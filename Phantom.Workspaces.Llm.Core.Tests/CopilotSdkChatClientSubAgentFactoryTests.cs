@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using GitHub.Copilot.SDK;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm;
@@ -293,7 +294,7 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
 
         public void ResetLease() => CreatedLease = null;
 
-        async Task<RunningAgentChatLease> IRunningAgentChatFactory.CreateAsync(
+        Task<RunningAgentChatLease> IRunningAgentChatFactory.CreateAsync(
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
@@ -305,19 +306,24 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
                 ? new CopilotSubAgentChatClient()
                 : new NonReceiverChatClient();
 
-            var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            // Create AgentChat using the internal constructor, skipping CreateAsync/InitializeAsync
+            // to avoid starting the background processing loop that would consume from the channel.
+            var chat = new AgentChat(new InternalCreateAgentChatRequest
             {
-                AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
-                    """{"kind":"prompt","name":"sub","model":{"id":"echo","provider":"echo","apiType":"Echo"},"tools":[]}"""),
-                AgentSessionId = sessionId.Value,
+                AgentDefinition = null,
                 ConfiguredStore = _store,
-                ClientOverride = client,
-                ForegroundScheduler = TaskScheduler.Default,
             });
+
+            // Create a real ChatClientAgent and inject it via reflection.
+            // ChatClientAgent itself doesn't start background tasks - those are in AgentChat.
+            var chatClientAgent = new ChatClientAgent(client, new ChatClientAgentOptions());
+            var chatClientAgentField = typeof(AgentChat).GetField("chatClientAgent",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            chatClientAgentField!.SetValue(chat, chatClientAgent);
 
             var lease = new RunningAgentChatLease(sessionId, chat, () => ValueTask.CompletedTask);
             CreatedLease = lease;
-            return lease;
+            return Task.FromResult(lease);
         }
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, CancellationToken ct) =>
