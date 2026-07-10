@@ -65,8 +65,10 @@ internal sealed class CopilotSdkTurnEventDispatcher : ISubAgentChat
     /// </summary>
     internal async Task DisposeRemainingLeasesAsync()
     {
-        foreach (var (_, (lease, _)) in this.factoryReceivers)
+        foreach (var (_, (lease, receiver)) in this.factoryReceivers)
         {
+            receiver.Fail(new OperationCanceledException("Sub-agent disposed without completing"));
+            lease.AgentChat.SetCompletionState(AgentChatCompletionState.Failed);
             await lease.DisposeAsync().ConfigureAwait(false);
         }
 
@@ -216,6 +218,7 @@ internal sealed class CopilotSdkTurnEventDispatcher : ISubAgentChat
                         if (this.factoryReceivers.TryGetValue(completedId, out var completedEntry))
                         {
                             completedEntry.Receiver.Complete();
+                            completedEntry.Lease.AgentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
                             this.factoryReceivers.Remove(completedId);
                             await completedEntry.Lease.DisposeAsync().ConfigureAwait(false);
                         }
@@ -245,6 +248,7 @@ internal sealed class CopilotSdkTurnEventDispatcher : ISubAgentChat
                         if (this.factoryReceivers.TryGetValue(failedId, out var failedEntry))
                         {
                             failedEntry.Receiver.Fail(new AgentSubagentFailedException(failed.Data?.Error));
+                            failedEntry.Lease.AgentChat.SetCompletionState(AgentChatCompletionState.Failed);
                             this.factoryReceivers.Remove(failedId);
                             await failedEntry.Lease.DisposeAsync().ConfigureAwait(false);
                         }
