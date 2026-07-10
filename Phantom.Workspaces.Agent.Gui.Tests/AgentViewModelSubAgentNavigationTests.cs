@@ -169,4 +169,36 @@ public sealed class AgentViewModelSubAgentNavigationTests
         await chat.GetOrCreateAsync(agentId, definition, $"tool-call-{agentId}");
         return chat.SubAgents.Single(s => s.AgentId == agentId);
     }
+
+    [Fact]
+    public async Task SubAgentNavItem_DisplaysTwoLines_NameAndDescription()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "test-subagent",
+              "description": "A description for the subagent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        await chat.GetOrCreateAsync("sa1", definition, "tool-call-sa1", TestContext.Current.CancellationToken);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = Assert.Single(subAgentsNode.Children);
+
+        Assert.Equal("test-subagent", subAgentNavItem.Name);
+        Assert.Equal("A description for the subagent", subAgentNavItem.Summary);
+    }
 }

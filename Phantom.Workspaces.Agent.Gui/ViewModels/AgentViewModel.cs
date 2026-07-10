@@ -657,7 +657,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 $"sub-agent-{slot.AgentId}",
                 slot.SubAgentViewModel.DisplayName,
                 null,
-                null,
+                slot.SubAgentViewModel.Description,
                 null,
                 this.subAgentsNavItem.DetailContent,
                 subRoot?.Children.ToArray() ?? []);
