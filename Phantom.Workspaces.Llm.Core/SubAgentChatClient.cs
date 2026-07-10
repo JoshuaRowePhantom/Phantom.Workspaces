@@ -18,6 +18,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
 
     public string AgentId { get; }
     public string DisplayName { get; }
+    public string Description { get; }
 
     public AgentChatCompletionState CompletionState => completionState;
 
@@ -27,10 +28,11 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
 
     public event EventHandler? CompletionStateChanged;
 
-    public SubAgentChatClient(string agentId, string displayName)
+    public SubAgentChatClient(string agentId, string displayName, string description = "")
     {
         AgentId = agentId;
         DisplayName = displayName;
+        Description = description;
     }
 
     public void Push(ChatResponseUpdate update)

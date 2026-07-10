@@ -516,7 +516,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -530,7 +530,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -545,7 +545,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -560,7 +560,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -576,7 +576,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -594,7 +594,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
         tab.SetReady(agentViewModel, loggerFactory);
 
         doc.HasUnreadNotification = true;
@@ -611,7 +611,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
         tab.SetReady(agentViewModel, loggerFactory);
 
         doc.HasUnreadNotification = true;

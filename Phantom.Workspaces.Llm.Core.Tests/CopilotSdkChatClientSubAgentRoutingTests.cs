@@ -289,6 +289,7 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     {
         public string AgentId { get; }
         public string DisplayName { get; }
+        public string Description => string.Empty;
         public AgentChatCompletionState CompletionState { get; private set; } = AgentChatCompletionState.Running;
         public DateTime LastUpdatedAt { get; private set; } = DateTime.UtcNow;
         public Exception? FailureException { get; private set; }

@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -12,7 +12,7 @@ public sealed class AgentChatDetailsViewModelTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
         var details = new AgentChatDetailsViewModel(viewModel);
 
         Assert.False(viewModel.IsReasoningVisible);
@@ -27,7 +27,7 @@ public sealed class AgentChatDetailsViewModelTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
         var details = new AgentChatDetailsViewModel(viewModel);
 
         viewModel.ToggleReasoningVisibility();
@@ -57,7 +57,7 @@ public sealed class AgentChatDetailsViewModelTests
             }
             """);
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
         var details = new AgentChatDetailsViewModel(viewModel);
 
         Assert.Equal("echo", details.ModelProvider);

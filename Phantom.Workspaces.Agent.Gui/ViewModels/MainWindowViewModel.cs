@@ -66,7 +66,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             displayName = $"{displayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        return new AgentViewModel(chat, displayName, loggerFactory)
+        return new AgentViewModel(chat, displayName, chat.Description, loggerFactory)
         {
             OpenUrlHandler = OpenUrlExternal,
         };

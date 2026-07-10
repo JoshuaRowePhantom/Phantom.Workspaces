@@ -12,7 +12,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -28,7 +28,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -49,7 +49,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -70,7 +70,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -90,7 +90,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -110,7 +110,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 

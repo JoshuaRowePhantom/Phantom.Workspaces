@@ -5598,7 +5598,7 @@ public sealed class MainWindowIntegrationTests
 
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-toggle", Title = "Agent" };
         agentTab.SetReady(agentViewModel, loggerFactory);
@@ -5628,7 +5628,7 @@ public sealed class MainWindowIntegrationTests
 
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-twice", Title = "Agent" };
         agentTab.SetReady(agentViewModel, loggerFactory);
@@ -5657,7 +5657,7 @@ public sealed class MainWindowIntegrationTests
 
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-handled", Title = "Agent" };
         agentTab.SetReady(agentViewModel, loggerFactory);

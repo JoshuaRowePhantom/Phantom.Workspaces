@@ -11,6 +11,7 @@ public interface IRunningSubAgentDisplay
 {
     string AgentId { get; }
     string DisplayName { get; }
+    string Description { get; }
     AgentChatCompletionState CompletionState { get; }
     IReadOnlyList<SubAgentActivityLine> RecentActivity { get; }
     IReadOnlyList<IRunningSubAgentDisplay> SubAgents { get; }

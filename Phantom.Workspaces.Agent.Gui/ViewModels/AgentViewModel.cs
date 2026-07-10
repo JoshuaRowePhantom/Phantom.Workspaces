@@ -42,12 +42,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName, ObservableLoggerFactory loggerFactory)
+    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
+        this.Description = description;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
         this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
         this.toolsDetail = new AgentChatToolsDetailViewModel();
@@ -166,6 +167,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     }
 
     public string DisplayName { get; }
+
+    public string Description { get; }
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
@@ -553,7 +556,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory);
         this.subAgentViewModels.Add(subAgentViewModel);
         this.subAgentsContainerDetail.AddSlot(subAgent.AgentId, subAgentViewModel);
     }

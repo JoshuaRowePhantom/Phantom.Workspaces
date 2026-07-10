@@ -1,4 +1,4 @@
-﻿using AgentSchema;
+using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -12,7 +12,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.False(root.IsExpanded);
@@ -23,7 +23,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.Contains(root.Children, c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
@@ -36,7 +36,7 @@ public sealed class AgentViewModelNavigationTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var chat = await CreateChatWithMcpAsync(server.BoundUrl);
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         await WaitForMcpToolsLoadedAsync(chat);
 
@@ -52,7 +52,7 @@ public sealed class AgentViewModelNavigationTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var chat = await CreateChatWithMcpAsync(server.BoundUrl);
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         await WaitForMcpToolsLoadedAsync(chat);
 
@@ -158,7 +158,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "agent-1", "Agent One");
         await AddSubAgentAsync(chat, "agent-2", "Agent Two");
@@ -189,7 +189,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "agent-1", "Agent One");
 
@@ -211,7 +211,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         // Add a real sub-agent first to ensure the mechanism works.
         await AddSubAgentAsync(chat, "agent-1", "Agent One");

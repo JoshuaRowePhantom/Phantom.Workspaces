@@ -291,6 +291,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
 
         public string AgentId { get; }
         public string DisplayName { get; }
+        public string Description => string.Empty;
         public AgentChatCompletionState CompletionState => this.completionState;
         public IReadOnlyList<SubAgentActivityLine> RecentActivity { get; }
         public IReadOnlyList<IRunningSubAgentDisplay> SubAgents => this.subAgents;
@@ -312,6 +313,7 @@ public sealed class RunningSubAgentsHtmlTransformerTests
 
         public string AgentId { get; }
         public string DisplayName { get; }
+        public string Description => string.Empty;
         public AgentChatCompletionState CompletionState => AgentChatCompletionState.Running;
         public DateTime LastUpdatedAt => DateTime.UtcNow;
         public IReadOnlyList<IRunningSubAgent> SubAgents => [];

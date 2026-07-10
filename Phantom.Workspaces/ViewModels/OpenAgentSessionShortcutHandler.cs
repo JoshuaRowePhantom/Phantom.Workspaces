@@ -454,7 +454,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         string title,
         string agentSessionTabId)
     {
-        return new AgentViewModel(agentChat, title, loggerFactory)
+        return new AgentViewModel(agentChat, title, agentChat.Description, loggerFactory)
         {
             OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
                 new WebViewModel(url, mainWindowViewModel)

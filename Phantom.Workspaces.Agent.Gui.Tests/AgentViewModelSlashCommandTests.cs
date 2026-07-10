@@ -17,7 +17,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 

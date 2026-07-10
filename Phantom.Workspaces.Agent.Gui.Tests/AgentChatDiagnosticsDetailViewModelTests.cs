@@ -19,7 +19,7 @@ public sealed class AgentChatDiagnosticsDetailViewModelTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
         var diagnosticsNode = root.Children.FirstOrDefault(c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
@@ -35,7 +35,7 @@ public sealed class AgentChatDiagnosticsDetailViewModelTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.False(

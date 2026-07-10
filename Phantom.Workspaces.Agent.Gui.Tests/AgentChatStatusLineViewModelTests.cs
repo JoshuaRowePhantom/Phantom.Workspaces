@@ -13,7 +13,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task EmptyAgent_ShowsNoneDisplaysAndNoTokens()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(agentDefinition: null), "empty-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(agentDefinition: null), "empty-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         Assert.Equal("(none)", statusLine.ModelDisplay);
@@ -29,7 +29,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task ModelAndProvider_DisplayResolvedAgentModel()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         Assert.Equal("gpt-4o", statusLine.ModelDisplay);
@@ -42,7 +42,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task IsThinking_FollowsRunningItems()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         var runningItem = agentViewModel.AgentChat.CreateRunningItem(new AgentChatHistoryItem
@@ -62,7 +62,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task TokensDisplay_FormatsOnlyWhenBothTotalsArePresent()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         SetTokenCountsAndRaiseUsageChanged(agentViewModel.AgentChat, inputTokenCount: 1234, outputTokenCount: null);
@@ -80,7 +80,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task IsReasoningVisible_WhenAgentPropertyChanges_PropagatesChange()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         var changedProperties = new List<string?>();
@@ -102,7 +102,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task ReasoningIndicatorText_WhenIsReasoningVisibleIsTrue_ReturnsShowingText()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         agentViewModel.SetReasoningVisibility(true);
@@ -114,7 +114,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task ReasoningIndicatorText_WhenIsReasoningVisibleIsFalse_ReturnsNotShowingText()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         agentViewModel.SetReasoningVisibility(false);
@@ -126,7 +126,7 @@ public sealed class AgentChatStatusLineViewModelTests
     public async Task Dispose_UnsubscribesFromAgentChanges()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory);
         var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
         statusLine.Dispose();
 

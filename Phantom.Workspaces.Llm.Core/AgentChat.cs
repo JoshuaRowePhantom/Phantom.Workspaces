@@ -179,6 +179,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
+       this.Description = resolvedAgentDefinition.Description ?? string.Empty;
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -350,6 +351,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => this.SubAgents;
 
     public string DisplayName { get; private set; } = string.Empty;
+
+    public string Description { get; private set; } = string.Empty;
 
     public string AgentSessionId => this.agentSessionId;
 
@@ -761,7 +764,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             }
         }
 
-        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId);
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty);
         var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = subAgentDefinition,
