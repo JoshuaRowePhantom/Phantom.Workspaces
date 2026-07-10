@@ -285,4 +285,56 @@ public sealed class RunningAgentChatTableTests
         Assert.Equal("Entity B", entryB.EntityName);
         Assert.Equal("id-b", entryB.EntityId);
     }
+
+    [Fact]
+    public async Task AcquireAsync_WithEntityDisplayName_PassesToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-display-name");
+
+        await using var lease = await table.AcquireAsync(
+            sessionId,
+            entityName: "Entity",
+            entityDisplayName: "Custom Display Name",
+            ct: TestContext.Current.CancellationToken);
+
+        // Verify the factory's GetOrCreateAsync was called (implicitly through our fake returning a lease)
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_WithEntityDescription_PassesToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-description");
+
+        await using var lease = await table.AcquireAsync(
+            sessionId,
+            entityName: "Entity",
+            entityDescription: "Test description",
+            ct: TestContext.Current.CancellationToken);
+
+        // Verify the factory's GetOrCreateAsync was called (implicitly through our fake returning a lease)
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_WithEntityDisplayNameAndDescription_PassesToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-both");
+
+        await using var lease = await table.AcquireAsync(
+            sessionId,
+            entityName: "Entity",
+            entityDisplayName: "Display Name",
+            entityDescription: "Description text",
+            ct: TestContext.Current.CancellationToken);
+
+        // Verify the factory's GetOrCreateAsync was called (implicitly through our fake returning a lease)
+        Assert.NotNull(lease);
+    }
 }

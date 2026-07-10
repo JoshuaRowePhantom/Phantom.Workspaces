@@ -1802,35 +1802,35 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public void Description_DefaultsToEmpty()
+    public async Task Description_DefaultsToEmpty()
     {
         // When no DescriptionOverride is provided, AgentChat.Description should be an empty string.
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
-        var chat = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
             ClientOverride = new DeterministicTestChatClient(),
-        }).GetAwaiter().GetResult();
+        });
 
         Assert.Equal(string.Empty, chat.Description);
     }
 
     [Fact]
-    public void Description_UsesDescriptionOverride()
+    public async Task Description_UsesDescriptionOverride()
     {
         // When DescriptionOverride is set, AgentChat.Description should return that value.
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
         var expectedDescription = "This is a test agent description";
-        var chat = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
             ClientOverride = new DeterministicTestChatClient(),
             DescriptionOverride = expectedDescription,
-        }).GetAwaiter().GetResult();
+        });
 
         Assert.Equal(expectedDescription, chat.Description);
     }
