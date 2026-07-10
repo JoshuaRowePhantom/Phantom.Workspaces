@@ -389,4 +389,20 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.Contains("tool call: powershell", html, StringComparison.Ordinal);
         Assert.DoesNotContain("tool call: powershell:", html, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void RenderToolCallPair_CallSummary_HasStickyLevel4()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        Assert.Contains("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_ResultSummary_HasStickyLevel4()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        Assert.Contains("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result", html, StringComparison.Ordinal);
+    }
 }
