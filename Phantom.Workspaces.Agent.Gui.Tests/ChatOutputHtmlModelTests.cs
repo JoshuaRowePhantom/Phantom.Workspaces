@@ -212,8 +212,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnosticsVisible: () => diagnosticsVisible);
         await model.HistoryLoaded;
 
-        var initial = Assert.Single(sink.ContentOperations);
-        Assert.DoesNotContain("diagnostic detail", initial.Content);
+        Assert.Empty(sink.ContentOperations);
 
         sink.Clear();
         diagnosticsVisible = true;
@@ -1604,5 +1603,92 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(
             sink.ContentOperations,
             op => op.Content?.Contains(msg200Id, StringComparison.Ordinal) == true);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutput_DiagnosticDisabled_DiagnosticContentNotRendered()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+        };
+        var sink = new RecordingSink();
+        var diagnosticsVisible = false;
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            isDiagnosticsVisible: () => diagnosticsVisible);
+        await model.HistoryLoaded;
+
+        Assert.Empty(sink.ContentOperations);
+        Assert.DoesNotContain(sink.Operations, op => op.Content.Contains("diagnostic"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutput_DiagnosticEnabled_DiagnosticContentRendered()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+        };
+        var sink = new RecordingSink();
+        var diagnosticsVisible = true;
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            isDiagnosticsVisible: () => diagnosticsVisible);
+        await model.HistoryLoaded;
+
+        Assert.NotEmpty(sink.ContentOperations);
+        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("diagnostic"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutput_DiagnosticDisabled_NonDiagnosticContentUnaffected()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.User,
+                Contents = [new TextContent("regular user message")],
+            },
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("assistant response")],
+            },
+        };
+        var sink = new RecordingSink();
+        var diagnosticsVisible = false;
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            isDiagnosticsVisible: () => diagnosticsVisible);
+        await model.HistoryLoaded;
+
+        Assert.Equal(2, sink.ContentOperations.Count);
+        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("regular user message"));
+        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("assistant response"));
+        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("diagnostic"));
     }
 }

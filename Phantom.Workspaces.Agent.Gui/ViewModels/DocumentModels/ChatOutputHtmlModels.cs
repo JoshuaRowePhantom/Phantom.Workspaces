@@ -159,6 +159,22 @@ internal sealed class ChatMessageHtmlModel
             AgentChatHistoryItem.DiagnosticChatRole.Value,
             StringComparison.OrdinalIgnoreCase);
 
+        // Completely suppress diagnostic messages when diagnostics are disabled.
+        if (isDiagnostic && !includeDiagnostics)
+        {
+            if (emit && this.hasRendered)
+            {
+                this.EmitDiff([], roleLabel, visibilityChanged);
+            }
+
+            this.bindings.Clear();
+            this.hasRendered = true;
+            this.lastReasoningVisible = includeReasoning;
+            this.lastDiagnosticsVisible = includeDiagnostics;
+            this.renderedRoleLabel = roleLabel;
+            return;
+        }
+
         // Pre-scan: build a CallId → result lookup for content-level call+result pairing.
         Dictionary<string, FunctionResultContent>? resultLookup = null;
         foreach (var content in this.source.Contents)
@@ -443,6 +459,18 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         // Maintain indexed lookup structures early, before any early returns.
         this.AddCallIdsToIndex(sourceItem, slot);
+
+        // Completely suppress diagnostic messages when diagnostics are disabled.
+        var isDiagnostic = string.Equals(
+            sourceItem.Role.Value,
+            AgentChatHistoryItem.DiagnosticChatRole.Value,
+            StringComparison.OrdinalIgnoreCase);
+        var includeDiagnostics = this.isDiagnosticsVisible?.Invoke() ?? true;
+        if (isDiagnostic && !includeDiagnostics)
+        {
+            // No DOM element for diagnostic messages when diagnostics are disabled.
+            return;
+        }
 
         // If the new item contains only FunctionResultContent items, try to inject each result into
         // the preceding slot that owns the matching FunctionCallContent. When any result is injected
