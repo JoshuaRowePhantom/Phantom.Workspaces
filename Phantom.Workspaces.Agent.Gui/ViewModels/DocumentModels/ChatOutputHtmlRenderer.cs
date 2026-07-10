@@ -125,7 +125,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"3\">tool ").Append(callSummary).Append("</summary>");
 
         builder.Append("<details class=\"chat-tool-call\" open>");
-        builder.Append("<summary class=\"chat-collapsible-summary\">call  ").Append(callSummary).Append("</summary>");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
             builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(callJson)).Append("</pre>");
@@ -137,7 +137,7 @@ internal static class ChatOutputHtmlRenderer
         {
             var resultSummary = FirstLine(resultJson);
             builder.Append("<details class=\"chat-tool-result\" open>");
-            builder.Append("<summary class=\"chat-collapsible-summary\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
+            builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
                 builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(resultJson)).Append("</pre>");
