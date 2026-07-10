@@ -288,6 +288,9 @@ public class AgentChatHistoryPromotionTests
         // (user + func-call + tool-result = 3 items).
         await WaitForHistoryCountAsync(chat.History, 3, "stable items promoted");
 
+        // Wait for the ExclusiveScheduler's UpdateRunningItem task (Step B) to complete.
+        await WaitForRunningItemCountAsync(chat.RunningItems, 1, "active tail only");
+
         // The running item should hold only the blank placeholder (active tail).
         Assert.Single(chat.RunningItems);
         var runningItem = chat.RunningItems[0];
@@ -342,6 +345,54 @@ public class AgentChatHistoryPromotionTests
         finally
         {
             collection.CollectionChanged -= OnChanged;
+        }
+    }
+
+    private static async Task WaitForRunningItemCountAsync(
+        INotifyCollectionChanged collection,
+        int expectedCount,
+        string description)
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = Task.Delay(TimeSpan.FromSeconds(30));
+
+        void OnChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (TryCheckCount())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        collection.CollectionChanged += OnChanged;
+        try
+        {
+            if (TryCheckCount())
+            {
+                return;
+            }
+
+            var completed = await Task.WhenAny(signal.Task, timeout);
+            if (completed == timeout)
+            {
+                throw new TimeoutException($"Timeout waiting for {description}.");
+            }
+        }
+        finally
+        {
+            collection.CollectionChanged -= OnChanged;
+        }
+
+        bool TryCheckCount()
+        {
+            try
+            {
+                return ((System.Collections.ICollection)collection).Count >= expectedCount;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
         }
     }
 
