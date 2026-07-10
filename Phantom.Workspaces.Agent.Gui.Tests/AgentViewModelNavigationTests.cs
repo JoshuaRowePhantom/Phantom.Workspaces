@@ -19,14 +19,15 @@ public sealed class AgentViewModelNavigationTests
     }
 
     [Fact]
-    public async Task EditorTree_ContainsDiagnosticsNode()
+    public async Task EditorTree_DoesNotContain_DiagnosticsNode()
     {
+        // Issue #819: Diagnostics node was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
-        Assert.Contains(root.Children, c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
+        Assert.DoesNotContain(root.Children, c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
     }
 
     [Fact]
