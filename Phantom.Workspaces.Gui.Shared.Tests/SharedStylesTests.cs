@@ -446,4 +446,94 @@ public sealed class SharedStylesTests
         Assert.Contains("DoubleTransition", styleBlock, StringComparison.Ordinal);
         Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
     }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_DefaultOpacity_IsZero()
+    {
+        // Issue #810: JSON button should be hidden by default like other shortcut buttons
+        var sharedStyles = LoadSharedStyles();
+
+        var jsonButton = new Button();
+        jsonButton.Classes.Add("workspace-edit-indicator-button");
+
+        var entityCard = new Border();
+        entityCard.Classes.Add("entity-card");
+        entityCard.Child = jsonButton;
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(entityCard);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.0, jsonButton.Opacity);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_OnPointerOver_OpacityIsOne()
+    {
+        // Issue #810: JSON button should fade in on pointer over
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:pointerover Button.workspace-edit-indicator-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:pointerover Button.workspace-edit-indicator-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_OnFocusWithin_OpacityIsOne()
+    {
+        // Issue #810: JSON button should fade in on focus within
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:focus-within Button.workspace-edit-indicator-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:focus-within Button.workspace-edit-indicator-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_HasOpacityTransition()
+    {
+        // Issue #810: JSON button should have smooth fade-in transition
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        var selectorStart = content.IndexOf("Button.workspace-edit-indicator-button", StringComparison.Ordinal);
+        Assert.True(selectorStart >= 0, "Button.workspace-edit-indicator-button style must exist.");
+
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        Assert.True(selectorEnd > selectorStart, "Button.workspace-edit-indicator-button style must be closed.");
+
+        var styleBlock = content[selectorStart..selectorEnd];
+        Assert.Contains("DoubleTransition", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
+    }
 }

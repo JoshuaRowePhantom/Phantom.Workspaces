@@ -538,6 +538,18 @@
         <Setter Property="Padding" Value="4,0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-edit-indicator-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card:focus-within Button.workspace-edit-indicator-button">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="Button.workspace-edit-action-button">
         <Setter Property="HorizontalAlignment" Value="Right" />
