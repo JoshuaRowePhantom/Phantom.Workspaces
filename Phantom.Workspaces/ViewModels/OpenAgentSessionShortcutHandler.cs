@@ -317,6 +317,21 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         AgentChat agentChat;
         RunningAgentChatLease? lease = null;
 
+        // Extract display-name and description from entity data to populate AgentChat properties
+        string? entityDisplayName = null;
+        string? entityDescription = null;
+        if (agentSessionEntityData.TryGetProperty("display-name", out var displayNameElement)
+            && displayNameElement.TryGetProperty("default", out var displayNameDefaultElement)
+            && displayNameDefaultElement.ValueKind == JsonValueKind.String)
+        {
+            entityDisplayName = displayNameDefaultElement.GetString();
+        }
+        if (agentSessionEntityData.TryGetProperty("description", out var descriptionElement)
+            && descriptionElement.ValueKind == JsonValueKind.String)
+        {
+            entityDescription = descriptionElement.GetString();
+        }
+
         if (this.runningAgentChatTable is not null)
         {
             lease = await this.runningAgentChatTable.AcquireAsync(
@@ -324,7 +339,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 createAgentChatRequest.AgentDefinition,
                 createAgentChatRequest.AgentServices,
                 agentSessionEntity.DisplayName,
-                agentSessionEntity.EntityId.ToString());
+                agentSessionEntity.EntityId.ToString(),
+                entityDisplayName,
+                entityDescription);
             agentChat = lease.AgentChat;
         }
         else

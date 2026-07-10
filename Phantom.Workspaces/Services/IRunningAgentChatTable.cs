@@ -21,6 +21,9 @@ public interface IRunningAgentChatTable
     /// already running, the existing <see cref="AgentChat"/> is returned.
     /// Registers <paramref name="entityName"/> / <paramref name="entityId"/> for display in
     /// <see cref="RunningSessions"/> if this is the first caller for the session.
+    /// <paramref name="entityDisplayName"/> and <paramref name="entityDescription"/> are used to
+    /// populate the <see cref="AgentChat.DisplayName"/> and <see cref="AgentChat.Description"/>
+    /// properties when creating a new session.
     /// Dispose the returned lease when done; the underlying <see cref="AgentChat"/> is disposed when
     /// the last lease is released.
     /// </summary>
@@ -30,6 +33,8 @@ public interface IRunningAgentChatTable
         AgentServices? agentServices = null,
         string entityName = "",
         string? entityId = null,
+        string? entityDisplayName = null,
+        string? entityDescription = null,
         CancellationToken ct = default);
 }
 

@@ -42,6 +42,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         AgentServices? agentServices = null,
         string entityName = "",
         string? entityId = null,
+        string? entityDisplayName = null,
+        string? entityDescription = null,
         CancellationToken ct = default)
     {
         // Store entity info before calling the factory so the CollectionChanged handler can read it
@@ -51,7 +53,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             _entityInfo.TryAdd(sessionId, (entityName, entityId));
         }
 
-        return await _factory.GetOrCreateAsync(sessionId, definition, agentServices, ct);
+        return await _factory.GetOrCreateAsync(sessionId, definition, agentServices, entityDisplayName, entityDescription, ct);
     }
 
     private void OnFactorySessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)

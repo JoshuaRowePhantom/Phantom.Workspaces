@@ -357,6 +357,8 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
             AgentSessionId sessionId,
             AgentDefinition? definition,
             AgentServices? services,
+            string? displayNameOverride,
+            string? descriptionOverride,
             CancellationToken ct) =>
             throw new NotImplementedException();
     }

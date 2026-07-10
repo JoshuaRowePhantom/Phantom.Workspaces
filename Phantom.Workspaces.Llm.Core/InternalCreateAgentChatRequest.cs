@@ -21,6 +21,8 @@ internal sealed record InternalCreateAgentChatRequest
 
     public string? DisplayNameOverride { get; init; }
 
+    public string? DescriptionOverride { get; init; }
+
     public IReadOnlyList<IAsyncDisposable>? OwnedResources { get; init; }
 
     public CancellationToken CancellationToken { get; init; } = default;

@@ -34,10 +34,14 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
     /// <see cref="AgentChat"/>, and returns a new lease. If <paramref name="definition"/> is
     /// <see langword="null"/> and the session is not running, delegates to
     /// <see cref="GetAsync"/> (which loads from persistence).
+    /// <paramref name="displayNameOverride"/> and <paramref name="descriptionOverride"/> are used
+    /// to populate the chat's DisplayName and Description when creating a new session.
     /// </summary>
     Task<RunningAgentChatLease> GetOrCreateAsync(
         AgentSessionId sessionId,
         AgentDefinition? definition = null,
         AgentServices? services = null,
+        string? displayNameOverride = null,
+        string? descriptionOverride = null,
         CancellationToken ct = default);
 }

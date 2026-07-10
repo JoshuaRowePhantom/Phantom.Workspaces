@@ -39,6 +39,8 @@ public sealed class RunningAgentBrainViewModelTests
             AgentServices? agentServices = null,
             string entityName = "",
             string? entityId = null,
+            string? entityDisplayName = null,
+            string? entityDescription = null,
             CancellationToken ct = default)
             => throw new NotSupportedException("Not used in unit tests.");
     }
