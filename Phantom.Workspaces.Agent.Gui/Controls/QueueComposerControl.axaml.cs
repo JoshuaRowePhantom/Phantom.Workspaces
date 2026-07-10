@@ -106,7 +106,7 @@ public partial class QueueComposerControl : UserControl
                     var textLines = presenter.TextLayout.TextLines;
                     for (var lineIndex = 1; lineIndex < textLines.Count; lineIndex++)
                     {
-                        if (clampedCaret >= textLines[lineIndex].FirstTextSourceIndex)
+                        if (clampedCaret > textLines[lineIndex].FirstTextSourceIndex)
                         {
                             caretLine = lineIndex;
                         }
