@@ -171,6 +171,31 @@ public sealed class QueueComposerInputHistoryTests
     }
 
     [Fact]
+    public async Task HandleInputKey_Up_WithCaretAtEndOfFirstVisualLine_DoesNotNavigateHistory()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first message";
+        composer.Submit();
+        composer.InputText = string.Empty;
+
+        // caretLine: 1 represents the caret being exactly at the FirstTextSourceIndex boundary
+        // of the second visual line (i.e., at the wrap point between line 0 and line 1).
+        // This is the case that triggered the bug: the caret visually appears on line 1,
+        // but the old >= comparison treated it as line 0.
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Up, KeyModifiers.None, caretLine: 1, out var newText, out _);
+
+        Assert.False(handled);
+        Assert.Null(newText);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
     public async Task HandleInputKey_Up_WhenCompletionsVisible_DoesNotNavigateHistory()
     {
         await using var chat = await AgentFactory.CreateAgentChatAsync(
