@@ -59,6 +59,14 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
         internal set => this.SetProperty(ref this.isThinking, value);
     }
 
+    /// <summary>The time of the most recent history activity for this session, used for sorting.</summary>
+    internal DateTime LastActivityAt { get; private set; } = DateTime.UtcNow;
+
+    internal void UpdateLastActivityAt(DateTime at)
+    {
+        this.LastActivityAt = at;
+    }
+
     /// <summary>Navigates to the agent tab or opens a new one when clicked.</summary>
     public ICommand ActivateCommand { get; }
 }

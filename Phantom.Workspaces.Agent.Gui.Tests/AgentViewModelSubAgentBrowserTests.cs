@@ -60,6 +60,28 @@ public sealed class AgentViewModelSubAgentBrowserTests
     }
 
     [Fact]
+    public void SubAgentBrowserViewModel_SortedByMostRecentActivity_NotLaunchOrder()
+    {
+        // "early-launch" was launched first but has the most recent activity timestamp.
+        // "late-launch" was launched second but has an older activity timestamp.
+        // The browser should show "early-launch" first (by activity, not by launch order).
+        var olderTime = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var newerTime = new DateTime(2024, 1, 1, 0, 0, 1, DateTimeKind.Utc);
+        var source = new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>
+        {
+            new StubSubAgentItem("early-launch", "Early Agent", AgentChatCompletionState.Running, newerTime),
+            new StubSubAgentItem("late-launch", "Late Agent", AgentChatCompletionState.Running, olderTime),
+        };
+        var all = new System.Collections.ObjectModel.ReadOnlyObservableCollection<IRunningSubAgent>(source);
+        using var browser = new SubAgentBrowserViewModel(all);
+
+        // Despite being launched first, "early-launch" appears first because it has more recent activity.
+        Assert.Collection(browser.VisibleItems,
+            item => Assert.Equal("early-launch", item.AgentId),
+            item => Assert.Equal("late-launch", item.AgentId));
+    }
+
+    [Fact]
     public async Task HideCompleted_True_ShowsOnlyRunningSubAgents()
     {
         var chat = await CreateChatAsync();
