@@ -280,7 +280,6 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly bool _exposeReceiver;
-        private readonly InMemoryAgentPersistenceStore _store = new();
 
         public List<(AgentDefinition Definition, AgentSessionId SessionId)> CreateCalls { get; } = new();
         public RunningAgentChatLease? CreatedLease { get; private set; }
@@ -311,13 +310,13 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
             var chat = new AgentChat(new InternalCreateAgentChatRequest
             {
                 AgentDefinition = null,
-                ConfiguredStore = _store,
+                ConfiguredStore = new InMemoryAgentPersistenceStore(),
             });
 
             // Create a real ChatClientAgent and inject it via reflection.
             // ChatClientAgent itself doesn't start background tasks - those are in AgentChat.
             var chatClientAgent = new ChatClientAgent(client, new ChatClientAgentOptions());
-            var chatClientAgentField = typeof(AgentChat).GetField("chatClientAgent",
+            var chatClientAgentField = typeof(AgentChat).GetField("chatClientAgent", 
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             chatClientAgentField!.SetValue(chat, chatClientAgent);
 
