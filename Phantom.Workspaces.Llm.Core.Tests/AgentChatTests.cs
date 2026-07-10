@@ -1835,4 +1835,64 @@ public sealed class AgentChatTests
         Assert.Equal(expectedDescription, chat.Description);
     }
 
+    [Fact]
+    public async Task AgentChatFromEntity_DisplayName_ReadsFromEntityDisplayName()
+    {
+        // When creating an AgentChat from entity data with display-name.default,
+        // the AgentChat.DisplayName should match the entity display-name value.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var entityDisplayName = "My Custom Entity Name";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = entityDisplayName,
+        });
+
+        Assert.Equal(entityDisplayName, chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task AgentChatFromEntity_Description_ReadsFromEntityDescription()
+    {
+        // When creating an AgentChat from entity data with description,
+        // the AgentChat.Description should match the entity description value.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var entityDescription = "Repository for handling user authentication";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DescriptionOverride = entityDescription,
+        });
+
+        Assert.Equal(entityDescription, chat.Description);
+    }
+
+    [Fact]
+    public async Task AgentChatFromEntity_DisplayNameAndDescription_BothReadFromEntity()
+    {
+        // When creating an AgentChat from entity data with both display-name and description,
+        // both AgentChat properties should reflect the entity values.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var entityDisplayName = "Authentication Service";
+        var entityDescription = "Handles user login and token management";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = entityDisplayName,
+            DescriptionOverride = entityDescription,
+        });
+
+        Assert.Equal(entityDisplayName, chat.DisplayName);
+        Assert.Equal(entityDescription, chat.Description);
+    }
+
 }
