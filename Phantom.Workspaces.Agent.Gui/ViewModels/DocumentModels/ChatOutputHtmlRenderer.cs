@@ -21,9 +21,10 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 /// </summary>
 internal static class ChatOutputHtmlRenderer
 {
-    public const string HistoryContainerId = "chat-history";
-    public const string RunningContainerId = "chat-running";
-    public const string RunningSubAgentsContainerId = "running-subagents";
+    public const string LoadAfterAnchorId = "load-after";
+    public const string HistoryBeforeAnchorId = "history-before";
+    public const string RunningContainerId = "running-items-inside";
+    public const string RunningSubAgentsContainerId = "subagent-items-inside";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
 

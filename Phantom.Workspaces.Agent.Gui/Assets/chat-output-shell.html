@@ -389,9 +389,10 @@
   </style>
 </head>
 <body>
-  <div id="chat-history"></div>
-  <div id="chat-running"></div>
-  <div id="running-subagents"></div>
+  <div id="load-after"></div>
+  <div id="history-before"></div>
+  <div id="running-items-inside"></div>
+  <div id="subagent-items-inside"></div>
   <script>
     /* copy-gutter.js — reusable copy-to-clipboard component.
      * Call CopyGutter.init(root) to wire up all [data-copy-target] elements inside root.
@@ -688,6 +689,9 @@
                 break;
               case "append":
                 target.insertAdjacentHTML("beforeend", command.content);
+                break;
+              case "prepend":
+                target.insertAdjacentHTML("afterbegin", command.content);
                 break;
             }
             break;

@@ -849,11 +849,11 @@ public sealed class AgentChatOutputControlTests
     }
 
     [PhantomAvaloniaFact(Timeout = 30_000)]
-    public async Task OnBrowserReady_SuppressSinkScroll_TrueDuringLoadingFalseAfterFirstChunk()
+    public async Task OnBrowserReady_ScrollsToBottomAfterFirstChunk()
     {
-        // suppressSinkScroll is set to true before constructing the model and cleared by
-        // ScrollToBottom() when the model delivers the first (newest) history chunk.
-        // After HistoryLoaded it must be false, and exactly one scroll command must exist.
+        // Auto-scroll is enabled from the start. ScrollToBottom() is called when the model
+        // delivers the first (newest) history chunk. After HistoryLoaded, exactly one scroll
+        // command must exist (from the first chunk).
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         for (var i = 0; i < 300; i++)
@@ -877,12 +877,6 @@ public sealed class AgentChatOutputControlTests
 
         control.DataContext = viewModel;
         await control.HistoryLoaded;
-
-        // After loading, suppressSinkScroll must be false.
-        var suppressField = typeof(AgentChatOutputControl)
-            .GetField("suppressSinkScroll", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(suppressField);
-        Assert.False((bool)suppressField!.GetValue(control)!, "suppressSinkScroll must be false after HistoryLoaded.");
 
         // Exactly one scroll command must have been posted (by the newest history chunk).
         var scrollCount = browser.PostedMessages.Count(msg =>

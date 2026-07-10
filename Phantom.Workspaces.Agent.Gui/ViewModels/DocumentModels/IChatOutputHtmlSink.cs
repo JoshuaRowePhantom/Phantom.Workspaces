@@ -14,6 +14,9 @@ public enum ChatOutputUpdateLocation
 
     /// <summary>Append the payload as the last child of the target element (used for container nodes).</summary>
     Append,
+
+    /// <summary>Insert the payload as the first child of the target element.</summary>
+    Prepend,
 }
 
 /// <summary>
