@@ -39,23 +39,29 @@ internal static class ChatOutputHtmlRenderer
         .UseAutoLinks()
         .Build();
 
-    public static string MessageId(int sequence) => $"msg-{sequence}";
+    public static string MessageId(int index) => $"history-{index}";
 
     public static string HeaderId(string messageId) => $"{messageId}-header";
 
     public static string ContentsContainerId(string messageId) => $"{messageId}-contents";
 
-    public static string ContentId(string messageId, int index) => $"{messageId}-c{index}";
+    public static string ContentId(string messageId, int subIndex) => $"{messageId}-{subIndex}";
+
+    public static string InsertAfterItemId(int index) => $"insert-after-{index}";
+
+    public static string InsertAfterContentId(int index, int subIndex) => $"insert-after-{index}-{subIndex}";
 
     public static string RunningItemId(int sequence) => $"run-{sequence}";
 
     public static string RunningItemContentsId(string runningItemId) => $"{runningItemId}-contents";
 
-    public static string ToolCallGroupId(int sequence) => $"grp-{sequence}";
+    public static string ToolCallGroupId(int index, int subIndex) => $"tool-grouping-{index}-{subIndex}";
 
     public static string ToolCallGroupSummaryId(string groupId) => $"{groupId}-summary";
 
     public static string ToolCallGroupBodyId(string groupId) => $"{groupId}-body";
+
+    public static string ToolGroupInsertAfterId(int highestIndex, int highestSubIndex) => $"insert-after-{highestIndex}-{highestSubIndex}";
 
     /// <summary>
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
@@ -243,6 +249,13 @@ internal static class ChatOutputHtmlRenderer
         }
 
         builder.Append("</div>");
+        
+        // Extract index from history-{index} format
+        if (messageId.StartsWith("history-") && int.TryParse(messageId.Substring(8), out var index))
+        {
+            builder.Append("<div class=\"insert-after\" id=\"").Append(InsertAfterItemId(index)).Append("\"></div>");
+        }
+        
         return builder.ToString();
     }
 

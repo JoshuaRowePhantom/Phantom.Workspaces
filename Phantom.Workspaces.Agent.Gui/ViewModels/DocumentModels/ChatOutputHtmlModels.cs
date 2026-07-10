@@ -23,6 +23,21 @@ internal sealed class ChatMessageHtmlModel
 {
     private sealed record ContentBinding(string Key, string ElementId, string Html);
 
+    /// <summary>Appends an insert-after anchor div to the content HTML if the element ID follows the positional pattern.</summary>
+    private static string AppendInsertAfterDiv(string contentId, string html)
+    {
+        // Extract index and subindex from "history-{index}-{subindex}" format
+        if (contentId.StartsWith("history-") && contentId.LastIndexOf('-') > 8)
+        {
+            var parts = contentId.Substring(8).Split('-');
+            if (parts.Length == 2 && int.TryParse(parts[0], out var index) && int.TryParse(parts[1], out var subIndex))
+            {
+                return html + $"<div class=\"insert-after\" id=\"{ChatOutputHtmlRenderer.InsertAfterContentId(index, subIndex)}\"></div>";
+            }
+        }
+        return html;
+    }
+
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
     private readonly Func<bool>? isDiagnosticsVisible;
@@ -30,6 +45,7 @@ internal sealed class ChatMessageHtmlModel
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
     private readonly List<ContentBinding> bindings = [];
+    private int historyIndex;
     private AgentChatHistoryItem source;
     private string? renderedRoleLabel;
     private bool hasRendered;
@@ -38,7 +54,7 @@ internal sealed class ChatMessageHtmlModel
     private Dictionary<string, FunctionResultContent>? supplementalResults;
 
     public ChatMessageHtmlModel(
-        string elementId,
+        int historyIndex,
         AgentChatHistoryItem source,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
@@ -49,7 +65,7 @@ internal sealed class ChatMessageHtmlModel
     {
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         ArgumentNullException.ThrowIfNull(sink);
-        this.ElementId = elementId;
+        this.historyIndex = historyIndex;
         this.source = source;
         this.isReasoningVisible = isReasoningVisible;
         this.isDiagnosticsVisible = isDiagnosticsVisible;
@@ -60,7 +76,13 @@ internal sealed class ChatMessageHtmlModel
         this.Render(emit: false);
     }
 
-    public string ElementId { get; }
+    public string ElementId => ChatOutputHtmlRenderer.MessageId(this.historyIndex);
+    
+    /// <summary>Updates the history index. Must be called before any DOM operations if the index changes.</summary>
+    public void SetHistoryIndex(int index)
+    {
+        this.historyIndex = index;
+    }
 
     /// <summary>Set once the message element has been inserted into the DOM by its transformer.</summary>
     public bool IsInserted { get; set; }
@@ -145,7 +167,7 @@ internal sealed class ChatMessageHtmlModel
 
     public void Refresh() => this.Render(emit: true);
 
-    private void Render(bool emit)
+    internal void Render(bool emit)
     {
         var includeReasoning = this.isReasoningVisible();
         var includeDiagnostics = this.isDiagnosticsVisible?.Invoke() ?? true;
@@ -244,7 +266,7 @@ internal sealed class ChatMessageHtmlModel
 
                 var groupKey = "group:" + string.Join("\x02", keyParts);
                 var groupHtml = ChatOutputHtmlRenderer.RenderToolGroup(elementId, calls, resultLookup);
-                newBindings.Add(new ContentBinding(groupKey, elementId, groupHtml));
+                newBindings.Add(new ContentBinding(groupKey, elementId, AppendInsertAfterDiv(elementId, groupHtml)));
                 continue;
             }
 
@@ -269,7 +291,7 @@ internal sealed class ChatMessageHtmlModel
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
-                newBindings.Add(new ContentBinding(key, contentId, html));
+                newBindings.Add(new ContentBinding(key, contentId, AppendInsertAfterDiv(contentId, html)));
             }
 
             contentIndex++;
@@ -420,9 +442,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
     private readonly int skipInitialItems;
+    private readonly int startIndex;
     private bool inInitialTransform;
     private readonly Dictionary<string, RenderSlot> slotByCallId = [];
     private int lastToolCallSlotIndex = -1;
+    private int nextCreateIndex = 0;
 
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
@@ -435,7 +459,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
-        int skipInitialItems = 0)
+        int skipInitialItems = 0,
+        int startIndex = 0)
         : base(source, target)
     {
         this.sink = sink;
@@ -447,19 +472,25 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.statusSink = statusSink;
         this.resolveSubAgentId = resolveSubAgentId;
         this.skipInitialItems = skipInitialItems;
+        this.startIndex = startIndex;
         this.inInitialTransform = true;
         this.ApplyInitialTransform();
         this.inInitialTransform = false;
     }
 
     protected override RenderSlot Create(AgentChatHistoryItem sourceItem)
-        => new(new ChatMessageHtmlModel(ChatOutputHtmlRenderer.MessageId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink, this.resolveSubAgentId));
+    {
+        var index = this.nextCreateIndex++;
+        return new(new ChatMessageHtmlModel(this.startIndex + index, sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink, this.resolveSubAgentId));
+    }
 
     protected override void Update(RenderSlot target, AgentChatHistoryItem sourceItem)
         => target.Model.Update(sourceItem);
 
     protected override void OnInsert(int index, RenderSlot slot)
     {
+        // Model was created with the correct index in Create(), no need to reset it
+        
         var sourceItem = this.Source[index];
         var suppressSink = this.inInitialTransform && index < this.skipInitialItems;
 
@@ -531,7 +562,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 if (IsToolCallOnlyItem(this.Source[prevIndex]))
                 {
                     // Previous item was a standalone tool call: promote both into a new group.
-                    var groupId = ChatOutputHtmlRenderer.ToolCallGroupId(this.nextId());
+                    var groupId = ChatOutputHtmlRenderer.ToolCallGroupId(prevIndex, 0);
                     var prevToolName = GetLastToolName(this.Source[prevIndex]);
                     var group = new ToolCallGroupHtmlModel(groupId, this.sink, prevToolName);
 
@@ -557,13 +588,11 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         // Standalone insert (non-tool-call, or first/isolated tool call with no adjacent group).
         if (!suppressSink)
         {
-            var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
-                this.Target,
-                index,
-                this.containerPath,
-                static s => s.Model.IsInserted,
-                static s => s.Group?.GroupId ?? s.Model.ElementId);
-            this.sink.UpdateContent(reference, location, slot.Model.BuildHtml());
+            // Use insert-after anchor targeting instead of sibling scanning
+            var insertReference = index == 0
+                ? ChatOutputHtmlRenderer.LoadAfterAnchorId
+                : ChatOutputHtmlRenderer.InsertAfterItemId(index - 1);
+            this.sink.UpdateContent(insertReference, ChatOutputUpdateLocation.After, slot.Model.BuildHtml());
         }
 
         // Mark as inserted in both the live path and the skip path (Phase B already put it in the DOM).
@@ -815,7 +844,9 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             ChatOutputHtmlRenderer.RunningItemContentsId(this.ElementId),
             this.isDiagnosticsVisible,
             this.toolFactory,
-            this.statusSink);
+            this.statusSink,
+            skipInitialItems: 0,
+            startIndex: 0);
     }
 
     public void Update(AgentChatRunningItem source)
@@ -906,6 +937,9 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 
     protected override void OnInsert(int index, RunningChatItemHtmlModel target)
     {
+        // Running items use a different container and don't use positional IDs,
+        // so they keep the sibling-scanning logic for now.
+        // They could be refactored to use insert-after anchors in a future change.
         var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
             this.Target,
             index,
@@ -1044,7 +1078,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 var (start, end) = chunks[chunkIndex];
                 var chunkSlice = snapshot.GetRange(start, end - start);
                 var (cmds, _) = GenerateHistoryChunk(
-                    chunkSlice, idBox,
+                    chunkSlice, start, idBox,
                     this.isReasoningVisible, this.isDiagnosticsVisible,
                     this.toolFactory, this.statusSink, this.resolveSubAgentId);
 
@@ -1110,7 +1144,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     this.toolFactory,
                     this.statusSink,
                     this.resolveSubAgentId,
-                    skipInitialItems: snapshot.Count);
+                    skipInitialItems: snapshot.Count,
+                    startIndex: 0);
 
                 // Ensure future ids don't collide with running-item ids allocated in Phase A.
                 this.idSequence = Math.Max(savedIdSequence, this.idSequence);
@@ -1177,10 +1212,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// first top-level element the transformer inserted into <see cref="ChatOutputHtmlRenderer.LoadAfterAnchorId"/>.
     /// </summary>
     /// <param name="chunk">A read-only slice of history items to render.</param>
+    /// <param name="startIndex">The actual index in the full history of the first item in <paramref name="chunk"/>. Used to generate positional IDs.</param>
     /// <param name="idBox">
-    /// A single-element array used as a shared mutable id counter. <c>idBox[0]</c> is read and
+    /// A single-element array used as a shared mutable id counter for running items. <c>idBox[0]</c> is read and
     /// incremented by the id factory so successive chunk calls advance a global counter without
-    /// id collisions across chunks.
+    /// id collisions across chunks. Note: history message IDs use positional indices, not this counter.
     /// </param>
     /// <param name="isReasoningVisible">Controls whether reasoning content is included.</param>
     /// <param name="isDiagnosticsVisible">Controls whether diagnostic content is included; null means always visible.</param>
@@ -1193,6 +1229,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     internal static (IReadOnlyList<SinkCommand> Commands, string? FirstElementId)
         GenerateHistoryChunk(
             IReadOnlyList<AgentChatHistoryItem> chunk,
+            int startIndex,
             int[] idBox,
             Func<bool> isReasoningVisible,
             Func<bool>? isDiagnosticsVisible,
@@ -1206,7 +1243,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
             chunk, slots, recording,
             isReasoningVisible, () => idBox[0]++,
             ChatOutputHtmlRenderer.LoadAfterAnchorId,
-            isDiagnosticsVisible, toolFactory, statusSink, resolveSubAgentId);
+            isDiagnosticsVisible, toolFactory, statusSink, resolveSubAgentId,
+            skipInitialItems: 0,
+            startIndex: startIndex);
 
         string? firstElementId = slots.Count > 0
             ? (slots[0].Group?.GroupId ?? slots[0].Model.ElementId)

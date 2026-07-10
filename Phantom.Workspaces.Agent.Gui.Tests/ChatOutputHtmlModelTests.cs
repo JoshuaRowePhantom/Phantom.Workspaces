@@ -70,7 +70,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputUpdateLocation.After, appends[0].Location);
         Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, appends[0].Path);
         Assert.Equal(ChatOutputUpdateLocation.After, appends[1].Location);
-        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), appends[1].Path);
+        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(0), appends[1].Path);
         Assert.Contains("chat-message", appends[0].Content);
         Assert.Contains(">hello<", appends[0].Content);
         Assert.Contains("chat-user-message", appends[0].Content);
@@ -91,7 +91,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var operation = Assert.Single(sink.ContentOperations);
         Assert.Equal(ChatOutputUpdateLocation.After, operation.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), operation.Path);
+        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(0), operation.Path);
         Assert.Contains(">second<", operation.Content);
     }
 
@@ -243,8 +243,8 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, operations[0].Path);
         Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), operations[0].Content);
 
-        // Then the message appended into that container.
-        Assert.Equal(ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)), operations[1].Path);
+        // Then the message appended after the load-after anchor (new insertion model).
+        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, operations[1].Path);
         Assert.Contains(">working<", operations[1].Content);
     }
 
@@ -452,10 +452,10 @@ public sealed class ChatOutputHtmlModelTests
         var contentOps = sink.ContentOperations;
         Assert.True(contentOps.Count >= 2, "Expected Replace + Append + summary update");
 
-        // First op: replace msg-0 with group wrapping it
+        // First op: replace history-0 with group wrapping it
         var replaceOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Path);
-        Assert.Contains("grp-", replaceOp.Content);
+        Assert.Contains("tool-grouping-", replaceOp.Content);
         Assert.Contains("read_file", replaceOp.Content);
         Assert.Contains("chat-tool-group-body", replaceOp.Content);
         Assert.Contains(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Content);
@@ -538,7 +538,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var op = Assert.Single(sink.ContentOperations);
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(0), op.Path);
         Assert.Contains(">done<", op.Content);
     }
 
@@ -560,7 +560,8 @@ public sealed class ChatOutputHtmlModelTests
         var contentOps = sink.ContentOperations;
         var insertOp = contentOps.First(op => op.Content.Contains("finished"));
         Assert.Equal(ChatOutputUpdateLocation.After, insertOp.Location);
-        Assert.StartsWith("grp-", insertOp.Path);
+        // Should insert after the insert-after anchor of the second tool call (index 1)
+        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(1), insertOp.Path);
     }
 
     // ── Content-level tool-group tests (issue #154) ────────────────────────────
@@ -798,14 +799,14 @@ public sealed class ChatOutputHtmlModelTests
 
         var contentOps = sink.ContentOperations;
 
-        // A Replace on msg-0 must have created the message-level group wrapper (contains group body).
+        // A Replace on history-0 must have created the message-level group wrapper (contains group body).
         var groupCreateOp = contentOps.FirstOrDefault(op =>
             op.Location == ChatOutputUpdateLocation.Replace &&
             op.Path == ChatOutputHtmlRenderer.MessageId(0) &&
             op.Content.Contains("chat-tool-group-body"));
         Assert.NotNull(groupCreateOp);
         Assert.Contains("read_file", groupCreateOp!.Content);
-        Assert.Contains("grp-", groupCreateOp.Content);
+        Assert.Contains("tool-grouping-", groupCreateOp.Content);
 
         // Second batch appended into the group body
         var appendOp = contentOps.FirstOrDefault(op =>
@@ -949,10 +950,8 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, ops[0].Path);
         Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), ops[0].Content);
 
-        // Second op must be the message appended into that container's contents div — which only
-        // exists because the first op already created it.
-        var contentsId = ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0));
-        Assert.Equal(contentsId, ops[1].Path);
+        // Second op must be the message appended after the load-after anchor (new insertion model).
+        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, ops[1].Path);
         Assert.Contains(">hello<", ops[1].Content);
     }
 
@@ -1073,7 +1072,7 @@ public sealed class ChatOutputHtmlModelTests
     {
         var idBox = new int[1];
         var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            [], idBox, () => true, null, null, null);
+            [], 0, idBox, () => true, null, null, null, null);
 
         Assert.Empty(commands);
         Assert.Null(firstElementId);
@@ -1086,7 +1085,7 @@ public sealed class ChatOutputHtmlModelTests
         var idBox = new int[1];
 
         var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, idBox, () => true, null, null, null);
+            chunk, 0, idBox, () => true, null, null, null, null);
 
         Assert.NotEmpty(commands);
         Assert.NotNull(firstElementId);
@@ -1111,11 +1110,11 @@ public sealed class ChatOutputHtmlModelTests
         var idBox = new int[1];
 
         var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, idBox, () => true, null, null, null);
+            chunk, 0, idBox, () => true, null, null, null, null);
 
         Assert.NotNull(firstElementId);
         // Two consecutive tool-call items are promoted into a group; firstElementId is the group id.
-        Assert.StartsWith("grp-", firstElementId);
+        Assert.StartsWith("tool-grouping-", firstElementId);
     }
 
     [Fact]
@@ -1128,18 +1127,26 @@ public sealed class ChatOutputHtmlModelTests
         var idBox = new int[1];
 
         var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, idBox, () => true, null, null, null);
+            chunk, 0, idBox, () => true, null, null, null, null);
 
-        // 200 text items each consume exactly one id (msg-N); no grouping.
-        Assert.Equal(200, idBox[0]);
+        // With positional IDs, we no longer use the idBox counter for history messages.
+        // Instead, verify that 200 commands were generated (one per message).
         Assert.Equal(200, commands.Count);
 
-        // All element ids referenced in Append commands must be unique.
-        var appendPaths = commands
-            .Where(c => c.Location == ChatOutputUpdateLocation.Append || c.Location == ChatOutputUpdateLocation.After)
+        // All element ids referenced in commands should follow the positional pattern history-{idx}
+        // and all should be unique.
+        var contentStrings = commands
+            .Where(c => c.Location == ChatOutputUpdateLocation.After)
             .Select(c => c.Content)
             .ToList();
-        Assert.Equal(200, appendPaths.Distinct().Count());
+        Assert.Equal(200, contentStrings.Count);
+        
+        // Verify each message has the correct positional ID
+        for (int i = 0; i < 200; i++)
+        {
+            var expectedId = $"history-{i}";
+            Assert.Contains(contentStrings, content => content != null && content.Contains($"id=\"{expectedId}\""));
+        }
     }
 
     [Fact]
@@ -1151,7 +1158,7 @@ public sealed class ChatOutputHtmlModelTests
         var idBox = new int[1];
 
         var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, idBox, () => true, null, null, null);
+            chunk, 0, idBox, () => true, null, null, null, null);
 
         var appendCmds = commands
             .Where(c => c.Location == ChatOutputUpdateLocation.After && c.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId)
@@ -1171,7 +1178,7 @@ public sealed class ChatOutputHtmlModelTests
         var idBox = new int[1];
 
         var (commands, firstElementId) = await Task.Run(() =>
-            ChatOutputHtmlModel.GenerateHistoryChunk(chunk, idBox, () => true, null, null, null));
+            ChatOutputHtmlModel.GenerateHistoryChunk(chunk, 0, idBox, () => true, null, null, null));
 
         Assert.NotEmpty(commands);
         Assert.NotNull(firstElementId);
@@ -1584,8 +1591,8 @@ public sealed class ChatOutputHtmlModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_ItemIdsAreAssignedInIndexOrder()
     {
-        // 400 items → 2 chunks. With oldest-first processing, items[0] must get msg-0,
-        // items[200] must get msg-200, ensuring the live transformer's IDs match the DOM.
+        // 400 items → 2 chunks. With oldest-first processing, items[0] must get history-0,
+        // items[200] must get history-200, ensuring the live transformer's IDs match the DOM.
         var history = new ObservableCollection<AgentChatHistoryItem>(
             Enumerable.Range(0, 400).Select(_ => TextMessage(ChatRole.User, "text")));
         var sink = new RecordingSink();
@@ -1593,19 +1600,18 @@ public sealed class ChatOutputHtmlModelTests
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
 
-        // The first element rendered by the oldest chunk (items[0]) should have id "msg-0".
-        var firstAppend = sink.ContentOperations
-            .FirstOrDefault(op =>
-                op.Location == ChatOutputUpdateLocation.After &&
-                op.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId);
-        Assert.NotNull(firstAppend);
-        Assert.Contains(ChatOutputHtmlRenderer.MessageId(0), firstAppend.Content, StringComparison.Ordinal);
-
-        // The first element of the second chunk (items[200]) should have id "msg-200".
-        var msg200Id = ChatOutputHtmlRenderer.MessageId(200);
+        // The first element rendered by the oldest chunk (items[0]) should have id "history-0".
+        var history0Id = ChatOutputHtmlRenderer.MessageId(0);
         Assert.Contains(
             sink.ContentOperations,
-            op => op.Content?.Contains(msg200Id, StringComparison.Ordinal) == true);
+            op => op.Location == ChatOutputUpdateLocation.After && 
+                  op.Content?.Contains(history0Id, StringComparison.Ordinal) == true);
+
+        // The first element of the second chunk (items[200]) should have id "history-200".
+        var history200Id = ChatOutputHtmlRenderer.MessageId(200);
+        Assert.Contains(
+            sink.ContentOperations,
+            op => op.Content?.Contains(history200Id, StringComparison.Ordinal) == true);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
