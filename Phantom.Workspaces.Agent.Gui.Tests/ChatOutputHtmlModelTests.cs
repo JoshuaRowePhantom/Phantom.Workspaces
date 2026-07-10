@@ -67,8 +67,8 @@ public sealed class ChatOutputHtmlModelTests
 
         var appends = sink.ContentOperations;
         Assert.Equal(2, appends.Count);
-        Assert.Equal(ChatOutputUpdateLocation.Append, appends[0].Location);
-        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, appends[0].Path);
+        Assert.Equal(ChatOutputUpdateLocation.After, appends[0].Location);
+        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, appends[0].Path);
         Assert.Equal(ChatOutputUpdateLocation.After, appends[1].Location);
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), appends[1].Path);
         Assert.Contains("chat-message", appends[0].Content);
@@ -1094,10 +1094,10 @@ public sealed class ChatOutputHtmlModelTests
         // The first element id for a standalone text message is msg-0.
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), firstElementId);
 
-        // There must be an Append into HistoryContainerId for the message element.
+        // There must be an After targeting LoadAfterAnchorId for the message element.
         Assert.Contains(commands, cmd =>
-            cmd.Location == ChatOutputUpdateLocation.Append &&
-            cmd.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+            cmd.Location == ChatOutputUpdateLocation.After &&
+            cmd.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId);
     }
 
     [Fact]
@@ -1154,7 +1154,7 @@ public sealed class ChatOutputHtmlModelTests
             chunk, idBox, () => true, null, null, null);
 
         var appendCmds = commands
-            .Where(c => c.Location == ChatOutputUpdateLocation.Append && c.Path == ChatOutputHtmlRenderer.HistoryContainerId)
+            .Where(c => c.Location == ChatOutputUpdateLocation.After && c.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId)
             .ToList();
 
         var appendCmd = Assert.Single(appendCmds);
@@ -1305,7 +1305,7 @@ public sealed class ChatOutputHtmlModelTests
             sink,
             () => true,
             () => idCounter++,
-            ChatOutputHtmlRenderer.HistoryContainerId,
+            ChatOutputHtmlRenderer.LoadAfterAnchorId,
             skipInitialItems: skipInitialItems);
     }
 
@@ -1596,8 +1596,8 @@ public sealed class ChatOutputHtmlModelTests
         // The first element rendered by the oldest chunk (items[0]) should have id "msg-0".
         var firstAppend = sink.ContentOperations
             .FirstOrDefault(op =>
-                op.Location == ChatOutputUpdateLocation.Append &&
-                op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+                op.Location == ChatOutputUpdateLocation.After &&
+                op.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId);
         Assert.NotNull(firstAppend);
         Assert.Contains(ChatOutputHtmlRenderer.MessageId(0), firstAppend.Content, StringComparison.Ordinal);
 

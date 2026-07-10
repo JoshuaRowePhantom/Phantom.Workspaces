@@ -727,10 +727,14 @@ internal static class ChatOutputHtmlInsertion
 {
     /// <summary>
     /// Resolves the placement for the item at <paramref name="index"/> (already present in
-    /// <paramref name="target"/>). Prefers <c>After</c> the previous already-inserted sibling, then
-    /// <c>Before</c> the next already-inserted sibling, otherwise appends into the container. This
-    /// keeps both the sequential initial population and incremental inserts correct, never referencing
-    /// a sibling that is not yet in the DOM.
+    /// <paramref name="target"/>). During initial population (all items being inserted for the
+    /// first time), this returns <c>(After, containerPath)</c> so chunks can be inserted
+    /// after the "load-after" anchor without nesting inside it.
+    ///
+    /// <para>During live updates, prefers <c>After</c> the previous already-inserted sibling, then
+    /// <c>Before</c> the next already-inserted sibling, otherwise <c>After</c> the container anchor.
+    /// This keeps both the sequential initial population and incremental inserts correct, never
+    /// referencing a sibling that is not yet in the DOM.</para>
     /// </summary>
     public static (ChatOutputUpdateLocation Location, string Reference) ResolveInsertTarget<T>(
         IList<T> target,
@@ -749,7 +753,7 @@ internal static class ChatOutputHtmlInsertion
             return (ChatOutputUpdateLocation.Before, elementId(target[index + 1]));
         }
 
-        return (ChatOutputUpdateLocation.Append, containerPath);
+        return (ChatOutputUpdateLocation.After, containerPath);
     }
 }
 
@@ -1030,10 +1034,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
             var chunks = ComputeChunkRanges(snapshot);
             var idBox = new int[1];
 
-            // Process chunks oldest-first so that each chunk is appended in DOM order
-            // and the integer IDs assigned by idBox match the index-order IDs that the
-            // live ChatMessageHtmlTransformer will assign in Phase C.
-            for (var chunkIndex = chunks.Count - 1; chunkIndex >= 0; chunkIndex--)
+            // Process chunks newest-first so the user sees the most recent content immediately.
+            // Each chunk is inserted After the "load-after" anchor, causing older chunks to
+            // naturally squeeze in between "load-after" and previously-inserted chunks.
+            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
@@ -1044,7 +1048,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     this.isReasoningVisible, this.isDiagnosticsVisible,
                     this.toolFactory, this.statusSink, this.resolveSubAgentId);
 
-                var isLastChunk = chunkIndex == 0;
+                var isFirstChunk = chunkIndex == 0;
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -1067,7 +1071,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
                         }
                     }
 
-                    if (isLastChunk)
+                    // Scroll to bottom immediately after the first (newest) chunk,
+                    // making the most recent content visible while older chunks fill in above.
+                    if (isFirstChunk)
                     {
                         this.sink.ScrollToBottom();
                     }
@@ -1099,7 +1105,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     this.sink,
                     this.isReasoningVisible,
                     this.NextId,
-                    ChatOutputHtmlRenderer.HistoryContainerId,
+                    ChatOutputHtmlRenderer.HistoryBeforeAnchorId,
                     this.isDiagnosticsVisible,
                     this.toolFactory,
                     this.statusSink,
@@ -1168,7 +1174,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// Generates HTML commands for a slice of history items, callable off the UI thread.
     /// Creates a <see cref="RecordingChatOutputHtmlSink"/>, runs a <see cref="ChatMessageHtmlTransformer"/>
     /// over <paramref name="chunk"/>, and returns the recorded commands together with the id of the
-    /// first top-level element the transformer inserted into <see cref="ChatOutputHtmlRenderer.HistoryContainerId"/>.
+    /// first top-level element the transformer inserted into <see cref="ChatOutputHtmlRenderer.LoadAfterAnchorId"/>.
     /// </summary>
     /// <param name="chunk">A read-only slice of history items to render.</param>
     /// <param name="idBox">
@@ -1199,7 +1205,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
         using var transformer = new ChatMessageHtmlTransformer(
             chunk, slots, recording,
             isReasoningVisible, () => idBox[0]++,
-            ChatOutputHtmlRenderer.HistoryContainerId,
+            ChatOutputHtmlRenderer.LoadAfterAnchorId,
             isDiagnosticsVisible, toolFactory, statusSink, resolveSubAgentId);
 
         string? firstElementId = slots.Count > 0

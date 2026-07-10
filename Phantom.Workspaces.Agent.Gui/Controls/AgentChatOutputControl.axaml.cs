@@ -52,7 +52,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private AgentViewModel? subscribedViewModel;
     private bool isAttached;
     private bool suppressScrollOnEnable;
-    private bool suppressSinkScroll;
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
@@ -115,13 +114,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     public void ScrollToBottom()
     {
-        // Clear the load-time scroll suppression. Set true in OnBrowserReady before constructing
-        // the model; cleared on first call (from the model after the newest history chunk in Phase B).
-        if (this.suppressSinkScroll)
-        {
-            this.suppressSinkScroll = false;
-        }
-
         if (this.subscribedViewModel?.AutoScrollEnabled == false)
         {
             return;
@@ -169,6 +161,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         ChatOutputUpdateLocation.Before => "before",
         ChatOutputUpdateLocation.After => "after",
         ChatOutputUpdateLocation.Append => "append",
+        ChatOutputUpdateLocation.Prepend => "prepend",
         _ => throw new ArgumentOutOfRangeException(nameof(location), location, null),
     };
 
@@ -257,11 +250,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         if (this.subscribedViewModel is { } vm)
         {
-            // suppressSinkScroll stays true until the model delivers ScrollToBottom after the
-            // first (newest) history chunk in Phase B. The BeginBatch/EndBatch here wraps only
-            // Phase A (running-items initial DOM); each history chunk gets its own batch inside
-            // LoadHistoryChunksAsync.
-            this.suppressSinkScroll = true;
+            // Auto-scroll is enabled from the start. ScrollToBottom will be called after the
+            // first (newest) history chunk in Phase B, making recent content visible immediately.
             this.browser.BeginBatch();
             this.outputModel = new ChatOutputHtmlModel(
                 vm.History,
@@ -275,8 +265,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 subAgents: vm.SubAgentDisplays,
                 ancestors: BuildAncestors(vm.AgentChat));
             this.browser.EndBatch();
-            // suppressSinkScroll is cleared by ScrollToBottom() when the model delivers
-            // the first history chunk scroll — no explicit clear here.
 
             // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom
             // is issued by the model after the first history chunk, not here.
