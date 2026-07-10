@@ -1,6 +1,7 @@
 using System.Threading.Tasks;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -26,7 +27,9 @@ public sealed class MainWindowKeyInterceptionTests
         => this.fixture.InvokeAsync(async () =>
         {
             // Verifies that Ctrl+K alone (missing Shift) does not trigger DuplicateBrowserTabCommand.
-            await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+            await using var viewModel = new MainWindowViewModel(
+                new UnknownRepositorySource(),
+                new WorkspacesConfiguration { SkipStartupWorkspace = true });
             await viewModel.InitializeAsync();
 
             var tab = new WebViewModel("https://example.com") { Id = "ctrl-k-no-dup", Title = "Browser" };
@@ -64,7 +67,9 @@ public sealed class MainWindowKeyInterceptionTests
         {
             // Verifies that Ctrl+Shift+K fires DuplicateBrowserTabCommand and marks the event as
             // handled so that child controls such as WebView2 do not receive the keystroke.
-            await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+            await using var viewModel = new MainWindowViewModel(
+                new UnknownRepositorySource(),
+                new WorkspacesConfiguration { SkipStartupWorkspace = true });
             await viewModel.InitializeAsync();
 
             var tab = new WebViewModel("https://example.com") { Id = "ctrl-shift-k-tab", Title = "Browser" };
