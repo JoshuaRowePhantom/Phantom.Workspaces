@@ -64,6 +64,23 @@ public sealed class AgentChatEditorControlTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AgentChatEditorControl_DoesNotContain_DiagnosticTabDataTemplate()
+    {
+        // Issue #819: The Diagnostics tab was removed from the agent edit view.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.DoesNotContain(
+            "DataType=\"vm:DiagnosticInspectorViewModel\"",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "DataType=\"vm:DiagnosticItemViewModel\"",
+            axamlContent,
+            StringComparison.Ordinal);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_ConversationSlot_FillsAvailableHeight()
     {

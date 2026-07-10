@@ -777,22 +777,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("diag-0", receivedContentId);
     }
 
-    [Fact]
-    public async Task DiagnosticSidebarPanel_ShowsIndividualItems_NotJustCounts()
-    {
-        // Verify that the "chat-diagnostics" nav node's detail content is DiagnosticInspectorViewModel
-        // (the per-item list) not the old AgentChatDiagnosticsDetailViewModel aggregate counts panel.
-        var chat = await AgentFactory.CreateAgentChatAsync(
-            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
-
-        var root = Assert.Single(viewModel.EditorItems);
-        var diagnosticsNode = root.Children.FirstOrDefault(c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
-        Assert.NotNull(diagnosticsNode);
-        Assert.IsType<DiagnosticInspectorViewModel>(diagnosticsNode!.DetailContent);
-    }
-
     [PhantomAvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_500ItemHistory_BrowserReceivesMultipleBatches()
     {

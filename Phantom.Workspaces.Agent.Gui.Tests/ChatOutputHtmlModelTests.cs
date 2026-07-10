@@ -467,7 +467,10 @@ public sealed class ChatOutputHtmlModelTests
         // Summary updated to count 2
         var summaryOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
         Assert.Contains("2 calls", summaryOp.Content);
-        Assert.Contains("write_file", summaryOp.Content);
+        // When tools are mixed (read_file and write_file), summary should show "tools" not a specific tool name
+        Assert.Contains("tools", summaryOp.Content);
+        Assert.DoesNotContain("write_file", summaryOp.Content);
+        Assert.DoesNotContain("read_file", summaryOp.Content);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

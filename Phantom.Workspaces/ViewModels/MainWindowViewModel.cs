@@ -2201,8 +2201,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (!pane.Tabs.Contains(tab)) continue;
 
+            // Capture whether this tab was active before removing it
+            var wasActive = false;
+            if (pane.ContentLayout is not null)
+            {
+                var documentDock = this.FindDocumentDock(pane.ContentLayout);
+                wasActive = documentDock?.ActiveDockable is WorkspaceDocument activeDoc
+                    && string.Equals(activeDoc.Id, tab.Id, StringComparison.Ordinal);
+            }
+
             // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
             pane.Tabs.Remove(tab);
+
+            // Navigate to MRU tab if we just closed the active tab
+            if (wasActive)
+            {
+                this.navigatingViaHistory = true;
+                try
+                {
+                    if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
+                    {
+                        this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                    }
+                }
+                finally
+                {
+                    this.navigatingViaHistory = false;
+                }
+            }
+
             DisposeWorkspaceTab(tab);
             return;
         }
@@ -2247,8 +2274,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var tab = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
             if (tab is null) continue;
 
+            // Capture whether this tab was active before removing it
+            var wasActive = false;
+            if (pane.ContentLayout is not null)
+            {
+                var documentDock = this.FindDocumentDock(pane.ContentLayout);
+                wasActive = documentDock?.ActiveDockable is WorkspaceDocument activeDoc
+                    && string.Equals(activeDoc.Id, tab.Id, StringComparison.Ordinal);
+            }
+
             // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
             pane.Tabs.Remove(tab);
+
+            // Navigate to MRU tab if we just closed the active tab
+            if (wasActive)
+            {
+                this.navigatingViaHistory = true;
+                try
+                {
+                    if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
+                    {
+                        this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                    }
+                }
+                finally
+                {
+                    this.navigatingViaHistory = false;
+                }
+            }
+
             DisposeWorkspaceTab(tab);
             return true;
         }
@@ -2667,7 +2721,34 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (pane.Tabs.Contains(tabVm))
             {
+                // Capture whether this tab was active before removing it
+                var wasActive = false;
+                if (pane.ContentLayout is not null)
+                {
+                    var documentDock = this.FindDocumentDock(pane.ContentLayout);
+                    wasActive = documentDock?.ActiveDockable is WorkspaceDocument activeDoc
+                        && string.Equals(activeDoc.Id, tabVm.Id, StringComparison.Ordinal);
+                }
+
                 pane.Tabs.Remove(tabVm);
+
+                // Navigate to MRU tab if we just closed the active tab
+                if (wasActive)
+                {
+                    this.navigatingViaHistory = true;
+                    try
+                    {
+                        if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
+                        {
+                            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                        }
+                    }
+                    finally
+                    {
+                        this.navigatingViaHistory = false;
+                    }
+                }
+
                 break;
             }
         }

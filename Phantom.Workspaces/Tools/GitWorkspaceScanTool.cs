@@ -330,6 +330,13 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
             writer.WriteString("path", fullPath);
 
+            // Add computer-user-profile-id field for group-by-parent view assembler support
+            if (profileName.Components.Length > 0)
+            {
+                var profileId = WorkspaceToolEntityUtilities.CreateDeterministicEntityId(profileName, "workspace-tool-entity");
+                writer.WriteString("computer-user-profile-id", profileId.ToString());
+            }
+
             writer.WriteEndObject();
         }
 

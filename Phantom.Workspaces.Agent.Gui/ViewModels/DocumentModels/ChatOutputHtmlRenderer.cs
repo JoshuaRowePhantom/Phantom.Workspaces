@@ -60,24 +60,38 @@ internal static class ChatOutputHtmlRenderer
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
     /// tool-call messages. <paramref name="bodyContent"/> is the pre-rendered HTML of the first
     /// message and is placed directly inside the body container.
+    /// <paramref name="toolName"/> is null when the group contains mixed tool types.
     /// </summary>
-    public static string RenderToolCallGroup(string groupId, string lastToolName, int callCount, string bodyContent)
+    public static string RenderToolCallGroup(string groupId, string? toolName, int callCount, string bodyContent)
     {
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
-        builder.Append(RenderToolCallGroupSummary(groupId, lastToolName, callCount));
+        builder.Append(RenderToolCallGroupSummary(groupId, toolName, callCount));
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolCallGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
         return builder.ToString();
     }
 
-    /// <summary>Builds the <c>summary</c> element for an existing tool-call group (used when the group is extended).</summary>
-    public static string RenderToolCallGroupSummary(string groupId, string lastToolName, int callCount)
+    /// <summary>
+    /// Builds the <c>summary</c> element for a tool-call group.
+    /// <paramref name="toolName"/> is null when the group contains mixed tool types, in which case
+    /// a neutral "tools" label is shown instead.
+    /// </summary>
+    public static string RenderToolCallGroupSummary(string groupId, string? toolName, int callCount)
     {
         var builder = new StringBuilder();
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolCallGroupSummaryId(groupId)).Append("\">");
-        builder.Append("tool call: <span class=\"tool-name\">").Append(HtmlEscape(lastToolName)).Append("</span>");
+        
+        if (toolName is not null)
+        {
+            builder.Append("tool call: <span class=\"tool-name\">").Append(HtmlEscape(toolName)).Append("</span>");
+        }
+        else
+        {
+            builder.Append("tools");
+        }
+        
         builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
         builder.Append("</summary>");
         return builder.ToString();
@@ -125,7 +139,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"3\">tool ").Append(callSummary).Append("</summary>");
 
         builder.Append("<details class=\"chat-tool-call\" open>");
-        builder.Append("<summary class=\"chat-collapsible-summary\">call  ").Append(callSummary).Append("</summary>");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
             builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(callJson)).Append("</pre>");
@@ -137,7 +151,7 @@ internal static class ChatOutputHtmlRenderer
         {
             var resultSummary = FirstLine(resultJson);
             builder.Append("<details class=\"chat-tool-result\" open>");
-            builder.Append("<summary class=\"chat-collapsible-summary\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
+            builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
                 builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(resultJson)).Append("</pre>");

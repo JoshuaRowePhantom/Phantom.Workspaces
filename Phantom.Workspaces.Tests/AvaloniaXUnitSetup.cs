@@ -17,6 +17,7 @@ public static class AvaloniaTestAppBuilder
     public static AppBuilder BuildAvaloniaApp()
     {
         Phantom.Workspaces.Gui.Shared.Controls.ControllableBrowserFactory.Create = static () => new HeadlessControllableBrowser();
+        Phantom.Workspaces.Controls.ConfiguredWebViewFactory.Create = static () => new HeadlessConfiguredWebView();
         return AppBuilder.Configure<TestApplication>()
             .UseHeadless(
                 new AvaloniaHeadlessPlatformOptions

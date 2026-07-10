@@ -10,5 +10,10 @@
     { "field-path": ["git", "branch"] },
     { "field-path": ["git", "head-commit"] },
     { "field-path": ["target-branch"] }
-  ]
+  ],
+  "group-by-parent": {
+    "source": "field",
+    "field-path": ["computer-user-profile-id"],
+    "parent-entity-type-names": ["user-computer-profile"]
+  }
 }

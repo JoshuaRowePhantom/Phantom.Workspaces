@@ -334,6 +334,7 @@ internal sealed class ToolCallGroupHtmlModel
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly string groupId;
+    private readonly HashSet<string> distinctToolNames;
     private string lastToolName;
     private int callCount;
 
@@ -343,22 +344,26 @@ internal sealed class ToolCallGroupHtmlModel
         this.sink = sink;
         this.lastToolName = firstToolName;
         this.callCount = 1;
+        this.distinctToolNames = new HashSet<string> { firstToolName };
     }
 
     public string GroupId => this.groupId;
+    
+    public bool IsHomogeneous => this.distinctToolNames.Count == 1;
 
     /// <summary>
     /// Builds the complete group element for DOM insertion, with <paramref name="firstMessageHtml"/>
     /// pre-placed inside the body container.
     /// </summary>
     public string BuildHtml(string firstMessageHtml)
-        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.groupId, this.lastToolName, this.callCount, firstMessageHtml);
+        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.groupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount, firstMessageHtml);
 
     /// <summary>Appends <paramref name="model"/> to the group and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model, string toolName)
     {
         this.callCount++;
         this.lastToolName = toolName;
+        this.distinctToolNames.Add(toolName);
 
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolCallGroupBodyId(this.groupId),
@@ -369,7 +374,7 @@ internal sealed class ToolCallGroupHtmlModel
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolCallGroupSummaryId(this.groupId),
             ChatOutputUpdateLocation.Replace,
-            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.groupId, this.lastToolName, this.callCount));
+            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.groupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount));
     }
 
     /// <summary>
@@ -381,6 +386,7 @@ internal sealed class ToolCallGroupHtmlModel
     {
         this.callCount++;
         this.lastToolName = toolName;
+        this.distinctToolNames.Add(toolName);
         model.IsInserted = true;
     }
 }
