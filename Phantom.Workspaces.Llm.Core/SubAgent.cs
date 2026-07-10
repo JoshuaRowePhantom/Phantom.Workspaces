@@ -20,7 +20,7 @@ public sealed class SubAgent : IRunningSubAgent
     /// Non-null on the eager path (registered via <see cref="ISubAgentTable.Add"/>);
     /// null on the lazy path until <see cref="AcquireLeaseAsync"/> is called.
     /// </summary>
-    public AgentChat? AgentChat { get; }
+    internal AgentChat? AgentChat { get; }
 
     /// <summary>Eager path — AgentChat already in hand (from <see cref="ISubAgentTable.Add"/>).</summary>
     internal SubAgent(AgentSessionId sessionId, AgentChat agentChat, IRunningAgentChatFactory? factory)
