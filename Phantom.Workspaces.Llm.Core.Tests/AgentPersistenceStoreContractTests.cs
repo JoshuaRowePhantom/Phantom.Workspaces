@@ -1,7 +1,9 @@
+using AgentSchema;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using System.Collections.ObjectModel;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -336,5 +338,72 @@ public abstract class AgentPersistenceStoreContractTests
         var childIds = await store.ReadSubAgentChildIdsAsync("parent-link-4b", CancellationToken.None);
 
         Assert.Empty(childIds);
+    }
+
+    [Fact]
+    public async Task SessionReopenRoundTrip_SubAgentsRestored()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+
+        // Manually persist parent and child sessions with a parent→child link
+        var parentSessionId = Guid.NewGuid().ToString("n");
+        var childSessionId = Guid.NewGuid().ToString("n");
+
+        var parentDefinition = BsonDocument.Parse(
+            """
+            {
+              "kind": "prompt",
+              "name": "parent-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var childDefinition = BsonDocument.Parse(
+            """
+            {
+              "kind": "prompt",
+              "name": "child-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        // Store parent agent
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = parentSessionId,
+                AgentDefinitionJson = parentDefinition,
+            }
+        });
+
+        // Store child agent
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = childDefinition,
+            }
+        });
+
+        // Create parent→child link
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+
+        // Verify the link can be read back
+        var childIds = await store.ReadSubAgentChildIdsAsync(parentSessionId);
+        Assert.Single(childIds);
+        Assert.Equal(childSessionId, childIds[0].Value);
     }
 }

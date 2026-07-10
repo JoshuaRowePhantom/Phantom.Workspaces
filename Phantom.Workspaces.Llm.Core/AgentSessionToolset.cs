@@ -278,7 +278,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
             // Register with parent's sub-agent table
             var parentChat = _toolset.ParentChat;
-            ((ISubAgentTable)parentChat).Add(lease.AgentChat);
+            await ((ISubAgentTable)parentChat).Add(lease.AgentChat);
 
             lock (_toolset._leasesLock)
             {

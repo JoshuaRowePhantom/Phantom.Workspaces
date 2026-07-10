@@ -183,4 +183,36 @@ public sealed class AgentChatSubAgentRegistryTests
         var child = (AgentChat)Assert.Single(parent.SubAgents);
         Assert.Equal("my-agent-id", child.AgentId);
     }
+
+    [Fact]
+    public async Task ISubAgentTable_Add_PersistsLinkBeforeReturning()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent-chat",
+        });
+
+        var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = CreateSubAgentDefinition(),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "child-chat",
+        });
+
+        await using var parentDispose = parentChat;
+        await using var childDispose = childChat;
+
+        // Act: Add the child to the parent
+        await ((ISubAgentTable)parentChat).Add(childChat);
+
+        // Assert: The link should be immediately readable from the store
+        var childIds = await store.ReadSubAgentChildIdsAsync(parentChat.AgentSessionId);
+        var childId = Assert.Single(childIds);
+        Assert.Equal(childChat.AgentSessionId, childId.Value);
+    }
 }
