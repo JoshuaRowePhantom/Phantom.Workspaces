@@ -36,12 +36,16 @@ public sealed class ToolCallGroupViewModelTests
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
             ToolCallMessage("report_intent"),
-            ToolCallMessage("workspaces_entity_get"),
         };
         var sink = new RecordingSink();
 
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
+        sink.Operations.Clear();
+
+        // Live-add a second, different tool call so the pair is promoted into a group and the
+        // group summary is refreshed with the mixed-tools label.
+        history.Add(ToolCallMessage("workspaces_entity_get"));
 
         var groupSummaryUpdate = sink.Operations.FirstOrDefault(op => op.Path.Contains("-summary"));
         Assert.True(groupSummaryUpdate != default);
@@ -63,12 +67,15 @@ public sealed class ToolCallGroupViewModelTests
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
             ToolCallMessage("grep"),
-            ToolCallMessage("grep"),
         };
         var sink = new RecordingSink();
 
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
+        sink.Operations.Clear();
+
+        // Live-add a second call of the same tool so promotion refreshes the group summary.
+        history.Add(ToolCallMessage("grep"));
 
         var groupSummaryUpdate = sink.Operations.FirstOrDefault(op => op.Path.Contains("-summary"));
         Assert.True(groupSummaryUpdate != default);
@@ -87,12 +94,14 @@ public sealed class ToolCallGroupViewModelTests
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
             ToolCallMessage("view"),
-            ToolCallMessage("edit"),
         };
         var sink = new RecordingSink();
 
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
+        sink.Operations.Clear();
+
+        history.Add(ToolCallMessage("edit"));
 
         // When two consecutive tool calls exist, they should be grouped
         var groupSummaryUpdate = sink.Operations.FirstOrDefault(op => op.Path.Contains("-summary"));

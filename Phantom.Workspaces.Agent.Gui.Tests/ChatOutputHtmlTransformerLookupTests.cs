@@ -50,6 +50,21 @@ public sealed class ChatOutputHtmlTransformerLookupTests
     private static AgentChatHistoryItem TextMessage(ChatRole role, string text)
         => new() { Role = role, Contents = [new TextContent(text)] };
 
+    private static ChatMessageHtmlTransformer MakeTransformer(
+        ObservableCollection<AgentChatHistoryItem> source,
+        List<RenderSlot> target,
+        RecordingSink sink,
+        Dictionary<string, RenderSlot>? sharedSlotByCallId = null)
+        => new(
+            source,
+            target,
+            sink,
+            () => true,
+            containerPath: "container",
+            elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
+            groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
+            sharedSlotByCallId: sharedSlotByCallId ?? new(System.StringComparer.Ordinal));
+
     [Fact]
     public void FindSlotWithCallId_SingleCall_ReturnsMatchingSlot()
     {
@@ -59,14 +74,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         var slot = transformer.FindSlotWithCallId("call-123");
 
@@ -86,14 +94,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         var slot1 = transformer.FindSlotWithCallId("call-1");
         var slot2 = transformer.FindSlotWithCallId("call-2");
@@ -115,14 +116,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         var slot = transformer.FindSlotWithCallId(null);
 
@@ -138,14 +132,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         var slot = transformer.FindSlotWithCallId("non-existent-id");
 
@@ -161,14 +148,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         var slotBefore = transformer.FindSlotWithCallId("call-123");
         Assert.NotNull(slotBefore);
@@ -180,7 +160,48 @@ public sealed class ChatOutputHtmlTransformerLookupTests
     }
 
     [Fact]
-    public void FindPrecedingToolCallSlotIndex_ToolCallExists_ReturnsIndex()
+    public void FindSlotWithCallId_SharedMap_MatchesCallRegisteredByOtherTransformer()
+    {
+        // Two transformers (e.g. history and a running item) share one call-id map: a call
+        // registered by the first transformer is visible through the second.
+        var sharedMap = new Dictionary<string, RenderSlot>(System.StringComparer.Ordinal);
+        var sink = new RecordingSink();
+
+        var historySource = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("history_tool", "shared-call"),
+        };
+        using var historyTransformer = MakeTransformer(historySource, [], sink, sharedMap);
+
+        var runningSource = new ObservableCollection<AgentChatHistoryItem>();
+        using var runningTransformer = MakeTransformer(runningSource, [], sink, sharedMap);
+
+        var slot = runningTransformer.FindSlotWithCallId("shared-call");
+
+        Assert.NotNull(slot);
+        Assert.True(slot.Model.HasCallWithId("shared-call"));
+    }
+
+    [Fact]
+    public void FindSlotWithCallId_TransformerDispose_RemovesItsEntriesFromSharedMap()
+    {
+        var sharedMap = new Dictionary<string, RenderSlot>(System.StringComparer.Ordinal);
+        var sink = new RecordingSink();
+
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("test_tool", "disposed-call"),
+        };
+        var transformer = MakeTransformer(source, [], sink, sharedMap);
+        Assert.True(sharedMap.ContainsKey("disposed-call"));
+
+        transformer.Dispose();
+
+        Assert.False(sharedMap.ContainsKey("disposed-call"));
+    }
+
+    [Fact]
+    public void FindGroupablePredecessor_PreviousToolCall_ReturnsItsSlot()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -189,22 +210,18 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
-        var index = transformer.FindPrecedingToolCallSlotIndex(1);
+        var predecessor = transformer.FindGroupablePredecessor(1);
 
-        Assert.Equal(0, index);
+        Assert.Same(target[0], predecessor);
+        // The two calls were promoted into a group during insertion.
+        Assert.NotNull(target[0].Group);
+        Assert.Same(target[0].Group, target[1].Group);
     }
 
     [Fact]
-    public void FindPrecedingToolCallSlotIndex_NoToolCallSlot_ReturnsMinusOne()
+    public void FindGroupablePredecessor_NoToolCallBefore_ReturnsNull()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -212,47 +229,15 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
-        var index = transformer.FindPrecedingToolCallSlotIndex(0);
+        var predecessor = transformer.FindGroupablePredecessor(0);
 
-        Assert.Equal(-1, index);
+        Assert.Null(predecessor);
     }
 
     [Fact]
-    public void FindPrecedingToolCallSlotIndex_AfterGroupedSlot_ReturnsGroupIndex()
-    {
-        var source = new ObservableCollection<AgentChatHistoryItem>
-        {
-            ToolCallMessage("tool_a", "call-1"),
-            ToolCallMessage("tool_b", "call-2"),
-        };
-        var target = new List<RenderSlot>();
-        var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
-
-        var index = transformer.FindPrecedingToolCallSlotIndex(1);
-
-        Assert.Equal(0, index);
-        Assert.NotNull(target[0].Group);
-    }
-
-    [Fact]
-    public void FindPrecedingToolCallSlotIndex_SkipsToolResultOnlyMessages_FindsToolCall()
+    public void FindGroupablePredecessor_SkipsToolResultOnlyMessages_FindsToolCall()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -262,18 +247,30 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         };
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
-        var index = transformer.FindPrecedingToolCallSlotIndex(2);
+        var predecessor = transformer.FindGroupablePredecessor(2);
 
-        Assert.Equal(0, index);
+        Assert.Same(target[0], predecessor);
+    }
+
+    [Fact]
+    public void FindGroupablePredecessor_TextMessageBetween_ReturnsNull()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1"),
+            TextMessage(ChatRole.Assistant, "thinking"),
+            ToolCallMessage("tool_b", "call-2"),
+        };
+        var target = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        using var transformer = MakeTransformer(source, target, sink);
+
+        var predecessor = transformer.FindGroupablePredecessor(2);
+
+        Assert.Null(predecessor);
+        Assert.Null(target[2].Group);
     }
 
     [Fact]
@@ -282,14 +279,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         var source = new ObservableCollection<AgentChatHistoryItem>();
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         for (var i = 0; i < 10; i++)
         {
@@ -298,10 +288,6 @@ public sealed class ChatOutputHtmlTransformerLookupTests
             source.Add(ToolResultMessage(callId, $"result-{i}"));
 
             var slot = transformer.FindSlotWithCallId(callId);
-            if (slot == null)
-            {
-                throw new System.Exception($"Failed to find slot for {callId} at iteration {i}, target count = {target.Count}");
-            }
             Assert.NotNull(slot);
             Assert.True(slot.Model.HasCallWithId(callId));
         }
@@ -320,18 +306,11 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         var source = new ObservableCollection<AgentChatHistoryItem>();
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         source.Add(ToolCallMessage("tool_0", "call-0"));
         source.Add(ToolResultMessage("call-0", "result-0"));
-        
+
         var slot0 = transformer.FindSlotWithCallId("call-0");
         Assert.NotNull(slot0);
 
@@ -342,7 +321,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
 
         var slot1 = transformer.FindSlotWithCallId("call-1");
         Assert.NotNull(slot1);
-        
+
         var slot0Again = transformer.FindSlotWithCallId("call-0");
         Assert.NotNull(slot0Again);
     }
@@ -353,14 +332,7 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         var source = new ObservableCollection<AgentChatHistoryItem>();
         var target = new List<RenderSlot>();
         var sink = new RecordingSink();
-        var nextIdCounter = 0;
-        var transformer = new ChatMessageHtmlTransformer(
-            source,
-            target,
-            sink,
-            () => true,
-            () => nextIdCounter++,
-            "container");
+        using var transformer = MakeTransformer(source, target, sink);
 
         source.Add(ToolCallMessage("tool_0", "call-0"));
         var slot0 = transformer.FindSlotWithCallId("call-0");

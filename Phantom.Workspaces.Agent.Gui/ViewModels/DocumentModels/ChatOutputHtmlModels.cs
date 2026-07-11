@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
@@ -17,26 +18,13 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 /// <see cref="IChatOutputHtmlSink"/>. The full element is produced once via <see cref="BuildHtml"/>
 /// (for insertion); subsequent <see cref="Update"/>/<see cref="Refresh"/> calls emit only the
 /// per-content operations needed to reconcile the DOM, reusing stable element ids so unchanged nodes
-/// are preserved.
+/// are preserved. The element id is injected at construction and is immutable: history callers pass
+/// <see cref="ChatOutputHtmlRenderer.MessageId"/>, running-item callers pass
+/// <see cref="ChatOutputHtmlRenderer.RunningMessageId"/>.
 /// </summary>
 internal sealed class ChatMessageHtmlModel
 {
     private sealed record ContentBinding(string Key, string ElementId, string Html);
-
-    /// <summary>Appends an insert-after anchor div to the content HTML if the element ID follows the positional pattern.</summary>
-    private static string AppendInsertAfterDiv(string contentId, string html)
-    {
-        // Extract index and subindex from "history-{index}-{subindex}" format
-        if (contentId.StartsWith("history-") && contentId.LastIndexOf('-') > 8)
-        {
-            var parts = contentId.Substring(8).Split('-');
-            if (parts.Length == 2 && int.TryParse(parts[0], out var index) && int.TryParse(parts[1], out var subIndex))
-            {
-                return html + $"<div class=\"insert-after\" id=\"{ChatOutputHtmlRenderer.InsertAfterContentId(index, subIndex)}\"></div>";
-            }
-        }
-        return html;
-    }
 
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
@@ -45,7 +33,6 @@ internal sealed class ChatMessageHtmlModel
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
     private readonly List<ContentBinding> bindings = [];
-    private int historyIndex;
     private AgentChatHistoryItem source;
     private string? renderedRoleLabel;
     private bool hasRendered;
@@ -54,7 +41,8 @@ internal sealed class ChatMessageHtmlModel
     private Dictionary<string, FunctionResultContent>? supplementalResults;
 
     public ChatMessageHtmlModel(
-        int historyIndex,
+        int sourceIndex,
+        string elementId,
         AgentChatHistoryItem source,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
@@ -63,9 +51,11 @@ internal sealed class ChatMessageHtmlModel
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null)
     {
+        ArgumentNullException.ThrowIfNull(elementId);
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         ArgumentNullException.ThrowIfNull(sink);
-        this.historyIndex = historyIndex;
+        this.SourceIndex = sourceIndex;
+        this.ElementId = elementId;
         this.source = source;
         this.isReasoningVisible = isReasoningVisible;
         this.isDiagnosticsVisible = isDiagnosticsVisible;
@@ -76,13 +66,14 @@ internal sealed class ChatMessageHtmlModel
         this.Render(emit: false);
     }
 
-    public string ElementId => ChatOutputHtmlRenderer.MessageId(this.historyIndex);
-    
-    /// <summary>Updates the history index. Must be called before any DOM operations if the index changes.</summary>
-    public void SetHistoryIndex(int index)
-    {
-        this.historyIndex = index;
-    }
+    /// <summary>The index of this message in its source collection at creation/render-plan time.</summary>
+    public int SourceIndex { get; }
+
+    /// <summary>The immutable DOM element id of this message's outer element.</summary>
+    public string ElementId { get; }
+
+    /// <summary>The source item this model currently renders.</summary>
+    public AgentChatHistoryItem Source => this.source;
 
     /// <summary>Set once the message element has been inserted into the DOM by its transformer.</summary>
     public bool IsInserted { get; set; }
@@ -112,8 +103,9 @@ internal sealed class ChatMessageHtmlModel
 
     /// <summary>
     /// Injects a <see cref="FunctionResultContent"/> from a separate tool-role message into this
-    /// message's rendering so the result appears nested under its matching call item. Triggers a
-    /// re-render if the message has already been inserted into the DOM.
+    /// message's rendering so the result appears nested under its matching call item. Recomputes the
+    /// content bindings immediately (so a later <see cref="BuildHtml"/> includes the result) and
+    /// emits reconciliation operations only when the message is already in the DOM.
     /// </summary>
     public void AddSupplementalResult(FunctionResultContent result)
     {
@@ -125,10 +117,7 @@ internal sealed class ChatMessageHtmlModel
         this.supplementalResults ??= new Dictionary<string, FunctionResultContent>(StringComparer.Ordinal);
         this.supplementalResults[result.CallId] = result;
 
-        if (this.IsInserted)
-        {
-            this.Render(emit: true);
-        }
+        this.Render(emit: this.IsInserted);
     }
 
     /// <summary>Builds the full message element for initial insertion from the current bindings.</summary>
@@ -266,7 +255,7 @@ internal sealed class ChatMessageHtmlModel
 
                 var groupKey = "group:" + string.Join("\x02", keyParts);
                 var groupHtml = ChatOutputHtmlRenderer.RenderToolGroup(elementId, calls, resultLookup);
-                newBindings.Add(new ContentBinding(groupKey, elementId, AppendInsertAfterDiv(elementId, groupHtml)));
+                newBindings.Add(new ContentBinding(groupKey, elementId, groupHtml));
                 continue;
             }
 
@@ -291,7 +280,7 @@ internal sealed class ChatMessageHtmlModel
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
-                newBindings.Add(new ContentBinding(key, contentId, AppendInsertAfterDiv(contentId, html)));
+                newBindings.Add(new ContentBinding(key, contentId, html));
             }
 
             contentIndex++;
@@ -348,39 +337,44 @@ internal sealed class ChatMessageHtmlModel
 }
 
 /// <summary>
-/// Renders a run of consecutive tool-call/result history items as a single collapsible
+/// Renders a run of consecutive tool-call history items as a single collapsible
 /// <c>details</c> element. Children are <see cref="ChatMessageHtmlModel"/> instances whose HTML
-/// is placed inside the expanded body. The summary line shows the last tool name and a call-count badge.
+/// is placed intact inside the expanded body (so later per-content diffs can still target their
+/// child ids). The summary line shows the last tool name and a call-count badge. The group id is
+/// derived from the first member's source index and never changes for the life of the group.
 /// </summary>
 internal sealed class ToolCallGroupHtmlModel
 {
     private readonly IChatOutputHtmlSink sink;
-    private readonly string groupId;
     private readonly HashSet<string> distinctToolNames;
     private string lastToolName;
     private int callCount;
 
-    public ToolCallGroupHtmlModel(string groupId, IChatOutputHtmlSink sink, string firstToolName)
+    public ToolCallGroupHtmlModel(int firstHistoryIndex, string groupId, IChatOutputHtmlSink sink, string firstToolName)
     {
-        this.groupId = groupId;
+        this.FirstHistoryIndex = firstHistoryIndex;
+        this.GroupId = groupId;
         this.sink = sink;
         this.lastToolName = firstToolName;
         this.callCount = 1;
         this.distinctToolNames = new HashSet<string> { firstToolName };
     }
 
-    public string GroupId => this.groupId;
-    
+    /// <summary>The source index of the first (top-level) member the group replaced.</summary>
+    public int FirstHistoryIndex { get; }
+
+    public string GroupId { get; }
+
     public bool IsHomogeneous => this.distinctToolNames.Count == 1;
 
     /// <summary>
     /// Builds the complete group element for DOM insertion, with <paramref name="firstMessageHtml"/>
-    /// pre-placed inside the body container.
+    /// (or the concatenated member HTML) pre-placed inside the body container.
     /// </summary>
     public string BuildHtml(string firstMessageHtml)
-        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.groupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount, firstMessageHtml);
+        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.GroupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount, firstMessageHtml);
 
-    /// <summary>Appends <paramref name="model"/> to the group and updates the summary badge.</summary>
+    /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model, string toolName)
     {
         this.callCount++;
@@ -388,34 +382,35 @@ internal sealed class ToolCallGroupHtmlModel
         this.distinctToolNames.Add(toolName);
 
         this.sink.UpdateContent(
-            ChatOutputHtmlRenderer.ToolCallGroupBodyId(this.groupId),
+            ChatOutputHtmlRenderer.ToolGroupBodyId(this.GroupId),
             ChatOutputUpdateLocation.Append,
             model.BuildHtml());
         model.IsInserted = true;
 
         this.sink.UpdateContent(
-            ChatOutputHtmlRenderer.ToolCallGroupSummaryId(this.groupId),
+            ChatOutputHtmlRenderer.ToolGroupSummaryId(this.GroupId),
             ChatOutputUpdateLocation.Replace,
-            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.groupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount));
+            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount));
     }
 
     /// <summary>
-    /// Updates group state (call count, last tool name, and <see cref="ChatMessageHtmlModel.IsInserted"/>)
-    /// without emitting any sink operations. Used during initial population for items already in the DOM
-    /// (rendered by the chunk loader, so DOM calls are suppressed via <c>skipInitialItems</c>).
+    /// Updates group state (call count, last tool name) without emitting any sink operations.
+    /// Used by render-plan/chunk generation and run rebuilds, where the group HTML is produced
+    /// as one blob rather than by incremental DOM operations.
     /// </summary>
     internal void AppendItemStateOnly(ChatMessageHtmlModel model, string toolName)
     {
         this.callCount++;
         this.lastToolName = toolName;
         this.distinctToolNames.Add(toolName);
-        model.IsInserted = true;
     }
 }
 
 /// <summary>
-/// Discriminated render target for <see cref="ChatMessageHtmlTransformer"/>. Each source item maps
-/// to a model plus an optional group; the group is set when the item belongs to a tool-call run.
+/// Discriminated render target for <see cref="ChatMessageHtmlTransformer"/> and the history render
+/// plan. Each source item maps to a model plus an optional group; the group is set when the item
+/// belongs to a tool-call run. <see cref="HasDomElement"/> is false for slots that render no DOM
+/// element of their own (suppressed diagnostics and result-only messages injected into a call).
 /// </summary>
 internal sealed class RenderSlot
 {
@@ -425,77 +420,211 @@ internal sealed class RenderSlot
 
     /// <summary>Non-null when this item has been merged into a tool-call group.</summary>
     public ToolCallGroupHtmlModel? Group { get; set; }
+
+    /// <summary>
+    /// True when this slot owns (or will own) a DOM element — either top-level or nested inside a
+    /// group body. False for suppressed diagnostics and result-only messages whose results were
+    /// injected into matched call models.
+    /// </summary>
+    public bool HasDomElement { get; set; } = true;
+
+    /// <summary>True only for the first rendered member that a group replaced at the top level.</summary>
+    public bool IsTopLevelFirstGroupMember { get; set; }
 }
 
 /// <summary>
 /// Transforms a chat-message source collection into <see cref="ChatMessageHtmlModel"/> instances,
-/// emitting insertion/removal operations against a parent container in the DOM.
+/// emitting insertion/removal operations against a parent container in the DOM. Element ids are
+/// produced by the injected <c>elementIdForSourceIndex</c>; tool-call group ids by
+/// <c>groupIdForSourceIndex</c>. Call-id lookup uses the shared, model-level map so tool results
+/// can match calls across chunks, phases, and running items.
 /// </summary>
 internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentChatHistoryItem, RenderSlot>
 {
+    private enum StructuralCategory
+    {
+        SuppressedDiagnostic,
+        ToolCallOnly,
+        ResultOnly,
+        Normal,
+    }
+
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
     private readonly Func<bool>? isDiagnosticsVisible;
-    private readonly Func<int> nextId;
     private readonly string containerPath;
+    private readonly Func<int, string> elementIdForSourceIndex;
+    private readonly Func<int, string> groupIdForSourceIndex;
+    private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
-    private readonly int skipInitialItems;
-    private readonly int startIndex;
-    private bool inInitialTransform;
-    private readonly Dictionary<string, RenderSlot> slotByCallId = [];
-    private int lastToolCallSlotIndex = -1;
-    private int nextCreateIndex = 0;
+    private int nextCreateIndex;
 
     public ChatMessageHtmlTransformer(
         IReadOnlyList<AgentChatHistoryItem> source,
         List<RenderSlot> target,
         IChatOutputHtmlSink sink,
         Func<bool> isReasoningVisible,
-        Func<int> nextId,
         string containerPath,
+        Func<int, string> elementIdForSourceIndex,
+        Func<int, string> groupIdForSourceIndex,
+        Dictionary<string, RenderSlot> sharedSlotByCallId,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
-        int skipInitialItems = 0,
-        int startIndex = 0)
+        int preloadedCount = 0)
         : base(source, target)
     {
+        ArgumentNullException.ThrowIfNull(elementIdForSourceIndex);
+        ArgumentNullException.ThrowIfNull(groupIdForSourceIndex);
+        ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
         this.isDiagnosticsVisible = isDiagnosticsVisible;
-        this.nextId = nextId;
         this.containerPath = containerPath;
+        this.elementIdForSourceIndex = elementIdForSourceIndex;
+        this.groupIdForSourceIndex = groupIdForSourceIndex;
+        this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
         this.resolveSubAgentId = resolveSubAgentId;
-        this.skipInitialItems = skipInitialItems;
-        this.startIndex = startIndex;
-        this.inInitialTransform = true;
-        this.ApplyInitialTransform();
-        this.inInitialTransform = false;
+        this.nextCreateIndex = preloadedCount;
+
+        // Preloaded slots (from the Phase B render plan) are already in `target` and in the DOM;
+        // only items appended to the source after the snapshot are created and inserted here.
+        for (var index = this.Target.Count; index < source.Count; index++)
+        {
+            var slot = this.Create(source[index]);
+            this.Target.Add(slot);
+            this.OnInsert(index, slot);
+        }
     }
 
     protected override RenderSlot Create(AgentChatHistoryItem sourceItem)
     {
         var index = this.nextCreateIndex++;
-        return new(new ChatMessageHtmlModel(this.startIndex + index, sourceItem, this.isReasoningVisible, this.sink, this.isDiagnosticsVisible, this.toolFactory, this.statusSink, this.resolveSubAgentId));
+        return new(new ChatMessageHtmlModel(
+            index,
+            this.elementIdForSourceIndex(index),
+            sourceItem,
+            this.isReasoningVisible,
+            this.sink,
+            this.isDiagnosticsVisible,
+            this.toolFactory,
+            this.statusSink,
+            this.resolveSubAgentId));
     }
 
     protected override void Update(RenderSlot target, AgentChatHistoryItem sourceItem)
-        => target.Model.Update(sourceItem);
+    {
+        var oldSource = target.Model.Source;
+        if (ReferenceEquals(oldSource, sourceItem))
+        {
+            return;
+        }
+
+        if (this.Categorize(oldSource) == this.Categorize(sourceItem))
+        {
+            target.Model.Update(sourceItem);
+
+            if (ContainsFunctionCalls(oldSource) || ContainsFunctionCalls(sourceItem))
+            {
+                this.RemoveCallIdsFromIndex(target);
+                this.AddCallIdsToIndex(sourceItem, target);
+            }
+
+            // A result-only message whose results are injected has no DOM element; keep the matched
+            // call models up to date with the replacement results.
+            if (!target.HasDomElement && IsToolResultOnlyItem(sourceItem))
+            {
+                this.TryInjectResults(sourceItem);
+            }
+
+            return;
+        }
+
+        // Structural category changed (e.g. tool-call ↔ text): rebuild locally as removal + insert.
+        var index = this.Target.IndexOf(target);
+        this.RebuildForReplace(index, target, sourceItem);
+    }
 
     protected override void OnInsert(int index, RenderSlot slot)
     {
-        // Model was created with the correct index in Create(), no need to reset it
-        
-        var sourceItem = this.Source[index];
-        var suppressSink = this.inInitialTransform && index < this.skipInitialItems;
+        this.AddCallIdsToIndex(slot.Model.Source, slot);
+        this.ClassifyAndInsert(index, slot);
+    }
 
-        // Maintain indexed lookup structures early, before any early returns.
-        this.AddCallIdsToIndex(sourceItem, slot);
+    protected override void OnRemoveAt(int index, RenderSlot slot)
+    {
+        this.RemoveCallIdsFromIndex(slot);
+
+        if (!slot.HasDomElement)
+        {
+            return;
+        }
+
+        if (slot.Group is { } group)
+        {
+            this.RebuildGroupAfterRemoval(group, slot);
+            return;
+        }
+
+        this.sink.RemoveContent(slot.Model.ElementId);
+    }
+
+    protected override void OnMove(int oldIndex, int newIndex, RenderSlot slot)
+    {
+        // Moves cannot be expressed as a safe local DOM operation once grouping is involved;
+        // rebuild this transformer's whole container region from the (already reordered) target.
+        var removedTopLevelIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var existing in this.Target)
+        {
+            if (!existing.HasDomElement)
+            {
+                continue;
+            }
+
+            var topLevelId = existing.Group?.GroupId ?? existing.Model.ElementId;
+            if (removedTopLevelIds.Add(topLevelId))
+            {
+                this.sink.RemoveContent(topLevelId);
+            }
+        }
+
+        foreach (var existing in this.Target)
+        {
+            existing.Group = null;
+            existing.IsTopLevelFirstGroupMember = false;
+            existing.HasDomElement = false;
+            existing.Model.IsInserted = false;
+        }
+
+        for (var index = 0; index < this.Target.Count; index++)
+        {
+            this.ClassifyAndInsert(index, this.Target[index]);
+        }
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        foreach (var slot in this.Target)
+        {
+            this.RemoveCallIdsFromIndex(slot);
+        }
+    }
+
+    /// <summary>
+    /// Classifies <paramref name="slot"/> (no-DOM, grouped, or standalone) and emits the DOM
+    /// operations that realize it. This is the normative live-insert algorithm: the first
+    /// renderable item appends into the configured container; later items insert after the previous
+    /// renderable top-level element or its group.
+    /// </summary>
+    private void ClassifyAndInsert(int index, RenderSlot slot)
+    {
+        var sourceItem = slot.Model.Source;
 
         // Completely suppress diagnostic messages when diagnostics are disabled.
         var isDiagnostic = string.Equals(
@@ -505,113 +634,217 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         var includeDiagnostics = this.isDiagnosticsVisible?.Invoke() ?? true;
         if (isDiagnostic && !includeDiagnostics)
         {
-            // No DOM element for diagnostic messages when diagnostics are disabled.
+            slot.HasDomElement = false;
             return;
         }
 
-        // If the new item contains only FunctionResultContent items, try to inject each result into
-        // the preceding slot that owns the matching FunctionCallContent. When any result is injected
-        // the tool-result message produces no DOM element of its own (the result is shown nested
-        // inside the call item). Unmatched results fall through to normal standalone rendering.
-        if (IsToolResultOnlyItem(sourceItem))
+        // A message containing only FunctionResultContent items produces no DOM element of its own
+        // when every result matches a known call: each result is injected into the matched call
+        // model so it renders nested under its call item. Any unmatched result keeps the whole
+        // message standalone.
+        if (IsToolResultOnlyItem(sourceItem) && this.TryInjectResults(sourceItem))
         {
-            var anyInjected = false;
-            foreach (var content in sourceItem.Contents)
-            {
-                if (content is FunctionResultContent result)
-                {
-                    var matchSlot = this.FindSlotWithCallId(result.CallId);
-                    if (matchSlot is not null)
-                    {
-                        matchSlot.Model.AddSupplementalResult(result);
-                        anyInjected = true;
-                    }
-                }
-            }
-
-            if (anyInjected)
-            {
-                // Results injected; no DOM element for this message.
-                return;
-            }
-
-            // No matching calls found; fall through to standalone rendering below.
+            slot.HasDomElement = false;
+            return;
         }
+
+        slot.HasDomElement = true;
 
         if (IsToolCallOnlyItem(sourceItem))
         {
             var toolName = GetLastToolName(sourceItem);
-
-            var prevIndex = this.FindPrecedingToolCallSlotIndex(index);
-            if (prevIndex >= 0)
+            var groupablePredecessor = this.FindGroupablePredecessor(index);
+            if (groupablePredecessor is not null)
             {
-                var prevSlot = this.Target[prevIndex];
-
-                if (prevSlot.Group is { } existingGroup)
+                if (groupablePredecessor.Group is { } existingGroup)
                 {
-                    // Extend the existing group: no new top-level DOM element needed.
-                    if (!suppressSink)
-                        existingGroup.AppendItem(slot.Model, toolName);
-                    else
-                        existingGroup.AppendItemStateOnly(slot.Model, toolName);
+                    existingGroup.AppendItem(slot.Model, toolName);
                     slot.Group = existingGroup;
-                    this.lastToolCallSlotIndex = index;
                     return;
                 }
 
-                if (IsToolCallOnlyItem(this.Source[prevIndex]))
-                {
-                    // Previous item was a standalone tool call: promote both into a new group.
-                    var groupId = ChatOutputHtmlRenderer.ToolCallGroupId(prevIndex, 0);
-                    var prevToolName = GetLastToolName(this.Source[prevIndex]);
-                    var group = new ToolCallGroupHtmlModel(groupId, this.sink, prevToolName);
+                // Previous item was a standalone tool call: promote both into a new group whose id
+                // is derived from the previous item's global source index.
+                var group = new ToolCallGroupHtmlModel(
+                    groupablePredecessor.Model.SourceIndex,
+                    this.groupIdForSourceIndex(groupablePredecessor.Model.SourceIndex),
+                    this.sink,
+                    GetLastToolName(groupablePredecessor.Model.Source));
+                this.sink.UpdateContent(
+                    groupablePredecessor.Model.ElementId,
+                    ChatOutputUpdateLocation.Replace,
+                    group.BuildHtml(groupablePredecessor.Model.BuildHtml()));
+                groupablePredecessor.Group = group;
+                groupablePredecessor.IsTopLevelFirstGroupMember = true;
 
-                    // Replace the previous standalone message with the group that wraps it.
-                    if (!suppressSink)
-                        this.sink.UpdateContent(
-                            prevSlot.Model.ElementId,
-                            ChatOutputUpdateLocation.Replace,
-                            group.BuildHtml(prevSlot.Model.BuildHtml()));
-                    prevSlot.Group = group;
-
-                    if (!suppressSink)
-                        group.AppendItem(slot.Model, toolName);
-                    else
-                        group.AppendItemStateOnly(slot.Model, toolName);
-                    slot.Group = group;
-                    this.lastToolCallSlotIndex = index;
-                    return;
-                }
+                group.AppendItem(slot.Model, toolName);
+                slot.Group = group;
+                return;
             }
         }
 
         // Standalone insert (non-tool-call, or first/isolated tool call with no adjacent group).
-        if (!suppressSink)
+        var previous = this.FindPreviousDomSlot(index);
+        if (previous is not null)
         {
-            // Use insert-after anchor targeting instead of sibling scanning
-            var insertReference = index == 0
-                ? ChatOutputHtmlRenderer.LoadAfterAnchorId
-                : ChatOutputHtmlRenderer.InsertAfterItemId(this.startIndex + index - 1);
-            this.sink.UpdateContent(insertReference, ChatOutputUpdateLocation.After, slot.Model.BuildHtml());
+            this.sink.UpdateContent(
+                previous.Group?.GroupId ?? previous.Model.ElementId,
+                ChatOutputUpdateLocation.After,
+                slot.Model.BuildHtml());
+        }
+        else
+        {
+            var next = this.FindNextDomSlot(index);
+            if (next is not null)
+            {
+                this.sink.UpdateContent(
+                    next.Group?.GroupId ?? next.Model.ElementId,
+                    ChatOutputUpdateLocation.Before,
+                    slot.Model.BuildHtml());
+            }
+            else
+            {
+                this.sink.UpdateContent(this.containerPath, ChatOutputUpdateLocation.Append, slot.Model.BuildHtml());
+            }
         }
 
-        // Mark as inserted in both the live path and the skip path (Phase B already put it in the DOM).
         slot.Model.IsInserted = true;
-
-        if (IsToolCallOnlyItem(sourceItem) || slot.Group is not null)
-        {
-            this.lastToolCallSlotIndex = index;
-        }
     }
 
-    protected override void OnRemoveAt(int index, RenderSlot slot)
+    /// <summary>
+    /// Rebuilds the tool-call group that <paramref name="excludedSlot"/> is leaving: the group's
+    /// outer element is replaced by the rebuilt group (or the sole remaining member's standalone
+    /// element), or removed entirely when no members remain. Never leaves an empty group or
+    /// duplicate ids in the DOM.
+    /// </summary>
+    private void RebuildGroupAfterRemoval(ToolCallGroupHtmlModel group, RenderSlot excludedSlot)
     {
-        this.sink.RemoveContent(slot.Model.ElementId);
-        this.RemoveCallIdsFromIndex(slot);
-        if (index == this.lastToolCallSlotIndex)
+        var members = this.Target
+            .Where(candidate => ReferenceEquals(candidate.Group, group) && !ReferenceEquals(candidate, excludedSlot))
+            .ToList();
+
+        if (members.Count == 0)
         {
-            this.lastToolCallSlotIndex = this.FindLastToolCallSlotIndexBelow(index);
+            this.sink.RemoveContent(group.GroupId);
+            return;
         }
+
+        var first = members[0];
+        if (members.Count == 1)
+        {
+            first.Group = null;
+            first.IsTopLevelFirstGroupMember = false;
+            this.sink.UpdateContent(group.GroupId, ChatOutputUpdateLocation.Replace, first.Model.BuildHtml());
+            return;
+        }
+
+        var rebuiltGroup = new ToolCallGroupHtmlModel(
+            first.Model.SourceIndex,
+            this.groupIdForSourceIndex(first.Model.SourceIndex),
+            this.sink,
+            GetLastToolName(first.Model.Source));
+        var body = new StringBuilder(first.Model.BuildHtml());
+        first.Group = rebuiltGroup;
+        first.IsTopLevelFirstGroupMember = true;
+
+        for (var memberIndex = 1; memberIndex < members.Count; memberIndex++)
+        {
+            var member = members[memberIndex];
+            rebuiltGroup.AppendItemStateOnly(member.Model, GetLastToolName(member.Model.Source));
+            member.Group = rebuiltGroup;
+            member.IsTopLevelFirstGroupMember = false;
+            body.Append(member.Model.BuildHtml());
+        }
+
+        this.sink.UpdateContent(group.GroupId, ChatOutputUpdateLocation.Replace, rebuiltGroup.BuildHtml(body.ToString()));
+    }
+
+    private void RebuildForReplace(int index, RenderSlot slot, AgentChatHistoryItem newItem)
+    {
+        this.RemoveCallIdsFromIndex(slot);
+
+        if (slot.HasDomElement)
+        {
+            if (slot.Group is { } group)
+            {
+                this.RebuildGroupAfterRemoval(group, slot);
+            }
+            else
+            {
+                this.sink.RemoveContent(slot.Model.ElementId);
+            }
+        }
+
+        var fresh = new RenderSlot(new ChatMessageHtmlModel(
+            slot.Model.SourceIndex,
+            slot.Model.ElementId,
+            newItem,
+            this.isReasoningVisible,
+            this.sink,
+            this.isDiagnosticsVisible,
+            this.toolFactory,
+            this.statusSink,
+            this.resolveSubAgentId));
+        this.Target[index] = fresh;
+
+        this.AddCallIdsToIndex(newItem, fresh);
+        this.ClassifyAndInsert(index, fresh);
+    }
+
+    private StructuralCategory Categorize(AgentChatHistoryItem item)
+    {
+        var isDiagnostic = string.Equals(
+            item.Role.Value,
+            AgentChatHistoryItem.DiagnosticChatRole.Value,
+            StringComparison.OrdinalIgnoreCase);
+        if (isDiagnostic && !(this.isDiagnosticsVisible?.Invoke() ?? true))
+        {
+            return StructuralCategory.SuppressedDiagnostic;
+        }
+
+        if (IsToolCallOnlyItem(item))
+        {
+            return StructuralCategory.ToolCallOnly;
+        }
+
+        if (IsToolResultOnlyItem(item))
+        {
+            return StructuralCategory.ResultOnly;
+        }
+
+        return StructuralCategory.Normal;
+    }
+
+    /// <summary>
+    /// Attempts to inject every <see cref="FunctionResultContent"/> in <paramref name="item"/> into
+    /// the call models matched via the shared call-id map. All results must match for injection to
+    /// happen; returns false (and injects nothing) when any result is unmatched.
+    /// </summary>
+    private bool TryInjectResults(AgentChatHistoryItem item)
+    {
+        List<(RenderSlot MatchedSlot, FunctionResultContent Result)>? matches = null;
+        foreach (var content in item.Contents)
+        {
+            var result = (FunctionResultContent)content;
+            if (result.CallId is null || !this.sharedSlotByCallId.TryGetValue(result.CallId, out var matchedSlot))
+            {
+                return false;
+            }
+
+            (matches ??= []).Add((matchedSlot, result));
+        }
+
+        if (matches is null)
+        {
+            return false;
+        }
+
+        foreach (var (matchedSlot, result) in matches)
+        {
+            matchedSlot.Model.AddSupplementalResult(result);
+        }
+
+        return true;
     }
 
     private void AddCallIdsToIndex(AgentChatHistoryItem sourceItem, RenderSlot slot)
@@ -620,41 +853,42 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         {
             if (content is FunctionCallContent call && call.CallId is not null)
             {
-                this.slotByCallId[call.CallId] = slot;
+                this.sharedSlotByCallId[call.CallId] = slot;
             }
         }
     }
 
     private void RemoveCallIdsFromIndex(RenderSlot slot)
     {
-        var keysToRemove = this.slotByCallId
+        var keysToRemove = this.sharedSlotByCallId
             .Where(kvp => ReferenceEquals(kvp.Value, slot))
             .Select(kvp => kvp.Key)
             .ToList();
 
         foreach (var key in keysToRemove)
         {
-            this.slotByCallId.Remove(key);
+            this.sharedSlotByCallId.Remove(key);
         }
     }
 
-    private int FindLastToolCallSlotIndexBelow(int index)
+    private static bool ContainsFunctionCalls(AgentChatHistoryItem item)
     {
-        for (var i = index - 1; i >= 0; i--)
+        foreach (var content in item.Contents)
         {
-            if (IsToolCallOnlyItem(this.Source[i]) || this.Target[i].Group is not null)
+            if (content is FunctionCallContent)
             {
-                return i;
+                return true;
             }
         }
-        return -1;
+
+        return false;
     }
 
     /// <summary>
     /// Returns true when the item contains only <see cref="FunctionResultContent"/> items.
     /// Such messages are handled by cross-message result injection rather than message-level grouping.
     /// </summary>
-    private static bool IsToolResultOnlyItem(AgentChatHistoryItem item)
+    internal static bool IsToolResultOnlyItem(AgentChatHistoryItem item)
     {
         if (item.Contents.Count == 0)
         {
@@ -672,7 +906,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         return true;
     }
 
-    private static bool IsToolCallOnlyItem(AgentChatHistoryItem item)
+    internal static bool IsToolCallOnlyItem(AgentChatHistoryItem item)
     {
         if (item.Contents.Count == 0)
         {
@@ -691,9 +925,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     }
 
     /// <summary>
-    /// Searches backwards through <see cref="CollectionTransformer{TSource,TTarget}.Target"/> for
-    /// the most recent slot whose source message contains a <see cref="FunctionCallContent"/> with
-    /// the given <paramref name="callId"/>. Returns <see langword="null"/> if not found.
+    /// Looks up the slot whose source message contains a <see cref="FunctionCallContent"/> with the
+    /// given <paramref name="callId"/> via the shared call-id map. Returns <see langword="null"/>
+    /// if not found.
     /// </summary>
     internal RenderSlot? FindSlotWithCallId(string? callId)
     {
@@ -702,42 +936,66 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             return null;
         }
 
-        this.slotByCallId.TryGetValue(callId, out var slot);
+        this.sharedSlotByCallId.TryGetValue(callId, out var slot);
         return slot;
     }
 
     /// <summary>
     /// Searches backwards from <paramref name="index"/> - 1, skipping tool-result-only messages,
-    /// and returns the index of the most recent source item that is either a tool-call-only message
-    /// or already belongs to a group. Returns -1 if the search reaches the start of the collection
-    /// or hits any other kind of message.
+    /// and returns the slot of the most recent source item that is either a tool-call-only message
+    /// or already belongs to a group. Returns <see langword="null"/> when the search reaches the
+    /// start of the collection or hits any other kind of message: grouping never crosses text,
+    /// suppressed diagnostics, or other non-tool content.
     /// </summary>
-    internal int FindPrecedingToolCallSlotIndex(int index)
+    internal RenderSlot? FindGroupablePredecessor(int index)
     {
-        if (index == 0 || this.lastToolCallSlotIndex < 0)
-        {
-            return -1;
-        }
-
         for (var i = index - 1; i >= 0; i--)
         {
-            if (IsToolResultOnlyItem(this.Source[i]))
+            var candidate = this.Target[i];
+            if (IsToolResultOnlyItem(candidate.Model.Source))
             {
                 continue;
             }
 
-            if (IsToolCallOnlyItem(this.Source[i]) || this.Target[i].Group is not null)
+            if (candidate.HasDomElement &&
+                (candidate.Group is not null || IsToolCallOnlyItem(candidate.Model.Source)))
             {
-                return i;
+                return candidate;
             }
 
-            return -1;
+            return null;
         }
 
-        return -1;
+        return null;
     }
 
-    private static string GetLastToolName(AgentChatHistoryItem item)
+    private RenderSlot? FindPreviousDomSlot(int index)
+    {
+        for (var i = index - 1; i >= 0; i--)
+        {
+            if (this.Target[i].HasDomElement)
+            {
+                return this.Target[i];
+            }
+        }
+
+        return null;
+    }
+
+    private RenderSlot? FindNextDomSlot(int index)
+    {
+        for (var i = index + 1; i < this.Target.Count; i++)
+        {
+            if (this.Target[i].HasDomElement)
+            {
+                return this.Target[i];
+            }
+        }
+
+        return null;
+    }
+
+    internal static string GetLastToolName(AgentChatHistoryItem item)
     {
         for (var i = item.Contents.Count - 1; i >= 0; i--)
         {
@@ -751,48 +1009,13 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     }
 }
 
-/// <summary>Shared logic for choosing where a newly inserted element is placed in the DOM.</summary>
-internal static class ChatOutputHtmlInsertion
-{
-    /// <summary>
-    /// Resolves the placement for the item at <paramref name="index"/> (already present in
-    /// <paramref name="target"/>). During initial population (all items being inserted for the
-    /// first time), this returns <c>(After, containerPath)</c> so chunks can be inserted
-    /// after the "load-after" anchor without nesting inside it.
-    ///
-    /// <para>During live updates, prefers <c>After</c> the previous already-inserted sibling, then
-    /// <c>Before</c> the next already-inserted sibling, otherwise <c>After</c> the container anchor.
-    /// This keeps both the sequential initial population and incremental inserts correct, never
-    /// referencing a sibling that is not yet in the DOM.</para>
-    /// </summary>
-    public static (ChatOutputUpdateLocation Location, string Reference) ResolveInsertTarget<T>(
-        IList<T> target,
-        int index,
-        string containerPath,
-        Func<T, bool> isInserted,
-        Func<T, string> elementId)
-    {
-        if (index - 1 >= 0 && isInserted(target[index - 1]))
-        {
-            return (ChatOutputUpdateLocation.After, elementId(target[index - 1]));
-        }
-
-        if (index + 1 < target.Count && isInserted(target[index + 1]))
-        {
-            return (ChatOutputUpdateLocation.Before, elementId(target[index + 1]));
-        }
-
-        return (ChatOutputUpdateLocation.After, containerPath);
-    }
-}
-
 /// <summary>Renders a single running (in-progress) turn: an empty container that hosts its streaming messages.</summary>
 internal sealed class RunningChatItemHtmlModel : IDisposable
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
     private readonly Func<bool>? isDiagnosticsVisible;
-    private readonly Func<int> nextId;
+    private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly List<RenderSlot> messageSlots = [];
@@ -803,19 +1026,20 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         AgentChatRunningItem source,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
-        Func<int> nextId,
+        Dictionary<string, RenderSlot> sharedSlotByCallId,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
         ArgumentNullException.ThrowIfNull(isReasoningVisible);
         ArgumentNullException.ThrowIfNull(sink);
+        ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
         this.ElementId = elementId;
         this.Source = source;
         this.isReasoningVisible = isReasoningVisible;
         this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.sink = sink;
-        this.nextId = nextId;
+        this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
     }
@@ -840,13 +1064,14 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             this.messageSlots,
             this.sink,
             this.isReasoningVisible,
-            this.nextId,
-            ChatOutputHtmlRenderer.RunningItemContentsId(this.ElementId),
-            this.isDiagnosticsVisible,
-            this.toolFactory,
-            this.statusSink,
-            skipInitialItems: 0,
-            startIndex: 0);
+            containerPath: ChatOutputHtmlRenderer.RunningItemContentsId(this.ElementId),
+            elementIdForSourceIndex: localIndex => ChatOutputHtmlRenderer.RunningMessageId(this.ElementId, localIndex),
+            groupIdForSourceIndex: localIndex => $"{this.ElementId}-group-{localIndex}",
+            sharedSlotByCallId: this.sharedSlotByCallId,
+            isDiagnosticsVisible: this.isDiagnosticsVisible,
+            toolFactory: this.toolFactory,
+            statusSink: this.statusSink,
+            preloadedCount: 0);
     }
 
     public void Update(AgentChatRunningItem source)
@@ -879,8 +1104,8 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
     /// <summary>
     /// Re-establishes the insertion point after a DOM failure by discarding the current transformer,
     /// clearing message slots, and re-inserting the container via <c>Append</c> into
-    /// <paramref name="containerPath"/> — a location that is always reachable (e.g. the static
-    /// running-items region).  Activates a fresh inner transformer so subsequent streaming chunks
+    /// <paramref name="containerPath"/> — a location that is always reachable (the persistent
+    /// running-items region). Activates a fresh inner transformer so subsequent streaming chunks
     /// arrive into the newly-placed contents div.
     /// </summary>
     public void ReInsert(string containerPath)
@@ -904,6 +1129,7 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
     private readonly Func<bool> isReasoningVisible;
     private readonly Func<bool>? isDiagnosticsVisible;
     private readonly Func<int> nextId;
+    private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
 
@@ -913,15 +1139,18 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
         IChatOutputHtmlSink sink,
         Func<bool> isReasoningVisible,
         Func<int> nextId,
+        Dictionary<string, RenderSlot> sharedSlotByCallId,
         Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
         : base(source, target)
     {
+        ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
         this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.nextId = nextId;
+        this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
         this.ApplyInitialTransform();
@@ -930,23 +1159,25 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
     public IReadOnlyList<RunningChatItemHtmlModel> Models => (List<RunningChatItemHtmlModel>)this.Target;
 
     protected override RunningChatItemHtmlModel Create(AgentChatRunningItem sourceItem)
-        => new(ChatOutputHtmlRenderer.RunningItemId(this.nextId()), sourceItem, this.isReasoningVisible, this.sink, this.nextId, this.isDiagnosticsVisible, this.toolFactory, this.statusSink);
+        => new(
+            ChatOutputHtmlRenderer.RunningItemId(this.nextId()),
+            sourceItem,
+            this.isReasoningVisible,
+            this.sink,
+            this.sharedSlotByCallId,
+            this.isDiagnosticsVisible,
+            this.toolFactory,
+            this.statusSink);
 
     protected override void Update(RunningChatItemHtmlModel target, AgentChatRunningItem sourceItem)
         => target.Update(sourceItem);
 
     protected override void OnInsert(int index, RunningChatItemHtmlModel target)
     {
-        // Running items use a different container and don't use positional IDs,
-        // so they keep the sibling-scanning logic for now.
-        // They could be refactored to use insert-after anchors in a future change.
-        var (location, reference) = ChatOutputHtmlInsertion.ResolveInsertTarget(
-            this.Target,
-            index,
+        this.sink.UpdateContent(
             ChatOutputHtmlRenderer.RunningContainerId,
-            static model => model.IsInserted,
-            static model => model.ElementId);
-        this.sink.UpdateContent(reference, location, target.BuildHtml());
+            ChatOutputUpdateLocation.Append,
+            target.BuildHtml());
         target.IsInserted = true;
         target.Activate();
     }
@@ -959,7 +1190,17 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 /// Top-level chat-output model for the browser-hosted renderer. Mirrors the selectable-text output
 /// model but, instead of building an Avalonia inline tree, emits incremental HTML operations to an
 /// <see cref="IChatOutputHtmlSink"/> and requests a scroll-to-bottom after each content change.
-/// History is loaded asynchronously in three phases to keep the UI thread responsive.
+/// History is loaded asynchronously in three phases to keep the UI thread responsive:
+/// <list type="bullet">
+///   <item><description><b>Phase A</b> — subscribe to history/running collections, create the
+///   running/sub-agent transformers, and snapshot the history.</description></item>
+///   <item><description><b>Phase B</b> — build a complete off-thread render plan for the snapshot,
+///   then prepend one HTML blob per chunk (newest first) into the persistent history
+///   container.</description></item>
+///   <item><description><b>Phase C</b> — publish the plan's slots and call map, then construct the
+///   live history transformer with <c>preloadedCount</c> so buffered additions replay through the
+///   normal insert path.</description></item>
+/// </list>
 /// </summary>
 public sealed class ChatOutputHtmlModel : IDisposable
 {
@@ -979,6 +1220,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly List<RenderSlot> historySlots = [];
     private readonly List<RunningChatItemHtmlModel> runningModels = [];
     private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = [];
+    private readonly Dictionary<string, RenderSlot> sharedSlotByCallId = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource loadCts = new();
     private ChatMessageHtmlTransformer? historyTransformer;
     private bool historyLoading;
@@ -990,6 +1232,12 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// Exposed internally for tests to await before asserting history-related sink state.
     /// </summary>
     internal Task HistoryLoaded { get; }
+
+    /// <summary>Exposed internally for tests that assert publication/cancellation invariants.</summary>
+    internal IReadOnlyList<RenderSlot> HistorySlots => this.historySlots;
+
+    /// <summary>Exposed internally for tests that assert publication/cancellation invariants.</summary>
+    internal IReadOnlyDictionary<string, RenderSlot> SharedSlotByCallId => this.sharedSlotByCallId;
 
     public ChatOutputHtmlModel(
         IReadOnlyList<AgentChatHistoryItem> historyItems,
@@ -1034,6 +1282,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             sink,
             isReasoningVisible,
             this.NextId,
+            this.sharedSlotByCallId,
             isDiagnosticsVisible,
             toolFactory,
             statusSink);
@@ -1059,30 +1308,256 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.HistoryLoaded = Task.Run(() => this.LoadHistoryChunksAsync(snapshot, loadToken));
     }
 
+    /// <summary>
+    /// Complete precomputed rendering state for a history snapshot: one slot per item (in snapshot
+    /// order), a single call-id lookup spanning the whole snapshot, and newest-first chunk ranges.
+    /// Built entirely off-thread before any chunk HTML is generated, so cross-chunk tool-result
+    /// matching does not depend on chunk processing order.
+    /// </summary>
+    internal sealed class HistoryRenderPlan
+    {
+        public required RenderSlot[] Slots { get; init; }
+
+        public required Dictionary<string, RenderSlot> SlotByCallId { get; init; }
+
+        public required IReadOnlyList<(int Start, int End)> Chunks { get; init; }
+    }
+
+    /// <summary>
+    /// Builds the full render plan for <paramref name="snapshot"/>: creates one slot per item with
+    /// history-index element ids, registers every call id, injects fully-matched result-only
+    /// messages into their call models, computes global tool-call groups (ids derived from the
+    /// first member's history index), and computes newest-first chunk ranges. Performs no sink
+    /// operations; callable off the UI thread.
+    /// </summary>
+    internal static HistoryRenderPlan BuildHistoryRenderPlan(
+        IReadOnlyList<AgentChatHistoryItem> snapshot,
+        IChatOutputHtmlSink sink,
+        Func<bool> isReasoningVisible,
+        Func<bool>? isDiagnosticsVisible = null,
+        IToolVisualizerFactory? toolFactory = null,
+        IAgentStatusSink? statusSink = null,
+        Func<string, string?>? resolveSubAgentId = null)
+    {
+        var slots = new RenderSlot[snapshot.Count];
+        var slotByCallId = new Dictionary<string, RenderSlot>(StringComparer.Ordinal);
+        var includeDiagnostics = isDiagnosticsVisible?.Invoke() ?? true;
+
+        // Pass 1: create slots and register call ids across the whole snapshot.
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var slot = new RenderSlot(new ChatMessageHtmlModel(
+                i,
+                ChatOutputHtmlRenderer.MessageId(i),
+                snapshot[i],
+                isReasoningVisible,
+                sink,
+                isDiagnosticsVisible,
+                toolFactory,
+                statusSink,
+                resolveSubAgentId));
+            slots[i] = slot;
+
+            foreach (var content in snapshot[i].Contents)
+            {
+                if (content is FunctionCallContent call && call.CallId is not null)
+                {
+                    slotByCallId[call.CallId] = slot;
+                }
+            }
+        }
+
+        // Pass 2: suppress diagnostics and inject fully-matched result-only messages.
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            var item = snapshot[i];
+            var isDiagnostic = string.Equals(
+                item.Role.Value,
+                AgentChatHistoryItem.DiagnosticChatRole.Value,
+                StringComparison.OrdinalIgnoreCase);
+            if (isDiagnostic && !includeDiagnostics)
+            {
+                slots[i].HasDomElement = false;
+                continue;
+            }
+
+            if (!ChatMessageHtmlTransformer.IsToolResultOnlyItem(item))
+            {
+                continue;
+            }
+
+            List<(RenderSlot MatchedSlot, FunctionResultContent Result)>? matches = null;
+            var allMatched = true;
+            foreach (var content in item.Contents)
+            {
+                var result = (FunctionResultContent)content;
+                if (result.CallId is null || !slotByCallId.TryGetValue(result.CallId, out var matchedSlot))
+                {
+                    allMatched = false;
+                    break;
+                }
+
+                (matches ??= []).Add((matchedSlot, result));
+            }
+
+            if (!allMatched || matches is null)
+            {
+                continue;
+            }
+
+            foreach (var (matchedSlot, result) in matches)
+            {
+                matchedSlot.Model.AddSupplementalResult(result);
+            }
+
+            slots[i].HasDomElement = false;
+        }
+
+        // Pass 3: compute contiguous tool-call groups globally. Group ids use the first member's
+        // history index; grouping skips result-only items but never crosses any other message kind.
+        for (var i = 0; i < snapshot.Count; i++)
+        {
+            if (!ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[i]))
+            {
+                continue;
+            }
+
+            RenderSlot? groupablePredecessor = null;
+            for (var j = i - 1; j >= 0; j--)
+            {
+                if (ChatMessageHtmlTransformer.IsToolResultOnlyItem(snapshot[j]))
+                {
+                    continue;
+                }
+
+                if (slots[j].HasDomElement &&
+                    (slots[j].Group is not null || ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[j])))
+                {
+                    groupablePredecessor = slots[j];
+                }
+
+                break;
+            }
+
+            if (groupablePredecessor is null)
+            {
+                continue;
+            }
+
+            var toolName = ChatMessageHtmlTransformer.GetLastToolName(snapshot[i]);
+            if (groupablePredecessor.Group is { } existingGroup)
+            {
+                existingGroup.AppendItemStateOnly(slots[i].Model, toolName);
+                slots[i].Group = existingGroup;
+            }
+            else
+            {
+                var firstIndex = groupablePredecessor.Model.SourceIndex;
+                var group = new ToolCallGroupHtmlModel(
+                    firstIndex,
+                    ChatOutputHtmlRenderer.ToolGroupId(firstIndex),
+                    sink,
+                    ChatMessageHtmlTransformer.GetLastToolName(snapshot[firstIndex]));
+                groupablePredecessor.Group = group;
+                groupablePredecessor.IsTopLevelFirstGroupMember = true;
+                group.AppendItemStateOnly(slots[i].Model, toolName);
+                slots[i].Group = group;
+            }
+        }
+
+        return new HistoryRenderPlan
+        {
+            Slots = slots,
+            SlotByCallId = slotByCallId,
+            Chunks = ComputeChunkRanges(snapshot),
+        };
+    }
+
+    /// <summary>
+    /// Generates the HTML blob for plan slots in <c>[start, end)</c>. Slots without a DOM element
+    /// are skipped; a group is emitted once (wrapping all member message HTML intact, so later
+    /// per-content diffs can target the nested ids); everything else is emitted standalone.
+    /// Never invokes <c>OnInsert</c> and never emits sink operations. Callable off the UI thread.
+    /// </summary>
+    internal static string GenerateHistoryChunk(HistoryRenderPlan plan, int start, int end)
+    {
+        var builder = new StringBuilder();
+        for (var i = start; i < end; i++)
+        {
+            var slot = plan.Slots[i];
+            if (!slot.HasDomElement)
+            {
+                continue;
+            }
+
+            if (slot.Group is { } group)
+            {
+                slot.Model.IsInserted = true;
+                if (!slot.IsTopLevelFirstGroupMember)
+                {
+                    continue;
+                }
+
+                var body = new StringBuilder();
+                for (var j = i; j < plan.Slots.Length; j++)
+                {
+                    if (ReferenceEquals(plan.Slots[j].Group, group))
+                    {
+                        body.Append(plan.Slots[j].Model.BuildHtml());
+                        plan.Slots[j].Model.IsInserted = true;
+                    }
+                    else if (plan.Slots[j].HasDomElement)
+                    {
+                        break;
+                    }
+                }
+
+                builder.Append(group.BuildHtml(body.ToString()));
+            }
+            else
+            {
+                builder.Append(slot.Model.BuildHtml());
+                slot.Model.IsInserted = true;
+            }
+        }
+
+        return builder.ToString();
+    }
+
     private async Task LoadHistoryChunksAsync(
         List<AgentChatHistoryItem> snapshot,
         CancellationToken cancellationToken)
     {
         try
         {
-            var chunks = ComputeChunkRanges(snapshot);
-            var idBox = new int[1];
+            // Phase B: build the complete render plan off-thread before any chunk is generated.
+            // Nothing is published to this model until every chunk has been delivered.
+            var plan = BuildHistoryRenderPlan(
+                snapshot,
+                this.sink,
+                this.isReasoningVisible,
+                this.isDiagnosticsVisible,
+                this.toolFactory,
+                this.statusSink,
+                this.resolveSubAgentId);
 
-            // Process chunks newest-first so the user sees the most recent content immediately.
-            // Each chunk is inserted After the "load-after" anchor, causing older chunks to
-            // naturally squeeze in between "load-after" and previously-inserted chunks.
-            for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+            var scrolled = false;
+
+            // Chunks are ordered newest-first so the user sees the most recent content immediately;
+            // each chunk blob is prepended to the persistent history container, causing older chunks
+            // to naturally stack in above previously-inserted ones.
+            foreach (var (start, end) in plan.Chunks)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                var (start, end) = chunks[chunkIndex];
-                var chunkSlice = snapshot.GetRange(start, end - start);
-                var (cmds, _) = GenerateHistoryChunk(
-                    chunkSlice, start, idBox,
-                    this.isReasoningVisible, this.isDiagnosticsVisible,
-                    this.toolFactory, this.statusSink, this.resolveSubAgentId);
+                var chunkHtml = GenerateHistoryChunk(plan, start, end);
+                if (chunkHtml.Length == 0)
+                {
+                    continue;
+                }
 
-                var isFirstChunk = chunkIndex == 0;
+                var scrollAfterThisChunk = !scrolled;
+                scrolled = true;
 
                 await Dispatcher.UIThread.InvokeAsync(() =>
                 {
@@ -1092,22 +1567,14 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     }
 
                     this.sink.BeginBatch();
+                    this.sink.UpdateContent(
+                        ChatOutputHtmlRenderer.HistoryContainerId,
+                        ChatOutputUpdateLocation.Prepend,
+                        chunkHtml);
 
-                    foreach (var cmd in cmds)
-                    {
-                        if (cmd.Location is null)
-                        {
-                            this.sink.RemoveContent(cmd.Path);
-                        }
-                        else
-                        {
-                            this.sink.UpdateContent(cmd.Path, cmd.Location.Value, cmd.Content!);
-                        }
-                    }
-
-                    // Scroll to bottom immediately after the first (newest) chunk,
-                    // making the most recent content visible while older chunks fill in above.
-                    if (isFirstChunk)
+                    // Scroll to bottom immediately after the first (newest) chunk, making the most
+                    // recent content visible while older chunks fill in above.
+                    if (scrollAfterThisChunk)
                     {
                         this.sink.ScrollToBottom();
                     }
@@ -1116,8 +1583,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 });
             }
 
-            // Phase C: construct live transformer and replay any buffered events.
-            var finalIdBox = idBox;
+            // Phase C: publish the plan, then construct the live transformer and replay any items
+            // added to the source during loading through the normal insert path.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -1125,30 +1592,26 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     return;
                 }
 
-                // Reset id sequence to 0 so ApplyInitialTransform assigns the same integer IDs to
-                // pre-existing history slots as Phase B did (which also started from 0, oldest-first).
-                // We save the running-items count to restore it afterward, preventing collisions.
-                var savedIdSequence = this.idSequence;
-                this.idSequence = 0;
+                this.historySlots.AddRange(plan.Slots);
+                foreach (var (callId, slot) in plan.SlotByCallId)
+                {
+                    this.sharedSlotByCallId[callId] = slot;
+                }
 
-                // Construct the live transformer. ApplyInitialTransform skips items 0..snapshot.Count-1
-                // (rendered by chunks) and emits DOM ops for any items added to historyItems during load.
                 this.historyTransformer = new ChatMessageHtmlTransformer(
                     this.historyItems,
                     this.historySlots,
                     this.sink,
                     this.isReasoningVisible,
-                    this.NextId,
-                    ChatOutputHtmlRenderer.HistoryBeforeAnchorId,
-                    this.isDiagnosticsVisible,
-                    this.toolFactory,
-                    this.statusSink,
-                    this.resolveSubAgentId,
-                    skipInitialItems: snapshot.Count,
-                    startIndex: 0);
-
-                // Ensure future ids don't collide with running-item ids allocated in Phase A.
-                this.idSequence = Math.Max(savedIdSequence, this.idSequence);
+                    containerPath: ChatOutputHtmlRenderer.HistoryContainerId,
+                    elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
+                    groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
+                    sharedSlotByCallId: this.sharedSlotByCallId,
+                    isDiagnosticsVisible: this.isDiagnosticsVisible,
+                    toolFactory: this.toolFactory,
+                    statusSink: this.statusSink,
+                    resolveSubAgentId: this.resolveSubAgentId,
+                    preloadedCount: snapshot.Count);
 
                 this.historyLoading = false;
 
@@ -1162,7 +1625,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Disposed before loading completed; no further action needed.
+            // Disposed before loading completed; the plan is discarded without publishing partial
+            // slots or call-map entries.
         }
     }
 
@@ -1190,7 +1654,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// <paramref name="failedPath"/> was silently dropped because the element did not exist.
     /// Finds the affected running-item model (by its element id or its contents-div id) and
     /// calls <see cref="RunningChatItemHtmlModel.ReInsert"/> to recover the insertion point
-    /// using a stable <c>Append</c> fallback.
+    /// using a stable <c>Append</c> into the persistent running-items region.
     /// </summary>
     public void NotifyInsertionFailed(string failedPath)
     {
@@ -1203,55 +1667,6 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 return;
             }
         }
-    }
-
-    /// <summary>
-    /// Generates HTML commands for a slice of history items, callable off the UI thread.
-    /// Creates a <see cref="RecordingChatOutputHtmlSink"/>, runs a <see cref="ChatMessageHtmlTransformer"/>
-    /// over <paramref name="chunk"/>, and returns the recorded commands together with the id of the
-    /// first top-level element the transformer inserted into <see cref="ChatOutputHtmlRenderer.LoadAfterAnchorId"/>.
-    /// </summary>
-    /// <param name="chunk">A read-only slice of history items to render.</param>
-    /// <param name="startIndex">The actual index in the full history of the first item in <paramref name="chunk"/>. Used to generate positional IDs.</param>
-    /// <param name="idBox">
-    /// A single-element array used as a shared mutable id counter for running items. <c>idBox[0]</c> is read and
-    /// incremented by the id factory so successive chunk calls advance a global counter without
-    /// id collisions across chunks. Note: history message IDs use positional indices, not this counter.
-    /// </param>
-    /// <param name="isReasoningVisible">Controls whether reasoning content is included.</param>
-    /// <param name="isDiagnosticsVisible">Controls whether diagnostic content is included; null means always visible.</param>
-    /// <param name="toolFactory">Optional tool visualizer factory; may be null.</param>
-    /// <param name="statusSink">Optional agent-status sink; may be null.</param>
-    /// <returns>
-    /// The recorded <see cref="SinkCommand"/> list and the element id of the first top-level DOM node
-    /// inserted by the transformer (<see langword="null"/> when <paramref name="chunk"/> is empty).
-    /// </returns>
-    internal static (IReadOnlyList<SinkCommand> Commands, string? FirstElementId)
-        GenerateHistoryChunk(
-            IReadOnlyList<AgentChatHistoryItem> chunk,
-            int startIndex,
-            int[] idBox,
-            Func<bool> isReasoningVisible,
-            Func<bool>? isDiagnosticsVisible,
-            IToolVisualizerFactory? toolFactory,
-            IAgentStatusSink? statusSink,
-            Func<string, string?>? resolveSubAgentId = null)
-    {
-        var recording = new RecordingChatOutputHtmlSink();
-        var slots = new List<RenderSlot>();
-        using var transformer = new ChatMessageHtmlTransformer(
-            chunk, slots, recording,
-            isReasoningVisible, () => idBox[0]++,
-            ChatOutputHtmlRenderer.LoadAfterAnchorId,
-            isDiagnosticsVisible, toolFactory, statusSink, resolveSubAgentId,
-            skipInitialItems: 0,
-            startIndex: startIndex);
-
-        string? firstElementId = slots.Count > 0
-            ? (slots[0].Group?.GroupId ?? slots[0].Model.ElementId)
-            : null;
-
-        return (recording.Commands, firstElementId);
     }
 
     /// <summary>

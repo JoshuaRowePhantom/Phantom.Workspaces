@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
@@ -24,10 +25,14 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
         subAgents.Add(agent);
 
+        // The old inner node is removed, then a fresh inner node is appended into the sentinel.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
         Assert.Contains(sink.Operations, op =>
             op.Kind == "update" &&
-            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
-            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append &&
             op.Content.Contains("running-subagents"));
     }
 
@@ -58,11 +63,13 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         agent.SetCompletionState(AgentChatCompletionState.Succeeded);
         agent.RaiseActivityChanged();
 
+        // The empty state removes the inner node and appends nothing back.
         Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op =>
             op.Kind == "update" &&
-            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
-            op.Location == ChatOutputUpdateLocation.Replace &&
-            op.Content == string.Empty);
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
     }
 
     // ── Content rendering ─────────────────────────────────────────────────────
@@ -218,11 +225,14 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         // Trigger a re-render while still running (ActivityChanged)
         agent.RaiseActivityChanged();
 
-        // Should Replace the existing panel on RunningSubAgentsContainerId, not inject After
+        // Should remove the old inner node and append a fresh one into the sentinel, never inject After.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
         Assert.Contains(sink.Operations, op =>
             op.Kind == "update" &&
-            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
-            op.Location == ChatOutputUpdateLocation.Replace);
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append);
         Assert.DoesNotContain(sink.Operations, op =>
             op.Location == ChatOutputUpdateLocation.After);
     }
@@ -282,12 +292,13 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         // Change completion state - this should trigger immediate re-render without needing ActivityChanged
         agent.SetCompletionState(AgentChatCompletionState.Succeeded);
 
-        // Verify panel was cleared immediately on CompletionStateChanged
+        // Verify panel inner node was removed immediately on CompletionStateChanged, with nothing re-appended.
         Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op =>
             op.Kind == "update" &&
-            op.Path == ChatOutputHtmlRenderer.RunningSubAgentsContainerId &&
-            op.Location == ChatOutputUpdateLocation.Replace &&
-            op.Content == string.Empty);
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
     }
 
     [Fact]
@@ -302,10 +313,13 @@ public sealed class RunningSubAgentsHtmlTransformerTests
 
         agent.SetCompletionState(AgentChatCompletionState.Succeeded);
 
-        // Verify that when all agents stop, content is replaced with empty string (hiding the container)
+        // Verify that when all agents stop, the inner panel node is removed (hiding the panel)
+        // while the persistent sentinel remains untouched.
         Assert.Contains(sink.Operations, op =>
-            op.Content == string.Empty &&
-            op.Location == ChatOutputUpdateLocation.Replace);
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
     }
 
     [Fact]
@@ -326,6 +340,128 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         Assert.True(depth2Index > depth1Index, "Depth-2 agent should appear after depth-1 agent in HTML");
     }
 
+
+    // ── Issue #893: sentinel/inner protocol tests ─────────────────────────────
+
+    [Fact]
+    public void SubAgentPanel_Update_RemovesOldInnerAndAppendsNewInner()
+    {
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+        sink.Clear();
+
+        agent.RaiseActivityChanged();
+
+        Assert.Equal(2, sink.Operations.Count);
+        Assert.Equal("remove", sink.Operations[0].Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, sink.Operations[0].Path);
+        Assert.Equal("update", sink.Operations[1].Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelSentinelId, sink.Operations[1].Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, sink.Operations[1].Location);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.SubAgentPanelInnerId}\"", sink.Operations[1].Content);
+    }
+
+    [Fact]
+    public void SubAgentPanel_Update_NeverReplacesSentinel()
+    {
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        agent.RaiseActivityChanged();
+        agent.SetCompletionState(AgentChatCompletionState.Succeeded);
+        subAgents.Add(new StubSubAgent("a2", "Another", AgentChatCompletionState.Running));
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Replace);
+    }
+
+    [Fact]
+    public void SubAgentPanel_Update_NeverRemovesSentinel()
+    {
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        agent.RaiseActivityChanged();
+        agent.SetCompletionState(AgentChatCompletionState.Succeeded);
+        subAgents.Clear();
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+    }
+
+    [Fact]
+    public void SubAgentPanel_EmptyState_OnlyRemovesInner()
+    {
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+        sink.Clear();
+
+        agent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        var op = Assert.Single(sink.Operations);
+        Assert.Equal("remove", op.Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, op.Path);
+    }
+
+    [Fact]
+    public void SubAgentPanel_RemoveMissingInner_IsAllowedByBrowserContract()
+    {
+        // The very first render removes an inner node that does not exist yet; the shell's
+        // applyCommand treats a remove of a missing id as a no-op, so this is always safe.
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        var op = Assert.Single(sink.Operations);
+        Assert.Equal("remove", op.Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, op.Path);
+    }
+
+    [Fact]
+    public void Regression_BugC_SubAgentPanelSentinel_NeverReplacedOrRemoved()
+    {
+        // Full lifecycle: appear, activity, nested agents, completion, reappear, clear. At no point
+        // may the persistent sentinel be replaced or removed — it is the permanent re-append anchor.
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        var nested = new StubSubAgent("a2", "Nested", AgentChatCompletionState.Running);
+        var agent = new StubSubAgent("a1", "Parent", AgentChatCompletionState.Running, subAgents: [nested]);
+        subAgents.Add(agent);
+        agent.RaiseActivityChanged();
+        agent.SetCompletionState(AgentChatCompletionState.Succeeded);
+        var second = new StubSubAgent("a3", "Second wave", AgentChatCompletionState.Running);
+        subAgents.Add(second);
+        second.SetCompletionState(AgentChatCompletionState.Failed);
+        subAgents.Clear();
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId &&
+            (op.Kind == "remove" || op.Location == ChatOutputUpdateLocation.Replace));
+
+        // Every append of a fresh panel targets the sentinel, and every removal targets the inner node.
+        Assert.All(
+            sink.Operations.Where(op => op.Kind == "update"),
+            op =>
+            {
+                Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelSentinelId, op.Path);
+                Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+            });
+        Assert.All(
+            sink.Operations.Where(op => op.Kind == "remove"),
+            op => Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, op.Path));
+    }
 
     private static int CountOccurrences(string text, string substring)
     {

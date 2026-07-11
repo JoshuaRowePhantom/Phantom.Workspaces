@@ -53,7 +53,7 @@ public sealed class ChatOutputHtmlModelTests
         => new() { Role = role, Contents = [new TextContent(text)] };
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task InitialHistory_EmitsOneAppendPerMessage_IntoHistoryContainer()
+    public async Task InitialHistory_EmitsSinglePrependBlob_IntoHistoryContainer()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -65,21 +65,19 @@ public sealed class ChatOutputHtmlModelTests
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
 
-        var appends = sink.ContentOperations;
-        Assert.Equal(2, appends.Count);
-        Assert.Equal(ChatOutputUpdateLocation.After, appends[0].Location);
-        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, appends[0].Path);
-        Assert.Equal(ChatOutputUpdateLocation.After, appends[1].Location);
-        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(0), appends[1].Path);
-        Assert.Contains("chat-message", appends[0].Content);
-        Assert.Contains(">hello<", appends[0].Content);
-        Assert.Contains("chat-user-message", appends[0].Content);
-        Assert.Contains("chat-assistant-message", appends[1].Content);
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.Prepend, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+        Assert.Contains("chat-message", op.Content);
+        Assert.Contains(">hello<", op.Content);
+        Assert.Contains("chat-user-message", op.Content);
+        Assert.Contains("chat-assistant-message", op.Content);
+        Assert.True(op.Content.IndexOf(">hello<", StringComparison.Ordinal) < op.Content.IndexOf(">hi there<", StringComparison.Ordinal));
         Assert.True(sink.ScrollCount >= 1);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task AddingMessage_AppendsAfterPreviousMessage()
+    public async Task AddingMessage_InsertsAfterPreviousMessageElement()
     {
         var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.User, "first") };
         var sink = new RecordingSink();
@@ -91,7 +89,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var operation = Assert.Single(sink.ContentOperations);
         Assert.Equal(ChatOutputUpdateLocation.After, operation.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(0), operation.Path);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), operation.Path);
         Assert.Contains(">second<", operation.Content);
     }
 
@@ -239,12 +237,16 @@ public sealed class ChatOutputHtmlModelTests
         var operations = sink.ContentOperations;
         Assert.Equal(2, operations.Count);
 
-        // First the empty running container appended into the running region.
+        // First the empty running container appended into the persistent running region.
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, operations[0].Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, operations[0].Location);
         Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), operations[0].Content);
 
-        // Then the message appended after the load-after anchor (new insertion model).
-        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, operations[1].Path);
+        // Then the message appended into the running item's own contents container.
+        Assert.Equal(
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            operations[1].Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, operations[1].Location);
         Assert.Contains(">working<", operations[1].Content);
     }
 
@@ -455,7 +457,7 @@ public sealed class ChatOutputHtmlModelTests
         // First op: replace history-0 with group wrapping it
         var replaceOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Path);
-        Assert.Contains("tool-grouping-", replaceOp.Content);
+        Assert.Contains(ChatOutputHtmlRenderer.ToolGroupId(0), replaceOp.Content);
         Assert.Contains("read_file", replaceOp.Content);
         Assert.Contains("chat-tool-group-body", replaceOp.Content);
         Assert.Contains(ChatOutputHtmlRenderer.MessageId(0), replaceOp.Content);
@@ -517,9 +519,9 @@ public sealed class ChatOutputHtmlModelTests
         await model.HistoryLoaded;
 
         var contentOps = sink.ContentOperations;
-        Assert.Equal(2, contentOps.Count);
+        var op = Assert.Single(contentOps);
         // Neither message should be inside a message-level group body.
-        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group-body"));
+        Assert.DoesNotContain("chat-tool-group-body", op.Content);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -538,7 +540,7 @@ public sealed class ChatOutputHtmlModelTests
 
         var op = Assert.Single(sink.ContentOperations);
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(0), op.Path);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
         Assert.Contains(">done<", op.Content);
     }
 
@@ -560,8 +562,9 @@ public sealed class ChatOutputHtmlModelTests
         var contentOps = sink.ContentOperations;
         var insertOp = contentOps.First(op => op.Content.Contains("finished"));
         Assert.Equal(ChatOutputUpdateLocation.After, insertOp.Location);
-        // Should insert after the insert-after anchor of the second tool call (index 1)
-        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(1), insertOp.Path);
+        // Should insert after the group element that wraps both tool calls (group id from the
+        // first member's history index).
+        Assert.Equal(ChatOutputHtmlRenderer.ToolGroupId(0), insertOp.Path);
     }
 
     // ── Content-level tool-group tests (issue #154) ────────────────────────────
@@ -806,7 +809,7 @@ public sealed class ChatOutputHtmlModelTests
             op.Content.Contains("chat-tool-group-body"));
         Assert.NotNull(groupCreateOp);
         Assert.Contains("read_file", groupCreateOp!.Content);
-        Assert.Contains("tool-grouping-", groupCreateOp.Content);
+        Assert.Contains(ChatOutputHtmlRenderer.ToolGroupId(0), groupCreateOp.Content);
 
         // Second batch appended into the group body
         var appendOp = contentOps.FirstOrDefault(op =>
@@ -948,10 +951,15 @@ public sealed class ChatOutputHtmlModelTests
 
         // First op must be the outer running-item container appended into the running region.
         Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, ops[0].Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, ops[0].Location);
         Assert.Contains(ChatOutputHtmlRenderer.RunningItemId(0), ops[0].Content);
 
-        // Second op must be the message appended after the load-after anchor (new insertion model).
-        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, ops[1].Path);
+        // Second op must be the message appended into the running item's contents container —
+        // never a hardcoded anchor outside the running item.
+        Assert.Equal(
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            ops[1].Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, ops[1].Location);
         Assert.Contains(">hello<", ops[1].Content);
     }
 
@@ -1067,191 +1075,201 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(200, ChatOutputHtmlModel.HistoryChunkSize);
     }
 
-    [Fact]
-    public void GenerateHistoryChunk_EmptyChunk_ReturnsNoCommandsAndNullFirstElementId()
-    {
-        var idBox = new int[1];
-        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            [], 0, idBox, () => true, null, null, null, null);
+    private static ChatOutputHtmlModel.HistoryRenderPlan BuildPlan(
+        IReadOnlyList<AgentChatHistoryItem> snapshot,
+        RecordingSink sink,
+        Func<bool>? isDiagnosticsVisible = null)
+        => ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, sink, () => true, isDiagnosticsVisible);
 
-        Assert.Empty(commands);
-        Assert.Null(firstElementId);
+    [Fact]
+    public void BuildHistoryRenderPlan_EmptyHistory_ReturnsNoSlotsAndNoChunks()
+    {
+        var sink = new RecordingSink();
+
+        var plan = BuildPlan([], sink);
+
+        Assert.Empty(plan.Slots);
+        Assert.Empty(plan.SlotByCallId);
+        Assert.Empty(plan.Chunks);
+        Assert.Empty(sink.Operations);
     }
 
     [Fact]
-    public void GenerateHistoryChunk_SingleTextItem_ReturnsAppendCommandAndFirstElementId()
+    public void GenerateHistoryChunk_SingleItem_ReturnsHistoryMessageHtml()
     {
-        var chunk = new List<AgentChatHistoryItem> { TextMessage(ChatRole.User, "hello world") };
-        var idBox = new int[1];
+        var sink = new RecordingSink();
+        var plan = BuildPlan([TextMessage(ChatRole.User, "hello world")], sink);
 
-        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, 0, idBox, () => true, null, null, null, null);
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, 1);
 
-        Assert.NotEmpty(commands);
-        Assert.NotNull(firstElementId);
-
-        // The first element id for a standalone text message is msg-0.
-        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), firstElementId);
-
-        // There must be an After targeting LoadAfterAnchorId for the message element.
-        Assert.Contains(commands, cmd =>
-            cmd.Location == ChatOutputUpdateLocation.After &&
-            cmd.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId);
+        Assert.Contains("id=\"history-0\"", html);
+        Assert.Contains("chat-message", html);
+        Assert.Contains("hello world", html);
     }
 
     [Fact]
-    public void GenerateHistoryChunk_TwoConsecutiveToolCallItems_FirstElementIdIsGroupId()
+    public void GenerateHistoryChunk_NonZeroStart_UsesHistoryIds()
     {
-        var chunk = new List<AgentChatHistoryItem>
+        var snapshot = Enumerable.Range(0, 250)
+            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
+            .ToList();
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 200, 250);
+
+        Assert.Contains("id=\"history-200\"", html);
+        Assert.Contains("id=\"history-249\"", html);
+        Assert.DoesNotContain("id=\"history-0\"", html);
+        Assert.DoesNotContain("id=\"history-199\"", html);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_ToolCallRun_GroupedWithFirstHistoryIndex()
+    {
+        var snapshot = Enumerable.Range(0, 10)
+            .Select(i => TextMessage(ChatRole.User, $"text {i}"))
+            .Concat(
+            [
+                ToolCallMessage("tool_a", "c1"),
+                ToolCallMessage("tool_b", "c2"),
+                ToolCallMessage("tool_c", "c3"),
+            ])
+            .ToList();
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // The group id derives from the first member's global history index (10), and all members
+        // are nested inside the single group element.
+        var groupId = ChatOutputHtmlRenderer.ToolGroupId(10);
+        Assert.Contains($"id=\"{groupId}\"", html);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        Assert.Contains("tool_a", html);
+        Assert.Contains("tool_b", html);
+        Assert.Contains("tool_c", html);
+        Assert.Contains("3 calls", html);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_GroupedMessageHtml_RemainsNestedForEmitDiff()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
         {
             ToolCallMessage("tool_a", "c1"),
             ToolCallMessage("tool_b", "c2"),
         };
-        var idBox = new int[1];
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
 
-        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, 0, idBox, () => true, null, null, null, null);
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, 2);
 
-        Assert.NotNull(firstElementId);
-        // Two consecutive tool-call items are promoted into a group; firstElementId is the group id.
-        Assert.StartsWith("tool-grouping-", firstElementId);
+        // The member message elements (with their per-content ids) remain intact inside the group
+        // body, so later EmitDiff operations can target the nested ids.
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(0)}\"", html);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(1)}\"", html);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentsContainerId(ChatOutputHtmlRenderer.MessageId(0))}\"", html);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentsContainerId(ChatOutputHtmlRenderer.MessageId(1))}\"", html);
     }
 
     [Fact]
-    public void GenerateHistoryChunk_200Items_IdBoxAdvancedByExpectedAmount()
+    public void GenerateHistoryChunk_DoesNotInvokeOnInsertOrEmitSinkCommands()
     {
-        var chunk = Enumerable
-            .Range(0, 200)
-            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
-            .ToList();
-        var idBox = new int[1];
-
-        var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, 0, idBox, () => true, null, null, null, null);
-
-        // With positional IDs, we no longer use the idBox counter for history messages.
-        // Instead, verify that 200 commands were generated (one per message).
-        Assert.Equal(200, commands.Count);
-
-        // All element ids referenced in commands should follow the positional pattern history-{idx}
-        // and all should be unique.
-        var contentStrings = commands
-            .Where(c => c.Location == ChatOutputUpdateLocation.After)
-            .Select(c => c.Content)
-            .ToList();
-        Assert.Equal(200, contentStrings.Count);
-        
-        // Verify each message has the correct positional ID
-        for (int i = 0; i < 200; i++)
+        var snapshot = new List<AgentChatHistoryItem>
         {
-            var expectedId = $"history-{i}";
-            Assert.Contains(contentStrings, content => content != null && content.Contains($"id=\"{expectedId}\""));
-        }
+            TextMessage(ChatRole.User, "one"),
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            TextMessage(ChatRole.Assistant, "two"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.NotEmpty(html);
+        // Chunk generation returns a single blob and never emits per-item sink operations.
+        Assert.Empty(sink.Operations);
     }
 
     [Fact]
-    public void GenerateHistoryChunk_ContentMatchesRenderer_ForSimpleTextItem()
+    public void BuildHistoryRenderPlan_ResultInNewerChunkCallInOlderChunk_InjectedIntoCall()
     {
-        const string messageText = "simple text";
-        var item = TextMessage(ChatRole.Assistant, messageText);
-        var chunk = new List<AgentChatHistoryItem> { item };
-        var idBox = new int[1];
-
-        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, 0, idBox, () => true, null, null, null, null);
-
-        var appendCmds = commands
-            .Where(c => c.Location == ChatOutputUpdateLocation.After && c.Path == ChatOutputHtmlRenderer.LoadAfterAnchorId)
+        // The call sits at index 10 (older chunk) while its result sits at index 300 (newer chunk).
+        var snapshot = Enumerable.Range(0, 10)
+            .Select(i => TextMessage(ChatRole.User, $"text {i}"))
+            .Append(ToolCallMessage("my_tool", "cross-chunk-call"))
+            .Concat(Enumerable.Range(11, 289).Select(i => TextMessage(ChatRole.User, $"text {i}")))
+            .Append(new AgentChatHistoryItem
+            {
+                Role = ChatRole.Tool,
+                Contents = [new FunctionResultContent("cross-chunk-call", "\"cross-chunk result data\"")],
+            })
+            .Concat(Enumerable.Range(301, 99).Select(i => TextMessage(ChatRole.User, $"text {i}")))
             .ToList();
+        Assert.Equal(400, snapshot.Count);
+        var sink = new RecordingSink();
 
-        var appendCmd = Assert.Single(appendCmds);
-        Assert.Contains("chat-message", appendCmd.Content);
-        Assert.Contains("chat-assistant-message", appendCmd.Content);
-        Assert.Contains(messageText, appendCmd.Content);
-        Assert.Contains($"id=\"{firstElementId}\"", appendCmd.Content);
+        var plan = BuildPlan(snapshot, sink);
+
+        // The result-only message renders no element of its own.
+        Assert.False(plan.Slots[300].HasDomElement);
+
+        // The older chunk containing the call renders the injected result nested under it.
+        Assert.True(plan.Chunks.Count >= 2);
+        var olderChunk = plan.Chunks.First(chunk => chunk.Start <= 10 && chunk.End > 10);
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, olderChunk.Start, olderChunk.End);
+        Assert.Contains("cross-chunk result data", html);
+        Assert.Contains("chat-tool-result", html);
+
+        // The newer chunk contains no standalone rendering of the result message.
+        var newerChunk = plan.Chunks.First(chunk => chunk.Start <= 300 && chunk.End > 300);
+        var newerHtml = ChatOutputHtmlModel.GenerateHistoryChunk(plan, newerChunk.Start, newerChunk.End);
+        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(300)}\"", newerHtml);
     }
 
     [Fact]
     public async Task GenerateHistoryChunk_CanBeCalledOffUIThread()
     {
-        var chunk = new List<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "off-thread") };
-        var idBox = new int[1];
+        var sink = new RecordingSink();
 
-        var (commands, firstElementId) = await Task.Run(() =>
-            ChatOutputHtmlModel.GenerateHistoryChunk(chunk, 0, idBox, () => true, null, null, null));
-
-        Assert.NotEmpty(commands);
-        Assert.NotNull(firstElementId);
-    }
-
-    [Fact]
-    public void GenerateHistoryChunk_NonZeroStartIndex_SecondItemUsesCorrectInsertAfterAnchor()
-    {
-        // Verify that for a chunk with startIndex=200, the second item references insert-after-200 (not insert-after-0).
-        var chunk = new List<AgentChatHistoryItem>
+        var html = await Task.Run(() =>
         {
-            TextMessage(ChatRole.User, "item 200"),
-            TextMessage(ChatRole.User, "item 201"),
-        };
-        var idBox = new int[1];
+            var plan = BuildPlan([TextMessage(ChatRole.Assistant, "off-thread")], sink);
+            return ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, 1);
+        });
 
-        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, startIndex: 200, idBox, () => true, null, null, null, null);
-
-        // First item should insert after "load-after"
-        var firstInsert = commands.First(c => c.Location == ChatOutputUpdateLocation.After);
-        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, firstInsert.Path);
-
-        // Second item should insert after "insert-after-200" (the anchor emitted by item 200, whose historyIndex is 200)
-        var secondInsert = commands.Skip(1).First(c => c.Location == ChatOutputUpdateLocation.After);
-        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(200), secondInsert.Path);
-    }
-
-    [Fact]
-    public void GenerateHistoryChunk_NonZeroStartIndex_AllItemsUseCorrectInsertAfterAnchors()
-    {
-        // For a 200-item chunk with startIndex=200, every item at local index i > 0 should reference insert-after-{199+i}.
-        var chunk = Enumerable.Range(200, 200)
-            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
-            .ToList();
-        var idBox = new int[1];
-
-        var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, startIndex: 200, idBox, () => true, null, null, null, null);
-
-        Assert.Equal(200, commands.Count);
-
-        // Verify each item uses the correct insert anchor
-        for (int i = 0; i < 200; i++)
-        {
-            var expectedPath = i == 0
-                ? ChatOutputHtmlRenderer.LoadAfterAnchorId
-                : ChatOutputHtmlRenderer.InsertAfterItemId(200 + i - 1);
-            
-            var cmd = commands[i];
-            Assert.Equal(ChatOutputUpdateLocation.After, cmd.Location);
-            Assert.Equal(expectedPath, cmd.Path);
-        }
-    }
-
-    [Fact]
-    public void GenerateHistoryChunk_500Items_AllItemsGenerateCommands()
-    {
-        // Verify that a 500-item scenario (requiring multiple chunks) produces commands for all 500 items.
-        // This is a regression test for the bug where non-zero startIndex chunks dropped items.
-        var chunk = Enumerable.Range(0, 500)
-            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
-            .ToList();
-        var idBox = new int[1];
-
-        var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
-            chunk, startIndex: 0, idBox, () => true, null, null, null, null);
-
-        // All 500 items should produce update commands (no items silently dropped)
-        Assert.Equal(500, commands.Count);
+        Assert.Contains("off-thread", html);
     }
 
     // ── ComputeChunkRanges / SnapCutPoint tests ───────────────────────────────
+
+    [Fact]
+    public void ComputeChunkRanges_RawCutInsideToolRun_SnapsToRunStart()
+    {
+        // 400 items with a call/result run straddling the raw cut at 200: the whole tool-related
+        // run must land in the newer chunk so grouping and result injection stay chunk-local.
+        var items = Enumerable.Range(0, 196).Select(_ => TextMessage(ChatRole.User, "text"))
+            .Concat(
+            [
+                ToolCallMessage("t0", "c0"),
+                ToolResultMessage("c0"),
+                ToolCallMessage("t1", "c1"),
+                ToolResultMessage("c1"),
+                ToolCallMessage("t2", "c2"),
+                ToolResultMessage("c2"),
+            ])
+            .Concat(Enumerable.Range(0, 198).Select(_ => TextMessage(ChatRole.User, "text")))
+            .ToList();
+        Assert.Equal(400, items.Count);
+
+        var ranges = ChatOutputHtmlModel.ComputeChunkRanges(items);
+
+        Assert.Equal(2, ranges.Count);
+        Assert.Equal((196, 400), ranges[0]);
+        Assert.Equal((0, 196), ranges[1]);
+    }
 
     [Fact]
     public void ComputeChunkRanges_SnapCutBoundaryInsideTool3Run_SnapsToBeforeRun()
@@ -1364,128 +1382,301 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Empty(ranges);
     }
 
-    // ── ChatMessageHtmlTransformer.skipInitialItems tests (issue #630) ──────────
+    // ── ChatMessageHtmlTransformer live-transformer tests (issue #893) ─────────
 
-    private static ChatMessageHtmlTransformer MakeTransformer(
+    private static ChatMessageHtmlTransformer MakeLiveTransformer(
         ObservableCollection<AgentChatHistoryItem> source,
+        List<RenderSlot> slots,
         RecordingSink sink,
-        int skipInitialItems = 0)
-    {
-        var slots = new List<RenderSlot>();
-        var idCounter = 0;
-        return new ChatMessageHtmlTransformer(
+        Dictionary<string, RenderSlot> sharedSlotByCallId,
+        int preloadedCount = 0)
+        => new(
             source,
             slots,
             sink,
             () => true,
-            () => idCounter++,
-            ChatOutputHtmlRenderer.LoadAfterAnchorId,
-            skipInitialItems: skipInitialItems);
+            containerPath: ChatOutputHtmlRenderer.HistoryContainerId,
+            elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
+            groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
+            sharedSlotByCallId: sharedSlotByCallId,
+            preloadedCount: preloadedCount);
+
+    /// <summary>
+    /// Simulates the Phase B → Phase C hand-off: builds the render plan for the current source
+    /// contents, renders the single chunk blob (marking the models inserted), and returns the
+    /// preloaded slots plus the shared call-id map, ready for live-transformer construction.
+    /// </summary>
+    private static (List<RenderSlot> Slots, Dictionary<string, RenderSlot> SharedMap) PreloadPlan(
+        ObservableCollection<AgentChatHistoryItem> source,
+        RecordingSink sink)
+    {
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan([.. source], sink, () => true);
+        ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, plan.Slots.Length);
+        return ([.. plan.Slots], plan.SlotByCallId);
     }
 
     [Fact]
-    public void ChatMessageHtmlTransformer_SkipInitialItems_Zero_EmitsAllItems()
+    public void LiveTransformer_FirstItem_AppendsIntoHistoryContainer()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>();
+        var sink = new RecordingSink();
+        using var transformer = MakeLiveTransformer(source, [], sink, new(StringComparer.Ordinal));
+
+        source.Add(TextMessage(ChatRole.User, "first-live"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+        Assert.Contains("first-live", op.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_ItemAfterHistoryLoad_InsertsAfterLastTopLevelHistoryOrGroup()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "old"),
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 3);
+        sink.Clear();
+
+        source.Add(TextMessage(ChatRole.Assistant, "new-live"));
+
+        // The last top-level element is the group wrapping items 1-2, so the live item inserts
+        // after the group element, not after a nested member.
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.ToolGroupId(1), op.Path);
+        Assert.Contains("new-live", op.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_ToolGroupPromotion_UsesHistoryIndex_NotLocalIndex()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 200).Select(i => TextMessage(ChatRole.User, $"text {i}")));
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 200);
+        sink.Clear();
+
+        source.Add(ToolCallMessage("tool_a", "c1"));
+        source.Add(ToolCallMessage("tool_b", "c2"));
+
+        // Promotion must derive the group id from the first member's global history index (200).
+        var promoteOp = sink.ContentOperations.First(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(200), promoteOp.Path);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(200)}\"", promoteOp.Content);
+        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(0)}\"", promoteOp.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_ToolGroupExtension_AppendsToGroupBody()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 2);
+        sink.Clear();
+
+        source.Add(ToolCallMessage("tool_c", "c3"));
+
+        var appendOp = sink.ContentOperations.First(op => op.Location == ChatOutputUpdateLocation.Append);
+        Assert.Equal(ChatOutputHtmlRenderer.ToolGroupBodyId(ChatOutputHtmlRenderer.ToolGroupId(0)), appendOp.Path);
+        Assert.Contains("tool_c", appendOp.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_ResultOnlyLiveMessage_MatchesPreloadedHistoryCall()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("my_tool", "preloaded-call"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 1);
+        sink.Clear();
+
+        source.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("preloaded-call", "\"late result\"")],
+        });
+
+        // The result was injected into the preloaded call's element rather than rendered standalone.
+        Assert.False(slots[1].HasDomElement);
+        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("late result"));
+        Assert.DoesNotContain(sink.ContentOperations, op =>
+            op.Content.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(1)}\"") &&
+            op.Location != ChatOutputUpdateLocation.Replace);
+    }
+
+    [Fact]
+    public void LiveTransformer_OnRemove_Ungrouped_RemovesMessageElement()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "keep"),
+            TextMessage(ChatRole.Assistant, "drop"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 2);
+        sink.Clear();
+
+        source.RemoveAt(1);
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal("remove", op.Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), op.Path);
+    }
+
+    [Fact]
+    public void LiveTransformer_OnRemove_Grouped_RebuildsOrRemovesAffectedGroup()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            ToolCallMessage("tool_c", "c3"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 3);
+        sink.Clear();
+
+        // Remove the middle member: the group element is replaced with a rebuilt two-member group.
+        source.RemoveAt(1);
+
+        var rebuildOp = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.Replace, rebuildOp.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.ToolGroupId(0), rebuildOp.Path);
+        Assert.Contains("2 calls", rebuildOp.Content);
+        Assert.Contains("tool_a", rebuildOp.Content);
+        Assert.Contains("tool_c", rebuildOp.Content);
+        Assert.DoesNotContain("tool_b", rebuildOp.Content);
+        sink.Clear();
+
+        // Remove another member: the sole remaining member becomes a standalone element.
+        source.RemoveAt(1);
+
+        var standaloneOp = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.Replace, standaloneOp.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.ToolGroupId(0), standaloneOp.Path);
+        Assert.DoesNotContain("chat-tool-group\"", standaloneOp.Content);
+        Assert.Contains("tool_a", standaloneOp.Content);
+        sink.Clear();
+
+        // Remove the final member: the standalone element is removed by id.
+        source.RemoveAt(0);
+
+        var removeOp = Assert.Single(sink.ContentOperations);
+        Assert.Equal("remove", removeOp.Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), removeOp.Path);
+    }
+
+    [Fact]
+    public void LiveTransformer_OnReplace_StructuralChange_RebuildsAffectedRun()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "before"),
+            TextMessage(ChatRole.Assistant, "will become tool call"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 2);
+        sink.Clear();
+
+        // Replace a text message with a tool-call-only message (structural category change).
+        source[1] = ToolCallMessage("replacement_tool", "c-replaced");
+
+        var ops = sink.ContentOperations;
+        // The old element is removed and the replacement is inserted after its predecessor.
+        Assert.Contains(ops, op => op.Kind == "remove" && op.Path == ChatOutputHtmlRenderer.MessageId(1));
+        var insertOp = ops.First(op => op.Kind == "update" && op.Content.Contains("replacement_tool"));
+        Assert.Equal(ChatOutputUpdateLocation.After, insertOp.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), insertOp.Path);
+
+        // The replacement keeps its immutable element id so per-content diffs still work.
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(1)}\"", insertOp.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_Reset_RebuildsContainerChildrenWithoutReplacingContainer()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>
         {
             TextMessage(ChatRole.User, "a"),
             TextMessage(ChatRole.Assistant, "b"),
-            TextMessage(ChatRole.User, "c"),
         };
         var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 2);
+        sink.Clear();
 
-        using var _ = MakeTransformer(source, sink, skipInitialItems: 0);
-
-        Assert.Equal(3, sink.ContentOperations.Count);
-    }
-
-    [Fact]
-    public void ChatMessageHtmlTransformer_SkipInitialItems_DoesNotEmitCommandsForSkippedItems()
-    {
-        var source = new ObservableCollection<AgentChatHistoryItem>
-        {
-            TextMessage(ChatRole.User, "skip-0"),
-            TextMessage(ChatRole.User, "skip-1"),
-            TextMessage(ChatRole.Assistant, "render-2"),
-            TextMessage(ChatRole.Assistant, "render-3"),
-        };
-        var sink = new RecordingSink();
-
-        using var _ = MakeTransformer(source, sink, skipInitialItems: 2);
+        source.Clear();
 
         var ops = sink.ContentOperations;
-        Assert.Equal(2, ops.Count);
-        Assert.All(ops, op => Assert.DoesNotContain("skip-", op.Content));
-        Assert.Contains(ops, op => op.Content.Contains("render-2"));
-        Assert.Contains(ops, op => op.Content.Contains("render-3"));
+        Assert.Equal(2, ops.Count(op => op.Kind == "remove"));
+        // The persistent container itself is never removed or replaced.
+        Assert.DoesNotContain(ops, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId && op.Kind == "remove");
+        Assert.DoesNotContain(ops, op =>
+            op.Path == ChatOutputHtmlRenderer.HistoryContainerId &&
+            op.Location == ChatOutputUpdateLocation.Replace);
     }
 
     [Fact]
-    public void ChatMessageHtmlTransformer_SkipInitialItems_GreaterThanSourceCount_EmitsNothing()
+    public void LiveTransformer_PreloadedItems_AreNotReEmitted()
     {
         var source = new ObservableCollection<AgentChatHistoryItem>
         {
-            TextMessage(ChatRole.User, "item"),
+            TextMessage(ChatRole.User, "preloaded-0"),
+            TextMessage(ChatRole.User, "preloaded-1"),
         };
         var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
 
-        using var _ = MakeTransformer(source, sink, skipInitialItems: 5);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 2);
 
         Assert.Empty(sink.ContentOperations);
-    }
 
-    [Fact]
-    public void ChatMessageHtmlTransformer_SkipInitialItems_SubscribesToFutureItems()
-    {
-        var source = new ObservableCollection<AgentChatHistoryItem>
-        {
-            TextMessage(ChatRole.User, "existing"),
-        };
-        var sink = new RecordingSink();
-
-        using var transformer = MakeTransformer(source, sink, skipInitialItems: 1);
-
-        // Constructor: 1 item skipped → no ops
-        Assert.Empty(sink.ContentOperations);
-
-        // Live add after the skip range
-        source.Add(TextMessage(ChatRole.Assistant, "new-item"));
+        source.Add(TextMessage(ChatRole.Assistant, "live-2"));
 
         var op = Assert.Single(sink.ContentOperations);
-        Assert.Contains("new-item", op.Content);
+        Assert.Contains("live-2", op.Content);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(2)}\"", op.Content);
     }
 
     [Fact]
-    public void ChatMessageHtmlTransformer_SkipInitialItems_ToolCallGroupingStillCorrect()
+    public void LiveTransformer_ItemsAddedDuringLoad_AreRenderedByConstructor()
     {
-        // Items 0 and 1 are tool-call-only and are skipped — they form a group in internal state.
-        // Item 2 is also tool-call-only and NOT skipped — it must extend that group.
-        // Adding item 3 (tool-call-only) must further extend the group, not create a standalone element.
+        // Items appended to the source after the snapshot (preloadedCount) but before Phase C are
+        // rendered by the constructor through the normal insert path.
         var source = new ObservableCollection<AgentChatHistoryItem>
         {
-            ToolCallMessage("tool_a", "c0"),
-            ToolCallMessage("tool_b", "c1"),
-            ToolCallMessage("tool_c", "c2"),
+            TextMessage(ChatRole.User, "snapshot-0"),
         };
         var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        source.Add(TextMessage(ChatRole.Assistant, "buffered-1"));
 
-        using var transformer = MakeTransformer(source, sink, skipInitialItems: 2);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 1);
 
-        // Only item 2 was rendered — it must have extended the group established by items 0-1.
-        // Since items 0-1 form a group and item 2 extends it, we expect an Append-into-body op.
-        var initialOps = sink.ContentOperations.ToList();
-        Assert.Contains(initialOps, op =>
-            op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
-        sink.Operations.Clear();
-
-        // Live add of item 3 — must extend the same group
-        source.Add(ToolCallMessage("tool_d", "c3"));
-
-        var liveOps = sink.ContentOperations;
-        Assert.DoesNotContain(liveOps, op =>
-            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group-body"));
-        Assert.Contains(liveOps, op =>
-            op.Location == ChatOutputUpdateLocation.Append && op.Path.Contains("body"));
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains("buffered-1", op.Content);
     }
 
     // ── ChatOutputHtmlModel three-phase async init tests (issue #631) ──────────
@@ -1543,25 +1734,28 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task ChatOutputHtmlModel_OlderChunk_AllItemsAppendedInOrder()
+    public async Task ChatOutputHtmlModel_OlderChunk_PrependedIntoHistoryContainer()
     {
-        // 400 items → 2 chunks processed oldest-first. All items must be inserted via Append
-        // (no Before ops), appearing in DOM in the correct oldest-to-newest order.
+        // 400 items → 2 chunks, newest chunk delivered first; the older chunk is then prepended
+        // above it. Every chunk op targets the persistent history container with Prepend.
         var history = new ObservableCollection<AgentChatHistoryItem>(
-            Enumerable.Range(0, 400).Select(_ => TextMessage(ChatRole.User, "text")));
+            Enumerable.Range(0, 400).Select(i => TextMessage(ChatRole.User, $"item {i}")));
         var sink = new RecordingSink();
 
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
 
-        // With oldest-first processing, no Before ops should be emitted.
-        var beforeOps = sink.ContentOperations
-            .Where(op => op.Location == ChatOutputUpdateLocation.Before)
-            .ToList();
-        Assert.Empty(beforeOps);
+        var ops = sink.ContentOperations;
+        Assert.Equal(2, ops.Count);
+        Assert.All(ops, op =>
+        {
+            Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+            Assert.Equal(ChatOutputUpdateLocation.Prepend, op.Location);
+        });
 
-        // All 400 items must have been rendered.
-        Assert.Equal(400, sink.ContentOperations.Count(op => op.Content?.Contains("chat-message") == true));
+        // Newest chunk (items 200-399) first, older chunk (items 0-199) second.
+        Assert.Contains(">item 399<", ops[0].Content);
+        Assert.Contains(">item 0<", ops[1].Content);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -1658,8 +1852,8 @@ public sealed class ChatOutputHtmlModelTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_ItemIdsAreAssignedInIndexOrder()
     {
-        // 400 items → 2 chunks. With oldest-first processing, items[0] must get history-0,
-        // items[200] must get history-200, ensuring the live transformer's IDs match the DOM.
+        // 400 items → 2 chunks. Element ids derive from the global history index: items[0] gets
+        // history-0 (older chunk), items[200] gets history-200 (newer chunk).
         var history = new ObservableCollection<AgentChatHistoryItem>(
             Enumerable.Range(0, 400).Select(_ => TextMessage(ChatRole.User, "text")));
         var sink = new RecordingSink();
@@ -1667,18 +1861,15 @@ public sealed class ChatOutputHtmlModelTests
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
 
-        // The first element rendered by the oldest chunk (items[0]) should have id "history-0".
-        var history0Id = ChatOutputHtmlRenderer.MessageId(0);
-        Assert.Contains(
-            sink.ContentOperations,
-            op => op.Location == ChatOutputUpdateLocation.After && 
-                  op.Content?.Contains(history0Id, StringComparison.Ordinal) == true);
+        var ops = sink.ContentOperations;
+        Assert.Equal(2, ops.Count);
 
-        // The first element of the second chunk (items[200]) should have id "history-200".
-        var history200Id = ChatOutputHtmlRenderer.MessageId(200);
-        Assert.Contains(
-            sink.ContentOperations,
-            op => op.Content?.Contains(history200Id, StringComparison.Ordinal) == true);
+        // The newest chunk (delivered first) starts at items[200].
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(200)}\"", ops[0].Content);
+        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(0)}\"", ops[0].Content);
+
+        // The older chunk contains items[0].
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(0)}\"", ops[1].Content);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -1762,9 +1953,398 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnosticsVisible: () => diagnosticsVisible);
         await model.HistoryLoaded;
 
-        Assert.Equal(2, sink.ContentOperations.Count);
-        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("regular user message"));
-        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("assistant response"));
-        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("diagnostic"));
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Contains("regular user message", op.Content);
+        Assert.Contains("assistant response", op.Content);
+        Assert.DoesNotContain("diagnostic", op.Content);
+    }
+
+    // ── HistoryLoad tests (issue #893) ──────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_AllChunksTargetHistoryContainer_WithPrependLocation()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 500).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var ops = sink.ContentOperations;
+        Assert.Equal(3, ops.Count);
+        Assert.All(ops, op =>
+        {
+            Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+            Assert.Equal(ChatOutputUpdateLocation.Prepend, op.Location);
+        });
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_NewestChunkInsertedFirst()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 400).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var ops = sink.ContentOperations;
+        Assert.Contains(">item 399<", ops[0].Content);
+        Assert.DoesNotContain(">item 399<", ops[1].Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_ScrollCalledAfterNewestChunkOnly()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 400).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        Assert.Equal(1, sink.ScrollCount);
+
+        // The scroll happens immediately after the first (newest) chunk, before the older chunk.
+        var kinds = sink.Operations.Select(op => op.Kind).ToList();
+        var firstUpdate = kinds.IndexOf("update");
+        var scrollIndex = kinds.IndexOf("scroll");
+        var secondUpdate = kinds.IndexOf("update", firstUpdate + 1);
+        Assert.True(firstUpdate < scrollIndex);
+        Assert.True(scrollIndex < secondUpdate);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_500Items_AllMessageIdsPresentInSinkOutput()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 500).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var allContent = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        for (var i = 0; i < 500; i++)
+        {
+            Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(i)}\"", allContent);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_EmptyHistory_EmitsNoChunkOps()
+    {
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+
+        Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_CancellationMidLoad_DoesNotPublishPartialSlotsOrCallMap()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 500).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        history.Add(ToolCallMessage("my_tool", "cancelled-call"));
+        var sink = new RecordingSink();
+
+        // Dispose before yielding the UI thread: no chunk or Phase C dispatcher work can have run,
+        // so cancellation is observed before anything is published.
+        var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        model.Dispose();
+        await model.HistoryLoaded;
+
+        Assert.Empty(model.HistorySlots);
+        Assert.Empty(model.SharedSlotByCallId);
+        Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    // ── Running-item structure tests (issue #893) ───────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_Container_AppendsToRunningItemsContainer()
+    {
+        var running = new ObservableCollection<AgentChatRunningItem>();
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        running.Add(new AgentChatRunningItem());
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, op.Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(0)}\"", op.Content);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0))}\"", op.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_InnerTransformer_FirstMessage_AppendsToRunContentsId()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streamed"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            op.Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+        Assert.Contains(">streamed<", op.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_InnerTransformer_UsesRunningMessageIds()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streamed"));
+
+        var runId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningMessageId(runId, 0)}\"", op.Content);
+        Assert.DoesNotContain("id=\"history-", op.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_InnerTransformer_SecondMessage_InsertsAfterFirstRunningMessage()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "first"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "second"));
+
+        var runId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.RunningMessageId(runId, 0), op.Path);
+        Assert.Contains(">second<", op.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_ReInsert_TargetsRunningItemsContainer()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.RunningItemId(0));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputHtmlRenderer.RunningContainerId, op.Path);
+        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(0)}\"", op.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_Update_ReplacesContentsDiv_NotRunWrapper()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "old stream"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // Replace the running item with a new source (fresh Items collection).
+        var replacement = new AgentChatRunningItem();
+        replacement.Items.Add(TextMessage(ChatRole.Assistant, "new stream"));
+        running[0] = replacement;
+
+        var runId = ChatOutputHtmlRenderer.RunningItemId(0);
+        var contentsId = ChatOutputHtmlRenderer.RunningItemContentsId(runId);
+        var ops = sink.ContentOperations;
+
+        // The contents div is replaced; the run wrapper element itself is never replaced or removed.
+        Assert.Contains(ops, op => op.Path == contentsId && op.Location == ChatOutputUpdateLocation.Replace);
+        Assert.DoesNotContain(ops, op => op.Path == runId);
+        Assert.Contains(ops, op => op.Content.Contains(">new stream<"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_Removal_RemovesRunWrapperAndDisposesInnerTransformer()
+    {
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streamed"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        running.RemoveAt(0);
+
+        var removeOp = Assert.Single(sink.ContentOperations);
+        Assert.Equal("remove", removeOp.Kind);
+        Assert.Equal(ChatOutputHtmlRenderer.RunningItemId(0), removeOp.Path);
+        sink.Clear();
+
+        // The inner transformer is disposed: further additions to the removed item emit nothing.
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "after removal"));
+
+        Assert.Empty(sink.ContentOperations);
+    }
+
+    // ── Regression tests for the redesign's bug classes (issue #893) ────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Regression_BugA_ToolGroupPromotion_UsesHistoryIndex_NotLocalIndex()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 200).Select(i => TextMessage(ChatRole.User, $"text {i}")));
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(ToolCallMessage("tool_a", "c1"));
+        history.Add(ToolCallMessage("tool_b", "c2"));
+
+        var promoteOp = sink.ContentOperations.First(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(200), promoteOp.Path);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(200)}\"", promoteOp.Content);
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Path.Contains(ChatOutputHtmlRenderer.ToolGroupId(0)) ||
+            op.Content.Contains($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(0)}\""));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Regression_BugB_NoInsertAfterDivs_EmittedAnywhere()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 210).Select(i => TextMessage(ChatRole.User, $"text {i}")));
+        history.Add(ToolCallMessage("tool_a", "c1"));
+        history.Add(ToolCallMessage("tool_b", "c2"));
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streaming"));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(history, running, () => true, sink);
+        await model.HistoryLoaded;
+
+        history.Add(ToolCallMessage("tool_c", "c3"));
+        history.Add(TextMessage(ChatRole.Assistant, "after group"));
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "more streaming"));
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Path.Contains("insert-after") || op.Content.Contains("insert-after"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Regression_BugD_OnInsert_UsesContainerPath_NotLoadAfterHardcode()
+    {
+        var runningItem = new AgentChatRunningItem();
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "first running message"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(
+            ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0)),
+            op.Path);
+        Assert.DoesNotContain(sink.Operations, o => o.Path == "load-after");
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Regression_BugE_CrossChunkToolResult_MatchesCall()
+    {
+        // The call lands in the older chunk while its result lands in the newer chunk.
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 10).Select(i => TextMessage(ChatRole.User, $"text {i}")));
+        history.Add(ToolCallMessage("my_tool", "cross-chunk-call"));
+        foreach (var i in Enumerable.Range(11, 289))
+        {
+            history.Add(TextMessage(ChatRole.User, $"text {i}"));
+        }
+
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents = [new FunctionResultContent("cross-chunk-call", "\"cross-chunk result data\"")],
+        });
+        foreach (var i in Enumerable.Range(301, 99))
+        {
+            history.Add(TextMessage(ChatRole.User, $"text {i}"));
+        }
+
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var allContent = string.Concat(sink.ContentOperations.Select(op => op.Content));
+
+        // The result is injected (nested under its call), never rendered standalone.
+        Assert.Contains("cross-chunk result data", allContent);
+        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(300)}\"", allContent);
+
+        // The chunk containing the call renders it with the injected result.
+        var chunkWithCall = sink.ContentOperations.First(op => op.Content.Contains("my_tool"));
+        Assert.Contains("cross-chunk result data", chunkWithCall.Content);
+        Assert.Contains("chat-tool-result", chunkWithCall.Content);
     }
 }

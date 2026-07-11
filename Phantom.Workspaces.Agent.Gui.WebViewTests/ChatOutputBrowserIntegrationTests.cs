@@ -1,10 +1,16 @@
 using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Llm;
 using Xunit;
 
 namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
@@ -33,7 +39,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             try
             {
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     Message("msg-0", "hello world")));
 
@@ -53,7 +59,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             var (web, window) = await ShowReadyBrowserAsync();
             try
             {
-                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history", "append", Message("msg-0", "first")));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history-container", "append", Message("msg-0", "first")));
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("msg-0", "after", Message("msg-1", "second")));
 
                 var order = await EvalAsync(
@@ -74,7 +80,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             var (web, window) = await ShowReadyBrowserAsync();
             try
             {
-                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history", "append", Message("msg-1", "second")));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history-container", "append", Message("msg-1", "second")));
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("msg-1", "before", Message("msg-0", "first")));
 
                 var order = await EvalAsync(
@@ -95,7 +101,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             var (web, window) = await ShowReadyBrowserAsync();
             try
             {
-                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history", "append", Message("msg-0", "before-text")));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history-container", "append", Message("msg-0", "before-text")));
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("msg-0", "replace", Message("msg-0", "after-text")));
 
                 var text = await EvalAsync(web, "document.getElementById('msg-0').textContent");
@@ -115,7 +121,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             var (web, window) = await ShowReadyBrowserAsync();
             try
             {
-                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history", "append", Message("msg-0", "doomed")));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update("chat-history-container", "append", Message("msg-0", "doomed")));
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove("msg-0"));
 
                 var missing = await EvalAsync(web, "document.getElementById('msg-0') === null");
@@ -187,7 +193,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             try
             {
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithCopyTarget("cg-0", "copy me")));
 
@@ -210,7 +216,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             try
             {
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithCopyTarget("cg-1", "hidden button")));
 
@@ -234,7 +240,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             {
                 // Inject a block after initial load — MutationObserver must pick it up.
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithCopyTarget("cg-2", "dynamic block")));
 
@@ -266,7 +272,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                     + "});");
 
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithCopyTarget("cg-3", "clipboard text")));
 
@@ -359,7 +365,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var iso = nowIso.Trim('"');
 
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithTimestamp("ts-0", iso)));
 
@@ -384,7 +390,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 // Year 2000 is guaranteed to be a different day from now
                 var oldIso = "2000-06-15T10:30:00.000Z";
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithTimestamp("ts-1", oldIso)));
 
@@ -409,7 +415,7 @@ public sealed class ChatOutputBrowserIntegrationTests
             try
             {
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithTimestamp("ts-2", "not-a-date")));
 
@@ -433,7 +439,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var oldIso = "2000-06-15T10:30:00.000Z";
                 // Dynamically appended via the streaming update path - MutationObserver must format it
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                    "chat-history",
+                    "chat-history-container",
                     "append",
                     MessageWithTimestamp("ts-3", oldIso)));
 
@@ -466,7 +472,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 for (int i = 0; i < 10; i++)
                 {
                     web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                        "chat-history",
+                        "chat-history-container",
                         "append",
                         Message($"msg-{i}", $"token{i}")));
                     await Task.Delay(5);
@@ -493,7 +499,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 for (int i = 0; i < 100; i++)
                 {
                     web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                        "chat-history",
+                        "chat-history-container",
                         "append",
                         Message($"history-{i}", $"Historical message {i}")));
                 }
@@ -505,7 +511,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 for (int i = 0; i < 50; i++)
                 {
                     web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                        "chat-history",
+                        "chat-history-container",
                         "append",
                         Message($"stream-{i}", $"Streaming token {i}")));
                 }
@@ -543,7 +549,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 for (int i = 0; i < 20; i++)
                 {
                     web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
-                        "chat-history",
+                        "chat-history-container",
                         "append",
                         Message($"rapid-{i}", $"Token {i}")));
                     await Task.Delay(1);
@@ -562,6 +568,326 @@ public sealed class ChatOutputBrowserIntegrationTests
                 window.Close();
             }
         });
+
+    [Fact]
+    public Task HistoryLoad_MultichunkHistory_AllItemsVisibleInDOM()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                for (var i = 0; i < 500; i++)
+                {
+                    history.Add(TextItem($"message {i}"));
+                }
+
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+
+                var count = await EvalAsync(
+                    web,
+                    "document.querySelectorAll('#chat-history-container .chat-message').length.toString()");
+                Assert.Equal("500", count);
+
+                var order = await EvalAsync(
+                    web,
+                    "(function(){var m=document.querySelectorAll('#chat-history-container > .chat-message');"
+                    + "return m[0].id + ',' + m[m.length-1].id;})()");
+                Assert.Equal("history-0,history-499", order);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task LiveItem_AfterHistoryLoad_AppearsAfterLastHistoryItemOrGroup()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>
+                {
+                    TextItem("first"),
+                    TextItem("second"),
+                };
+
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+
+                history.Add(TextItem("live message"));
+
+                var previousSibling = await EvalAsync(
+                    web,
+                    "document.getElementById('history-2').previousElementSibling.id");
+                Assert.Equal("history-1", previousSibling);
+
+                var parent = await EvalAsync(
+                    web,
+                    "document.getElementById('history-2').parentElement.id");
+                Assert.Equal("chat-history-container", parent);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ToolGroup_PromotedInLiveStream_SummaryAndBodyCorrect()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+
+                history.Add(ToolCallItem("write_file", "call-1"));
+                history.Add(ToolCallItem("write_file", "call-2"));
+
+                var groupExists = await EvalAsync(web, "(document.getElementById('tool-group-0') !== null).toString()");
+                Assert.Equal("true", groupExists);
+
+                var summaryText = await EvalAsync(web, "document.getElementById('tool-group-0-summary').textContent");
+                Assert.Contains("2", summaryText, StringComparison.Ordinal);
+
+                var bodyMessages = await EvalAsync(
+                    web,
+                    "document.querySelectorAll('#tool-group-0-body .chat-message').length.toString()");
+                Assert.Equal("2", bodyMessages);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ToolGroup_PromotedInLiveStream_NoDanglingInsertAfterDiv()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                using var model = CreateModel(web, history);
+                await model.HistoryLoaded;
+
+                history.Add(ToolCallItem("write_file", "call-1"));
+                history.Add(ToolCallItem("write_file", "call-2"));
+
+                var danglingCount = await EvalAsync(
+                    web,
+                    "document.querySelectorAll('.insert-after, [id*=\"insert-after\"]').length.toString()");
+                Assert.Equal("0", danglingCount);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task RunningItem_StartsEmpty_StreamingAppendsIntoContents()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var running = new ObservableCollection<AgentChatRunningItem>();
+                using var model = CreateModel(web, [], running);
+                await model.HistoryLoaded;
+
+                var runningItem = new AgentChatRunningItem();
+                running.Add(runningItem);
+
+                var wrapperParent = await EvalAsync(web, "document.getElementById('run-0').parentElement.id");
+                Assert.Equal("running-items-container", wrapperParent);
+
+                var initiallyEmpty = await EvalAsync(
+                    web,
+                    "document.querySelectorAll('#run-0-contents .chat-message').length.toString()");
+                Assert.Equal("0", initiallyEmpty);
+
+                runningItem.Items.Add(TextItem("streaming text"));
+
+                var streamed = await EvalAsync(web, "document.getElementById('run-0-contents').textContent");
+                Assert.Contains("streaming text", streamed, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task SubAgentPanel_Update_SentinelPresent_InnerReplaced()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+                using var model = CreateModel(web, [], subAgents: subAgents);
+                await model.HistoryLoaded;
+
+                var subAgent = new StubSubAgentDisplay("agent-1", "Research Agent");
+                subAgents.Add(subAgent);
+
+                var sentinelPresent = await EvalAsync(
+                    web,
+                    "(document.getElementById('subagent-panel-sentinel') !== null).toString()");
+                Assert.Equal("true", sentinelPresent);
+
+                var innerText = await EvalAsync(
+                    web,
+                    "document.getElementById('subagent-panel-inner')?.textContent || 'missing'");
+                Assert.Contains("Research Agent", innerText, StringComparison.Ordinal);
+
+                subAgent.Complete();
+
+                sentinelPresent = await EvalAsync(
+                    web,
+                    "(document.getElementById('subagent-panel-sentinel') !== null).toString()");
+                Assert.Equal("true", sentinelPresent);
+
+                var innerGone = await EvalAsync(
+                    web,
+                    "(document.getElementById('subagent-panel-inner') === null).toString()");
+                Assert.Equal("true", innerGone);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task HeadlessBrowser_CommandFailure_ReInsertStillTargetsRunningContainer()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var running = new ObservableCollection<AgentChatRunningItem>();
+                using var model = CreateModel(web, [], running);
+                await model.HistoryLoaded;
+
+                var runningItem = new AgentChatRunningItem();
+                runningItem.Items.Add(TextItem("in flight"));
+                running.Add(runningItem);
+
+                // Simulate the wrapper element being lost in the browser (the failure mode the
+                // shell reports as commandFailed for subsequent commands targeting it).
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove("run-0"));
+                var removed = await EvalAsync(web, "(document.getElementById('run-0') === null).toString()");
+                Assert.Equal("true", removed);
+
+                // Recovery: the model re-inserts using a stable Append into the persistent
+                // running-items region rather than a sibling anchor.
+                model.NotifyInsertionFailed("run-0-contents");
+
+                var wrapperParent = await EvalAsync(web, "document.getElementById('run-0').parentElement.id");
+                Assert.Equal("running-items-container", wrapperParent);
+
+                var contents = await EvalAsync(web, "document.getElementById('run-0-contents').textContent");
+                Assert.Contains("in flight", contents, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    private static ChatOutputHtmlModel CreateModel(
+        ControllableWebViewControl web,
+        ObservableCollection<AgentChatHistoryItem> history,
+        ObservableCollection<AgentChatRunningItem>? running = null,
+        ObservableCollection<IRunningSubAgentDisplay>? subAgents = null)
+        => new(
+            history,
+            running ?? [],
+            () => true,
+            new BrowserSink(web),
+            subAgents: subAgents);
+
+    private static AgentChatHistoryItem TextItem(string text)
+        => new() { Role = ChatRole.Assistant, Contents = [new TextContent(text)] };
+
+    private static AgentChatHistoryItem ToolCallItem(string toolName, string callId)
+        => new()
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent(callId, toolName, new Dictionary<string, object?>())],
+        };
+
+    /// <summary>
+    /// Bridges <see cref="IChatOutputHtmlSink"/> operations to the real browser by posting the
+    /// same JSON commands the production control emits.
+    /// </summary>
+    private sealed class BrowserSink : IChatOutputHtmlSink
+    {
+        private readonly ControllableWebViewControl web;
+
+        public BrowserSink(ControllableWebViewControl web) => this.web = web;
+
+        public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
+            => this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(path, ToWireLocation(location), content));
+
+        public void RemoveContent(string path)
+            => this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove(path));
+
+        public void ScrollToBottom()
+            => this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+
+        private static string ToWireLocation(ChatOutputUpdateLocation location) => location switch
+        {
+            ChatOutputUpdateLocation.Replace => "replace",
+            ChatOutputUpdateLocation.Before => "before",
+            ChatOutputUpdateLocation.After => "after",
+            ChatOutputUpdateLocation.Append => "append",
+            ChatOutputUpdateLocation.Prepend => "prepend",
+            _ => throw new ArgumentOutOfRangeException(nameof(location), location, null),
+        };
+    }
+
+    private sealed class StubSubAgentDisplay : IRunningSubAgentDisplay
+    {
+        private AgentChatCompletionState completionState = AgentChatCompletionState.Running;
+
+        public StubSubAgentDisplay(string agentId, string displayName)
+        {
+            this.AgentId = agentId;
+            this.DisplayName = displayName;
+        }
+
+        public string AgentId { get; }
+
+        public string DisplayName { get; }
+
+        public AgentChatCompletionState CompletionState => this.completionState;
+
+        public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];
+
+        public IReadOnlyList<IRunningSubAgentDisplay> SubAgents => [];
+
+        public event EventHandler? ActivityChanged;
+
+        public event EventHandler? CompletionStateChanged;
+
+        public void Complete()
+        {
+            this.completionState = AgentChatCompletionState.Succeeded;
+            this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public void RaiseActivityChanged() => this.ActivityChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private static string LoadShellHtml()
     {

@@ -21,10 +21,10 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 /// </summary>
 internal static class ChatOutputHtmlRenderer
 {
-    public const string LoadAfterAnchorId = "load-after";
-    public const string HistoryBeforeAnchorId = "history-before";
-    public const string RunningContainerId = "running-items-inside";
-    public const string RunningSubAgentsContainerId = "subagent-items-inside";
+    public const string HistoryContainerId = "chat-history-container";
+    public const string RunningContainerId = "running-items-container";
+    public const string SubAgentPanelSentinelId = "subagent-panel-sentinel";
+    public const string SubAgentPanelInnerId = "subagent-panel-inner";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
 
@@ -39,7 +39,9 @@ internal static class ChatOutputHtmlRenderer
         .UseAutoLinks()
         .Build();
 
-    public static string MessageId(int index) => $"history-{index}";
+    public static string MessageId(int historyIndex) => $"history-{historyIndex}";
+
+    public static string RunningMessageId(string runningItemId, int localIndex) => $"{runningItemId}-msg-{localIndex}";
 
     public static string HeaderId(string messageId) => $"{messageId}-header";
 
@@ -47,21 +49,15 @@ internal static class ChatOutputHtmlRenderer
 
     public static string ContentId(string messageId, int subIndex) => $"{messageId}-{subIndex}";
 
-    public static string InsertAfterItemId(int index) => $"insert-after-{index}";
-
-    public static string InsertAfterContentId(int index, int subIndex) => $"insert-after-{index}-{subIndex}";
-
     public static string RunningItemId(int sequence) => $"run-{sequence}";
 
     public static string RunningItemContentsId(string runningItemId) => $"{runningItemId}-contents";
 
-    public static string ToolCallGroupId(int index, int subIndex) => $"tool-grouping-{index}-{subIndex}";
+    public static string ToolGroupId(int firstHistoryIndex) => $"tool-group-{firstHistoryIndex}";
 
-    public static string ToolCallGroupSummaryId(string groupId) => $"{groupId}-summary";
+    public static string ToolGroupSummaryId(string groupId) => $"{groupId}-summary";
 
-    public static string ToolCallGroupBodyId(string groupId) => $"{groupId}-body";
-
-    public static string ToolGroupInsertAfterId(int highestIndex, int highestSubIndex) => $"insert-after-{highestIndex}-{highestSubIndex}";
+    public static string ToolGroupBodyId(string groupId) => $"{groupId}-body";
 
     /// <summary>
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
@@ -74,7 +70,7 @@ internal static class ChatOutputHtmlRenderer
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
         builder.Append(RenderToolCallGroupSummary(groupId, toolName, callCount));
-        builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolCallGroupBodyId(groupId)).Append("\">");
+        builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
         return builder.ToString();
@@ -88,7 +84,7 @@ internal static class ChatOutputHtmlRenderer
     public static string RenderToolCallGroupSummary(string groupId, string? toolName, int callCount)
     {
         var builder = new StringBuilder();
-        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolCallGroupSummaryId(groupId)).Append("\">");
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolGroupSummaryId(groupId)).Append("\">");
         
         if (toolName is not null)
         {
@@ -249,13 +245,6 @@ internal static class ChatOutputHtmlRenderer
         }
 
         builder.Append("</div>");
-        
-        // Extract index from history-{index} format
-        if (messageId.StartsWith("history-") && int.TryParse(messageId.Substring(8), out var index))
-        {
-            builder.Append("<div class=\"insert-after\" id=\"").Append(InsertAfterItemId(index)).Append("\"></div>");
-        }
-        
         return builder.ToString();
     }
 

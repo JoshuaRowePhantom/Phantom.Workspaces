@@ -9,16 +9,16 @@ using Phantom.Workspaces.Llm;
 namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 
 /// <summary>
-/// Maintains the <c>#running-subagents</c> panel. The panel is populated while at least one entry
-/// in <paramref name="subAgents"/> has <see cref="AgentChatCompletionState.Running"/> state and is
-/// cleared as soon as none remain. Each running sub-agent is rendered as a clickable row with its
-/// display name, up to <see cref="MaxActivityLines"/> recent activity lines, and any running nested
-/// sub-agents as indented children. An ancestry breadcrumb above the rows allows navigation to each
-/// ancestor.
+/// Maintains the sub-agent panel. The panel's inner node (<c>#subagent-panel-inner</c>) is rebuilt
+/// inside the persistent <c>#subagent-panel-sentinel</c> shell region whenever sub-agent state
+/// changes: the old inner node is removed and, while at least one entry in the sub-agent list has
+/// <see cref="AgentChatCompletionState.Running"/> state, a fresh inner node is appended. Each
+/// running sub-agent is rendered as a clickable row with its display name, up to
+/// <see cref="MaxActivityLines"/> recent activity lines, and any running nested sub-agents as
+/// indented children. An ancestry breadcrumb above the rows allows navigation to each ancestor.
 /// </summary>
 internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
 {
-    public const string ContainerId = "running-subagents";
     internal const int MaxActivityLines = 5;
 
     private readonly IChatOutputHtmlSink sink;
@@ -26,7 +26,6 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     private readonly IReadOnlyList<IRunningSubAgent> ancestors;
     private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> activityHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
     private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> completionStateHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
-    private bool hasContent;
 
     public RunningSubAgentsHtmlTransformer(
         IReadOnlyList<IRunningSubAgentDisplay> subAgents,
@@ -96,22 +95,21 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
 
     private void FullRender()
     {
-        var hasRunning = this.subAgents.Any(a => a.CompletionState == AgentChatCompletionState.Running);
+        // The inner panel node is the only removable element; the sentinel wrapper is a persistent
+        // shell region that is never replaced or removed. The browser swallows a Remove of a
+        // missing id, so Remove-before-Append is always safe.
+        this.sink.RemoveContent(ChatOutputHtmlRenderer.SubAgentPanelInnerId);
 
+        var hasRunning = this.subAgents.Any(a => a.CompletionState == AgentChatCompletionState.Running);
         if (!hasRunning)
         {
-            if (this.hasContent)
-            {
-                this.sink.UpdateContent(ChatOutputHtmlRenderer.RunningSubAgentsContainerId, ChatOutputUpdateLocation.Replace, string.Empty);
-                this.hasContent = false;
-            }
-
             return;
         }
 
-        var html = BuildPanelHtml(this.subAgents, this.ancestors);
-        this.sink.UpdateContent(ChatOutputHtmlRenderer.RunningSubAgentsContainerId, ChatOutputUpdateLocation.Replace, html);
-        this.hasContent = true;
+        this.sink.UpdateContent(
+            ChatOutputHtmlRenderer.SubAgentPanelSentinelId,
+            ChatOutputUpdateLocation.Append,
+            BuildPanelHtml(this.subAgents, this.ancestors));
     }
 
     /// <summary>
@@ -123,7 +121,7 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         IReadOnlyList<IRunningSubAgent> ancestors)
     {
         var sb = new StringBuilder();
-        sb.Append("<div class=\"running-subagents-panel\" id=\"").Append(ContainerId).Append("\">");
+        sb.Append("<div class=\"running-subagents-panel\" id=\"").Append(ChatOutputHtmlRenderer.SubAgentPanelInnerId).Append("\">");
         sb.Append("<h4 class=\"running-subagents-header\">[Running sub-agents]</h4>");
 
         AppendBreadcrumb(sb, ancestors);
