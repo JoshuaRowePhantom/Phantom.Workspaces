@@ -1389,7 +1389,8 @@ public sealed class ChatOutputHtmlModelTests
         List<RenderSlot> slots,
         RecordingSink sink,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
-        int preloadedCount = 0)
+        int preloadedCount = 0,
+        Func<bool>? isDiagnosticsVisible = null)
         => new(
             source,
             slots,
@@ -1399,6 +1400,7 @@ public sealed class ChatOutputHtmlModelTests
             elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
             groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
             sharedSlotByCallId: sharedSlotByCallId,
+            isDiagnosticsVisible: isDiagnosticsVisible,
             preloadedCount: preloadedCount);
 
     /// <summary>
@@ -1408,9 +1410,10 @@ public sealed class ChatOutputHtmlModelTests
     /// </summary>
     private static (List<RenderSlot> Slots, Dictionary<string, RenderSlot> SharedMap) PreloadPlan(
         ObservableCollection<AgentChatHistoryItem> source,
-        RecordingSink sink)
+        RecordingSink sink,
+        Func<bool>? isDiagnosticsVisible = null)
     {
-        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan([.. source], sink, () => true);
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan([.. source], sink, () => true, isDiagnosticsVisible);
         ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, plan.Slots.Length);
         return ([.. plan.Slots], plan.SlotByCallId);
     }
@@ -2346,5 +2349,197 @@ public sealed class ChatOutputHtmlModelTests
         var chunkWithCall = sink.ContentOperations.First(op => op.Content.Contains("my_tool"));
         Assert.Contains("cross-chunk result data", chunkWithCall.Content);
         Assert.Contains("chat-tool-result", chunkWithCall.Content);
+    }
+
+    // ── Live insertion anchor regression tests (issue #900) ────────────────────
+
+    private static AgentChatHistoryItem DiagnosticMessage(string text)
+        => new() { Role = AgentChatHistoryItem.DiagnosticChatRole, Contents = [new TextContent(text)] };
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UserMessage_AddedWhileRunningItemActive_InsertsIntoHistoryDom()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "earlier answer") };
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streaming..."));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, running, () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.User, "sent while agent is running"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains("sent while agent is running", op.Content);
+        Assert.DoesNotContain(sink.Operations, o =>
+            o.Path.Contains("insert-after") || o.Content.Contains("insert-after"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UserMessage_AddedAfterRunningItemCompletes_InsertsIntoHistoryDom()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "earlier answer") };
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streaming..."));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, running, () => true, sink);
+        await model.HistoryLoaded;
+
+        running.Remove(runningItem);
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.User, "sent after completion"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains("sent after completion", op.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UserMessage_AddedToHistory_AnchorsAfterLastTopLevelHistoryElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "one"),
+            TextMessage(ChatRole.Assistant, "two"),
+            TextMessage(ChatRole.User, "three"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.User, "latest question"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(2), op.Path);
+        Assert.Contains("latest question", op.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_LastPreloadedItemIsToolResultOnly_FirstLiveItemAnchorsToNearestDomSlot()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("my_tool", "c1"),
+            ToolResultMessage("c1"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink);
+        Assert.False(slots[1].HasDomElement);
+        using var transformer = MakeLiveTransformer(source, slots, sink, sharedMap, preloadedCount: 2);
+        sink.Clear();
+
+        source.Add(TextMessage(ChatRole.User, "first live message"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains("first live message", op.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_LastPreloadedItemIsSuppressedDiagnostic_FirstLiveItemAnchorsToNearestDomSlot()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "visible answer"),
+            DiagnosticMessage("hidden diagnostic"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink, isDiagnosticsVisible: () => false);
+        Assert.False(slots[1].HasDomElement);
+        using var transformer = MakeLiveTransformer(
+            source, slots, sink, sharedMap, preloadedCount: 2, isDiagnosticsVisible: () => false);
+        sink.Clear();
+
+        source.Add(TextMessage(ChatRole.User, "first live message"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+        Assert.Contains("first live message", op.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_AllPreloadedItemsLackDomElements_FirstLiveItemAppendsIntoHistoryContainer()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            DiagnosticMessage("hidden diagnostic one"),
+            DiagnosticMessage("hidden diagnostic two"),
+        };
+        var sink = new RecordingSink();
+        var (slots, sharedMap) = PreloadPlan(source, sink, isDiagnosticsVisible: () => false);
+        Assert.All(slots, slot => Assert.False(slot.HasDomElement));
+        using var transformer = MakeLiveTransformer(
+            source, slots, sink, sharedMap, preloadedCount: 2, isDiagnosticsVisible: () => false);
+        sink.Clear();
+
+        source.Add(TextMessage(ChatRole.User, "first live message"));
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+        Assert.Contains("first live message", op.Content);
+    }
+
+    [Fact]
+    public void LiveTransformer_LiveInsert_AnchorAlwaysTargetsSlotWithDomElement()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>();
+        var slots = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        using var transformer = MakeLiveTransformer(
+            source, slots, sink, new(StringComparer.Ordinal), isDiagnosticsVisible: () => false);
+
+        source.Add(TextMessage(ChatRole.User, "text zero"));
+        source.Add(ToolCallMessage("my_tool", "c1"));
+        source.Add(ToolResultMessage("c1"));
+        source.Add(DiagnosticMessage("hidden diagnostic"));
+        sink.Clear();
+
+        source.Add(TextMessage(ChatRole.User, "text four"));
+
+        // The new item skips the injected result (index 2) and suppressed diagnostic (index 3)
+        // and anchors on the tool-call element at index 1 — the nearest slot with a DOM element.
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), op.Path);
+        Assert.Contains("text four", op.Content);
+        Assert.True(slots[1].HasDomElement);
+        Assert.False(slots[2].HasDomElement);
+        Assert.False(slots[3].HasDomElement);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Reload_HistoryWithToolResultOnlyTail_RendersAllMessagesIncludingUserMessage()
+    {
+        // Simulates a WebView reload: a fresh model renders the full history, including a user
+        // message that follows a tool-result-only item (which itself has no standalone element).
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolResultMessage("c1"),
+            TextMessage(ChatRole.User, "user question after tool run"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+        Assert.Contains("user question after tool run", op.Content);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(2)}\"", op.Content);
+
+        // The result is nested under its call, never rendered as a standalone element.
+        Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(1)}\"", op.Content);
+        Assert.Contains("chat-tool-result", op.Content);
     }
 }
