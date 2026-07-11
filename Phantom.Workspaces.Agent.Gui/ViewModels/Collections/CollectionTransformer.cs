@@ -87,6 +87,14 @@ internal abstract class CollectionTransformer<TSource, TTarget> : IDisposable
 
     protected IList<TTarget> Target => this.target;
 
+    /// <summary>
+    /// Applies a source collection-changed event through the same logic used by the live
+    /// subscription. Used to replay events that were buffered while the transformer did not yet
+    /// exist (for example, history mutations captured during asynchronous history loading).
+    /// </summary>
+    protected void ApplySourceEvent(NotifyCollectionChangedEventArgs e)
+        => this.OnSourceCollectionChanged(this, e);
+
     public virtual void Dispose()
     {
         if (this.sourceNotifications is not null)

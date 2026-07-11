@@ -2542,4 +2542,248 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain($"id=\"{ChatOutputHtmlRenderer.MessageId(1)}\"", op.Content);
         Assert.Contains("chat-tool-result", op.Content);
     }
+
+    // ── Buffered history events replayed at Phase C (issue #901, Fix A) ────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryReplaceDuringLoading_IsAppliedAfterPhaseC()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "original-content"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        // Replace while historyLoading is still true (Phase B/C callbacks only run once awaited).
+        history[0] = TextMessage(ChatRole.Assistant, "replaced-content");
+
+        await model.HistoryLoaded;
+
+        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("replaced-content"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryRemoveDuringLoading_IsAppliedAfterPhaseC()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "keep zero"),
+            TextMessage(ChatRole.Assistant, "removed one"),
+            TextMessage(ChatRole.User, "keep two"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        history.RemoveAt(1);
+
+        await model.HistoryLoaded;
+
+        Assert.Contains(sink.Operations, op => op.Kind == "remove" && op.Path == ChatOutputHtmlRenderer.MessageId(1));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryInsertAtMiddleDuringLoading_IsAppliedAfterPhaseC()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "first"),
+            TextMessage(ChatRole.Assistant, "second"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        history.Insert(1, TextMessage(ChatRole.User, "middle-inserted"));
+
+        await model.HistoryLoaded;
+
+        var op = Assert.Single(sink.ContentOperations, op => op.Content.Contains("middle-inserted"));
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryTailAddDuringLoading_IsAppliedAfterPhaseC_ExactlyOnce()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "first"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        history.Add(TextMessage(ChatRole.Assistant, "tail-added"));
+
+        await model.HistoryLoaded;
+
+        var op = Assert.Single(sink.ContentOperations, op => op.Content.Contains("tail-added"));
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task StreamingUserMessageThenAgentReply_DuringPhaseB_BothVisibleAfterPhaseC()
+    {
+        // 250 items → two Phase B chunks. During loading, a user message is appended, an
+        // assistant placeholder is appended, and the placeholder is replaced by streamed content.
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 250).Select(i => TextMessage(ChatRole.User, $"old {i}")));
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+
+        history.Add(TextMessage(ChatRole.User, "user question mid-load"));
+        history.Add(TextMessage(ChatRole.Assistant, "streaming partial"));
+        history[251] = TextMessage(ChatRole.Assistant, "full streamed reply");
+
+        await model.HistoryLoaded;
+
+        var userOp = Assert.Single(sink.ContentOperations, op => op.Content.Contains("user question mid-load"));
+        Assert.Equal(ChatOutputUpdateLocation.After, userOp.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(249), userOp.Path);
+        Assert.Contains(sink.ContentOperations, op => op.Content.Contains("full streamed reply"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task UserMessage_AddedWhileRunningItemActive_DuringHistoryLoading_AppearsAfterPhaseC()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "earlier answer") };
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(TextMessage(ChatRole.Assistant, "streaming..."));
+        var running = new ObservableCollection<AgentChatRunningItem> { runningItem };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, running, () => true, sink);
+
+        history.Add(TextMessage(ChatRole.User, "sent while loading"));
+
+        await model.HistoryLoaded;
+
+        var op = Assert.Single(sink.ContentOperations, op => op.Content.Contains("sent while loading"));
+        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
+    }
+
+    // ── History-side NotifyInsertionFailed recovery (issue #901, Fix B) ────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task NotifyInsertionFailed_WithHistoryId_ReInsertsAffectedSlot()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "item zero"),
+            TextMessage(ChatRole.Assistant, "item one"),
+            TextMessage(ChatRole.User, "item two"),
+            TextMessage(ChatRole.Assistant, "item three"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.MessageId(2));
+
+        // The tail from the failed slot onward is removed and re-emitted; the first re-inserted
+        // slot anchors on the last still-attached element before the repair range.
+        Assert.Contains(sink.Operations, op => op.Kind == "remove" && op.Path == ChatOutputHtmlRenderer.MessageId(2));
+        Assert.Contains(sink.Operations, op => op.Kind == "remove" && op.Path == ChatOutputHtmlRenderer.MessageId(3));
+        var slot2Op = Assert.Single(sink.ContentOperations, op => op.Content.Contains("item two"));
+        Assert.Equal(ChatOutputUpdateLocation.After, slot2Op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), slot2Op.Path);
+        var slot3Op = Assert.Single(sink.ContentOperations, op => op.Content.Contains("item three"));
+        Assert.Equal(ChatOutputUpdateLocation.After, slot3Op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(2), slot3Op.Path);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task NotifyInsertionFailed_WithFirstHistoryId_ReAppendsIntoHistoryContainer()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "only item"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.MessageId(0));
+
+        var op = Assert.Single(sink.ContentOperations, op => op.Content.Contains("only item"));
+        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task NotifyInsertionFailed_WithToolGroupId_ReInsertsAffectedGroup()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "intro"),
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.ToolGroupId(1));
+
+        // The whole group is rebuilt: removed once, first member re-inserted standalone after the
+        // intro message, then promoted back into a group when the second member is re-inserted.
+        Assert.Contains(sink.Operations, op => op.Kind == "remove" && op.Path == ChatOutputHtmlRenderer.ToolGroupId(1));
+        var firstMemberOp = sink.ContentOperations.First(op =>
+            op.Location == ChatOutputUpdateLocation.After && op.Path == ChatOutputHtmlRenderer.MessageId(0));
+        Assert.Contains("tool_a", firstMemberOp.Content);
+        var promoteOp = sink.ContentOperations.First(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Path == ChatOutputHtmlRenderer.MessageId(1));
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(1)}\"", promoteOp.Content);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task NotifyInsertionFailed_WithUnknownId_EmitsNothing()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "item zero"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        model.NotifyInsertionFailed("history-99");
+        model.NotifyInsertionFailed("no-such-element");
+
+        Assert.Empty(sink.Operations);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryAdd_WhenPreviousElementMissingFromDom_RecoversViaNotifyInsertionFailed()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "item zero"),
+            TextMessage(ChatRole.Assistant, "item one"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // The live tail Add targets history-1; the host then reports that anchor missing.
+        history.Add(TextMessage(ChatRole.User, "new tail item"));
+        var addOp = Assert.Single(sink.ContentOperations);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), addOp.Path);
+        sink.Clear();
+
+        model.NotifyInsertionFailed(ChatOutputHtmlRenderer.MessageId(1));
+
+        // Recovery re-emits both the missing anchor slot and the dropped payload.
+        var anchorOp = Assert.Single(sink.ContentOperations, op => op.Content.Contains("item one"));
+        Assert.Equal(ChatOutputUpdateLocation.After, anchorOp.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), anchorOp.Path);
+        var payloadOp = Assert.Single(sink.ContentOperations, op => op.Content.Contains("new tail item"));
+        Assert.Equal(ChatOutputUpdateLocation.After, payloadOp.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), payloadOp.Path);
+    }
 }

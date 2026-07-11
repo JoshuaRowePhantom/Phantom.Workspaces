@@ -474,7 +474,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
-        int preloadedCount = 0)
+        int preloadedCount = 0,
+        IReadOnlyList<NotifyCollectionChangedEventArgs>? bufferedEvents = null)
         : base(source, target)
     {
         ArgumentNullException.ThrowIfNull(elementIdForSourceIndex);
@@ -492,13 +493,26 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         this.resolveSubAgentId = resolveSubAgentId;
         this.nextCreateIndex = preloadedCount;
 
-        // Preloaded slots (from the Phase B render plan) are already in `target` and in the DOM;
-        // only items appended to the source after the snapshot are created and inserted here.
-        for (var index = this.Target.Count; index < source.Count; index++)
+        // Preloaded slots (from the Phase B render plan) are already in `target` and in the DOM.
+        // When the buffered events captured during loading are supplied, replaying them applies
+        // every mutation (tail adds, mid-list inserts, replaces, removes, moves) exactly once,
+        // since the buffer is precisely the delta between the snapshot and the current source.
+        // Without a buffer, only items appended after the snapshot are created and inserted.
+        if (bufferedEvents is not null)
         {
-            var slot = this.Create(source[index]);
-            this.Target.Add(slot);
-            this.OnInsert(index, slot);
+            foreach (var bufferedEvent in bufferedEvents)
+            {
+                this.ApplySourceEvent(bufferedEvent);
+            }
+        }
+        else
+        {
+            for (var index = this.Target.Count; index < source.Count; index++)
+            {
+                var slot = this.Create(source[index]);
+                this.Target.Add(slot);
+                this.OnInsert(index, slot);
+            }
         }
     }
 
@@ -789,6 +803,81 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         this.AddCallIdsToIndex(newItem, fresh);
         this.ClassifyAndInsert(index, fresh);
+    }
+
+    /// <summary>
+    /// Deterministically recovers from a DOM command that failed because the element with id
+    /// <paramref name="failedPath"/> (a message element or tool-group wrapper owned by this
+    /// transformer) was missing. The repair range starts at the matching slot — extended backward
+    /// to the first member of its containing group, so groups are always rebuilt whole — and runs
+    /// to the end of history: every top-level element in the range is removed (the browser treats
+    /// removal of a missing element as a no-op) and re-inserted via <see cref="ClassifyAndInsert"/>.
+    /// The first re-inserted slot anchors on the last still-attached slot before the range, or
+    /// falls back to <c>Append</c> into the persistent container when none exists. Repairing the
+    /// whole tail also restores any payload dropped by the failed command itself, since that
+    /// payload's slot always follows the missing anchor. Returns false when no slot matches.
+    /// </summary>
+    internal bool RepairFailedElement(string failedPath)
+    {
+        var repairStart = -1;
+        for (var i = 0; i < this.Target.Count; i++)
+        {
+            var slot = this.Target[i];
+            if (slot.HasDomElement &&
+                (slot.Model.ElementId == failedPath || slot.Group?.GroupId == failedPath))
+            {
+                repairStart = i;
+                break;
+            }
+        }
+
+        if (repairStart < 0)
+        {
+            return false;
+        }
+
+        if (this.Target[repairStart].Group is { } containingGroup)
+        {
+            for (var i = repairStart - 1; i >= 0; i--)
+            {
+                if (ReferenceEquals(this.Target[i].Group, containingGroup))
+                {
+                    repairStart = i;
+                }
+            }
+        }
+
+        var removedTopLevelIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = repairStart; i < this.Target.Count; i++)
+        {
+            var slot = this.Target[i];
+            if (!slot.HasDomElement)
+            {
+                continue;
+            }
+
+            var topLevelId = slot.Group?.GroupId ?? slot.Model.ElementId;
+            if (removedTopLevelIds.Add(topLevelId))
+            {
+                this.sink.RemoveContent(topLevelId);
+            }
+        }
+
+        for (var i = repairStart; i < this.Target.Count; i++)
+        {
+            var slot = this.Target[i];
+            slot.Group = null;
+            slot.IsTopLevelFirstGroupMember = false;
+            slot.HasDomElement = false;
+            slot.Model.IsInserted = false;
+        }
+
+        for (var i = repairStart; i < this.Target.Count; i++)
+        {
+            this.ClassifyAndInsert(i, this.Target[i]);
+        }
+
+        return true;
     }
 
     private StructuralCategory Categorize(AgentChatHistoryItem item)
@@ -1198,8 +1287,8 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 ///   then prepend one HTML blob per chunk (newest first) into the persistent history
 ///   container.</description></item>
 ///   <item><description><b>Phase C</b> — publish the plan's slots and call map, then construct the
-///   live history transformer with <c>preloadedCount</c> so buffered additions replay through the
-///   normal insert path.</description></item>
+///   live history transformer, replaying the collection-changed events buffered during loading so
+///   every mutation is applied to the DOM exactly once.</description></item>
 /// </list>
 /// </summary>
 public sealed class ChatOutputHtmlModel : IDisposable
@@ -1583,8 +1672,9 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 });
             }
 
-            // Phase C: publish the plan, then construct the live transformer and replay any items
-            // added to the source during loading through the normal insert path.
+            // Phase C: publish the plan, then construct the live transformer, replaying the
+            // buffered collection-changed events captured during loading so every mutation
+            // (adds, replaces, removes, moves) is applied to the DOM exactly once.
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -1611,7 +1701,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     toolFactory: this.toolFactory,
                     statusSink: this.statusSink,
                     resolveSubAgentId: this.resolveSubAgentId,
-                    preloadedCount: snapshot.Count);
+                    preloadedCount: snapshot.Count,
+                    bufferedEvents: this.bufferedHistoryEvents);
 
                 this.historyLoading = false;
 
@@ -1652,9 +1743,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
     /// <summary>
     /// Called when the browser reports that a DOM command targeting
     /// <paramref name="failedPath"/> was silently dropped because the element did not exist.
-    /// Finds the affected running-item model (by its element id or its contents-div id) and
-    /// calls <see cref="RunningChatItemHtmlModel.ReInsert"/> to recover the insertion point
-    /// using a stable <c>Append</c> into the persistent running-items region.
+    /// Running items recover by re-appending the affected container into the persistent
+    /// running-items region via <see cref="RunningChatItemHtmlModel.ReInsert"/>; history-side
+    /// failures recover through <see cref="ChatMessageHtmlTransformer.RepairFailedElement"/>,
+    /// which re-emits the affected slot and the rest of the history tail from a still-valid
+    /// anchor (or the persistent history container).
     /// </summary>
     public void NotifyInsertionFailed(string failedPath)
     {
@@ -1667,6 +1760,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 return;
             }
         }
+
+        this.historyTransformer?.RepairFailedElement(failedPath);
     }
 
     /// <summary>
