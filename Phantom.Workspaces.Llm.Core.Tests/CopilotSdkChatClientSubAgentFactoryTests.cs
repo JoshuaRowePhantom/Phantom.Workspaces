@@ -315,7 +315,16 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
 
             // Create a real ChatClientAgent and inject it via reflection.
             // ChatClientAgent itself doesn't start background tasks - those are in AgentChat.
-            var chatClientAgent = new ChatClientAgent(client, new ChatClientAgentOptions());
+            // Use UseProvidedChatClientAsIs = true so ChatClientAgent does not wrap the client
+            // with WithDefaultAgentMiddleware. That wrapping otherwise inserts middleware that
+            // (a) may initialize state lazily on first GetService call and (b) is not contractually
+            // required to forward GetService for arbitrary service types. Keeping the client
+            // unwrapped guarantees GetService(typeof(ICopilotSubAgentReceiver)) always returns
+            // the exact CopilotSubAgentChatClient instance the dispatcher pushes updates to.
+            var chatClientAgent = new ChatClientAgent(client, new ChatClientAgentOptions
+            {
+                UseProvidedChatClientAsIs = true,
+            });
             var chatClientAgentField = typeof(AgentChat).GetField("chatClientAgent", 
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             chatClientAgentField!.SetValue(chat, chatClientAgent);
