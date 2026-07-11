@@ -591,7 +591,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             // Use insert-after anchor targeting instead of sibling scanning
             var insertReference = index == 0
                 ? ChatOutputHtmlRenderer.LoadAfterAnchorId
-                : ChatOutputHtmlRenderer.InsertAfterItemId(index - 1);
+                : ChatOutputHtmlRenderer.InsertAfterItemId(this.startIndex + index - 1);
             this.sink.UpdateContent(insertReference, ChatOutputUpdateLocation.After, slot.Model.BuildHtml());
         }
 

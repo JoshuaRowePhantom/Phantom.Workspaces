@@ -1184,6 +1184,73 @@ public sealed class ChatOutputHtmlModelTests
         Assert.NotNull(firstElementId);
     }
 
+    [Fact]
+    public void GenerateHistoryChunk_NonZeroStartIndex_SecondItemUsesCorrectInsertAfterAnchor()
+    {
+        // Verify that for a chunk with startIndex=200, the second item references insert-after-200 (not insert-after-0).
+        var chunk = new List<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "item 200"),
+            TextMessage(ChatRole.User, "item 201"),
+        };
+        var idBox = new int[1];
+
+        var (commands, firstElementId) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, startIndex: 200, idBox, () => true, null, null, null, null);
+
+        // First item should insert after "load-after"
+        var firstInsert = commands.First(c => c.Location == ChatOutputUpdateLocation.After);
+        Assert.Equal(ChatOutputHtmlRenderer.LoadAfterAnchorId, firstInsert.Path);
+
+        // Second item should insert after "insert-after-200" (the anchor emitted by item 200, whose historyIndex is 200)
+        var secondInsert = commands.Skip(1).First(c => c.Location == ChatOutputUpdateLocation.After);
+        Assert.Equal(ChatOutputHtmlRenderer.InsertAfterItemId(200), secondInsert.Path);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_NonZeroStartIndex_AllItemsUseCorrectInsertAfterAnchors()
+    {
+        // For a 200-item chunk with startIndex=200, every item at local index i > 0 should reference insert-after-{199+i}.
+        var chunk = Enumerable.Range(200, 200)
+            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
+            .ToList();
+        var idBox = new int[1];
+
+        var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, startIndex: 200, idBox, () => true, null, null, null, null);
+
+        Assert.Equal(200, commands.Count);
+
+        // Verify each item uses the correct insert anchor
+        for (int i = 0; i < 200; i++)
+        {
+            var expectedPath = i == 0
+                ? ChatOutputHtmlRenderer.LoadAfterAnchorId
+                : ChatOutputHtmlRenderer.InsertAfterItemId(200 + i - 1);
+            
+            var cmd = commands[i];
+            Assert.Equal(ChatOutputUpdateLocation.After, cmd.Location);
+            Assert.Equal(expectedPath, cmd.Path);
+        }
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_500Items_AllItemsGenerateCommands()
+    {
+        // Verify that a 500-item scenario (requiring multiple chunks) produces commands for all 500 items.
+        // This is a regression test for the bug where non-zero startIndex chunks dropped items.
+        var chunk = Enumerable.Range(0, 500)
+            .Select(i => TextMessage(ChatRole.User, $"message {i}"))
+            .ToList();
+        var idBox = new int[1];
+
+        var (commands, _) = ChatOutputHtmlModel.GenerateHistoryChunk(
+            chunk, startIndex: 0, idBox, () => true, null, null, null, null);
+
+        // All 500 items should produce update commands (no items silently dropped)
+        Assert.Equal(500, commands.Count);
+    }
+
     // ── ComputeChunkRanges / SnapCutPoint tests ───────────────────────────────
 
     [Fact]
