@@ -142,7 +142,8 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_InitializeAsync_ReplacesDefaultAndLoadingWorkspacePanes()
     {
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
         await viewModel.InitializeAsync();
 
         Assert.NotEmpty(viewModel.WorkspacePanes);
@@ -2578,7 +2579,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Arrange: capture a real dock-layout JSON from an open tab, then open a new
         // workspace entity that carries that dock-layout.
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://restore-layout-present.example.com")
@@ -2629,7 +2630,7 @@ public sealed class MainWindowIntegrationTests
     {
         // After the fix, pane.Tabs.CollectionChanged is NOT subscribed for write-back.
         // Dock-order changes (Move/Reset from dock animations) must NOT trigger entity updates.
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tabA = new WebViewModel("https://no-write-a.example.com") { Id = "nw-a", Title = "A" };
@@ -2666,7 +2667,8 @@ public sealed class MainWindowIntegrationTests
     {
         // Explicit WriteBackWorkspaceTabs persists dock-layout JSON that contains
         // Descriptor data for each open tab.
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://save-layout-test.example.com")
@@ -2714,7 +2716,7 @@ public sealed class MainWindowIntegrationTests
     {
         // Verify serialize → deserialize round-trip: the Descriptor survives and the
         // layout structure is intact (no exceptions, correct types).
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
         var tab = new WebViewModel("https://roundtrip-test.example.com")
@@ -3236,11 +3238,12 @@ public sealed class MainWindowIntegrationTests
 
     private static MainWindowViewModel CreateTestMainWindowViewModel(
         ProfileStore? profileStore = null,
-        ApplicationServices? applicationServices = null)
+        ApplicationServices? applicationServices = null,
+        WorkspacesConfiguration? configuration = null)
     {
         return new MainWindowViewModel(
             CreateInMemoryRepositorySource(),
-            new WorkspacesConfiguration { SkipStartupWorkspace = true },
+            configuration ?? new WorkspacesConfiguration { SkipStartupWorkspace = true },
             profileStore ?? new ProfileStore(CreateTempProfileStorePath()),
             applicationServices);
     }
@@ -4101,7 +4104,8 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
     {
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
 
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
@@ -4149,7 +4153,8 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
     {
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
         await viewModel.InitializeAsync();
 
         Assert.Contains(
@@ -4160,7 +4165,8 @@ public sealed class MainWindowIntegrationTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
     {
-        await using var viewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
 
         var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
         var profileId = entityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
