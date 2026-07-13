@@ -253,7 +253,7 @@ public partial class App : Application
             loadingViewModel.StatusText = "Initializing main workspace view model.";
             var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
-            var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+            var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
             var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), foregroundScheduler);
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(agentChatFactory),

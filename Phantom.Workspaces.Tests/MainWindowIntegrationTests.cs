@@ -736,6 +736,112 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentManifestLaunchpad_StartSessionWithParameters_CreatesAgentChatOnUIThread()
+    {
+        // Enforcement test for issue #909: the launchpad previously wrapped AgentChat creation in
+        // Task.Run, constructing the chat on a thread-pool thread. With the foreground-context
+        // affinity invariant enforced in the AgentChat constructor, this flow only reaches
+        // AgentTabState.Ready when creation runs on the UI thread.
+        var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentManifestEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("a1b2c3d4-0000-4000-8000-000000000909"),
+            """
+            {
+              "entity-id": "a1b2c3d4-0000-4000-8000-000000000909",
+              "entity-types": ["entity", "agent-manifest"],
+              "names": [["tests", "agent-manifests", "ui-thread-creation"]],
+              "display-name": { "default": "UI Thread Creation Manifest" },
+              "manifest": {
+                "name": "ui-thread-creation",
+                "displayName": "UI Thread Creation Manifest",
+                "template": {
+                  "kind": "prompt",
+                  "name": "ui-thread-creation",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                },
+                "parameters": {
+                  "properties": [
+                    { "name": "working-directory", "required": true }
+                  ]
+                }
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
+
+        var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
+        Assert.True(handled);
+
+        var launchpadTab = await WaitForSelectedTabAsync<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane);
+        launchpadTab.Parameters[0].Value = Environment.CurrentDirectory;
+        Assert.True(launchpadTab.CanStart);
+
+        launchpadTab.StartSessionCommand.Execute(null);
+
+        var sessionTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane);
+        await WaitForAgentReadyAsync(sessionTab);
+
+        Assert.Equal(AgentTabState.Ready, sessionTab.State);
+        Assert.NotNull(sessionTab.Agent);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_Handle_CreatesAgentChatOnUIThread()
+    {
+        // Enforcement test for issue #909: the loaded-session path (shortcut handler →
+        // RunningAgentChatTable → AgentChatFactory) must create the AgentChat on the UI thread.
+        // The factory's foreground scheduler is a SynchronizationContextTaskScheduler, so an
+        // off-context construction would throw and the tab would end in AgentTabState.Failed.
+        var runningAgentChatTable = CreateTestRunningAgentChatTable();
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("a1b2c3d4-0000-4000-8000-000000000910"),
+            """
+            {
+              "entity-id": "a1b2c3d4-0000-4000-8000-000000000910",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "ui-thread-load"]],
+              "display-name": { "default": "UI Thread Load" },
+              "definition": {
+                "kind": "prompt",
+                "name": "ui-thread-load",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), runningAgentChatTable);
+
+        var handled = await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+        Assert.True(handled);
+
+        var sessionTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(sessionTab);
+
+        Assert.Equal(AgentTabState.Ready, sessionTab.State);
+        Assert.NotNull(sessionTab.Lease);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3229,7 +3335,7 @@ public sealed class MainWindowIntegrationTests
     private static RunningAgentChatTable CreateTestRunningAgentChatTable()
     {
         var store = new InMemoryAgentPersistenceStore();
-        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
         var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
         return new RunningAgentChatTable(factory);
     }
@@ -7261,7 +7367,7 @@ public sealed class MainWindowIntegrationTests
             agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), table);
 
         const string resumePrompt = "Resume the task where you left off.";
-        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
         var lease = await Task.Run(() =>
             handler.TryStartAutoResumeAsync(viewModel, agentSessionEntity!, resumePrompt, foregroundScheduler));
 
