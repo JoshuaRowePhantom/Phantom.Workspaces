@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using AgentSchema;
+using Avalonia.Controls;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -989,6 +990,131 @@ public sealed class AgentChatOutputControlTests
             });
 
         Assert.True(historyUpdateCount > 0, "Expected 'update' commands in history batches.");
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_HtmlShellSameValueReassigned_DoesNotRaiseReady()
+    {
+        // Mirrors the real ControllableWebViewControl: HtmlShell is a StyledProperty, and the
+        // Avalonia property system suppresses same-value assignments, so no reload and no Ready.
+        var browser = new HeadlessControllableBrowser();
+        browser.HtmlShell = "<html></html>";
+
+        var readyCount = 0;
+        browser.Ready += (_, _) => readyCount++;
+
+        browser.HtmlShell = "<html></html>";
+
+        Assert.Equal(0, readyCount);
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_LoadShell_SameValue_RaisesReady()
+    {
+        // Mirrors ControllableWebViewControl.LoadShell: the reload is forced even when the markup
+        // is unchanged, so Ready fires again.
+        var browser = new HeadlessControllableBrowser();
+        browser.HtmlShell = "<html></html>";
+
+        var readyCount = 0;
+        browser.Ready += (_, _) => readyCount++;
+
+        browser.LoadShell("<html></html>");
+
+        Assert.Equal(1, readyCount);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_DetachReattach_RebuildsOutputModel()
+    {
+        // Regression for issue #904: detaching disposes the output model; reattaching re-runs
+        // AttachOutputModel with an unchanged shell string. The reload must still happen so a
+        // fresh ChatOutputHtmlModel is built — otherwise the view is dead until a manual refresh.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.HistoryLoaded;
+            Assert.NotNull(GetOutputModel(control));
+
+            window.Content = null;
+            Assert.Null(GetOutputModel(control));
+
+            window.Content = control;
+
+            Assert.NotNull(GetOutputModel(control));
+            await control.HistoryLoaded;
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_DetachReattach_LiveHistoryAddPostsUpdate()
+    {
+        // Regression for issue #904 at the message level: after a detach/reattach cycle, a live
+        // History.Add must still flow through a (rebuilt) ChatOutputHtmlModel to the browser sink.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl { DataContext = viewModel };
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.HistoryLoaded;
+
+            window.Content = null;
+            window.Content = control;
+            await control.HistoryLoaded;
+
+            browser.PostedMessages.Clear();
+            chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("live-reply")] });
+
+            Assert.True(
+                browser.PostedMessages.Any(msg =>
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(msg);
+                        return doc.RootElement.TryGetProperty("type", out var t)
+                            && t.GetString() == "update"
+                            && doc.RootElement.TryGetProperty("content", out var content)
+                            && (content.GetString() ?? string.Empty).Contains("live-reply", StringComparison.Ordinal);
+                    }
+                    catch (JsonException) { return false; }
+                }),
+                "Expected an 'update' command for the live history item added after reattach.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static ViewModels.DocumentModels.ChatOutputHtmlModel? GetOutputModel(AgentChatOutputControl control)
+    {
+        var field = typeof(AgentChatOutputControl)
+            .GetField("outputModel", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (ViewModels.DocumentModels.ChatOutputHtmlModel?)field!.GetValue(control);
     }
 
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()

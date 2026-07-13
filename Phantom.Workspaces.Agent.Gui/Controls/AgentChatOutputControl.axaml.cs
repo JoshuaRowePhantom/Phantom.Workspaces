@@ -201,12 +201,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.subscribedViewModel = agentViewModel;
         agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
 
-        // Reload the shell so a reused control starts from an empty page.
+        // Reload the shell so a reused control starts from an empty page. LoadShell always
+        // re-navigates — a plain HtmlShell assignment is deduplicated by the property system when
+        // the markup is unchanged (the common case: the shell string is deterministic), which would
+        // skip the reload, never re-raise Ready, and leave outputModel null after a reattach.
         // OnBrowserReady creates the ChatOutputHtmlModel once the shell is ready, and again on
         // every subsequent reload, so both the first-load and spontaneous-reload paths are unified.
         var html = ReadShellHtml();
         var themeVariables = this.BuildThemeVariables();
-        this.browser.HtmlShell = InjectThemeIntoHtml(html, themeVariables);
+        this.browser.LoadShell(InjectThemeIntoHtml(html, themeVariables));
     }
 
     private void DetachOutputModel()

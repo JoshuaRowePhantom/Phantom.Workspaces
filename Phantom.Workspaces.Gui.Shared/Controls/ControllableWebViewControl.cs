@@ -67,6 +67,27 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
     }
 
     /// <summary>
+    /// Loads <paramref name="html"/> as the page shell, always re-navigating even when the markup
+    /// equals the currently loaded shell. Assigning <see cref="HtmlShell"/> is deduplicated by the
+    /// Avalonia property system for unchanged values, which would silently skip the reload (and the
+    /// <see cref="Ready"/> event) — this method forces the navigation in that case.
+    /// </summary>
+    public void LoadShell(string html)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+
+        var previous = this.HtmlShell;
+        this.HtmlShell = html;
+
+        if (string.Equals(previous, html, StringComparison.Ordinal))
+        {
+            // The property system suppressed OnPropertyChanged; run the same reload path manually.
+            this.isShellLoaded = false;
+            this.NavigateToString(html, new Uri("about:blank"));
+        }
+    }
+
+    /// <summary>
     /// Registers a script to execute (in registration order) immediately after the shell loads. Use
     /// this to install DOM helpers, theme wiring, and initial page bootstrapping. Scripts registered
     /// after the shell is already loaded run immediately.
