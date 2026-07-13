@@ -26,22 +26,15 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         uint dwFlags, out IntPtr phPC);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern int ResizePseudoConsole(IntPtr hPC, COORD size);
+    private static extern int ResizePseudoConsole(SafePseudoConsoleHandle hPC, COORD size);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern void ClosePseudoConsole(IntPtr hPC);
 
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern SafeFileHandle CreateNamedPipeW(
-        string lpName, uint dwOpenMode, uint dwPipeMode,
-        uint nMaxInstances, uint nOutBufferSize, uint nInBufferSize,
-        uint nDefaultTimeOut, IntPtr lpSecurityAttributes);
-
-    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern SafeFileHandle CreateFileW(
-        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
-        IntPtr lpSecurityAttributes, uint dwCreationDisposition,
-        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CreatePipe(
+        out SafeFileHandle hReadPipe, out SafeFileHandle hWritePipe,
+        ref SECURITY_ATTRIBUTES lpPipeAttributes, uint nSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
@@ -57,10 +50,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         out PROCESS_INFORMATION lpProcessInformation);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr hObject);
+    private static extern bool GetExitCodeProcess(SafeProcessHandle hProcess, out uint lpExitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool InitializeProcThreadAttributeList(
@@ -78,7 +68,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private static extern bool SetHandleInformation(SafeFileHandle hObject, uint dwMask, uint dwFlags);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetProcessHandleCount(IntPtr hProcess, out uint pdwHandleCount);
+    private static extern bool GetProcessHandleCount(SafeProcessHandle hProcess, out uint pdwHandleCount);
 
     // ── Constants ───────────────────────────────────────────────────────────
 
@@ -86,16 +76,7 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private const uint CREATE_UNICODE_ENVIRONMENT    = 0x00000400;
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     private const uint HANDLE_FLAG_INHERIT           = 0x00000001;
-    private const uint PIPE_ACCESS_INBOUND  = 0x00000001;
-    private const uint PIPE_ACCESS_OUTBOUND = 0x00000002;
     private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
-    private const uint PIPE_TYPE_BYTE       = 0x00000000;
-    private const uint PIPE_READMODE_BYTE   = 0x00000000;
-    private const uint PIPE_WAIT            = 0x00000000;
-    private const uint OPEN_EXISTING        = 3;
-    private const uint GENERIC_READ         = 0x80000000;
-    private const uint GENERIC_WRITE        = 0x40000000;
-    private const uint FILE_ATTRIBUTE_NORMAL = 0x80;
 
     // ── Structures ──────────────────────────────────────────────────────────
 
@@ -104,6 +85,14 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     {
         public short X;
         public short Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SECURITY_ATTRIBUTES
+    {
+        public int nLength;
+        public IntPtr lpSecurityDescriptor;
+        public int bInheritHandle;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
@@ -145,11 +134,21 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         public uint dwThreadId;
     }
 
+    // ── SafeHandle Implementations ─────────────────────────────────────────
+
+    private sealed class SafePseudoConsoleHandle : SafeHandle
+    {
+        public SafePseudoConsoleHandle() : base(IntPtr.Zero, ownsHandle: true) { }
+        public SafePseudoConsoleHandle(IntPtr h) : base(IntPtr.Zero, ownsHandle: true) { SetHandle(h); }
+        public override bool IsInvalid => handle == IntPtr.Zero;
+        protected override bool ReleaseHandle() { ClosePseudoConsole(handle); return true; }
+    }
+
     // ── Fields ──────────────────────────────────────────────────────────────
 
-    private readonly IntPtr _hPC;
-    private readonly IntPtr _hProcess;
-    private readonly IntPtr _hThread;
+    private readonly SafePseudoConsoleHandle _hPC;
+    private readonly SafeProcessHandle _hProcess;
+    private readonly SafeWaitHandle _hThread;
     private bool _disposed;
 
     public Stream Output { get; }
@@ -174,29 +173,28 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        // PTY input pipe: ConPTY reads from inputRead (synchronous), caller writes to inputWrite (overlapped)
-        var id = Guid.NewGuid().ToString("N");
-        var (inputRead, inputWrite)   = CreateNamedPipePair($@"\\.\pipe\phantom-pty-in-{id}",  PIPE_ACCESS_INBOUND,  GENERIC_WRITE);
+        // PTY input pipe: ConPTY reads from inputPtySide (synchronous), caller writes to inputWrite (synchronous)
+        var (inputPtySide, inputWrite) = CreatePtyPipe(callerReads: false);
 
-        // PTY output pipe: ConPTY writes to outputWrite (synchronous), caller reads from outputRead (overlapped)
-        SafeFileHandle outputWrite, outputRead;
+        // PTY output pipe: ConPTY writes to outputPtySide (synchronous), caller reads from outputRead (synchronous)
+        SafeFileHandle outputPtySide, outputRead;
         try
         {
-            (outputWrite, outputRead) = CreateNamedPipePair($@"\\.\pipe\phantom-pty-out-{id}", PIPE_ACCESS_OUTBOUND, GENERIC_READ);
+            (outputPtySide, outputRead) = CreatePtyPipe(callerReads: true);
         }
         catch
         {
-            inputRead.Dispose();
+            inputPtySide.Dispose();
             inputWrite.Dispose();
             throw;
         }
 
         var size = new COORD { X = (short)payload.Columns, Y = (short)payload.Rows };
-        int hr = CreatePseudoConsole(size, inputRead, outputWrite, 0, out _hPC);
+        int hr = CreatePseudoConsole(size, inputPtySide, outputPtySide, 0, out IntPtr rawHpc);
 
         // The PTY now owns the pipe ends it was given; dispose our copies
-        inputRead.Dispose();
-        outputWrite.Dispose();
+        inputPtySide.Dispose();
+        outputPtySide.Dispose();
 
         if (hr != 0)
         {
@@ -205,33 +203,58 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             throw new Win32Exception(hr, "CreatePseudoConsole failed.");
         }
 
+        _hPC = new SafePseudoConsoleHandle(rawHpc);
+
         IntPtr attrList = IntPtr.Zero;
         PROCESS_INFORMATION pi = default;
+        SafeProcessHandle? hProcess = null;
+        SafeWaitHandle? hThread = null;
         try
         {
-            attrList = BuildAttributeList(_hPC);
-
-            var startupInfo = new STARTUPINFOEXW
+            bool refAdded = false;
+            _hPC.DangerousAddRef(ref refAdded);
+            try
             {
-                StartupInfo = new STARTUPINFOW { cb = Marshal.SizeOf<STARTUPINFOEXW>() },
-                lpAttributeList = attrList,
-            };
+                attrList = BuildAttributeList(_hPC.DangerousGetHandle());
 
-            string commandLine = BuildCommandLine(payload);
+                var startupInfo = new STARTUPINFOEXW
+                {
+                    StartupInfo = new STARTUPINFOW { cb = Marshal.SizeOf<STARTUPINFOEXW>() },
+                    lpAttributeList = attrList,
+                };
 
-            if (!CreateProcessW(
-                    null,
-                    commandLine,
-                    IntPtr.Zero, IntPtr.Zero,
-                    false,
-                    EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
-                    IntPtr.Zero,
-                    payload.WorkingDirectory,
-                    ref startupInfo,
-                    out pi))
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateProcessW failed for '{commandLine}'.");
+                string commandLine = BuildCommandLine(payload);
+
+                if (!CreateProcessW(
+                        null,
+                        commandLine,
+                        IntPtr.Zero, IntPtr.Zero,
+                        false,
+                        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT,
+                        IntPtr.Zero,
+                        payload.WorkingDirectory,
+                        ref startupInfo,
+                        out pi))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateProcessW failed for '{commandLine}'.");
+                }
+
+                // Wrap raw handles into SafeHandles immediately
+                hProcess = new SafeProcessHandle(pi.hProcess, ownsHandle: true);
+                hThread = new SafeWaitHandle(pi.hThread, ownsHandle: true);
             }
+            finally
+            {
+                if (refAdded) _hPC.DangerousRelease();
+            }
+        }
+        catch
+        {
+            hProcess?.Dispose();
+            hThread?.Dispose();
+            inputWrite.Dispose();
+            outputRead.Dispose();
+            throw;
         }
         finally
         {
@@ -242,12 +265,14 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             }
         }
 
-        _hProcess = pi.hProcess;
-        _hThread = pi.hThread;
+        _hProcess = hProcess;
+        _hThread = hThread;
         ProcessId = pi.dwProcessId;
 
-        Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
-        Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
+        // Anonymous pipes from CreatePipe are synchronous. Use isAsync: false.
+        // FileStream will use threadpool-based async for ReadAsync/WriteAsync calls.
+        Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: false);
+        Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: false);
     }
 
     // ── IPseudoTerminal ─────────────────────────────────────────────────────
@@ -264,10 +289,11 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         return Task.Run(() =>
         {
             using var mre = new ManualResetEvent(false);
-            mre.SafeWaitHandle = new SafeWaitHandle(_hProcess, ownsHandle: false);
+            mre.SafeWaitHandle = new SafeWaitHandle(_hProcess.DangerousGetHandle(), ownsHandle: false);
             mre.WaitOne();
 
             GetExitCodeProcess(_hProcess, out uint code);
+            GC.KeepAlive(_hProcess);
             return (int)code;
         }, ct);
     }
@@ -282,47 +308,49 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         await Input.DisposeAsync().ConfigureAwait(false);
         await Output.DisposeAsync().ConfigureAwait(false);
 
-        ClosePseudoConsole(_hPC);
-
-        if (_hThread != IntPtr.Zero) CloseHandle(_hThread);
-        if (_hProcess != IntPtr.Zero) CloseHandle(_hProcess);
+        _hPC.Dispose();
+        _hThread.Dispose();
+        _hProcess.Dispose();
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Creates a named-pipe pair where the server handle is <b>synchronous</b> (required by
-    /// <c>CreatePseudoConsole</c>) and the client handle is <c>FILE_FLAG_OVERLAPPED</c>
-    /// (required by <see cref="FileStream"/> constructed with <c>isAsync: true</c>). The
-    /// inherit flag is explicitly cleared on both handles to prevent accidental leakage into
-    /// child processes.
+    /// Creates an anonymous pipe pair (per the documented ConPTY sample). Both ends are
+    /// synchronous; FileStream(isAsync:false) will use threadpool for async operations.
     /// </summary>
-    private static (SafeFileHandle Server, SafeFileHandle Client) CreateNamedPipePair(
-        string name, uint serverAccess, uint clientAccess)
+    private static (SafeFileHandle PtySide, SafeFileHandle CallerSide) CreatePtyPipe(
+        bool callerReads)
     {
-        var server = CreateNamedPipeW(
-            name,
-            serverAccess,   // synchronous — CreatePseudoConsole requires non-overlapped handles
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            1, 4096, 4096, 0, IntPtr.Zero);
-        if (server.IsInvalid)
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateNamedPipeW failed for '{name}'.");
-
-        // Explicitly clear the inherit flag so these handles are never leaked into
-        // child processes, guarding against any future caller that passes bInheritHandles=true.
-        SetHandleInformation(server, HANDLE_FLAG_INHERIT, 0);
-
-        var client = CreateFileW(name, clientAccess, 0, IntPtr.Zero, OPEN_EXISTING,
-            FILE_FLAG_OVERLAPPED | FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
-        if (client.IsInvalid)
+        var sa = new SECURITY_ATTRIBUTES
         {
-            server.Dispose();
-            throw new Win32Exception(Marshal.GetLastWin32Error(), $"CreateFileW failed for '{name}'.");
+            nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
+            lpSecurityDescriptor = IntPtr.Zero,
+            bInheritHandle = 0  // not inheritable
+        };
+
+        SafeFileHandle read, write;
+        if (!CreatePipe(out read, out write, ref sa, 0))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe failed.");
+
+        // PtySide = synchronous end for ConPTY, CallerSide = synchronous end for caller
+        SafeFileHandle ptySide, callerSide;
+        if (callerReads)
+        {
+            ptySide = write;      // ConPTY writes rendered output
+            callerSide = read;    // caller reads
+        }
+        else
+        {
+            ptySide = read;       // ConPTY reads stdin
+            callerSide = write;   // caller writes
         }
 
-        SetHandleInformation(client, HANDLE_FLAG_INHERIT, 0);
+        // Explicitly clear inherit flags (belt-and-suspenders with bInheritHandle=0)
+        SetHandleInformation(ptySide, HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(callerSide, HANDLE_FLAG_INHERIT, 0);
 
-        return (server, client);
+        return (ptySide, callerSide);
     }
 
     /// <summary>
