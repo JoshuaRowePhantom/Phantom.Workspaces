@@ -2512,9 +2512,8 @@ public sealed class MainWindowIntegrationTests
             p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
         Assert.NotNull(restoredPane);
 
-        // Allow async restore to propagate
-        await Dispatcher.UIThread.InvokeAsync(() => {});
-        await Dispatcher.UIThread.InvokeAsync(() => {});
+        // Wait for PopulateWorkspacePaneTabsAsync to populate the tabs
+        await WaitForWorkspacePaneTabsAsync(restoredPane!);
 
         // The pane must have at least one tab from the dock-layout restore
         Assert.NotEmpty(restoredPane!.Tabs);
@@ -2618,9 +2617,8 @@ public sealed class MainWindowIntegrationTests
             p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
         Assert.NotNull(restoredPane);
 
-        // Allow async restore to propagate
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-        await Dispatcher.UIThread.InvokeAsync(() => { });
+        // Wait for PopulateWorkspacePaneTabsAsync to populate the tabs
+        await WaitForWorkspacePaneTabsAsync(restoredPane!);
 
         Assert.NotEmpty(restoredPane!.Tabs);
         Assert.Contains(restoredPane.Tabs, t => t is WebViewModel);
@@ -2853,6 +2851,36 @@ public sealed class MainWindowIntegrationTests
             {
                 observable.CollectionChanged -= OnCollectionChanged;
             }
+        }
+    }
+
+    private static async Task WaitForWorkspacePaneTabsAsync(WorkspacePaneViewModel pane)
+    {
+        if (pane.Tabs.Count > 0)
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (pane.Tabs.Count > 0)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        pane.Tabs.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            if (pane.Tabs.Count == 0)
+            {
+                await signal.Task;
+            }
+        }
+        finally
+        {
+            pane.Tabs.CollectionChanged -= OnCollectionChanged;
         }
     }
 
@@ -3213,7 +3241,7 @@ public sealed class MainWindowIntegrationTests
         return new MainWindowViewModel(
             CreateInMemoryRepositorySource(),
             new WorkspacesConfiguration { SkipStartupWorkspace = true },
-            profileStore,
+            profileStore ?? new ProfileStore(CreateTempProfileStorePath()),
             applicationServices);
     }
 
