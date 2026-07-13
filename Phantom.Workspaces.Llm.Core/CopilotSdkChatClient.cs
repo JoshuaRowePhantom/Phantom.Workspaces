@@ -419,9 +419,27 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             var dispatchLoop = Task.Run(async () =>
             {
-                await foreach (var sessionEvent in eventChannel.Reader.ReadAllAsync(turnCancellationToken))
+                try
                 {
-                    await dispatcher.DispatchAsync(sessionEvent).ConfigureAwait(false);
+                    await foreach (var sessionEvent in eventChannel.Reader.ReadAllAsync(turnCancellationToken))
+                    {
+                        await dispatcher.DispatchAsync(sessionEvent).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (turnCancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    // Without this, a dispatch failure kills the event loop while the CLI keeps
+                    // streaming: every subsequent session event is dropped and the turn's channel
+                    // never completes, so the remaining output silently never renders (issue
+                    // #912). Fail the turn loudly instead.
+                    this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogError(
+                        exception,
+                        "Session event dispatch failed; failing the turn.");
+                    channel.Writer.TryComplete(exception);
                 }
             }, turnCancellationToken);
 

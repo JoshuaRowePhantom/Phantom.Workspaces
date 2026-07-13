@@ -192,7 +192,24 @@ public static class AgentFactory
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
 
         var model = (agent as PromptAgent)?.Model;
-        if (model is null || string.IsNullOrEmpty(model.Id))
+        if (model is null)
+        {
+            throw new InvalidOperationException("Agent definition does not specify a model.");
+        }
+
+        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
+
+        // The sub-agent receiver provider must resolve before the model-ID validation: it mirrors
+        // a CLI-hosted sub-agent whose model is chosen by the CLI, so its definition legitimately
+        // carries no model ID (see CopilotSdkTurnEventDispatcher.SubAgentDefinition). Requiring an
+        // ID here made every real sub-agent creation throw, killing the session event dispatch
+        // loop and silently dropping all further live output (issue #912).
+        if (provider == "github-copilot-subagent")
+        {
+            return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
+        }
+
+        if (string.IsNullOrEmpty(model.Id))
         {
             throw new InvalidOperationException("Agent definition does not specify a model ID.");
         }
@@ -202,13 +219,11 @@ public static class AgentFactory
             return new ChatClientResult(new TestProviderChatClient(), "Test Chat Client");
         }
 
-        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
         return provider switch
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
             "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
             "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
-            "github-copilot-subagent" => new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent"),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
             "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),

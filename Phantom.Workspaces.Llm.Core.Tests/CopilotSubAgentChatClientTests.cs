@@ -189,4 +189,25 @@ public sealed class CopilotSubAgentChatClientTests
 
         Assert.IsType<CopilotSubAgentChatClient>(result.ChatClient);
     }
+
+    /// <summary>
+    /// Regression test for issue #912. <see cref="CopilotSdkTurnEventDispatcher"/> creates real
+    /// sub-agent chats from exactly this definition — a prompt agent with the sub-agent provider
+    /// and NO model ID (the CLI owns model selection for its sub-agents). Requiring a model ID
+    /// made every real sub-agent creation throw inside the session event dispatch loop, which
+    /// silently dropped all further live output for the turn.
+    /// </summary>
+    [Fact]
+    public void AgentFactory_GithubCopilotSubagentProvider_WithoutModelId_CreatesCopilotSubAgentChatClient()
+    {
+        // Mirrors CopilotSdkTurnEventDispatcher.SubAgentDefinition verbatim (including using
+        // AgentDefinition.FromJson, as the dispatcher does).
+        var agent = AgentDefinition.FromJson(
+            """{"kind":"prompt","model":{"provider":"github-copilot-subagent"}}""");
+        Assert.NotNull(agent);
+
+        var result = AgentFactory.CreateChatClient(agent);
+
+        Assert.IsType<CopilotSubAgentChatClient>(result.ChatClient);
+    }
 }
