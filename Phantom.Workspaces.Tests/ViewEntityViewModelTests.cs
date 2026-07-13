@@ -84,6 +84,23 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         Assert.Equal("▾", viewModel.ExpandArrow);
     }
 
+    [Fact]
+    public void ToggleExpandCommand_DisabledWhenNoTraversedChildren()
+    {
+        var viewModel = this.CreateViewModel();
+
+        Assert.False(viewModel.ToggleExpandCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void ToggleExpandCommand_EnabledWhenHasTraversedChildren()
+    {
+        var viewModel = this.CreateViewModel();
+        viewModel.HasTraversedChildren = true;
+
+        Assert.True(viewModel.ToggleExpandCommand.CanExecute(null));
+    }
+
     private ViewEntityViewModel CreateViewModel(bool isExpanded = true)
     {
         var entity = CreateTestEntity();
