@@ -175,7 +175,8 @@ public sealed class EntityBroker
         UpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        var updateResult = await this.entityRepository.DataAccessLayer.UpdateAsync(request, cancellationToken);
+        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
+        var updateResult = await Task.Run(() => this.entityRepository.DataAccessLayer.UpdateAsync(request, cancellationToken));
 
         var changedEntityIds = new HashSet<EntityId>();
         lock (this.gate)
@@ -251,13 +252,14 @@ public sealed class EntityBroker
                 snapshotsById[entity.EntityId] = entity.Snapshot;
             }
 
-            var changedEntitiesResult = await this.entityRepository.DataAccessLayer.GetChangedEntitiesAsync(
+            // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
+            var changedEntitiesResult = await Task.Run(() => this.entityRepository.DataAccessLayer.GetChangedEntitiesAsync(
                 new GetChangedEntitiesRequest
                 {
                     EntityIdTimestamps = snapshotsById.Select(
                         static pair => new EntityIdTimestamp(pair.Key, pair.Value.ModifiedTime)).ToArray(),
                 },
-                cancellationToken);
+                cancellationToken));
 
             foreach (var changedEntity in changedEntitiesResult.Entities)
             {
@@ -291,7 +293,8 @@ public sealed class EntityBroker
         ISet<EntityId>? changedEntityIds = null,
         CancellationToken cancellationToken = default)
     {
-        var getResult = await this.entityRepository.DataAccessLayer.GetAsync(request, cancellationToken);
+        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
+        var getResult = await Task.Run(() => this.entityRepository.DataAccessLayer.GetAsync(request, cancellationToken));
         var snapshots = getResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
@@ -311,7 +314,8 @@ public sealed class EntityBroker
         ISet<EntityId>? changedEntityIds = null,
         CancellationToken cancellationToken = default)
     {
-        var queryResult = await this.entityRepository.DataAccessLayer.QueryAsync(request, cancellationToken);
+        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
+        var queryResult = await Task.Run(() => this.entityRepository.DataAccessLayer.QueryAsync(request, cancellationToken));
         var snapshots = queryResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
@@ -335,12 +339,13 @@ public sealed class EntityBroker
             return new Dictionary<EntityId, EntitySnapshot>();
         }
 
-        var getResult = await this.entityRepository.DataAccessLayer.GetAsync(
+        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
+        var getResult = await Task.Run(() => this.entityRepository.DataAccessLayer.GetAsync(
             new GetRequest
             {
                 Entities = entityRequests,
             },
-            cancellationToken);
+            cancellationToken));
 
         var result = new Dictionary<EntityId, EntitySnapshot>();
         foreach (var snapshot in getResult.Batches.SelectMany(static b => b.Entities))

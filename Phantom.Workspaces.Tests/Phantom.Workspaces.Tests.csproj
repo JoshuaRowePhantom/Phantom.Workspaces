@@ -24,6 +24,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB.Tests\Phantom.Workspaces.Data.MongoDB.Tests.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Shared\Phantom.Workspaces.Gui.Shared.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />
   </ItemGroup>

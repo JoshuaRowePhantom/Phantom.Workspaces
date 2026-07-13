@@ -946,4 +946,545 @@ public sealed class EntityBrokerTests
             Relationships = Array.Empty<EntitySnapshot>(),
         };
     }
+
+    private sealed class CallbackDataAccessLayer : IDataAccessLayer
+    {
+        private readonly IDataAccessLayer inner;
+        private readonly Action? onUpdateAsync;
+        private readonly Action? onGetAsync;
+        private readonly Action? onQueryAsync;
+        private readonly Action? onGetChangedEntitiesAsync;
+        private readonly Action<CancellationToken>? captureUpdateToken;
+        private readonly Action<CancellationToken>? captureGetToken;
+        private readonly Action<CancellationToken>? captureQueryToken;
+        private readonly Action<CancellationToken>? captureGetChangedEntitiesToken;
+
+        public CallbackDataAccessLayer(
+            IDataAccessLayer inner,
+            Action? onUpdateAsync = null,
+            Action? onGetAsync = null,
+            Action? onQueryAsync = null,
+            Action? onGetChangedEntitiesAsync = null,
+            Action<CancellationToken>? captureUpdateToken = null,
+            Action<CancellationToken>? captureGetToken = null,
+            Action<CancellationToken>? captureQueryToken = null,
+            Action<CancellationToken>? captureGetChangedEntitiesToken = null)
+        {
+            this.inner = inner;
+            this.onUpdateAsync = onUpdateAsync;
+            this.onGetAsync = onGetAsync;
+            this.onQueryAsync = onQueryAsync;
+            this.onGetChangedEntitiesAsync = onGetChangedEntitiesAsync;
+            this.captureUpdateToken = captureUpdateToken;
+            this.captureGetToken = captureGetToken;
+            this.captureQueryToken = captureQueryToken;
+            this.captureGetChangedEntitiesToken = captureGetChangedEntitiesToken;
+        }
+
+        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+        {
+            this.onUpdateAsync?.Invoke();
+            this.captureUpdateToken?.Invoke(cancellationToken);
+            return this.inner.UpdateAsync(request, cancellationToken);
+        }
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+        {
+            this.onGetAsync?.Invoke();
+            this.captureGetToken?.Invoke(cancellationToken);
+            return this.inner.GetAsync(request, cancellationToken);
+        }
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+        {
+            this.onQueryAsync?.Invoke();
+            this.captureQueryToken?.Invoke(cancellationToken);
+            return this.inner.QueryAsync(request, cancellationToken);
+        }
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+        {
+            this.onGetChangedEntitiesAsync?.Invoke();
+            this.captureGetChangedEntitiesToken?.Invoke(cancellationToken);
+            return this.inner.GetChangedEntitiesAsync(request, cancellationToken);
+        }
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618 // Type or member is obsolete
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618 // Type or member is obsolete
+
+        public Task<ProcessQueueResult> ProcessQueueAsync(ProcessQueueRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ProcessQueueAsync(request, cancellationToken);
+
+        public Task<ComputeEmbeddingsResult> ComputeEmbeddingsAsync(ComputeEmbeddingsRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ComputeEmbeddingsAsync(request, cancellationToken);
+
+        public Task<UpdateEmbeddingsResult> UpdateEmbeddingsAsync(UpdateEmbeddingsRequest request, CancellationToken cancellationToken = default)
+            => this.inner.UpdateEmbeddingsAsync(request, cancellationToken);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task UpdateAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        // This test verifies that UpdateAsync doesn't synchronously block.
+        // If the DAL call runs inline on the calling thread, long DAL operations
+        // would block the UI thread. By wrapping in Task.Run, the operation
+        // is dispatched to the thread pool, keeping the calling thread responsive.
+
+        var updateResult = await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Test update" },
+                },
+                Changes = [],
+            },
+            ct);
+
+        Assert.NotNull(updateResult);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task RefreshAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("55555555-5555-5555-5555-555555555555");
+        var snapshot = CreateSnapshot(
+            entityId,
+            new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+            """
+            {
+              "entity-id": "55555555-5555-5555-5555-555555555555",
+              "entity-types": ["entity", "task"],
+              "names": [["test-entity"]],
+              "display-name": { "default": "Test" }
+            }
+            """);
+
+        var broker = await CreateBrokerAsync(ct);
+        await SeedSnapshotAsync(broker, snapshot);
+
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
+        Assert.Single(entities);
+
+        // This test verifies that RefreshAsync doesn't synchronously block.
+        // If GetChangedEntitiesAsync runs inline on the calling thread, long DAL
+        // operations would block the UI thread.
+
+        await broker.RefreshAsync(ct);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetEntitiesAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("77777777-7777-7777-7777-777777777777");
+        var snapshot = CreateSnapshot(
+            entityId,
+            new Timestamp(DateTimeOffset.UtcNow, "1"),
+            """
+            {
+              "entity-id": "77777777-7777-7777-7777-777777777777",
+              "entity-types": ["entity", "task"],
+              "names": [["get-test"]],
+              "display-name": { "default": "Get Test" }
+            }
+            """);
+
+        var broker = await CreateBrokerAsync(ct);
+        await SeedSnapshotAsync(broker, snapshot);
+
+        // This test verifies that GetEntitiesAsync (which calls
+        // GetSubscribedEntitiesForGetRequestAsync) doesn't synchronously block.
+        // If GetAsync runs inline on the calling thread, long DAL operations
+        // would block the UI thread.
+
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
+
+        Assert.Single(entities);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task SubscribeQueryAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        // This test verifies that SubscribeQueryAsync (which calls
+        // GetSubscribedEntitiesForQueryRequestAsync) doesn't synchronously block.
+        // If QueryAsync runs inline on the calling thread, long DAL operations
+        // would block the UI thread.
+
+        var subscription = await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("test-query"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["entity"]),
+                        },
+                    },
+                ],
+            },
+            ct);
+
+        Assert.NotNull(subscription);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task UpdateAsync_RunsOnThreadPoolThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        int? dalThreadId = null;
+        int callingThreadId = Environment.CurrentManagedThreadId;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onUpdateAsync: () => dalThreadId = Environment.CurrentManagedThreadId);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Test" },
+                },
+                Changes = [],
+            },
+            ct);
+
+        Assert.NotNull(dalThreadId);
+        Assert.NotEqual(callingThreadId, dalThreadId.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task RefreshAsync_RunsOnThreadPoolThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("88888888-8888-8888-8888-888888888888");
+        var broker = await CreateBrokerAsync(ct);
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+                """
+                {
+                  "entity-id": "88888888-8888-8888-8888-888888888888",
+                  "entity-types": ["entity", "task"],
+                  "names": [["test-refresh-thread"]],
+                  "display-name": { "default": "Test" }
+                }
+                """));
+
+        await broker.GetEntitiesAsync([entityId], ct);
+
+        int? dalThreadId = null;
+        int callingThreadId = Environment.CurrentManagedThreadId;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetChangedEntitiesAsync: () => dalThreadId = Environment.CurrentManagedThreadId);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.RefreshAsync(ct);
+
+        Assert.NotNull(dalThreadId);
+        Assert.NotEqual(callingThreadId, dalThreadId.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetSubscribedEntitiesForGetRequest_RunsOnThreadPoolThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        int? dalThreadId = null;
+        int callingThreadId = Environment.CurrentManagedThreadId;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetAsync: () => dalThreadId = Environment.CurrentManagedThreadId);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityName = new EntityName("test") }],
+                Timestamps = [null],
+            },
+            ct);
+
+        Assert.NotNull(dalThreadId);
+        Assert.NotEqual(callingThreadId, dalThreadId.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetSubscribedEntitiesForQueryRequest_RunsOnThreadPoolThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        int? dalThreadId = null;
+        int callingThreadId = Environment.CurrentManagedThreadId;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onQueryAsync: () => dalThreadId = Environment.CurrentManagedThreadId);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("test"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["entity"]),
+                        },
+                    },
+                ],
+            },
+            ct);
+
+        Assert.NotNull(dalThreadId);
+        Assert.NotEqual(callingThreadId, dalThreadId.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task LoadSnapshots_RunsOnThreadPoolThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("99999999-9999-9999-9999-999999999999");
+        var broker = await CreateBrokerAsync(ct);
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+                """
+                {
+                  "entity-id": "99999999-9999-9999-9999-999999999999",
+                  "entity-types": ["entity", "task"],
+                  "names": [["test-load"]],
+                  "display-name": { "default": "Test" }
+                }
+                """));
+
+        int? dalThreadId = null;
+        int callingThreadId = Environment.CurrentManagedThreadId;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetAsync: () => dalThreadId = Environment.CurrentManagedThreadId);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.GetEntitiesAsync([entityId], ct);
+
+        Assert.NotNull(dalThreadId);
+        Assert.NotEqual(callingThreadId, dalThreadId.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task UpdateAsync_ForwardsCancellationToken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        var cts = new CancellationTokenSource();
+        var testToken = cts.Token;
+        CancellationToken? receivedToken = null;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onUpdateAsync: () => { },
+            captureUpdateToken: token => receivedToken = token);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Test" },
+                },
+                Changes = [],
+            },
+            testToken);
+
+        Assert.NotNull(receivedToken);
+        Assert.Equal(testToken, receivedToken.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task RefreshAsync_ForwardsCancellationToken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+        var broker = await CreateBrokerAsync(ct);
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+                """
+                {
+                  "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                  "entity-types": ["entity", "task"],
+                  "names": [["test-refresh-token"]],
+                  "display-name": { "default": "Test" }
+                }
+                """));
+
+        await broker.GetEntitiesAsync([entityId], ct);
+
+        var cts = new CancellationTokenSource();
+        var testToken = cts.Token;
+        CancellationToken? receivedToken = null;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetChangedEntitiesAsync: () => { },
+            captureGetChangedEntitiesToken: token => receivedToken = token);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.RefreshAsync(testToken);
+
+        Assert.NotNull(receivedToken);
+        Assert.Equal(testToken, receivedToken.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetSubscribedEntitiesForGetRequest_ForwardsCancellationToken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        var cts = new CancellationTokenSource();
+        var testToken = cts.Token;
+        CancellationToken? receivedToken = null;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetAsync: () => { },
+            captureGetToken: token => receivedToken = token);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityName = new EntityName("test") }],
+                Timestamps = [null],
+            },
+            testToken);
+
+        Assert.NotNull(receivedToken);
+        Assert.Equal(testToken, receivedToken.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetSubscribedEntitiesForQueryRequest_ForwardsCancellationToken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        var cts = new CancellationTokenSource();
+        var testToken = cts.Token;
+        CancellationToken? receivedToken = null;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onQueryAsync: () => { },
+            captureQueryToken: token => receivedToken = token);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("test"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["entity"]),
+                        },
+                    },
+                ],
+            },
+            testToken);
+
+        Assert.NotNull(receivedToken);
+        Assert.Equal(testToken, receivedToken.Value);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task LoadSnapshots_ForwardsCancellationToken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+        var broker = await CreateBrokerAsync(ct);
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+                """
+                {
+                  "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                  "entity-types": ["entity", "task"],
+                  "names": [["test-load-token"]],
+                  "display-name": { "default": "Test" }
+                }
+                """));
+
+        var cts = new CancellationTokenSource();
+        var testToken = cts.Token;
+        CancellationToken? receivedToken = null;
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetAsync: () => { },
+            captureGetToken: token => receivedToken = token);
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        await broker.GetEntitiesAsync([entityId], testToken);
+
+        Assert.NotNull(receivedToken);
+        Assert.Equal(testToken, receivedToken.Value);
+    }
 }
+
