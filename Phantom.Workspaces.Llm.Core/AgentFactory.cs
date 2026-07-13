@@ -553,6 +553,16 @@ public static class AgentFactory
         CopilotByokOptions? byokOptions = null;
         string displayName;
 
+        // Optional provider configuration fields come from options.additionalProperties in the
+        // manifest because AgentSchema.ApiKeyConnection does not carry an AdditionalProperties
+        // bag; extra JSON fields in the connection object are silently dropped by the parser.
+        var additionalProps = model.Options?.AdditionalProperties;
+        string? cliPath = null;
+        if (additionalProps is not null && additionalProps.TryGetValue("cliPath", out var cliPathValue))
+        {
+            cliPath = cliPathValue as string;
+        }
+
         if (model.Connection is ApiKeyConnection conn && !string.IsNullOrWhiteSpace(conn.Endpoint))
         {
             // BYOK mode: a custom endpoint is supplied — authenticate to that endpoint, not GitHub.
@@ -560,10 +570,6 @@ public static class AgentFactory
                 ? null
                 : resolver.ResolveApiKey(conn.ApiKey, "github-copilot");
 
-            // Optional BYOK configuration fields come from options.additionalProperties in the
-            // manifest because AgentSchema.ApiKeyConnection does not carry an AdditionalProperties
-            // bag; extra JSON fields in the connection object are silently dropped by the parser.
-            var additionalProps = model.Options?.AdditionalProperties;
             string? providerType = null;
             string? wireApi = null;
             string? wireModel = null;
@@ -616,6 +622,7 @@ public static class AgentFactory
             gitHubToken,
             services?.LoggerFactory,
             byokOptions: byokOptions,
+            cliPath: cliPath,
             queueManager: queueManager,
             modelOptions: model.Options,
             subAgentChatRegistry: subAgentChatRegistry);

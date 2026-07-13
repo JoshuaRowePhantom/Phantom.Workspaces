@@ -131,6 +131,29 @@ public sealed class AgentFactoryByokTests
         Assert.Equal("prod", byok.Headers!["X-Env"]);
     }
 
+    [Fact]
+    public void CreateChatClient_GithubCopilot_WithEndpoint_CliPath_IsMapped()
+    {
+        var agent = LoadByokAgent(
+            "http://localhost:12345/",
+            additionalOptions: @"""cliPath"": ""C:/tools/copilot.exe""");
+
+        var result = AgentFactory.CreateChatClient(agent);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Equal("C:/tools/copilot.exe", copilotClient.CliPath);
+    }
+
+    [Fact]
+    public void CreateChatClient_GithubCopilot_WithEndpoint_NoCliPath_CliPathIsNull()
+    {
+        var agent = LoadByokAgent("http://localhost:12345/");
+        var result = AgentFactory.CreateChatClient(agent);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Null(copilotClient.CliPath);
+    }
+
     // ---------------------------------------------------------------------------
     // Standard mode — no endpoint
     // ---------------------------------------------------------------------------

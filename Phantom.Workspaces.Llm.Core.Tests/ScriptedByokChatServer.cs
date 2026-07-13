@@ -1,28 +1,34 @@
+using Microsoft.Extensions.AI;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 /// <summary>
-/// A deterministic, scripted OpenAI-compatible chat-completions server for full-stack BYOK tests
-/// (issue #912). The GitHub Copilot CLI issues multiple distinct conversations against the same
-/// endpoint (the main session plus one per sub-agent); this server classifies each incoming
-/// request by inspecting its message content, routes it to a named per-conversation script with
-/// its own turn counter, and streams scripted SSE replies (text and OpenAI <c>tool_calls</c>
-/// deltas). Every scripted step can carry awaitable gates so a test controls exactly when each
-/// reply — or any point inside a streamed reply — is delivered. Requests that match no
-/// conversation script, or that arrive after a conversation's script is exhausted, fail loudly:
-/// the server responds 500 and records a diagnostic in <see cref="Failures"/> (it never hangs).
+/// A thin, protocol-generic OpenAI-compatible chat-completions wire adapter over
+/// <see cref="DeterministicTestChatClient"/> for full-stack BYOK tests (issue #912). A single
+/// endpoint can serve multiple distinct conversations (for example, a main session plus one per
+/// sub-agent): the adapter classifies each incoming request by inspecting its message content and
+/// delegates it to the matched conversation's own <see cref="DeterministicTestChatClient"/>, then
+/// translates the resulting <see cref="ChatResponseUpdate"/> stream (<see cref="TextContent"/>,
+/// <see cref="FunctionCallContent"/>) into OpenAI SSE content and <c>tool_calls</c> deltas. All
+/// scripting — responses, streamed deltas, and readiness gating — is expressed through
+/// <see cref="DeterministicTestChatClient"/>'s queue and readiness mechanisms; this class carries
+/// no knowledge of any particular consumer's tools or prompts. Requests that match no
+/// conversation, or that arrive after a conversation's queued responses are exhausted, fail
+/// loudly: the adapter responds 500 and records a diagnostic in <see cref="Failures"/> (it never
+/// hangs).
 /// </summary>
 public sealed class ScriptedByokChatServer : IAsyncDisposable
 {
     private readonly HttpListener listener;
     private readonly CancellationTokenSource cancellation = new();
     private readonly Task acceptLoop;
-    private readonly List<ScriptedConversation> conversations = [];
+    private readonly List<ConversationClient> conversations = [];
     private readonly object conversationsLock = new();
     private readonly ConcurrentQueue<string> failures = new();
     private readonly ConcurrentQueue<CapturedRequest> recordedRequests = new();
@@ -51,13 +57,13 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
     public Action<string>? Trace { get; set; }
 
     /// <summary>
-    /// Registers a named conversation script. Incoming requests are classified by evaluating each
+    /// Registers a named conversation. Incoming requests are classified by evaluating each
     /// conversation's <paramref name="matcher"/> in registration order; the first match wins and
-    /// the request consumes that conversation's next scripted turn.
+    /// the request is delegated to that conversation's <see cref="ConversationClient.Client"/>.
     /// </summary>
-    public ScriptedConversation AddConversation(string name, Func<CapturedRequest, bool> matcher)
+    public ConversationClient AddConversation(string name, Func<CapturedRequest, bool> matcher)
     {
-        var conversation = new ScriptedConversation(name, matcher);
+        var conversation = new ConversationClient(name, matcher);
         lock (this.conversationsLock)
         {
             this.conversations.Add(conversation);
@@ -153,8 +159,7 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
             var request = CapturedRequest.Parse(path, body);
             this.recordedRequests.Enqueue(request);
 
-            ScriptedConversation? conversation = null;
-            ScriptedTurn? turn = null;
+            ConversationClient? conversation = null;
             lock (this.conversationsLock)
             {
                 foreach (var candidate in this.conversations)
@@ -162,7 +167,6 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
                     if (candidate.Matches(request))
                     {
                         conversation = candidate;
-                        turn = candidate.TakeNextTurn();
                         break;
                     }
                 }
@@ -170,26 +174,28 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
 
             if (conversation is null)
             {
-                this.RecordFailure($"No conversation script matched request. Body: {Truncate(body)}");
-                await WriteJsonAsync(context, 500, "{\"error\":\"no conversation script matched\"}").ConfigureAwait(false);
-                return;
-            }
-
-            if (turn is null)
-            {
-                this.RecordFailure(
-                    $"Conversation '{conversation.Name}' has no scripted turns left. Body: {Truncate(body)}");
-                await WriteJsonAsync(context, 500, "{\"error\":\"conversation script exhausted\"}").ConfigureAwait(false);
+                this.RecordFailure($"No conversation matched request. Body: {Truncate(body)}");
+                await WriteJsonAsync(context, 500, "{\"error\":\"no conversation matched\"}").ConfigureAwait(false);
                 return;
             }
 
             request.Conversation = conversation.Name;
-            request.TurnIndex = turn.Index;
-            this.Trace?.Invoke($"MATCH conversation='{conversation.Name}' turn={turn.Index}");
-            turn.SetRequest(request);
+            request.TurnIndex = conversation.TakeNextTurnIndex();
+            this.Trace?.Invoke($"MATCH conversation='{conversation.Name}' turn={request.TurnIndex}");
+            conversation.CompleteRequest(request);
 
-            await this.WriteScriptedSseAsync(context, turn).ConfigureAwait(false);
-            this.Trace?.Invoke($"REPLY-COMPLETE conversation='{conversation.Name}' turn={turn.Index}");
+            // Fail loudly instead of blocking inside GetStreamingResponseAsync when the
+            // conversation's scripted responses are exhausted: the adapter must never hang a test.
+            if (conversation.Client.QueuedStreamingResponseCount == 0)
+            {
+                this.RecordFailure(
+                    $"Conversation '{conversation.Name}' has no queued streaming responses left. Body: {Truncate(body)}");
+                await WriteJsonAsync(context, 500, "{\"error\":\"conversation responses exhausted\"}").ConfigureAwait(false);
+                return;
+            }
+
+            await this.WriteSseFromClientAsync(context, conversation, request).ConfigureAwait(false);
+            this.Trace?.Invoke($"REPLY-COMPLETE conversation='{conversation.Name}' turn={request.TurnIndex}");
         }
         catch (Exception exception)
         {
@@ -199,7 +205,7 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
                 await WriteJsonAsync(
                     context,
                     500,
-                    $"{{\"error\":{System.Text.Json.JsonSerializer.Serialize(exception.Message)}}}").ConfigureAwait(false);
+                    $"{{\"error\":{JsonSerializer.Serialize(exception.Message)}}}").ConfigureAwait(false);
             }
             catch
             {
@@ -217,79 +223,98 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
     private static string Truncate(string value)
         => value.Length <= 4000 ? value : value[..4000] + "…";
 
-    private async Task WriteScriptedSseAsync(HttpListenerContext context, ScriptedTurn turn)
+    private async Task WriteSseFromClientAsync(
+        HttpListenerContext context,
+        ConversationClient conversation,
+        CapturedRequest request)
     {
         context.Response.StatusCode = 200;
         context.Response.ContentType = "text/event-stream";
         context.Response.SendChunked = true;
         var output = context.Response.OutputStream;
 
-        var completionId = $"chatcmpl-{turn.Index}-{Guid.NewGuid():n}";
+        var completionId = $"chatcmpl-{request.TurnIndex}-{Guid.NewGuid():n}";
         var wroteRole = false;
+        var toolCallIndex = 0;
+        string? finishReason = null;
 
-        foreach (var item in turn.Items)
+        await foreach (var update in conversation.Client
+            .GetStreamingResponseAsync(request.ToChatMessages(), options: null, this.cancellation.Token)
+            .ConfigureAwait(false))
         {
-            switch (item)
+            foreach (var content in update.Contents)
             {
-                case ScriptGateItem gate:
-                    await gate.Gate.Released.WaitAsync(this.cancellation.Token).ConfigureAwait(false);
-                    break;
-
-                case ScriptTextItem text:
-                    await WriteSseEventAsync(output, BuildChunk(completionId, delta =>
-                    {
-                        if (!wroteRole)
+                switch (content)
+                {
+                    case TextContent text:
+                        await WriteSseEventAsync(output, BuildChunk(completionId, delta =>
                         {
-                            delta["role"] = "assistant";
-                        }
-
-                        delta["content"] = text.Text;
-                    })).ConfigureAwait(false);
-                    wroteRole = true;
-                    break;
-
-                case ScriptToolCallItem toolCall:
-                    // OpenAI streaming tool_calls: first delta carries id/type/name, argument
-                    // fragments follow with the same index. Emit the header and the full argument
-                    // payload as two chunks so the client exercises its fragment-joining path.
-                    await WriteSseEventAsync(output, BuildChunk(completionId, delta =>
-                    {
-                        if (!wroteRole)
-                        {
-                            delta["role"] = "assistant";
-                        }
-
-                        delta["tool_calls"] = new JsonArray(new JsonObject
-                        {
-                            ["index"] = toolCall.Index,
-                            ["id"] = toolCall.CallId,
-                            ["type"] = "function",
-                            ["function"] = new JsonObject
+                            if (!wroteRole)
                             {
-                                ["name"] = toolCall.Name,
-                                ["arguments"] = string.Empty,
-                            },
-                        });
-                    })).ConfigureAwait(false);
-                    wroteRole = true;
+                                delta["role"] = "assistant";
+                            }
 
-                    await WriteSseEventAsync(output, BuildChunk(completionId, delta =>
-                    {
-                        delta["tool_calls"] = new JsonArray(new JsonObject
+                            delta["content"] = text.Text;
+                        })).ConfigureAwait(false);
+                        wroteRole = true;
+                        break;
+
+                    case FunctionCallContent functionCall:
+                        // OpenAI streaming tool_calls: the first delta carries id/type/name,
+                        // argument fragments follow with the same index. Emit the header and the
+                        // full argument payload as two chunks so the client exercises its
+                        // fragment-joining path.
+                        var callIndex = toolCallIndex++;
+                        var argumentsJson = JsonSerializer.Serialize(
+                            functionCall.Arguments ?? new Dictionary<string, object?>());
+
+                        await WriteSseEventAsync(output, BuildChunk(completionId, delta =>
                         {
-                            ["index"] = toolCall.Index,
-                            ["function"] = new JsonObject
+                            if (!wroteRole)
                             {
-                                ["arguments"] = toolCall.ArgumentsJson,
-                            },
-                        });
-                    })).ConfigureAwait(false);
-                    break;
+                                delta["role"] = "assistant";
+                            }
 
-                default:
-                    throw new InvalidOperationException($"Unknown script item type '{item.GetType()}'.");
+                            delta["tool_calls"] = new JsonArray(new JsonObject
+                            {
+                                ["index"] = callIndex,
+                                ["id"] = functionCall.CallId,
+                                ["type"] = "function",
+                                ["function"] = new JsonObject
+                                {
+                                    ["name"] = functionCall.Name,
+                                    ["arguments"] = string.Empty,
+                                },
+                            });
+                        })).ConfigureAwait(false);
+                        wroteRole = true;
+
+                        await WriteSseEventAsync(output, BuildChunk(completionId, delta =>
+                        {
+                            delta["tool_calls"] = new JsonArray(new JsonObject
+                            {
+                                ["index"] = callIndex,
+                                ["function"] = new JsonObject
+                                {
+                                    ["arguments"] = argumentsJson,
+                                },
+                            });
+                        })).ConfigureAwait(false);
+                        break;
+
+                    default:
+                        throw new InvalidOperationException(
+                            $"Unsupported streamed content type '{content.GetType()}'.");
+                }
+            }
+
+            if (update.FinishReason is { } explicitFinishReason)
+            {
+                finishReason = explicitFinishReason.Value;
             }
         }
+
+        finishReason ??= toolCallIndex > 0 ? "tool_calls" : "stop";
 
         var finalChunk = new JsonObject
         {
@@ -301,7 +326,7 @@ public sealed class ScriptedByokChatServer : IAsyncDisposable
             {
                 ["index"] = 0,
                 ["delta"] = new JsonObject(),
-                ["finish_reason"] = turn.FinishReason,
+                ["finish_reason"] = finishReason,
             }),
         };
 
@@ -376,7 +401,7 @@ public sealed class CapturedRequest
     /// <summary>The conversation name this request was routed to, set after classification.</summary>
     public string? Conversation { get; internal set; }
 
-    /// <summary>The zero-based scripted turn index consumed by this request.</summary>
+    /// <summary>The zero-based per-conversation request index, set after classification.</summary>
     public int TurnIndex { get; internal set; } = -1;
 
     /// <summary>Returns whether any message with the given role contains <paramref name="text"/>.</summary>
@@ -393,6 +418,26 @@ public sealed class CapturedRequest
 
         return false;
     }
+
+    /// <summary>Converts the flattened wire messages into <see cref="ChatMessage"/>s.</summary>
+    internal List<ChatMessage> ToChatMessages()
+    {
+        var messages = new List<ChatMessage>(this.Messages.Count);
+        foreach (var (role, content) in this.Messages)
+        {
+            messages.Add(new ChatMessage(MapRole(role), content));
+        }
+
+        return messages;
+    }
+
+    private static ChatRole MapRole(string role) => role.ToLowerInvariant() switch
+    {
+        "system" => ChatRole.System,
+        "assistant" => ChatRole.Assistant,
+        "tool" => ChatRole.Tool,
+        _ => ChatRole.User,
+    };
 
     internal static CapturedRequest Parse(string path, string body)
     {
@@ -441,14 +486,21 @@ public sealed class CapturedRequest
     }
 }
 
-/// <summary>A named per-conversation script with its own turn counter.</summary>
-public sealed class ScriptedConversation
+/// <summary>
+/// The routing handle for one named conversation: pairs a request matcher with the
+/// <see cref="DeterministicTestChatClient"/> that scripts the conversation's responses. Tests
+/// enqueue streaming responses (and express gating via the client's readiness mechanism) directly
+/// on <see cref="Client"/>, and can observe each classified request through
+/// <see cref="GetRequestAsync"/>.
+/// </summary>
+public sealed class ConversationClient
 {
     private readonly Func<CapturedRequest, bool> matcher;
-    private readonly List<ScriptedTurn> turns = [];
-    private int nextTurn;
+    private readonly object requestsLock = new();
+    private readonly List<TaskCompletionSource<CapturedRequest>> requests = [];
+    private int nextTurnIndex;
 
-    internal ScriptedConversation(string name, Func<CapturedRequest, bool> matcher)
+    internal ConversationClient(string name, Func<CapturedRequest, bool> matcher)
     {
         this.Name = name;
         this.matcher = matcher;
@@ -457,90 +509,41 @@ public sealed class ScriptedConversation
     /// <summary>The conversation name used in diagnostics.</summary>
     public string Name { get; }
 
-    /// <summary>Appends a scripted turn; requests consume turns in order.</summary>
-    public ScriptedTurn AddTurn()
+    /// <summary>The deterministic chat client scripting this conversation's responses.</summary>
+    public DeterministicTestChatClient Client { get; } = new();
+
+    /// <summary>
+    /// Completes with the <paramref name="index"/>-th (zero-based) request classified into this
+    /// conversation, letting tests observe request arrival and content.
+    /// </summary>
+    public Task<CapturedRequest> GetRequestAsync(int index)
     {
-        var turn = new ScriptedTurn(this.turns.Count);
-        this.turns.Add(turn);
-        return turn;
+        lock (this.requestsLock)
+        {
+            this.EnsureRequestSlot(index);
+            return this.requests[index].Task;
+        }
     }
 
     internal bool Matches(CapturedRequest request) => this.matcher(request);
 
-    internal ScriptedTurn? TakeNextTurn()
+    internal int TakeNextTurnIndex() => Interlocked.Increment(ref this.nextTurnIndex) - 1;
+
+    internal void CompleteRequest(CapturedRequest request)
     {
-        if (this.nextTurn >= this.turns.Count)
+        lock (this.requestsLock)
         {
-            return null;
+            this.EnsureRequestSlot(request.TurnIndex);
+            this.requests[request.TurnIndex].TrySetResult(request);
         }
+    }
 
-        return this.turns[this.nextTurn++];
+    private void EnsureRequestSlot(int index)
+    {
+        while (this.requests.Count <= index)
+        {
+            this.requests.Add(new TaskCompletionSource<CapturedRequest>(
+                TaskCreationOptions.RunContinuationsAsynchronously));
+        }
     }
 }
-
-/// <summary>An awaitable gate a test releases to let the server proceed past a scripted point.</summary>
-public sealed class ScriptGate
-{
-    private readonly TaskCompletionSource released = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-    /// <summary>Completes when the test has released this gate.</summary>
-    public Task Released => this.released.Task;
-
-    /// <summary>Releases the gate, letting the scripted reply proceed.</summary>
-    public void Release() => this.released.TrySetResult();
-}
-
-/// <summary>
-/// One scripted assistant reply: an ordered list of stream items (text deltas, tool-call deltas,
-/// and gates) plus the finish reason. The turn's <see cref="Request"/> task completes when a
-/// request consumes this turn, letting tests observe arrival before releasing gates.
-/// </summary>
-public sealed class ScriptedTurn
-{
-    private readonly TaskCompletionSource<CapturedRequest> request = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly List<object> items = [];
-
-    internal ScriptedTurn(int index) => this.Index = index;
-
-    /// <summary>The zero-based index of this turn within its conversation.</summary>
-    public int Index { get; }
-
-    /// <summary>Completes with the request that consumed this turn.</summary>
-    public Task<CapturedRequest> Request => this.request.Task;
-
-    /// <summary>The finish reason for the final SSE chunk; defaults to <c>stop</c>.</summary>
-    public string FinishReason { get; set; } = "stop";
-
-    internal IReadOnlyList<object> Items => this.items;
-
-    /// <summary>Appends a streamed text delta.</summary>
-    public ScriptedTurn AddText(string text)
-    {
-        this.items.Add(new ScriptTextItem(text));
-        return this;
-    }
-
-    /// <summary>Appends a streamed OpenAI tool call and sets the finish reason to <c>tool_calls</c>.</summary>
-    public ScriptedTurn AddToolCall(int index, string callId, string name, string argumentsJson)
-    {
-        this.items.Add(new ScriptToolCallItem(index, callId, name, argumentsJson));
-        this.FinishReason = "tool_calls";
-        return this;
-    }
-
-    /// <summary>Appends an awaitable gate; the stream stalls at this point until released.</summary>
-    public ScriptGate AddGate()
-    {
-        var gate = new ScriptGate();
-        this.items.Add(new ScriptGateItem(gate));
-        return gate;
-    }
-
-    internal void SetRequest(CapturedRequest capturedRequest) => this.request.TrySetResult(capturedRequest);
-}
-
-internal sealed record ScriptTextItem(string Text);
-
-internal sealed record ScriptToolCallItem(int Index, string CallId, string Name, string ArgumentsJson);
-
-internal sealed record ScriptGateItem(ScriptGate Gate);

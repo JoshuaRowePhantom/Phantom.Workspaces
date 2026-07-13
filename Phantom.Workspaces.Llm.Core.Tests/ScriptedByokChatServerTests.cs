@@ -1,3 +1,5 @@
+using AgentSchema;
+using Microsoft.Extensions.AI;
 using System.Net.Http;
 using System.Text;
 using Xunit;
@@ -6,9 +8,10 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 /// <summary>
 /// Deterministic coverage for <see cref="ScriptedByokChatServer"/> (issue #912): request
-/// classification into named per-conversation scripts with independent turn counters, awaitable
-/// per-step gates, streamed OpenAI <c>tool_calls</c> deltas, and loud failure (never a hang) for
-/// unmatched or unscripted requests.
+/// classification into named conversations each backed by its own
+/// <see cref="DeterministicTestChatClient"/>, gating via the client's readiness mechanism,
+/// translation of streamed <see cref="FunctionCallContent"/> into OpenAI <c>tool_calls</c> deltas,
+/// and loud failure (never a hang) for unmatched requests or exhausted response queues.
 /// </summary>
 public sealed class ScriptedByokChatServerTests
 {
@@ -29,7 +32,7 @@ public sealed class ScriptedByokChatServerTests
 
         Assert.Equal(500, (int)response.StatusCode);
         var failure = Assert.Single(server.Failures);
-        Assert.Contains("No conversation script matched", failure, StringComparison.Ordinal);
+        Assert.Contains("No conversation matched", failure, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -37,7 +40,9 @@ public sealed class ScriptedByokChatServerTests
     {
         await using var server = new ScriptedByokChatServer();
         var main = server.AddConversation("main", request => request.AnyMessageContains("user", "marker"));
-        main.AddTurn().AddText("only turn");
+        var stream = main.Client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "only turn"));
+        stream.Complete();
 
         using var httpClient = new HttpClient { BaseAddress = new Uri(server.BaseUrl) };
         using var first = await httpClient.PostAsync("v1/chat/completions", ChatRequest("marker one"));
@@ -46,7 +51,7 @@ public sealed class ScriptedByokChatServerTests
         using var second = await httpClient.PostAsync("v1/chat/completions", ChatRequest("marker two"));
         Assert.Equal(500, (int)second.StatusCode);
         var failure = Assert.Single(server.Failures);
-        Assert.Contains("no scripted turns left", failure, StringComparison.Ordinal);
+        Assert.Contains("no queued streaming responses left", failure, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -54,14 +59,17 @@ public sealed class ScriptedByokChatServerTests
     {
         await using var server = new ScriptedByokChatServer();
         var main = server.AddConversation("main", request => request.AnyMessageContains("user", "MAIN"));
-        var mainTurn0 = main.AddTurn();
-        mainTurn0.AddText("main-reply-0");
-        var mainTurn1 = main.AddTurn();
-        mainTurn1.AddText("main-reply-1");
+        var mainStream0 = main.Client.EnqueueStreamingResponse();
+        mainStream0.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "main-reply-0"));
+        mainStream0.Complete();
+        var mainStream1 = main.Client.EnqueueStreamingResponse();
+        mainStream1.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "main-reply-1"));
+        mainStream1.Complete();
 
         var sub = server.AddConversation("sub", request => request.AnyMessageContains("user", "SUB"));
-        var subTurn0 = sub.AddTurn();
-        subTurn0.AddText("sub-reply-0");
+        var subStream0 = sub.Client.EnqueueStreamingResponse();
+        subStream0.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "sub-reply-0"));
+        subStream0.Complete();
 
         using var httpClient = new HttpClient { BaseAddress = new Uri(server.BaseUrl) };
 
@@ -74,32 +82,33 @@ public sealed class ScriptedByokChatServerTests
         Assert.Contains("main-reply-1", secondMain, StringComparison.Ordinal);
 
         Assert.Empty(server.Failures);
-        Assert.Equal(0, (await mainTurn0.Request).TurnIndex);
-        Assert.Equal(1, (await mainTurn1.Request).TurnIndex);
-        Assert.Equal(0, (await subTurn0.Request).TurnIndex);
-        Assert.Equal("main", (await mainTurn1.Request).Conversation);
-        Assert.Equal("sub", (await subTurn0.Request).Conversation);
+        Assert.Equal(0, (await main.GetRequestAsync(0)).TurnIndex);
+        Assert.Equal(1, (await main.GetRequestAsync(1)).TurnIndex);
+        Assert.Equal(0, (await sub.GetRequestAsync(0)).TurnIndex);
+        Assert.Equal("main", (await main.GetRequestAsync(1)).Conversation);
+        Assert.Equal("sub", (await sub.GetRequestAsync(0)).Conversation);
     }
 
     [Fact]
-    public async Task ScriptedByokChatServer_GatedStep_DoesNotReplyUntilReleased()
+    public async Task ScriptedByokChatServer_GatedUpdate_DoesNotReplyUntilMarkedReady()
     {
         await using var server = new ScriptedByokChatServer();
         var main = server.AddConversation("main", _ => true);
-        var turn = main.AddTurn();
-        turn.AddText("before-gate ");
-        var gate = turn.AddGate();
-        turn.AddText("after-gate");
+        var stream = main.Client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "before-gate "));
+        var gated = stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "after-gate"), isReady: false);
+        stream.Complete();
 
         using var httpClient = new HttpClient { BaseAddress = new Uri(server.BaseUrl) };
         var responseTask = ReadSseAsync(httpClient, "anything");
 
-        // Deterministic partial-order check: the request has been consumed by the scripted turn,
-        // yet the response body cannot complete because the gate is still held.
-        await turn.Request.WaitAsync(TimeSpan.FromSeconds(30));
+        // Deterministic partial-order check: the request has been classified into the
+        // conversation, yet the response body cannot complete because the second streamed update
+        // is not yet marked ready.
+        await main.GetRequestAsync(0).WaitAsync(TimeSpan.FromSeconds(30));
         Assert.False(responseTask.IsCompleted);
 
-        gate.Release();
+        gated.MarkReady();
         var body = await responseTask.WaitAsync(TimeSpan.FromSeconds(30));
         Assert.Contains("before-gate", body, StringComparison.Ordinal);
         Assert.Contains("after-gate", body, StringComparison.Ordinal);
@@ -111,15 +120,19 @@ public sealed class ScriptedByokChatServerTests
     {
         await using var server = new ScriptedByokChatServer();
         var main = server.AddConversation("main", _ => true);
-        main.AddTurn().AddToolCall(0, "call_1", "powershell", """{"command":"Write-Output \"x\""}""");
+        var stream = main.Client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [new FunctionCallContent("call_1", "lookup_widget", new Dictionary<string, object?> { ["widgetId"] = "w-42" })]));
+        stream.Complete();
 
         using var httpClient = new HttpClient { BaseAddress = new Uri(server.BaseUrl) };
         var body = await ReadSseAsync(httpClient, "anything");
 
-        // Captured-exchange derived shape: a header chunk carrying id/type/name with empty
-        // arguments, an argument-fragment chunk, then finish_reason=tool_calls.
-        Assert.Contains("\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"powershell\",\"arguments\":\"\"}}]", body, StringComparison.Ordinal);
-        Assert.Contains("Write-Output", body, StringComparison.Ordinal);
+        // Wire shape: a header chunk carrying id/type/name with empty arguments, an
+        // argument-fragment chunk, then finish_reason=tool_calls.
+        Assert.Contains("\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"lookup_widget\",\"arguments\":\"\"}}]", body, StringComparison.Ordinal);
+        Assert.Contains("w-42", body, StringComparison.Ordinal);
         Assert.Contains("\"finish_reason\":\"tool_calls\"", body, StringComparison.Ordinal);
         Assert.Contains("data: [DONE]", body, StringComparison.Ordinal);
         Assert.Empty(server.Failures);
@@ -128,9 +141,11 @@ public sealed class ScriptedByokChatServerTests
     /// <summary>
     /// End-to-end wire compatibility: the scripted <c>tool_calls</c> SSE deltas round-trip through
     /// the real Copilot CLI, which executes the scripted <c>powershell</c> tool and posts its
-    /// genuine output back as the tool-result message of the follow-up turn. Requires the local
-    /// Copilot CLI; carries the WebView category so the default fast suite stays hermetic while
-    /// targeted runs (issue #912 validation) exercise it.
+    /// genuine output back as the tool-result message of the follow-up turn. The chat client is
+    /// resolved from a BYOK agent definition through <see cref="AgentFactory.CreateChatClient"/>,
+    /// exactly as production does. Requires the local Copilot CLI; carries the WebView category so
+    /// the default fast suite stays hermetic while targeted runs (issue #912 validation) exercise
+    /// it.
     /// </summary>
     [Fact]
     [Trait("Category", "WebView")]
@@ -138,40 +153,56 @@ public sealed class ScriptedByokChatServerTests
     {
         await using var server = new ScriptedByokChatServer();
         var main = server.AddConversation("main", _ => true);
-        var toolTurn = main.AddTurn();
-        toolTurn.AddToolCall(
-            0,
-            "call_ps",
-            "powershell",
-            """{"command":"Write-Output \"roundtrip-proof\"","description":"Round-trip check"}""");
-        var finalTurn = main.AddTurn();
-        finalTurn.AddText("cli-roundtrip-complete");
-        main.AddTurn().AddText("spare");
+        var toolTurn = main.Client.EnqueueStreamingResponse();
+        toolTurn.EnqueueUpdate(new ChatResponseUpdate(
+            ChatRole.Assistant,
+            [new FunctionCallContent("call_ps", "powershell", new Dictionary<string, object?>
+            {
+                ["command"] = "Write-Output \"roundtrip-proof\"",
+                ["description"] = "Round-trip check",
+            })]));
+        toolTurn.Complete();
+        var finalTurn = main.Client.EnqueueStreamingResponse();
+        finalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "cli-roundtrip-complete"));
+        finalTurn.Complete();
+        var spareTurn = main.Client.EnqueueStreamingResponse();
+        spareTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "spare"));
+        spareTurn.Complete();
 
-        var byok = new CopilotByokOptions
+        var definition = AgentDefinitionLoader.LoadAgentFromJson($$"""
         {
-            BaseUrl = server.BaseUrl,
-            ApiKey = "test-key",
-        };
+          "kind": "prompt",
+          "name": "roundtrip",
+          "model": {
+            "id": "gpt-test",
+            "provider": "github-copilot",
+            "connection": {
+              "kind": "key",
+              "endpoint": "{{server.BaseUrl}}",
+              "apiKey": "test-key"
+            },
+            "options": {
+              "additionalProperties": {
+                "cliPath": {{System.Text.Json.JsonSerializer.Serialize(CopilotCliLocator.FindOrThrow())}}
+              }
+            }
+          }
+        }
+        """);
 
-        await using var chatClient = new CopilotSdkChatClient(
-            "gpt-test",
-            "roundtrip",
-            gitHubToken: null,
-            loggerFactory: null,
-            byokOptions: byok,
-            cliPath: CopilotCliLocator.FindOrThrow());
+        var result = AgentFactory.CreateChatClient(definition);
+        await using var chatClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
         var response = await chatClient.GetResponseAsync(
-            [new Microsoft.Extensions.AI.ChatMessage(Microsoft.Extensions.AI.ChatRole.User, "run the scripted tool")],
+            [new ChatMessage(ChatRole.User, "run the scripted tool")],
             cancellationToken: cts.Token);
 
         Assert.Contains("cli-roundtrip-complete", response.Text, StringComparison.Ordinal);
 
         // The CLI really executed the scripted powershell call: its output travels back to the
         // model as the tool-result message of the second scripted turn.
-        var followUp = await finalTurn.Request.WaitAsync(cts.Token);
+        var followUp = await main.GetRequestAsync(1).WaitAsync(cts.Token);
         Assert.True(
             followUp.AnyMessageContains("tool", "roundtrip-proof"),
             "The follow-up request should carry the genuine powershell output as a tool message.");

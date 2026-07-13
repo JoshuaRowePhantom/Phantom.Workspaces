@@ -24,12 +24,17 @@ namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
 /// against a scripted local OpenAI-compatible server → <see cref="AgentChat"/> (real
 /// partial-response conflator, real foreground scheduler per #909) → <see cref="AgentViewModel"/>
 /// → <see cref="AgentChatOutputControl"/> → a real Win32 WebView DOM — for the parent chat and
-/// each sub-agent chat view. Synchronisation is exclusively event-driven: WebView
-/// <c>Ready</c>/<c>HistoryLoaded</c>, collection-changed waits, scripted-server gates, and
-/// explicit <c>EndBatch</c> flushes (the same deterministic flush the production sink exposes).
-/// The scripted wire shapes (tool names <c>task</c>/<c>read_agent</c>/<c>powershell</c>,
-/// background-mode agent ids equal to the task <c>name</c>, blocking <c>read_agent</c> waits)
-/// were captured from a real CLI exchange before being hard-coded here.
+/// each sub-agent chat view. The chat client is resolved from an <see cref="AgentDefinition"/>
+/// (provider <c>github-copilot</c> with a BYOK endpoint connection) through the production
+/// <c>AgentFactory</c> path — no hand-constructed client, no override. The scripted responses are
+/// expressed as <see cref="DeterministicTestChatClient"/> queues (one per conversation) behind
+/// the protocol-generic <see cref="ScriptedByokChatServer"/> wire adapter. Synchronisation is
+/// exclusively event-driven: WebView <c>Ready</c>/<c>HistoryLoaded</c>, collection-changed waits,
+/// the deterministic client's readiness gating, and explicit <c>EndBatch</c> flushes (the same
+/// deterministic flush the production sink exposes). The scripted wire shapes (tool names
+/// <c>task</c>/<c>read_agent</c>/<c>powershell</c>, background-mode agent ids equal to the task
+/// <c>name</c>, blocking <c>read_agent</c> waits) were captured from a real CLI exchange before
+/// being hard-coded here — and live only in this test body, never in the harness classes.
 /// </summary>
 [Collection(WebViewTestCollection.Name)]
 [Trait("Category", "WebView")]
@@ -47,77 +52,129 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             await using var server = new ScriptedByokChatServer();
 
             // ---- Scripted wire exchange (captured-exchange derived) -------------------------
+            // All copilot-level knowledge (tool names, agent-id conventions, prompt markers)
+            // lives here in the test body; the server is a protocol-generic adapter.
             var main = server.AddConversation(
                 "main",
                 request => request.AnyMessageContains("user", "using two subagents"));
-            main.AddTurn()
-                .AddText("Starting two subagents.")
-                .AddToolCall(0, "call_task_1", "task",
-                    """{"name":"sub-one","description":"Print hello world 1","agent_type":"general-purpose","mode":"background","prompt":"SUBAGENT-ONE: Use the powershell tool to run Write-Output \"hello world 1\"."}""")
-                .AddToolCall(1, "call_task_2", "task",
-                    """{"name":"sub-two","description":"Print hello world 2","agent_type":"general-purpose","mode":"background","prompt":"SUBAGENT-TWO: Use the powershell tool to run Write-Output \"hello world 2\"."}""");
-            main.AddTurn()
-                .AddToolCall(0, "call_read_1", "read_agent", """{"agent_id":"sub-one","wait":true}""")
-                .AddToolCall(1, "call_read_2", "read_agent", """{"agent_id":"sub-two","wait":true}""");
-            var mainFinalTurn = main.AddTurn();
-            var mainFinalGate = mainFinalTurn.AddGate();
+            var mainTurn0 = main.Client.EnqueueStreamingResponse();
+            mainTurn0.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Starting two subagents."));
+            mainTurn0.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_task_1", "task", new Dictionary<string, object?>
+                {
+                    ["name"] = "sub-one",
+                    ["description"] = "Print hello world 1",
+                    ["agent_type"] = "general-purpose",
+                    ["mode"] = "background",
+                    ["prompt"] = "SUBAGENT-ONE: Use the powershell tool to run Write-Output \"hello world 1\".",
+                })]));
+            mainTurn0.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_task_2", "task", new Dictionary<string, object?>
+                {
+                    ["name"] = "sub-two",
+                    ["description"] = "Print hello world 2",
+                    ["agent_type"] = "general-purpose",
+                    ["mode"] = "background",
+                    ["prompt"] = "SUBAGENT-TWO: Use the powershell tool to run Write-Output \"hello world 2\".",
+                })]));
+            mainTurn0.Complete();
+
+            var mainTurn1 = main.Client.EnqueueStreamingResponse();
+            mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_read_1", "read_agent", new Dictionary<string, object?>
+                {
+                    ["agent_id"] = "sub-one",
+                    ["wait"] = true,
+                })]));
+            mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_read_2", "read_agent", new Dictionary<string, object?>
+                {
+                    ["agent_id"] = "sub-two",
+                    ["wait"] = true,
+                })]));
+            mainTurn1.Complete();
+
+            // The final replies stay gated (not ready) until the test releases them, so the DOMs
+            // can be attached and observed before the closing text streams through.
+            var mainFinalTurn = main.Client.EnqueueStreamingResponse(isReady: false);
             foreach (var delta in new[] { "FINAL-REPLY: ", "hello", " world", " 1", " and ", "hello", " world", " 2", "." })
             {
-                mainFinalTurn.AddText(delta);
+                mainFinalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, delta));
             }
+
+            mainFinalTurn.Complete();
 
             var subOne = server.AddConversation(
                 "sub-one",
                 request => request.AnyMessageContains("user", "SUBAGENT-ONE"));
-            subOne.AddTurn().AddToolCall(0, "call_ps_1", "powershell",
-                """{"command":"Write-Output \"hello world 1\"","description":"Print hello world 1"}""");
-            var subOneFinalTurn = subOne.AddTurn();
-            var subOneFinalGate = subOneFinalTurn.AddGate();
+            var subOneTurn0 = subOne.Client.EnqueueStreamingResponse();
+            subOneTurn0.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_ps_1", "powershell", new Dictionary<string, object?>
+                {
+                    ["command"] = "Write-Output \"hello world 1\"",
+                    ["description"] = "Print hello world 1",
+                })]));
+            subOneTurn0.Complete();
+            var subOneFinalTurn = subOne.Client.EnqueueStreamingResponse(isReady: false);
             foreach (var delta in new[] { "SUB-ONE-FINAL: ", "hello", " world", " 1" })
             {
-                subOneFinalTurn.AddText(delta);
+                subOneFinalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, delta));
             }
+
+            subOneFinalTurn.Complete();
 
             var subTwo = server.AddConversation(
                 "sub-two",
                 request => request.AnyMessageContains("user", "SUBAGENT-TWO"));
-            subTwo.AddTurn().AddToolCall(0, "call_ps_2", "powershell",
-                """{"command":"Write-Output \"hello world 2\"","description":"Print hello world 2"}""");
-            var subTwoFinalTurn = subTwo.AddTurn();
-            var subTwoFinalGate = subTwoFinalTurn.AddGate();
+            var subTwoTurn0 = subTwo.Client.EnqueueStreamingResponse();
+            subTwoTurn0.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_ps_2", "powershell", new Dictionary<string, object?>
+                {
+                    ["command"] = "Write-Output \"hello world 2\"",
+                    ["description"] = "Print hello world 2",
+                })]));
+            subTwoTurn0.Complete();
+            var subTwoFinalTurn = subTwo.Client.EnqueueStreamingResponse(isReady: false);
             foreach (var delta in new[] { "SUB-TWO-FINAL: ", "hello", " world", " 2" })
             {
-                subTwoFinalTurn.AddText(delta);
+                subTwoFinalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, delta));
             }
 
-            // ---- Production pipeline wiring --------------------------------------------------
-            var byok = new CopilotByokOptions
-            {
-                BaseUrl = server.BaseUrl,
-                ApiKey = "test-key",
-            };
+            subTwoFinalTurn.Complete();
 
+            // ---- Production pipeline wiring --------------------------------------------------
             using var loggerFactory = new ObservableLoggerFactory();
-            var copilotClient = new CopilotSdkChatClient(
-                "gpt-test",
-                "GitHub Copilot BYOK (issue #912 harness)",
-                gitHubToken: null,
-                loggerFactory: loggerFactory,
-                byokOptions: byok,
-                cliPath: CopilotCliLocator.FindOrThrow());
 
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
             var store = new InMemoryAgentPersistenceStore();
             await using var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
 
-            var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
-                """
+            // The chat client is resolved from this definition by AgentFactory inside
+            // AgentChat.CreateAsync: provider github-copilot + a connection endpoint selects the
+            // copilot-sdk BYOK path, and the cliPath model option pins the CLI executable.
+            var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson($$"""
                 {
                   "kind": "prompt",
                   "name": "byok-e2e-parent",
                   "model": {
                     "id": "gpt-test",
-                    "provider": "github-copilot"
+                    "provider": "github-copilot",
+                    "connection": {
+                      "kind": "key",
+                      "endpoint": "{{server.BaseUrl}}",
+                      "apiKey": "test-key"
+                    },
+                    "options": {
+                      "additionalProperties": {
+                        "cliPath": {{System.Text.Json.JsonSerializer.Serialize(CopilotCliLocator.FindOrThrow())}}
+                      }
+                    }
                   },
                   "tools": []
                 }
@@ -125,7 +182,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
 
             var parentServices = new AgentServices
             {
-                ChatClientOverride = copilotClient,
+                LoggerFactory = loggerFactory,
                 RunningAgentChatFactory = factory,
             };
 
@@ -186,11 +243,11 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                     // Release both sub-agent final replies in a single burst to stress the
                     // conflation windows, then let the main final reply through once the CLI has
                     // finished both read_agent waits and asked for the next main turn.
-                    subOneFinalGate.Release();
-                    subTwoFinalGate.Release();
+                    subOneFinalTurn.MarkReady();
+                    subTwoFinalTurn.MarkReady();
 
-                    await mainFinalTurn.Request.WaitAsync(timeout);
-                    mainFinalGate.Release();
+                    await main.GetRequestAsync(2).WaitAsync(timeout);
+                    mainFinalTurn.MarkReady();
 
                     // Model-layer completion: the final texts are promoted into each chat's
                     // history. The DOM assertions below then check the rendering layer only. Which

@@ -81,6 +81,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal string? GitHubToken => this.gitHubToken;
 
     /// <summary>
+    /// The explicit Copilot CLI executable path this client was constructed with, or
+    /// <see langword="null"/> when the SDK resolves the CLI itself. Exposed internally for
+    /// factory wiring tests.
+    /// </summary>
+    internal string? CliPath => this.cliPath;
+
+    /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
     /// </summary>
     /// <param name="modelId">The Copilot model identifier (for example, <c>gpt-5</c>).</param>
