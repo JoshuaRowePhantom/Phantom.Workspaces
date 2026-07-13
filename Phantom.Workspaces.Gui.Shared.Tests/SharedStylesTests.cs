@@ -152,9 +152,11 @@ public sealed class SharedStylesTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void StatusThemeResources_AreSolidColorBrushes()
     {
+        // Theme.Status.* resources were moved to theme dictionaries (Dark.axaml and Light.axaml)
+        // as part of issue #905. This test now verifies they are NOT in SharedStyles anymore.
         var sharedStyles = LoadSharedStyles();
 
-        var expectedKeys = new List<string>
+        var statusKeys = new List<string>
         {
             "Theme.Status.Good",
             "Theme.Status.Bad",
@@ -162,13 +164,13 @@ public sealed class SharedStylesTests
         };
         for (var index = 0; index < 6; index++)
         {
-            expectedKeys.Add($"Theme.Status.Palette.{index}");
+            statusKeys.Add($"Theme.Status.Palette.{index}");
         }
 
-        foreach (var key in expectedKeys)
+        foreach (var key in statusKeys)
         {
-            Assert.True(sharedStyles.Resources.TryGetValue(key, out var value), $"Expected resource key '{key}' to exist.");
-            _ = Assert.IsAssignableFrom<ISolidColorBrush>(value);
+            Assert.False(sharedStyles.Resources.ContainsKey(key), 
+                $"Theme status resource '{key}' should be in theme dictionaries, not SharedStyles.");
         }
     }
 
