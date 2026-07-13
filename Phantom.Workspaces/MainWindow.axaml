@@ -173,10 +173,10 @@
                             <DataTemplate x:DataType="vm:ViewEntityViewModel">
                                 <StackPanel Margin="{Binding IndentMargin}"
                                             Spacing="6">
+                                    <ContentControl Content="{Binding EntityCardNode}" />
                                     <Border IsVisible="{Binding HasTraversedChildren}" Classes="entity-card-expand-section">
                                         <Button Classes="entity-card-expand-button" Content="{Binding ExpandArrow}" Command="{Binding ToggleExpandCommand}" />
                                     </Border>
-                                    <ContentControl Content="{Binding EntityCardNode}" />
                                 </StackPanel>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
