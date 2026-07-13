@@ -1795,12 +1795,14 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             // the exclusive scheduler, which serializes the loop's running-item lifecycle operations
             // (create/update/complete) with the conflator's running-item population so the
             // collections are never mutated concurrently.
-            var loopTask = this.acceptsUserInput
-                ? this.RunProcessLoopAsync(this.cts.Token)
-                : this.RunHostedProcessLoopAsync(this.cts.Token);
-
+            // The loop must be invoked inside the StartNew delegate: invoking the async method
+            // eagerly here would run it (and its await continuations) on the calling thread —
+            // typically a thread-pool thread during session creation — and StartNew would merely
+            // wrap the already-running task without scheduling anything (issue #908).
             this.processTask = Task.Factory.StartNew(
-                () => loopTask,
+                () => this.acceptsUserInput
+                    ? this.RunProcessLoopAsync(this.cts.Token)
+                    : this.RunHostedProcessLoopAsync(this.cts.Token),
                 this.cts.Token,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler).Unwrap();

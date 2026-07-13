@@ -1109,6 +1109,80 @@ public sealed class AgentChatOutputControlTests
         }
     }
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_ChatCreatedOnBackgroundThread_LiveTurnPostsOnUIThread()
+    {
+        // Regression for issue #908: production sessions (loaded and freshly launched) create their
+        // AgentChat on a background thread, passing the captured UI scheduler as ForegroundScheduler.
+        // Since 873bc7ae, StartProcessingLoop invoked the process loop eagerly on that background
+        // thread, so live History/RunningItems mutations — and hence the sink's
+        // PostMessageToJavaScript calls — happened off the UI thread, where the real WebView sink's
+        // auto-flush DispatcherTimer never fires and live text silently never renders.
+        var uiScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var chat = await Task.Run(() => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = CreateAgentDefinition(),
+                ForegroundScheduler = uiScheduler,
+            }));
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl { DataContext = viewModel };
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.HistoryLoaded;
+            browser.PostedMessages.Clear();
+            browser.PostedOnUIThread.Clear();
+
+            var turnComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+            {
+                if (chat.RunningItems.Count == 0
+                    && chat.History.Count >= 2
+                    && chat.History[^1].Role == ChatRole.Assistant)
+                {
+                    turnComplete.TrySetResult();
+                }
+            }
+
+            var historyNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.History;
+            var runningItemsNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems;
+            historyNotifications.CollectionChanged += OnCollectionChanged;
+            runningItemsNotifications.CollectionChanged += OnCollectionChanged;
+            try
+            {
+                chat.EnqueueUserMessage("hello-live");
+                await turnComplete.Task;
+            }
+            finally
+            {
+                historyNotifications.CollectionChanged -= OnCollectionChanged;
+                runningItemsNotifications.CollectionChanged -= OnCollectionChanged;
+            }
+
+            Assert.True(
+                browser.PostedMessages.Any(msg => msg.Contains("hello-live", StringComparison.Ordinal)),
+                "Expected the live user message to be posted to the browser sink.");
+            Assert.NotEmpty(browser.PostedOnUIThread);
+            Assert.True(
+                browser.PostedOnUIThread.All(onUI => onUI),
+                "Expected every live PostMessageToJavaScript call to be made on the UI thread; " +
+                "off-thread posts never render in the real WebView sink.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static ViewModels.DocumentModels.ChatOutputHtmlModel? GetOutputModel(AgentChatOutputControl control)
     {
         var field = typeof(AgentChatOutputControl)

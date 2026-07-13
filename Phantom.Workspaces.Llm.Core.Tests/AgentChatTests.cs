@@ -1267,6 +1267,159 @@ public sealed class AgentChatTests
         Assert.Equal("pong", GetText(chat.History[1].Contents));
     }
 
+    /// <summary>
+    /// A <see cref="TaskScheduler"/> that executes all queued tasks on a single dedicated thread,
+    /// so tests can assert that work actually ran on the foreground scheduler by comparing thread ids.
+    /// </summary>
+    private sealed class DedicatedThreadTaskScheduler : TaskScheduler, IDisposable
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<Task> queue = [];
+        private readonly Thread thread;
+
+        public DedicatedThreadTaskScheduler()
+        {
+            this.thread = new Thread(() =>
+            {
+                foreach (var task in this.queue.GetConsumingEnumerable())
+                {
+                    this.TryExecuteTask(task);
+                }
+            })
+            {
+                IsBackground = true,
+                Name = "test-foreground-scheduler",
+            };
+            this.thread.Start();
+        }
+
+        public int ThreadId => this.thread.ManagedThreadId;
+
+        protected override IEnumerable<Task>? GetScheduledTasks() => null;
+
+        protected override void QueueTask(Task task) => this.queue.Add(task);
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+        public void Dispose() => this.queue.CompleteAdding();
+    }
+
+    [Fact]
+    public async Task StartProcessingLoop_ChatCreatedOnBackgroundThread_HistoryMutationsRunOnForegroundScheduler()
+    {
+        // Regression test for GitHub issue #908: since 873bc7ae, StartProcessingLoop invoked
+        // RunProcessLoopAsync eagerly on the calling thread, so Task.Factory.StartNew(...,
+        // foregroundScheduler) wrapped an already-running task and scheduled nothing. A chat created
+        // on a background thread (the production shape for loaded sessions) then mutated History on
+        // thread-pool threads instead of the foreground scheduler.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+
+        using var scheduler = new DedicatedThreadTaskScheduler();
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        await using var chat = await Task.Run(() => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = client,
+            DisplayNameOverride = "test-chat",
+            ForegroundScheduler = scheduler,
+        }));
+
+        var notificationThreadIds = new List<int>();
+        void OnHistoryChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            lock (notificationThreadIds)
+            {
+                notificationThreadIds.Add(Environment.CurrentManagedThreadId);
+            }
+        }
+
+        var historyNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.History;
+        historyNotifications.CollectionChanged += OnHistoryChanged;
+        try
+        {
+            chat.EnqueueUserMessage("ping");
+            await WaitForConditionAsync(
+                chat.History,
+                () => chat.History.Count == 2 && chat.History[^1].Role == ChatRole.Assistant,
+                "assistant response to complete");
+        }
+        finally
+        {
+            historyNotifications.CollectionChanged -= OnHistoryChanged;
+        }
+
+        lock (notificationThreadIds)
+        {
+            Assert.NotEmpty(notificationThreadIds);
+            Assert.All(notificationThreadIds, threadId => Assert.Equal(scheduler.ThreadId, threadId));
+        }
+    }
+
+    [Fact]
+    public async Task StartProcessingLoop_ChatCreatedOnBackgroundThread_RunningItemMutationsRunOnForegroundScheduler()
+    {
+        // Companion to the History test above (GitHub issue #908): the running-item container
+        // lifecycle (CreateRunningItem/CompleteRunningItem) executes inline in the process loop, so
+        // it must also land on the foreground scheduler when the chat is created on a background thread.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+
+        using var scheduler = new DedicatedThreadTaskScheduler();
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        await using var chat = await Task.Run(() => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = client,
+            DisplayNameOverride = "test-chat",
+            ForegroundScheduler = scheduler,
+        }));
+
+        var notificationThreadIds = new List<int>();
+        void OnRunningItemsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            lock (notificationThreadIds)
+            {
+                notificationThreadIds.Add(Environment.CurrentManagedThreadId);
+            }
+        }
+
+        var runningItemsNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems;
+        runningItemsNotifications.CollectionChanged += OnRunningItemsChanged;
+        try
+        {
+            chat.EnqueueUserMessage("ping");
+            await WaitForConditionAsync(
+                chat.RunningItems,
+                () => chat.RunningItems.Count == 0
+                    && chat.History.Count == 2
+                    && chat.History[^1].Role == ChatRole.Assistant,
+                "streaming run to complete");
+        }
+        finally
+        {
+            runningItemsNotifications.CollectionChanged -= OnRunningItemsChanged;
+        }
+
+        lock (notificationThreadIds)
+        {
+            Assert.NotEmpty(notificationThreadIds);
+            Assert.All(notificationThreadIds, threadId => Assert.Equal(scheduler.ThreadId, threadId));
+        }
+    }
 
     [Fact]
     public async Task PerServiceCallPersistence_AssistantResponsePersistedBeforeSecondServiceCallCompletes()
