@@ -169,8 +169,8 @@ public sealed class MainWindowAxamlTests
             appContent,
             StringComparison.Ordinal);
 
-        Assert.DoesNotContain(
-            "RequestedThemeVariant=\"Dark\"",
+        Assert.Contains(
+            "RequestedThemeVariant=\"Default\"",
             appContent,
             StringComparison.Ordinal);
 

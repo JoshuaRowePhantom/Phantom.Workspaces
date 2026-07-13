@@ -1,0 +1,50 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Light theme color palette -->
+    
+    <!-- Entity pane surfaces -->
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#E0E0E0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#F5F5F5</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#D0D0D0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBackground">#E8F0FE</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBorder">#1976D2</SolidColorBrush>
+
+    <!-- Entity card surfaces -->
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.Background">#FAFAFA</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#E0E0E0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#F0F0F0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#C0C0C0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#E8F0FE</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#1976D2</SolidColorBrush>
+
+    <!-- Popup surfaces -->
+    <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.Popup.Border">#CCCCCC</SolidColorBrush>
+
+    <!-- Text classes -->
+    <SolidColorBrush x:Key="Theme.Class.normal.Foreground">#212121</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.heading.Foreground">#000000</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.section-title.Foreground">#212121</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.caption.Foreground">#424242</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.muted.Foreground">#757575</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.accent.Foreground">#1976D2</SolidColorBrush>
+
+    <!-- Status badges -->
+    <SolidColorBrush x:Key="Theme.Status.Good">#2E7D32</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Bad">#C62828</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Foreground">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Palette.0">#1565C0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Palette.1">#4527A0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Palette.2">#6A1B9A</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Palette.3">#00838F</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Palette.4">#FF8F00</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Status.Palette.5">#455A64</SolidColorBrush>
+
+    <!-- Terminal palette -->
+    <SolidColorBrush x:Key="Terminal.Background">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Terminal.Foreground">#24292E</SolidColorBrush>
+    <SolidColorBrush x:Key="Terminal.Cursor">#1976D2</SolidColorBrush>
+    <SolidColorBrush x:Key="Terminal.SelectionBackground">#B3D7FF</SolidColorBrush>
+</ResourceDictionary>

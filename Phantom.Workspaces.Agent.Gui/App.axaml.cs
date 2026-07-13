@@ -34,7 +34,7 @@ public partial class App : Application
             "Phantom.Workspaces",
             "profile.json");
 
-        var isLight = false;
+        string? themeName = null;
         if (File.Exists(filePath))
         {
             try
@@ -43,7 +43,6 @@ public partial class App : Application
                 using var document = JsonDocument.Parse(stream);
                 var root = document.RootElement;
 
-                string? themeName = null;
                 if (root.TryGetProperty("theme", out var themeElement))
                 {
                     if (themeElement.ValueKind == JsonValueKind.String)
@@ -56,15 +55,18 @@ public partial class App : Application
                         themeName = nameElement.GetString();
                     }
                 }
-
-                isLight = string.Equals(themeName, "light", StringComparison.OrdinalIgnoreCase);
             }
             catch (JsonException)
             {
             }
         }
 
-        Application.Current!.RequestedThemeVariant = isLight ? ThemeVariant.Light : ThemeVariant.Dark;
+        Application.Current!.RequestedThemeVariant = themeName?.ToLowerInvariant() switch
+        {
+            "light" => ThemeVariant.Light,
+            "dark" => ThemeVariant.Dark,
+            _ => ThemeVariant.Default,
+        };
     }
 
     public override void OnFrameworkInitializationCompleted()

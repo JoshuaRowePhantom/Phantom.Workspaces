@@ -872,9 +872,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private void ApplyThemeVariant(
         string themeName)
     {
-        Application.Current!.RequestedThemeVariant = string.Equals(themeName, "light", StringComparison.OrdinalIgnoreCase)
-            ? ThemeVariant.Light
-            : ThemeVariant.Dark;
+        Application.Current!.RequestedThemeVariant = themeName.ToLowerInvariant() switch
+        {
+            "light" => ThemeVariant.Light,
+            "dark" => ThemeVariant.Dark,
+            _ => ThemeVariant.Default,
+        };
     }
 
     private void ApplyThemeResources(

@@ -2,16 +2,14 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:CompileBindings="False">
     <Styles.Resources>
-        <StaticResource x:Key="Theme.SlashCompletions.Popup.Background" ResourceKey="Theme.Surface.Popup.Background" />
-        <StaticResource x:Key="Theme.SlashCompletions.Popup.Border" ResourceKey="Theme.Surface.Popup.Border" />
         <CornerRadius x:Key="Theme.SlashCompletions.Popup.CornerRadius">6</CornerRadius>
         <BoxShadows x:Key="Theme.SlashCompletions.Popup.BoxShadow">0 -4 16 0 #B0000000</BoxShadows>
         <SolidColorBrush x:Key="Theme.SlashCompletions.Item.SelectedBackground">#40569CD6</SolidColorBrush>
     </Styles.Resources>
 
     <Style Selector="Border.slash-completions-popup">
-        <Setter Property="Background" Value="{DynamicResource Theme.SlashCompletions.Popup.Background}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.SlashCompletions.Popup.Border}" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.Popup.Background}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.Popup.Border}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="CornerRadius" Value="{DynamicResource Theme.SlashCompletions.Popup.CornerRadius}" />
         <Setter Property="BoxShadow" Value="{DynamicResource Theme.SlashCompletions.Popup.BoxShadow}" />
