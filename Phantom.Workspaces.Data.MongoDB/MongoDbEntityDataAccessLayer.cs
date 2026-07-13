@@ -5,7 +5,7 @@ using MongoDB.Driver;
 
 namespace Phantom.Workspaces.Data.MongoDB;
 
-public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
+public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 {
     /// <summary>The Atlas vector search index name over the current-version embedding field.</summary>
     public const string VectorIndexName = "entity-current-embedding-index";
@@ -203,7 +203,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
         };
     }
 
-    public async Task<GetResult> GetAsync(
+    public virtual async Task<GetResult> GetAsync(
         GetRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -591,7 +591,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// Ensures the five required query indexes exist on the entity collection. This is idempotent and
     /// should be called once on startup before serving any queries.
     /// </summary>
-    public async Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
+    public virtual async Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
     {
         var indexModels = new CreateIndexModel<MongoDbEntityDocument>[]
         {
@@ -611,7 +611,7 @@ public sealed class MongoDbEntityDataAccessLayer : IDataAccessLayer
     /// obsolete <c>current.names</c> and <c>current.type-names</c> fields. Processes up to 500
     /// documents per <c>bulkWrite</c> batch. Idempotent — safe to call multiple times.
     /// </summary>
-    public async Task MigrateAsync(CancellationToken cancellationToken = default)
+    public virtual async Task MigrateAsync(CancellationToken cancellationToken = default)
     {
         const int BatchSize = 500;
         var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
