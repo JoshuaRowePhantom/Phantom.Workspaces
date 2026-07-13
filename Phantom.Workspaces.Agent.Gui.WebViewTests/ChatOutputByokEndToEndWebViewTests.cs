@@ -319,6 +319,228 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             }
         });
 
+    /// <summary>
+    /// Production-wiring variant closing the coverage gap that let issue #913 slip through: the
+    /// GUI never sets <see cref="AgentServices.RunningAgentChatFactory"/>, so real sub-agents are
+    /// created through the <see cref="ISubAgentChatRegistry"/> path (<c>AgentChat.GetOrCreateAsync</c>),
+    /// not the factory/lease path this class's other test wires up. The original test also called
+    /// <c>EndBatch()</c> before reading the DOM, which synchronously flushes the message batch and
+    /// masks a dead auto-flush timer. This variant uses production wiring (no
+    /// <c>RunningAgentChatFactory</c>) and asserts the sub-agent DOM content arrives LIVE — via a
+    /// MutationObserver posting back through the bridge, with no explicit flush — so a sub-agent
+    /// chat bound to a non-pumping scheduler fails this test the way the real app failed.
+    /// </summary>
+    [Fact]
+    public Task AgentChatOutput_ByokSubagents_ProductionWiring_SubAgentDomArrivesLiveWithoutExplicitFlush()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var timeout = TimeSpan.FromSeconds(90);
+            await using var server = new ScriptedByokChatServer();
+
+            var main = server.AddConversation(
+                "main",
+                request => request.AnyMessageContains("user", "using one subagent"));
+            var mainTurn0 = main.Client.EnqueueStreamingResponse();
+            mainTurn0.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "Starting one subagent."));
+            mainTurn0.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_task_1", "task", new Dictionary<string, object?>
+                {
+                    ["name"] = "sub-one",
+                    ["description"] = "Print hello world 1",
+                    ["agent_type"] = "general-purpose",
+                    ["mode"] = "background",
+                    ["prompt"] = "SUBAGENT-ONE: Use the powershell tool to run Write-Output \"hello world 1\".",
+                })]));
+            mainTurn0.Complete();
+
+            var mainTurn1 = main.Client.EnqueueStreamingResponse();
+            mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_read_1", "read_agent", new Dictionary<string, object?>
+                {
+                    ["agent_id"] = "sub-one",
+                    ["wait"] = true,
+                })]));
+            mainTurn1.Complete();
+
+            var mainFinalTurn = main.Client.EnqueueStreamingResponse(isReady: false);
+            mainFinalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "FINAL-REPLY: hello world 1."));
+            mainFinalTurn.Complete();
+
+            var subOne = server.AddConversation(
+                "sub-one",
+                request => request.AnyMessageContains("user", "SUBAGENT-ONE"));
+            var subOneTurn0 = subOne.Client.EnqueueStreamingResponse();
+            subOneTurn0.EnqueueUpdate(new ChatResponseUpdate(
+                ChatRole.Assistant,
+                [new FunctionCallContent("call_ps_1", "powershell", new Dictionary<string, object?>
+                {
+                    ["command"] = "Write-Output \"hello world 1\"",
+                    ["description"] = "Print hello world 1",
+                })]));
+            subOneTurn0.Complete();
+            var subOneFinalTurn = subOne.Client.EnqueueStreamingResponse(isReady: false);
+            foreach (var delta in new[] { "SUB-ONE-FINAL: ", "hello", " world", " 1" })
+            {
+                subOneFinalTurn.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, delta));
+            }
+
+            subOneFinalTurn.Complete();
+
+            // ---- Production pipeline wiring: NO RunningAgentChatFactory ---------------------
+            using var loggerFactory = new ObservableLoggerFactory();
+
+            var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+            var store = new InMemoryAgentPersistenceStore();
+            await using var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
+
+            var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson($$"""
+                {
+                  "kind": "prompt",
+                  "name": "byok-e2e-parent",
+                  "model": {
+                    "id": "gpt-test",
+                    "provider": "openai",
+                    "connection": {
+                      "kind": "key",
+                      "endpoint": "{{server.BaseUrl}}",
+                      "apiKey": "test-key"
+                    },
+                    "options": {
+                      "additionalProperties": {
+                        "cliPath": {{System.Text.Json.JsonSerializer.Serialize(CopilotCliLocator.FindOrThrow())}}
+                      }
+                    }
+                  },
+                  "tools": []
+                }
+                """);
+
+            // Mirrors App.axaml.cs / AgentSessionShortcutContext: the production GUI's
+            // AgentServices never sets RunningAgentChatFactory, so sub-agents take the
+            // ISubAgentChatRegistry path.
+            var parentServices = new AgentServices
+            {
+                LoggerFactory = loggerFactory,
+            };
+
+            var lease = await factory.CreateAsync(
+                parentDefinition,
+                new AgentSessionId(Guid.NewGuid().ToString("n")),
+                parentServices);
+            try
+            {
+                var chat = lease.AgentChat;
+                await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", loggerFactory);
+
+                var parentControl = new AgentChatOutputControl { DataContext = viewModel };
+                var parentBrowser = GetBrowser(parentControl);
+                var parentReady = WaitForReady(parentBrowser);
+
+                var parentWindow = CreateOffscreenWindow(parentControl);
+                Window? subWindow = null;
+                try
+                {
+                    parentWindow.Show();
+                    await parentReady.WaitAsync(timeout);
+                    await parentControl.HistoryLoaded.WaitAsync(timeout);
+
+                    chat.EnqueueUserMessage("Print \"hello world 1\" using one subagent.");
+
+                    try
+                    {
+                        await WaitForCollectionCountAsync(
+                            viewModel.SubAgentsContainer.Slots,
+                            expectedCount: 1,
+                            timeout);
+                    }
+                    catch (TimeoutException)
+                    {
+                        throw new InvalidOperationException(
+                            $"Timed out waiting for the sub-agent slot. Diagnostics:\n{Diagnostics(server, chat, loggerFactory)}");
+                    }
+
+                    // Registry-path scheduler assertion (issue #913): the child chat inherits the
+                    // parent's UI foreground scheduler instead of a private fallback pair.
+                    var childChat = (AgentChat)chat.SubAgents.Single();
+                    Assert.Same(chat.ForegroundSchedulerForTesting, childChat.ForegroundSchedulerForTesting);
+
+                    var slot = viewModel.SubAgentsContainer.Slots.Single();
+                    var subViewModel = slot.SubAgentViewModel;
+                    var subControl = new AgentChatOutputControl { DataContext = subViewModel };
+                    var subBrowser = GetBrowser(subControl);
+
+                    // Observe the sub-agent DOM live from inside the page: a MutationObserver
+                    // posts back through the bridge the moment the final marker text lands in the
+                    // DOM. No EndBatch and no DOM polling — content must arrive via the
+                    // auto-flush timer alone, which only fires on the pumping UI dispatcher.
+                    subBrowser.AddStartupScript(
+                        """
+                        (function () {
+                            function check() {
+                                if (document.body && document.body.innerHTML.indexOf('SUB-ONE-FINAL') !== -1) {
+                                    window.chrome.webview.postMessage('live-dom:SUB-ONE-FINAL');
+                                    return true;
+                                }
+                                return false;
+                            }
+                            if (!check()) {
+                                new MutationObserver(function (mutations, observer) {
+                                    if (check()) { observer.disconnect(); }
+                                }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+                            }
+                        }());
+                        """);
+                    var liveDomHit = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    subBrowser.JavaScriptMessageReceived += (_, body) =>
+                    {
+                        if (body.StartsWith("live-dom:", StringComparison.Ordinal))
+                        {
+                            liveDomHit.TrySetResult(body);
+                        }
+                    };
+
+                    var subReady = WaitForReady(subBrowser);
+                    subWindow = CreateOffscreenWindow(subControl);
+                    subWindow.Show();
+                    await subReady.WaitAsync(timeout);
+                    await subControl.HistoryLoaded.WaitAsync(timeout);
+
+                    subOneFinalTurn.MarkReady();
+                    await main.GetRequestAsync(2).WaitAsync(timeout);
+                    mainFinalTurn.MarkReady();
+
+                    try
+                    {
+                        // The core #913 assertion: the marker reaches the live DOM with no
+                        // explicit flush and no refresh.
+                        await liveDomHit.Task.WaitAsync(timeout);
+                    }
+                    catch (TimeoutException)
+                    {
+                        var subChat = subViewModel.AgentChat;
+                        var subHistory = string.Join(" || ", subChat.History.Select(item =>
+                            string.Join(" | ", item.Contents.Select(c => c.GetType().Name + ":" + (c as TextContent)?.Text))));
+                        throw new InvalidOperationException(
+                            "Timed out waiting for the sub-agent DOM to receive 'SUB-ONE-FINAL' live "
+                            + $"(no EndBatch). Sub history: {subHistory}\nDiagnostics:\n{Diagnostics(server, chat, loggerFactory)}");
+                    }
+
+                    Assert.Empty(server.Failures);
+                }
+                finally
+                {
+                    subWindow?.Close();
+                    parentWindow.Close();
+                }
+            }
+            finally
+            {
+                await lease.DisposeAsync();
+            }
+        });
+
     private static string Diagnostics(ScriptedByokChatServer server, AgentChat chat, ObservableLoggerFactory loggerFactory)
     {
         var sb = new System.Text.StringBuilder();

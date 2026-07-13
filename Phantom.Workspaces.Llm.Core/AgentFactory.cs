@@ -201,7 +201,7 @@ public static class AgentFactory
 
         // The sub-agent receiver provider must resolve before the model-ID validation: it mirrors
         // a CLI-hosted sub-agent whose model is chosen by the CLI, so its definition legitimately
-        // carries no model ID (see CopilotSdkTurnEventDispatcher.SubAgentDefinition). Requiring an
+        // carries no model ID (see CopilotSubAgentRouter.SubAgentDefinition). Requiring an
         // ID here made every real sub-agent creation throw, killing the session event dispatch
         // loop and silently dropping all further live output (issue #912).
         if (provider == "github-copilot-subagent")

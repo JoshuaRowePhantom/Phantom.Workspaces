@@ -14,7 +14,7 @@ using Xunit;
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 /// <summary>
-/// Tests for the factory-path sub-agent wiring in <see cref="CopilotSdkTurnEventDispatcher"/>:
+/// Tests for the factory-path sub-agent wiring in <see cref="CopilotSubAgentRouter"/>:
 /// uses <see cref="IRunningAgentChatFactory"/> + <see cref="ISubAgentTable"/> to create and route
 /// sub-agent events through <see cref="ICopilotSubAgentReceiver"/>.
 /// </summary>
@@ -22,20 +22,36 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
 {
     // ─── helpers ────────────────────────────────────────────────────────────────
 
-    private static (CopilotSdkTurnEventDispatcher dispatcher, System.Threading.Channels.Channel<ChatResponseUpdate> channel)
-        CreateDispatcher(
+    private static (CopilotSubAgentRouter router, System.Threading.Channels.Channel<ChatResponseUpdate> channel)
+        CreateRouter(
             FakeRunningAgentChatFactory? factory = null,
             FakeSubAgentTable? table = null,
             FakeLogger? logger = null)
     {
         var channel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
-        var dispatcher = new CopilotSdkTurnEventDispatcher(
+        var router = new CopilotSubAgentRouter(
             channel.Writer,
             registry: null,
             factory: factory,
             subAgentTable: table,
             logger: logger);
-        return (dispatcher, channel);
+        return (router, channel);
+    }
+
+    /// <summary>
+    /// Runs a single SDK event through the real adapter+router pipeline
+    /// (<see cref="CopilotSdkStreamAdapter"/> then <see cref="CopilotSubAgentRouter"/>),
+    /// mirroring the drain loop in <c>CopilotSdkChatClient.BeginTurnAsync</c>.
+    /// </summary>
+    private static async Task DispatchAsync(CopilotSubAgentRouter router, SessionEvent sessionEvent)
+    {
+        var events = System.Threading.Channels.Channel.CreateUnbounded<SessionEvent>();
+        events.Writer.TryWrite(sessionEvent);
+        events.Writer.Complete();
+        await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(events.Reader, CancellationToken.None))
+        {
+            await router.RouteAsync(update);
+        }
     }
 
     private static SubagentStartedEvent StartedEvent(string agentId, string toolCallId = "call-1") =>
@@ -86,9 +102,9 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
 
         Assert.Single(factory.CreateCalls);
         var (definition, _) = factory.CreateCalls[0];
@@ -100,9 +116,9 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
 
         Assert.Single(table.AddedChats);
         Assert.Same(factory.CreatedLease!.AgentChat, table.AddedChats[0]);
@@ -113,9 +129,9 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
 
         // Verify the factory created the chat and the receiver was extracted
         Assert.NotNull(factory.CreatedLease);
@@ -128,10 +144,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
-        await dispatcher.DispatchAsync(DeltaEvent("agent-1", "hello from sub-agent"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
+        await DispatchAsync(router, DeltaEvent("agent-1", "hello from sub-agent"));
 
         var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
         // Drain the receiver
@@ -148,10 +164,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
-        await dispatcher.DispatchAsync(CompletedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
+        await DispatchAsync(router, CompletedEvent("agent-1"));
 
         var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
         // After Complete, reading the channel should finish with no items
@@ -167,10 +183,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
-        await dispatcher.DispatchAsync(FailedEvent("agent-1", "test error"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
+        await DispatchAsync(router, FailedEvent("agent-1", "test error"));
 
         var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
         // After Fail, reading should throw
@@ -188,10 +204,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
         var logger = new FakeLogger();
-        var (dispatcher, _) = CreateDispatcher(factory, table, logger);
+        var (router, _) = CreateRouter(factory, table, logger);
 
         // No SubAgentStarted — dispatch event for unknown ID
-        await dispatcher.DispatchAsync(DeltaEvent("unknown-agent", "text"));
+        await DispatchAsync(router, DeltaEvent("unknown-agent", "text"));
 
         Assert.Contains(logger.Logs, l => l.Level == LogLevel.Warning);
     }
@@ -202,10 +218,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
         var logger = new FakeLogger();
-        var (dispatcher, _) = CreateDispatcher(factory, table, logger);
+        var (router, _) = CreateRouter(factory, table, logger);
 
         // No SubAgentStarted — dispatch completed for unknown ID
-        await dispatcher.DispatchAsync(CompletedEvent("unknown-agent"));
+        await DispatchAsync(router, CompletedEvent("unknown-agent"));
 
         Assert.Contains(logger.Logs, l => l.Level == LogLevel.Warning);
     }
@@ -216,10 +232,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
         var logger = new FakeLogger();
-        var (dispatcher, _) = CreateDispatcher(factory, table, logger);
+        var (router, _) = CreateRouter(factory, table, logger);
 
         // No SubAgentStarted — dispatch failed for unknown ID
-        await dispatcher.DispatchAsync(FailedEvent("unknown-agent"));
+        await DispatchAsync(router, FailedEvent("unknown-agent"));
 
         Assert.Contains(logger.Logs, l => l.Level == LogLevel.Warning);
     }
@@ -229,10 +245,10 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory(exposeReceiver: false);
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
-            await dispatcher.DispatchAsync(StartedEvent("agent-1")));
+            await DispatchAsync(router, StartedEvent("agent-1")));
     }
 
     [Fact]
@@ -240,25 +256,25 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-1", "call-1"));
+        await DispatchAsync(router, StartedEvent("agent-1", "call-1"));
         var receiver1 = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
         factory.ResetLease();
 
-        await dispatcher.DispatchAsync(StartedEvent("agent-2", "call-2"));
+        await DispatchAsync(router, StartedEvent("agent-2", "call-2"));
         var receiver2 = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
         Assert.NotSame(receiver1, receiver2);
 
         // Route events to agent-1 and agent-2 separately
-        await dispatcher.DispatchAsync(DeltaEvent("agent-1", "msg-for-1"));
-        await dispatcher.DispatchAsync(DeltaEvent("agent-2", "msg-for-2"));
+        await DispatchAsync(router, DeltaEvent("agent-1", "msg-for-1"));
+        await DispatchAsync(router, DeltaEvent("agent-2", "msg-for-2"));
 
         // Complete both
-        await dispatcher.DispatchAsync(CompletedEvent("agent-1", "call-1"));
-        await dispatcher.DispatchAsync(CompletedEvent("agent-2", "call-2"));
+        await DispatchAsync(router, CompletedEvent("agent-1", "call-1"));
+        await DispatchAsync(router, CompletedEvent("agent-2", "call-2"));
 
         var updates1 = new List<ChatResponseUpdate>();
         await foreach (var u in receiver1.GetStreamingResponseAsync([]))
@@ -320,7 +336,7 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
             // (a) may initialize state lazily on first GetService call and (b) is not contractually
             // required to forward GetService for arbitrary service types. Keeping the client
             // unwrapped guarantees GetService(typeof(ICopilotSubAgentReceiver)) always returns
-            // the exact CopilotSubAgentChatClient instance the dispatcher pushes updates to.
+            // the exact CopilotSubAgentChatClient instance the router pushes updates to.
             var chatClientAgent = new ChatClientAgent(client, new ChatClientAgentOptions
             {
                 UseProvidedChatClientAsIs = true,

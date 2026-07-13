@@ -106,6 +106,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     // collections from two threads at once.
     private readonly TaskScheduler foregroundScheduler;
 
+    // Test-only accessor for verifying foreground-scheduler flow through sub-agent creation
+    // paths (issue #913).
+    internal TaskScheduler ForegroundSchedulerForTesting => this.foregroundScheduler;
+
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
        VerifyOnForegroundContext(request.ForegroundScheduler);
@@ -189,7 +193,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        if (resolvedClient is SubAgentChatClient sac)
        {
            this.subAgentChatClientSource = sac;
-           sac.CompletionStateChanged += (_, _) => this.CompletionStateChanged?.Invoke(this, EventArgs.Empty);
+
+           // SubAgentChatClient.Complete/Fail run on the Copilot SDK event drain loop (a
+           // thread-pool thread). Re-raising synchronously would run UI subscribers
+           // (RunningSubAgentDisplay → WebView bridge) off the UI thread, which now fails loudly
+           // (issue #913) — marshal onto the chat's foreground scheduler like every other
+           // foreground mutation.
+           sac.CompletionStateChanged += (_, _) => _ = Task.Factory.StartNew(
+               () => this.CompletionStateChanged?.Invoke(this, EventArgs.Empty),
+               CancellationToken.None,
+               TaskCreationOptions.DenyChildAttach,
+               this.foregroundScheduler);
        }
 
        var useProvidedChatClientAsIs= this.request.OverrideUseProvidedChatClientAsIs
@@ -793,14 +807,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId);
-        var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
-        {
-            AgentDefinition = subAgentDefinition,
-            ConfiguredStore = this.request.ConfiguredStore,
-            ClientOverride = chatClient,
-            DisplayNameOverride = subAgentDefinition.Name ?? agentId,
-            CancellationToken = cancellationToken,
-        });
+
+        // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
+        // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
+        // PromoteItemsToHistory) runs on thread-pool threads and downstream UI machinery (e.g.
+        // the WebView auto-flush DispatcherTimer) binds to a dispatcher that never pumps,
+        // silently dropping all live sub-agent output. Flow the parent's foreground scheduler to
+        // the child and construct it on that scheduler — mirroring
+        // AgentChatFactory.CreateChatOnForegroundAsync — which also satisfies the #909
+        // construction-affinity guard.
+        var childChat = await Task.Factory.StartNew(
+            () => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = subAgentDefinition,
+                ConfiguredStore = this.request.ConfiguredStore,
+                ClientOverride = chatClient,
+                DisplayNameOverride = subAgentDefinition.Name ?? agentId,
+                ForegroundScheduler = this.foregroundScheduler,
+                CancellationToken = cancellationToken,
+            }),
+            cancellationToken,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler).Unwrap();
         childChat.agentId = agentId;
         childChat.parentAgent = this;
 
