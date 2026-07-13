@@ -11,19 +11,25 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public sealed class CopilotByokTests
 {
     [Fact]
-    public void CreateProviderConfig_MapsByokOptions()
+    public void CreateProviderConfig_MapsConnectionAndModelOptions()
     {
         var byok = new CopilotByokOptions
         {
+            Provider = "openai",
             BaseUrl = "http://localhost:1234/",
             ApiKey = "test-key",
-            ProviderType = "openai",
-            WireApi = "chat-completions",
-            WireModel = "wire-model",
-            Headers = new Dictionary<string, string> { ["X-Test"] = "1" },
+        };
+        var modelOptions = new AgentSchema.ModelOptions
+        {
+            AdditionalProperties = new Dictionary<string, object>
+            {
+                ["wireApi"] = "chat-completions",
+                ["wireModel"] = "wire-model",
+                ["headers"] = new Dictionary<string, object> { ["X-Test"] = "1" },
+            },
         };
 
-        var providerConfig = CopilotSdkChatClient.CreateProviderConfig(byok, "gpt-test");
+        var providerConfig = CopilotSdkChatClient.CreateProviderConfig(byok, "gpt-test", modelOptions);
 
         Assert.Equal("http://localhost:1234/", providerConfig.BaseUrl);
         Assert.Equal("test-key", providerConfig.ApiKey);
@@ -33,6 +39,36 @@ public sealed class CopilotByokTests
         Assert.Equal("wire-model", providerConfig.WireModel);
         Assert.NotNull(providerConfig.Headers);
         Assert.Equal("1", providerConfig.Headers!["X-Test"]);
+    }
+
+    [Fact]
+    public void CreateProviderConfig_AzureOpenAiProvider_MapsToAzureProviderType()
+    {
+        var byok = new CopilotByokOptions
+        {
+            Provider = "azure-openai",
+            BaseUrl = "http://localhost:1234/",
+        };
+
+        var providerConfig = CopilotSdkChatClient.CreateProviderConfig(byok, "gpt-test");
+
+        Assert.Equal("azure", providerConfig.Type);
+    }
+
+    [Fact]
+    public void CreateProviderConfig_WithoutModelOptions_UsesWireDefaults()
+    {
+        var byok = new CopilotByokOptions
+        {
+            Provider = "openai",
+            BaseUrl = "http://localhost:1234/",
+        };
+
+        var providerConfig = CopilotSdkChatClient.CreateProviderConfig(byok, "gpt-test");
+
+        Assert.Equal("chat-completions", providerConfig.WireApi);
+        Assert.Null(providerConfig.WireModel);
+        Assert.Null(providerConfig.Headers);
     }
 
     [Fact]
@@ -81,6 +117,7 @@ public sealed class CopilotByokTests
         await using var server = new OpenAiCompatibleChatServer(new FixedResponseChatClient("byok-pong"));
         var byok = new CopilotByokOptions
         {
+            Provider = "openai",
             BaseUrl = server.BaseUrl,
             ApiKey = "test-key",
         };

@@ -16,7 +16,7 @@ See also:
 
 **Self-invoking:** Yes — the Copilot CLI drives its own agentic tool loop. The framework does _not_ wrap this client with `ToolResultSteeringMiddleware`. One Copilot "turn" spans the entire agentic loop (potentially many tool calls).
 
-**Connection:** `ApiKeyConnection` is optional. When `apiKey` is provided it is used as the GitHub token (supports `${GITHUB_TOKEN}` env-var reference). When omitted the SDK authenticates as the logged-in Copilot user.
+**Connection:** `ApiKeyConnection` is optional. When `apiKey` is provided it is used as the GitHub token (supports `${GITHUB_TOKEN}` env-var reference). When omitted the SDK authenticates as the logged-in Copilot user. A connection `endpoint` is rejected — custom (BYOK) endpoints use the `openai` / `azure-openai` provider strings instead.
 
 **Example `model.id` values:** `gpt-5`, `claude-sonnet-4.5`, `claude-opus-4.5`, `gemini-2.5-pro`.
 
@@ -26,7 +26,23 @@ See also:
 
 **Working directory:** Supplied via the `workingDirectory` top-level field (static default) or the `agent-session` entity `cwd` field (runtime override). Both `CopilotClientOptions.Cwd` and `SessionConfig.WorkingDirectory` are set to the resolved value.
 
-**Session behavior:** A single `CopilotClient` and `CopilotSession` are created lazily on first use and reused across turns. Changing the tool set or working directory after the first turn requires a new session (detected via `ComputeSessionSignature`).
+**Session behavior:** A single `CopilotClient` and `CopilotSession` are created lazily on first use and reused across turns. Changing the tool set, working directory, or the call-time `ChatOptions.ModelId` after the first turn requires a new session (detected via `ComputeSessionSignature`).
+
+---
+
+## `openai` and `azure-openai` (BYOK via the Copilot SDK)
+
+**Client:** `CopilotSdkChatClient`, same as `github-copilot`, but pointed at a custom OpenAI-compatible endpoint (bring-your-own-key). The provider string is the sole BYOK discriminator (issue #896): `openai` maps to the Copilot runtime provider type `openai`, `azure-openai` maps to `azure`.
+
+**Self-invoking:** Yes — same as `github-copilot`.
+
+**Connection:** `ApiKeyConnection` required. `endpoint` (required) is the base URL of the OpenAI-compatible endpoint; `apiKey` (optional) authenticates to that endpoint (supports `${ENV_VAR}` references). No GitHub token is used in BYOK mode.
+
+**Notable `additionalProperties` keys (in `model.options`, interpreted by `CopilotSdkChatClient.CreateProviderConfig`, not by `AgentFactory`):**
+- `wireApi` — wire API the endpoint speaks (default `chat-completions`).
+- `wireModel` — wire model name when it differs from `model.id`.
+- `headers` — extra request headers (object of string values).
+- `cliPath` — explicit path to the Copilot CLI executable.
 
 ---
 
@@ -70,10 +86,4 @@ See also:
 
 ## `test` (via `model.id`)
 
-When `model.id` is `"test"` (case-insensitive), provider dispatch is bypassed and a `TestProviderChatClient` is returned regardless of `model.provider`. Intended for unit tests only.
-
----
-
-## Unimplemented providers
-
-`openai` and `azure` are recognized provider names but throw `NotImplementedException`. Do not use them.
+When `model.id` is `"test"` (case-insensitive), provider dispatch is bypassed and a `TestProviderChatClient` is returned regardless of `model.provider`. Intended for unit tests only. This is the sole exception to the rule that `model.id` is a value forwarded to the chat client and never inspected to route provider selection.

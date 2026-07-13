@@ -28,6 +28,66 @@ public sealed class AgentDefinitionJsonSchemaByokTests
     }
 
     [Fact]
+    public void AgentDefinitionSchema_OpenAi_WithByokEndpoint_IsValid()
+    {
+        Assert.True(Evaluate("""
+        {
+          "kind": "prompt",
+          "name": "byok-test",
+          "model": {
+            "id": "test-model",
+            "provider": "openai",
+            "connection": {
+              "kind": "key",
+              "endpoint": "http://localhost:1234/",
+              "apiKey": "test-key"
+            }
+          }
+        }
+        """));
+    }
+
+    [Fact]
+    public void AgentDefinitionSchema_AzureOpenAi_WithByokEndpoint_IsValid()
+    {
+        Assert.True(Evaluate("""
+        {
+          "kind": "prompt",
+          "name": "byok-test",
+          "model": {
+            "id": "test-model",
+            "provider": "azure-openai",
+            "connection": {
+              "kind": "key",
+              "endpoint": "http://localhost:1234/",
+              "apiKey": "test-key"
+            }
+          }
+        }
+        """));
+    }
+
+    [Fact]
+    public void AgentDefinitionSchema_AzureProvider_IsInvalid()
+    {
+        // "azure" was replaced by the BYOK provider string "azure-openai" (issue #896).
+        Assert.False(Evaluate("""
+        {
+          "kind": "prompt",
+          "name": "byok-test",
+          "model": {
+            "id": "test-model",
+            "provider": "azure",
+            "connection": {
+              "kind": "key",
+              "endpoint": "http://localhost:1234/"
+            }
+          }
+        }
+        """));
+    }
+
+    [Fact]
     public void AgentDefinitionSchema_GithubCopilot_WithByokEndpoint_IsValid()
     {
         Assert.True(Evaluate("""

@@ -21,7 +21,8 @@ Used when an API key or bearer token is required.
 | Provider | `apiKey` | `endpoint` |
 |---|---|---|
 | `github-models` | GitHub token (required) | Custom inference endpoint (optional) |
-| `github-copilot` | GitHub token (optional) | Not used — Copilot SDK manages the endpoint |
+| `github-copilot` | GitHub token (optional) | Rejected — use `openai`/`azure-openai` for BYOK endpoints |
+| `openai`, `azure-openai` | Endpoint API key (optional) | BYOK endpoint base URL (required) |
 | MCP tools | API key for the MCP server (required when using `ApiKeyConnection`) | MCP server base URL |
 
 ### `${ENV_VAR}` resolution
@@ -68,16 +69,12 @@ stdio://?command=<executable>&arg=<arg1>&arg=<arg2>&cwd=<working-dir>
 
 ## `CopilotByokOptions` (BYOK)
 
-The `CopilotByokOptions` record configures bring-your-own-key mode for the `github-copilot` provider, pointing the Copilot SDK at a custom OpenAI-compatible endpoint instead of GitHub's hosted models. This is used primarily in test scenarios.
+The `CopilotByokOptions` record carries the factory-resolved connection facts for bring-your-own-key mode (`openai` / `azure-openai` providers), pointing the Copilot SDK at a custom OpenAI-compatible endpoint instead of GitHub's hosted models. `AgentFactory` populates it from the provider string and the model connection only; the remaining wire knobs (`wireApi`, `wireModel`, `headers`) are `model.options.additionalProperties` keys interpreted by `CopilotSdkChatClient.CreateProviderConfig` (issue #896).
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `BaseUrl` | string | (required) | Absolute base URL of the custom endpoint. |
-| `ApiKey` | string? | null | API key for the custom endpoint. |
-| `BearerToken` | string? | null | Bearer token for the custom endpoint. |
-| `ProviderType` | string | `"openai"` | Provider type understood by the Copilot runtime. |
-| `WireApi` | string | `"chat-completions"` | Wire API the endpoint speaks. |
-| `WireModel` | string? | null | Wire model name when it differs from `model.id`. |
-| `Headers` | `Dictionary<string,string>`? | null | Extra request headers. |
+| `Provider` | string | (required) | The BYOK provider string: `openai` or `azure-openai`. Mapped to the Copilot runtime provider type (`openai` / `azure`). |
+| `BaseUrl` | string | (required) | Absolute base URL of the custom endpoint (from the connection `endpoint`). |
+| `ApiKey` | string? | null | API key for the custom endpoint (resolved from the connection `apiKey`). |
 
-Note: `CopilotByokOptions` is not expressed directly in the agent JSON schema — it is supplied programmatically via test infrastructure or service configuration.
+Note: `CopilotByokOptions` is not expressed directly in the agent JSON schema — it is derived by `AgentFactory` from the provider string and connection, or supplied programmatically via test infrastructure.

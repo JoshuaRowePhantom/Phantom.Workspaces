@@ -25,8 +25,9 @@ namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
 /// partial-response conflator, real foreground scheduler per #909) → <see cref="AgentViewModel"/>
 /// → <see cref="AgentChatOutputControl"/> → a real Win32 WebView DOM — for the parent chat and
 /// each sub-agent chat view. The chat client is resolved from an <see cref="AgentDefinition"/>
-/// (provider <c>github-copilot</c> with a BYOK endpoint connection) through the production
-/// <c>AgentFactory</c> path — no hand-constructed client, no override. The scripted responses are
+/// (provider <c>openai</c> — the BYOK provider string per issue #896 — with the scripted
+/// server as the connection endpoint) through the production <c>AgentFactory</c> path — no
+/// hand-constructed client, no override. The scripted responses are
 /// expressed as <see cref="DeterministicTestChatClient"/> queues (one per conversation) behind
 /// the protocol-generic <see cref="ScriptedByokChatServer"/> wire adapter. Synchronisation is
 /// exclusively event-driven: WebView <c>Ready</c>/<c>HistoryLoaded</c>, collection-changed waits,
@@ -156,15 +157,16 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             await using var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
 
             // The chat client is resolved from this definition by AgentFactory inside
-            // AgentChat.CreateAsync: provider github-copilot + a connection endpoint selects the
-            // copilot-sdk BYOK path, and the cliPath model option pins the CLI executable.
+            // AgentChat.CreateAsync: the openai provider string selects the copilot-sdk BYOK
+            // path (issue #896), the connection supplies the endpoint, and the cliPath model
+            // option (interpreted by the client) pins the CLI executable.
             var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson($$"""
                 {
                   "kind": "prompt",
                   "name": "byok-e2e-parent",
                   "model": {
                     "id": "gpt-test",
-                    "provider": "github-copilot",
+                    "provider": "openai",
                     "connection": {
                       "kind": "key",
                       "endpoint": "{{server.BaseUrl}}",

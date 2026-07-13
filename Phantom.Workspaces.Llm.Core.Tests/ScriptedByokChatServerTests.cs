@@ -175,7 +175,7 @@ public sealed class ScriptedByokChatServerTests
           "name": "roundtrip",
           "model": {
             "id": "gpt-test",
-            "provider": "github-copilot",
+            "provider": "openai",
             "connection": {
               "kind": "key",
               "endpoint": "{{server.BaseUrl}}",
