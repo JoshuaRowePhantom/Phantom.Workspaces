@@ -220,9 +220,10 @@
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="vm:SubAgentSlotViewModel">
-                            <controls:AgentChatEditorControl DataContext="{Binding SubAgentViewModel}"
-                                                             IsVisible="{Binding IsSelected}"/>
+                        <DataTemplate DataType="vm:SubAgentSlotViewModel" x:CompileBindings="True">
+                            <Panel IsVisible="{Binding IsSelected}">
+                                <controls:AgentChatEditorControl DataContext="{Binding SubAgentViewModel}"/>
+                            </Panel>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
