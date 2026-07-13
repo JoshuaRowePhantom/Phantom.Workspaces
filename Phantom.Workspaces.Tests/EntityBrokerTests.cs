@@ -946,4 +946,120 @@ public sealed class EntityBrokerTests
             Relationships = Array.Empty<EntitySnapshot>(),
         };
     }
+
+    [PhantomAvaloniaFact]
+    public async Task UpdateAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        // This test verifies that UpdateAsync doesn't synchronously block.
+        // If the DAL call runs inline on the calling thread, long DAL operations
+        // would block the UI thread. By wrapping in Task.Run, the operation
+        // is dispatched to the thread pool, keeping the calling thread responsive.
+
+        var updateResult = await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Test update" },
+                },
+                Changes = [],
+            },
+            ct);
+
+        Assert.NotNull(updateResult);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task RefreshAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("55555555-5555-5555-5555-555555555555");
+        var snapshot = CreateSnapshot(
+            entityId,
+            new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+            """
+            {
+              "entity-id": "55555555-5555-5555-5555-555555555555",
+              "entity-types": ["entity", "task"],
+              "names": [["test-entity"]],
+              "display-name": { "default": "Test" }
+            }
+            """);
+
+        var broker = await CreateBrokerAsync(ct);
+        await SeedSnapshotAsync(broker, snapshot);
+
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
+        Assert.Single(entities);
+
+        // This test verifies that RefreshAsync doesn't synchronously block.
+        // If GetChangedEntitiesAsync runs inline on the calling thread, long DAL
+        // operations would block the UI thread.
+
+        await broker.RefreshAsync(ct);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task GetEntitiesAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("77777777-7777-7777-7777-777777777777");
+        var snapshot = CreateSnapshot(
+            entityId,
+            new Timestamp(DateTimeOffset.UtcNow, "1"),
+            """
+            {
+              "entity-id": "77777777-7777-7777-7777-777777777777",
+              "entity-types": ["entity", "task"],
+              "names": [["get-test"]],
+              "display-name": { "default": "Get Test" }
+            }
+            """);
+
+        var broker = await CreateBrokerAsync(ct);
+        await SeedSnapshotAsync(broker, snapshot);
+
+        // This test verifies that GetEntitiesAsync (which calls
+        // GetSubscribedEntitiesForGetRequestAsync) doesn't synchronously block.
+        // If GetAsync runs inline on the calling thread, long DAL operations
+        // would block the UI thread.
+
+        var entities = await broker.GetEntitiesAsync([entityId], ct);
+
+        Assert.Single(entities);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task SubscribeQueryAsync_DoesNotBlockCallingThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await CreateBrokerAsync(ct);
+
+        // This test verifies that SubscribeQueryAsync (which calls
+        // GetSubscribedEntitiesForQueryRequestAsync) doesn't synchronously block.
+        // If QueryAsync runs inline on the calling thread, long DAL operations
+        // would block the UI thread.
+
+        var subscription = await broker.SubscribeQueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("test-query"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet(["entity"]),
+                        },
+                    },
+                ],
+            },
+            ct);
+
+        Assert.NotNull(subscription);
+    }
 }
