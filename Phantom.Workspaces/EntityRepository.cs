@@ -33,7 +33,12 @@ public sealed class EntityRepository
 
     public WorkspaceEntitySession WorkspaceEntitySession { get; }
 
-    public IDataAccessLayer DataAccessLayer { get; }
+    public IDataAccessLayer DataAccessLayer { get; private set; }
+
+    internal void SetDataAccessLayerForTesting(IDataAccessLayer dataAccessLayer)
+    {
+        this.DataAccessLayer = dataAccessLayer;
+    }
 
     public static async Task<EntityRepository> CreateAsync(
         RepositorySource repositorySource,
