@@ -112,6 +112,7 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
     public void PostMessageToJavaScript(string message)
     {
         ArgumentNullException.ThrowIfNull(message);
+        VerifyOnUiThread();
         if (!this.isShellLoaded)
         {
             this.pendingMessages.Enqueue(message);
@@ -139,12 +140,14 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
     /// <inheritdoc/>
     public void BeginBatch()
     {
+        VerifyOnUiThread();
         this.batchMessages ??= [];
     }
 
     /// <inheritdoc/>
     public void EndBatch()
     {
+        VerifyOnUiThread();
         if (this.batchMessages is not { Count: > 0 } messages)
         {
             this.batchMessages = null;
@@ -154,6 +157,22 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
 
         this.batchMessages = null;
         this.DeliverBatch(messages);
+    }
+
+    // Enforces UI-thread affinity on the message bridge (issue #913). This is an Avalonia control:
+    // the auto-flush DispatcherTimer created in PostMessageToJavaScript binds to the *calling*
+    // thread's Dispatcher, so an off-UI-thread call would create a timer on a dispatcher that never
+    // pumps and messages would queue forever without ever reaching the page — silent data loss.
+    // Fail loudly instead so caller threading bugs surface immediately.
+    private static void VerifyOnUiThread()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            throw new InvalidOperationException(
+                $"{nameof(ControllableWebViewControl)} messages must be posted on the Avalonia UI thread. "
+                + "Calling from a background thread would bind the auto-flush DispatcherTimer to a "
+                + "dispatcher that never runs, silently discarding all queued DOM updates (issue #913).");
+        }
     }
 
     private void FlushPendingBatch()
