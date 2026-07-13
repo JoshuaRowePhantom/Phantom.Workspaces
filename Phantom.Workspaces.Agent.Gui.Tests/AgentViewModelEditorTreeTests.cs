@@ -424,6 +424,25 @@ public sealed class AgentViewModelEditorTreeTests
         Assert.True(subAgentsNav.IsExpanded);
     }
 
+    [Fact]
+    public async Task AgentViewModel_ConversationDetail_ReturnsSameInstanceUsedByEditorTree()
+    {
+        // Issue #903: Verify that the ConversationDetail property exposes the same instance
+        // that is used by the editor tree, so the SubAgentSlotViewModel DataTemplate can bind
+        // directly to it without instantiating a nested AgentChatEditorControl.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var conversationDetail = viewModel.ConversationDetail;
+        Assert.NotNull(conversationDetail);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var rootDetailContent = root.DetailContent;
+
+        Assert.Same(conversationDetail, rootDetailContent);
+    }
+
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """

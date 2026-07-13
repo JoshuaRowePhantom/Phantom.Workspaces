@@ -222,7 +222,7 @@
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="vm:SubAgentSlotViewModel" x:CompileBindings="True">
                             <Panel IsVisible="{Binding IsSelected}">
-                                <controls:AgentChatEditorControl DataContext="{Binding SubAgentViewModel}"/>
+                                <ContentControl Content="{Binding SubAgentViewModel.ConversationDetail}"/>
                             </Panel>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>

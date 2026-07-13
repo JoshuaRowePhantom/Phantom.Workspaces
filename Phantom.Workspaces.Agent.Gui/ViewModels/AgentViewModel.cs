@@ -154,6 +154,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public string DisplayName { get; }
 
+    public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
+
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
     public event EventHandler<bool>? AltKeyStateChanged;
