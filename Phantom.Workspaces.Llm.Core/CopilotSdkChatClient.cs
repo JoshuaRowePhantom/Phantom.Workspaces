@@ -351,7 +351,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     /// <summary>
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
-    /// <see cref="CopilotSdkTurnEventDispatcher"/> uses to create and register sub-agent
+    /// <see cref="CopilotSubAgentRouter"/> uses to create and register sub-agent
     /// <see cref="AgentChat"/> instances when a <c>SubagentStartedEvent</c> arrives.
     /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created,
     /// in the same block that subscribes to <see cref="SteeringMessageForwarded"/> and
@@ -451,15 +451,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 SingleWriter = true,
             });
 
-            var dispatcher = new CopilotSdkTurnEventDispatcher(
+            var router = new CopilotSubAgentRouter(
                 channel.Writer,
                 this.subAgentChatRegistry,
                 this.runningAgentChatFactory,
                 this.subAgentTable,
-                this.loggerFactory?.CreateLogger<CopilotSdkTurnEventDispatcher>());
+                this.loggerFactory?.CreateLogger<CopilotSubAgentRouter>());
 
             // Fix for GitHub issue #765: serialize event dispatch via a channel to prevent concurrent
-            // DispatchAsync calls from corrupting internal dictionaries. SingleReader ensures the drain
+            // routing calls from corrupting internal dictionaries. SingleReader ensures the drain
             // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
             var eventChannel = Channel.CreateUnbounded<SessionEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -470,10 +470,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 try
                 {
-                    await foreach (var sessionEvent in eventChannel.Reader.ReadAllAsync(turnCancellationToken))
+                    // Issue #808 split: CopilotSdkStreamAdapter translates raw SDK events into
+                    // routed ChatResponseUpdate items; CopilotSubAgentRouter interprets the
+                    // stream and pushes each update into the correct sink. The adapter completes
+                    // normally on SessionIdleEvent and faults on SessionErrorEvent, so the turn
+                    // channel is completed here rather than inside the translation layer.
+                    await foreach (var update in CopilotSdkStreamAdapter
+                        .TranslateCopilotSdkSessionEvents(eventChannel.Reader, turnCancellationToken)
+                        .ConfigureAwait(false))
                     {
-                        await dispatcher.DispatchAsync(sessionEvent).ConfigureAwait(false);
+                        await router.RouteAsync(update).ConfigureAwait(false);
                     }
+
+                    channel.Writer.TryComplete();
                 }
                 catch (OperationCanceledException) when (turnCancellationToken.IsCancellationRequested)
                 {
@@ -537,7 +546,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
                 }
 
-                _ = Task.Run(dispatcher.DisposeRemainingLeasesAsync);
+                _ = Task.Run(router.DisposeRemainingLeasesAsync);
             });
 
             return new StreamingTurnContext(

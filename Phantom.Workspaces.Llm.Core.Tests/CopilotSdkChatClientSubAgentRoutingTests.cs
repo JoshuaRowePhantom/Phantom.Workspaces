@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 /// <summary>
 /// Tests for sub-agent event routing, buffering, and prompt injection in
-/// <see cref="CopilotSdkTurnEventDispatcher"/>.
+/// <see cref="CopilotSubAgentRouter"/>.
 /// </summary>
 public sealed class CopilotSdkChatClientSubAgentRoutingTests
 {
@@ -20,12 +20,28 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     private static FakeSubAgentChat CreateChildSink(string agentId = "agent-1") =>
         new(agentId, "Test Sub-Agent");
 
-    private static (CopilotSdkTurnEventDispatcher dispatcher, System.Threading.Channels.Channel<ChatResponseUpdate> channel)
-        CreateDispatcher(ISubAgentChatRegistry? registry = null)
+    private static (CopilotSubAgentRouter router, System.Threading.Channels.Channel<ChatResponseUpdate> channel)
+        CreateRouter(ISubAgentChatRegistry? registry = null)
     {
         var channel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
-        var dispatcher = new CopilotSdkTurnEventDispatcher(channel.Writer, registry);
-        return (dispatcher, channel);
+        var router = new CopilotSubAgentRouter(channel.Writer, registry);
+        return (router, channel);
+    }
+
+    /// <summary>
+    /// Runs a single SDK event through the real adapter+router pipeline
+    /// (<see cref="CopilotSdkStreamAdapter"/> then <see cref="CopilotSubAgentRouter"/>),
+    /// mirroring the drain loop in <c>CopilotSdkChatClient.BeginTurnAsync</c>.
+    /// </summary>
+    private static async Task DispatchAsync(CopilotSubAgentRouter router, SessionEvent sessionEvent)
+    {
+        var events = System.Threading.Channels.Channel.CreateUnbounded<SessionEvent>();
+        events.Writer.TryWrite(sessionEvent);
+        events.Writer.Complete();
+        await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(events.Reader, CancellationToken.None))
+        {
+            await router.RouteAsync(update);
+        }
     }
 
     private static AssistantMessageDeltaEvent DeltaEvent(string? agentId, string text) =>
@@ -79,9 +95,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     [Fact]
     public async Task AssistantMessageDeltaEvent_NullAgentId_WrittenToRootStream()
     {
-        var (dispatcher, channel) = CreateDispatcher();
+        var (router, channel) = CreateRouter();
 
-        await dispatcher.DispatchAsync(DeltaEvent(null, "hello"));
+        await DispatchAsync(router, DeltaEvent(null, "hello"));
 
         channel.Writer.Complete();
         var updates = new List<ChatResponseUpdate>();
@@ -99,9 +115,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         var registry = CreateRegistry();
         registry.Register("agent-1", childSink);
 
-        var (dispatcher, rootChannel) = CreateDispatcher(registry);
+        var (router, rootChannel) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(DeltaEvent("agent-1", "child text"));
+        await DispatchAsync(router, DeltaEvent("agent-1", "child text"));
 
         rootChannel.Writer.Complete();
         var rootUpdates = new List<ChatResponseUpdate>();
@@ -117,9 +133,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     public async Task SubagentStartedEvent_CallsGetOrCreateAsync_WithAgentDefinition()
     {
         var registry = CreateRegistry();
-        var (dispatcher, channel) = CreateDispatcher(registry);
+        var (router, channel) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(SubagentStartedEvent("agent-42", "tool-call-1", "My Sub Agent"));
+        await DispatchAsync(router, SubagentStartedEvent("agent-42", "tool-call-1", "My Sub Agent"));
 
         Assert.Single(registry.CreateCalls);
         var call = registry.CreateCalls[0];
@@ -135,9 +151,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         var registry = CreateRegistry();
         registry.Register("agent-1", childSink);
 
-        var (dispatcher, _) = CreateDispatcher(registry);
+        var (router, _) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(SubagentCompletedEvent("agent-1", "tool-call-1"));
+        await DispatchAsync(router, SubagentCompletedEvent("agent-1", "tool-call-1"));
 
         Assert.Equal(AgentChatCompletionState.Succeeded, childSink.CompletionState);
     }
@@ -149,9 +165,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         var registry = CreateRegistry();
         registry.Register("agent-1", childSink);
 
-        var (dispatcher, _) = CreateDispatcher(registry);
+        var (router, _) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(SubagentFailedEvent("agent-1", "tool-call-1", "something went wrong"));
+        await DispatchAsync(router, SubagentFailedEvent("agent-1", "tool-call-1", "something went wrong"));
 
         Assert.Equal(AgentChatCompletionState.Failed, childSink.CompletionState);
         Assert.IsType<AgentSubagentFailedException>(childSink.FailureException);
@@ -165,9 +181,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         var registry = CreateRegistry();
         registry.Register("agent-1", childSink);
 
-        var (dispatcher, rootChannel) = CreateDispatcher(registry);
+        var (router, rootChannel) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(ToolStartEvent("agent-1", "call-1"));
+        await DispatchAsync(router, ToolStartEvent("agent-1", "call-1"));
 
         rootChannel.Writer.Complete();
         var rootUpdates = new List<ChatResponseUpdate>();
@@ -187,9 +203,9 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
         var registry = CreateRegistry();
         registry.Register("agent-1", childSink);
 
-        var (dispatcher, rootChannel) = CreateDispatcher(registry);
+        var (router, rootChannel) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(ToolCompleteEvent("agent-1", "call-1"));
+        await DispatchAsync(router, ToolCompleteEvent("agent-1", "call-1"));
 
         rootChannel.Writer.Complete();
         var rootUpdates = new List<ChatResponseUpdate>();
@@ -206,13 +222,13 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     public async Task ToolStart_ArrivesBeforeSubagentStarted_PromptInjectedAsFirstMessage()
     {
         var registry = CreateRegistry();
-        var (dispatcher, _) = CreateDispatcher(registry);
+        var (router, _) = CreateRouter(registry);
 
         // Tool start arrives first on root stream
-        await dispatcher.DispatchAsync(ToolStartEvent(null, "call-spawn", "spawn_agent"));
+        await DispatchAsync(router, ToolStartEvent(null, "call-spawn", "spawn_agent"));
 
         // Sub-agent then starts
-        await dispatcher.DispatchAsync(SubagentStartedEvent("agent-1", "call-spawn"));
+        await DispatchAsync(router, SubagentStartedEvent("agent-1", "call-spawn"));
 
         var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
         Assert.NotEmpty(childSink.ReceivedUpdates);
@@ -226,13 +242,13 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     public async Task SubagentStarted_ArrivesBeforeToolStart_PromptInjectedWhenToolStartArrives()
     {
         var registry = CreateRegistry();
-        var (dispatcher, _) = CreateDispatcher(registry);
+        var (router, _) = CreateRouter(registry);
 
         // Sub-agent starts first (before its spawning tool call arrives)
-        await dispatcher.DispatchAsync(SubagentStartedEvent("agent-1", "call-spawn"));
+        await DispatchAsync(router, SubagentStartedEvent("agent-1", "call-spawn"));
 
         // Tool start arrives later on root stream
-        await dispatcher.DispatchAsync(ToolStartEvent(null, "call-spawn", "spawn_agent"));
+        await DispatchAsync(router, ToolStartEvent(null, "call-spawn", "spawn_agent"));
 
         var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
         Assert.NotEmpty(childSink.ReceivedUpdates);
@@ -245,13 +261,13 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     public async Task SubAgent_ToolCallPrompt_IsFirstHistoryMessage()
     {
         var registry = CreateRegistry();
-        var (dispatcher, _) = CreateDispatcher(registry);
+        var (router, _) = CreateRouter(registry);
 
-        await dispatcher.DispatchAsync(ToolStartEvent(null, "call-1", "do_work"));
-        await dispatcher.DispatchAsync(SubagentStartedEvent("agent-1", "call-1"));
+        await DispatchAsync(router, ToolStartEvent(null, "call-1", "do_work"));
+        await DispatchAsync(router, SubagentStartedEvent("agent-1", "call-1"));
 
         // Push some child content after start
-        await dispatcher.DispatchAsync(DeltaEvent("agent-1", "child output"));
+        await DispatchAsync(router, DeltaEvent("agent-1", "child output"));
 
         var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
         Assert.Equal(2, childSink.ReceivedUpdates.Count);
@@ -264,16 +280,16 @@ public sealed class CopilotSdkChatClientSubAgentRoutingTests
     public async Task SubAgent_ToolCallPrompt_SubagentStartedBeforeToolStart_StillRecorded()
     {
         var registry = CreateRegistry();
-        var (dispatcher, _) = CreateDispatcher(registry);
+        var (router, _) = CreateRouter(registry);
 
         // Sub-agent starts before its tool call arrives
-        await dispatcher.DispatchAsync(SubagentStartedEvent("agent-1", "call-1"));
+        await DispatchAsync(router, SubagentStartedEvent("agent-1", "call-1"));
 
         // Some child content arrives (these still go to child, just without prompt yet)
-        await dispatcher.DispatchAsync(DeltaEvent("agent-1", "early output"));
+        await DispatchAsync(router, DeltaEvent("agent-1", "early output"));
 
         // Tool start arrives on root
-        await dispatcher.DispatchAsync(ToolStartEvent(null, "call-1", "do_work"));
+        await DispatchAsync(router, ToolStartEvent(null, "call-1", "do_work"));
 
         var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
 

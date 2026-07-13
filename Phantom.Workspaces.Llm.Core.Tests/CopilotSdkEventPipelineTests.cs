@@ -13,21 +13,37 @@ using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
-public sealed class CopilotSdkTurnEventDispatcherTests
+public sealed class CopilotSdkEventPipelineTests
 {
-    private static (CopilotSdkTurnEventDispatcher dispatcher, Channel<ChatResponseUpdate> channel)
-        CreateDispatcher(
+    private static (CopilotSubAgentRouter router, Channel<ChatResponseUpdate> channel)
+        CreateRouter(
             FakeRunningAgentChatFactory? factory = null,
             FakeSubAgentTable? table = null)
     {
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
-        var dispatcher = new CopilotSdkTurnEventDispatcher(
+        var router = new CopilotSubAgentRouter(
             channel.Writer,
             registry: null,
             factory: factory,
             subAgentTable: table,
             logger: null);
-        return (dispatcher, channel);
+        return (router, channel);
+    }
+
+    /// <summary>
+    /// Runs a single SDK event through the real adapter+router pipeline
+    /// (<see cref="CopilotSdkStreamAdapter"/> then <see cref="CopilotSubAgentRouter"/>),
+    /// mirroring the drain loop in <c>CopilotSdkChatClient.BeginTurnAsync</c>.
+    /// </summary>
+    private static async Task DispatchAsync(CopilotSubAgentRouter router, SessionEvent sessionEvent)
+    {
+        var events = Channel.CreateUnbounded<SessionEvent>();
+        events.Writer.TryWrite(sessionEvent);
+        events.Writer.Complete();
+        await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(events.Reader, CancellationToken.None))
+        {
+            await router.RouteAsync(update);
+        }
     }
 
     private static SubagentStartedEvent StartedEvent(string agentId) =>
@@ -70,7 +86,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         // Regression test for GitHub issue #765: concurrent DispatchAsync calls would corrupt the
         // internal bufferedToolStarts dictionary, causing IndexOutOfRangeException.
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
-        var dispatcher = new CopilotSdkTurnEventDispatcher(
+        var router = new CopilotSubAgentRouter(
             channel.Writer,
             registry: null,
             factory: null,
@@ -100,8 +116,8 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         // Fire two concurrent DispatchAsync calls. Before the fix, this would often trigger
         // IndexOutOfRangeException during dictionary resize/insert because Dictionary<K,V> is not
         // thread-safe.
-        var task1 = Task.Run(async () => await dispatcher.DispatchAsync(toolStart1));
-        var task2 = Task.Run(async () => await dispatcher.DispatchAsync(toolStart2));
+        var task1 = Task.Run(async () => await DispatchAsync(router, toolStart1));
+        var task2 = Task.Run(async () => await DispatchAsync(router, toolStart2));
 
         await Task.WhenAll(task1, task2);
 
@@ -115,7 +131,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         // Verifies that events dispatched through channel-based drain loop are processed
         // sequentially in order.
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
-        var dispatcher = new CopilotSdkTurnEventDispatcher(
+        var router = new CopilotSubAgentRouter(
             channel.Writer,
             registry: null,
             factory: null,
@@ -144,7 +160,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         // Dispatch all events sequentially (simulating the drain loop behavior)
         foreach (var evt in events)
         {
-            await dispatcher.DispatchAsync(evt);
+            await DispatchAsync(router, evt);
         }
 
         channel.Writer.Complete();
@@ -171,7 +187,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
     {
         // Verifies that when the cancellation token is triggered, the drain loop stops processing.
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
-        var dispatcher = new CopilotSdkTurnEventDispatcher(
+        var router = new CopilotSubAgentRouter(
             channel.Writer,
             registry: null,
             factory: null,
@@ -187,7 +203,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         };
 
         // Dispatch one event successfully
-        await dispatcher.DispatchAsync(deltaEvent);
+        await DispatchAsync(router, deltaEvent);
 
         // Cancel the token (simulating turn cancellation)
         cts.Cancel();
@@ -208,10 +224,10 @@ public sealed class CopilotSdkTurnEventDispatcherTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
         // Start sub-agent
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
         var receiver = (CopilotSubAgentChatClient)lease.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
@@ -226,7 +242,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         });
 
         // Complete the sub-agent
-        await dispatcher.DispatchAsync(CompletedEvent("agent-1"));
+        await DispatchAsync(router, CompletedEvent("agent-1"));
 
         // Wait for stream to complete
         await streamTask;
@@ -240,10 +256,10 @@ public sealed class CopilotSdkTurnEventDispatcherTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
         // Start sub-agent
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
         var receiver = (CopilotSubAgentChatClient)lease.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
@@ -265,7 +281,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         });
 
         // Fail the sub-agent
-        await dispatcher.DispatchAsync(FailedEvent("agent-1", "error"));
+        await DispatchAsync(router, FailedEvent("agent-1", "error"));
 
         // Wait for stream to complete
         await streamTask;
@@ -279,17 +295,17 @@ public sealed class CopilotSdkTurnEventDispatcherTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
         // Start sub-agent but don't complete it
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
 
         // Verify initial state is Running
         Assert.Equal(AgentChatCompletionState.Running, lease.AgentChat.CompletionState);
 
         // Dispose remaining leases (simulating turn cleanup)
-        await dispatcher.DisposeRemainingLeasesAsync();
+        await router.DisposeRemainingLeasesAsync();
 
         // Verify completion state is now Failed
         Assert.Equal(AgentChatCompletionState.Failed, lease.AgentChat.CompletionState);
@@ -301,10 +317,10 @@ public sealed class CopilotSdkTurnEventDispatcherTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
         // Start sub-agent
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
         var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
         // Start consuming the stream in the background
@@ -323,7 +339,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         });
 
         // Dispose remaining leases
-        await dispatcher.DisposeRemainingLeasesAsync();
+        await router.DisposeRemainingLeasesAsync();
 
         // Wait for stream
         await streamTask;
@@ -338,10 +354,10 @@ public sealed class CopilotSdkTurnEventDispatcherTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var (dispatcher, _) = CreateDispatcher(factory, table);
+        var (router, _) = CreateRouter(factory, table);
 
         // Start sub-agent
-        await dispatcher.DispatchAsync(StartedEvent("agent-1"));
+        await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
         var agentChat = lease.AgentChat;
 
@@ -354,7 +370,7 @@ public sealed class CopilotSdkTurnEventDispatcherTests
         });
 
         // Complete the sub-agent
-        await dispatcher.DispatchAsync(CompletedEvent("agent-1"));
+        await DispatchAsync(router, CompletedEvent("agent-1"));
 
         // Wait for stream
         await streamTask;
