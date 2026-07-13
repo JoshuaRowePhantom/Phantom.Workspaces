@@ -79,7 +79,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
         // Complete initialization in the background
-        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
         lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, entityViewModel, loadingTab, foregroundScheduler));
 
         return true;
@@ -144,7 +144,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             NotificationService = mainWindowViewModel.NotificationService,
         };
 
-        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
         lifetime.Run(ct => InitializeTabInBackgroundAsync(mainWindowViewModel, agentSessionEntity, loadingTab, foregroundScheduler));
 
         return loadingTab;

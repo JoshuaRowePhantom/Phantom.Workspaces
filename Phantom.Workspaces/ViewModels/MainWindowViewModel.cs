@@ -638,7 +638,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
 
         foreach (var session in sessions)
         {

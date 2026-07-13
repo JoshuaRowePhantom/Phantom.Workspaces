@@ -108,6 +108,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
+       VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
@@ -119,6 +120,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            ?? (SynchronizationContext.Current is not null
                ? TaskScheduler.FromCurrentSynchronizationContext()
                : this.foregroundSchedulerPair.ExclusiveScheduler);
+    }
+
+    // Enforces the foreground-context affinity invariant (issue #909): AgentChat construction and
+    // initialization must happen on the foreground context, never on a background thread that
+    // merely holds a reference to the foreground scheduler. The invariant is only verifiable for
+    // SynchronizationContextTaskScheduler, which exposes its context; plain schedulers (e.g.
+    // TaskScheduler.Default in headless hosts such as the CLI and tests) carry no thread affinity
+    // to verify. When no scheduler is provided, the foreground context is captured from the
+    // current thread and is therefore consistent by construction. Verification fails fast rather
+    // than marshalling, so caller bugs surface immediately instead of silently binding downstream
+    // UI machinery to the wrong thread (issue #908).
+    private static void VerifyOnForegroundContext(TaskScheduler? foregroundScheduler)
+    {
+        if (foregroundScheduler is SynchronizationContextTaskScheduler contextScheduler
+            && !contextScheduler.IsOnSynchronizationContext
+            && TaskScheduler.Current != contextScheduler)
+        {
+            throw new InvalidOperationException(
+                "AgentChat must be constructed and initialized on its foreground context (the UI thread in GUI hosts). "
+                + "The provided ForegroundScheduler's SynchronizationContext is not current on this thread. "
+                + "Invoke creation on the foreground context instead of a background thread (issue #909).");
+        }
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
@@ -1795,12 +1818,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             // the exclusive scheduler, which serializes the loop's running-item lifecycle operations
             // (create/update/complete) with the conflator's running-item population so the
             // collections are never mutated concurrently.
-            var loopTask = this.acceptsUserInput
-                ? this.RunProcessLoopAsync(this.cts.Token)
-                : this.RunHostedProcessLoopAsync(this.cts.Token);
-
+            // The loop must be invoked inside the StartNew delegate: invoking the async method
+            // eagerly here would run it (and its await continuations) on the calling thread —
+            // and StartNew would merely wrap the already-running task without scheduling
+            // anything (issue #908). Construction is now verified to occur on the foreground
+            // context (issue #909), but this explicit scheduling remains the mechanism that
+            // binds the loop to the foreground scheduler: even on the UI thread,
+            // TaskScheduler.Current is TaskScheduler.Default outside a scheduled task.
             this.processTask = Task.Factory.StartNew(
-                () => loopTask,
+                () => this.acceptsUserInput
+                    ? this.RunProcessLoopAsync(this.cts.Token)
+                    : this.RunHostedProcessLoopAsync(this.cts.Token),
                 this.cts.Token,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler).Unwrap();

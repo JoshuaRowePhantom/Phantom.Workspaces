@@ -77,7 +77,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                     }, ct);
                 }
 
-                var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+                var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
                 {
                     AgentDefinition = definition,
                     AgentSessionId = sessionId.Value,
@@ -86,7 +86,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                     ClientOverride = effectiveServices.ChatClientOverride,
                     ForegroundScheduler = _foregroundScheduler,
                     CancellationToken = ct,
-                });
+                }, ct);
                 _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
                 newChat = chat;
             }
@@ -119,7 +119,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             }
             else
             {
-                var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+                var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
                 {
                     AgentDefinition = null,
                     AgentSessionId = sessionId.Value,
@@ -128,7 +128,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                     ClientOverride = _services.ChatClientOverride,
                     ForegroundScheduler = _foregroundScheduler,
                     CancellationToken = ct,
-                });
+                }, ct);
                 _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
                 newChat = chat;
             }
@@ -171,7 +171,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             }, ct);
 
             var effectiveServices = services ?? _services;
-            var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
             {
                 AgentDefinition = definition,
                 AgentSessionId = sessionId.Value,
@@ -180,7 +180,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 ClientOverride = effectiveServices.ChatClientOverride,
                 ForegroundScheduler = _foregroundScheduler,
                 CancellationToken = ct,
-            });
+            }, ct);
             _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
             newChat = chat;
         }
@@ -258,4 +258,18 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             CancellationToken.None,
             TaskCreationOptions.None,
             _foregroundScheduler);
+
+    // AgentChat construction and initialization must happen on the foreground context (issue
+    // #909). The factory is invoked both from the GUI (already on the UI thread) and from
+    // thread-agnostic contexts such as agent tools creating sub-sessions; since the factory owns
+    // the foreground scheduler, it schedules creation onto it so the invariant holds structurally
+    // for every caller.
+    private Task<AgentChat> CreateChatOnForegroundAsync(
+        InternalCreateAgentChatRequest request,
+        CancellationToken ct)
+        => Task.Factory.StartNew(
+            () => AgentChat.CreateAsync(request),
+            ct,
+            TaskCreationOptions.DenyChildAttach,
+            _foregroundScheduler).Unwrap();
 }
