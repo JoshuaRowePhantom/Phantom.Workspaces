@@ -222,18 +222,29 @@ public sealed class UsageMetricsServiceTests
         var usageMetrics = new UsageMetrics(mutationScheduler);
         var timeProvider = new FakeTimeProvider();
 
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var service = new UsageMetricsService(
             dal,
             usageMetrics,
             new[] { provider },
             timeProvider,
-            NullLogger<UsageMetricsService>.Instance);
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
 
         await service.StartAsync(TestContext.Current.CancellationToken);
         await firstMutationCompleted.Task;
 
         // First refresh: account added
         Assert.Single(usageMetrics.Accounts);
+
+        // Wait for the service loop to register its timer before advancing fake time
+        await delayScheduled.Task;
 
         timeProvider.Advance(TimeSpan.FromSeconds(60));
         await secondMutationCompleted.Task;
@@ -277,18 +288,29 @@ public sealed class UsageMetricsServiceTests
         var usageMetrics = new UsageMetrics(mutationScheduler);
         var timeProvider = new FakeTimeProvider();
 
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var service = new UsageMetricsService(
             dal,
             usageMetrics,
             new[] { provider },
             timeProvider,
-            NullLogger<UsageMetricsService>.Instance);
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
 
         await service.StartAsync(TestContext.Current.CancellationToken);
         await firstMutationCompleted.Task;
 
         // First refresh: account added
         Assert.Single(usageMetrics.Accounts);
+
+        // Wait for the service loop to register its timer before advancing fake time
+        await delayScheduled.Task;
 
         timeProvider.Advance(TimeSpan.FromSeconds(60));
         await secondCallCompleted.Task;

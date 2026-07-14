@@ -28,6 +28,12 @@ public sealed class UsageMetricsService : IAsyncDisposable
     private readonly Dictionary<string, UsageAccount> accountsByKey = new();
     private Task? loopTask;
 
+    /// <summary>
+    /// Test-only hook: invoked immediately after Task.Delay is scheduled in the run loop.
+    /// Allows tests to synchronize on timer registration before advancing FakeTimeProvider.
+    /// </summary>
+    internal Func<Task>? DelayScheduled;
+
     public UsageMetricsService(
         IDataAccessLayer dataAccessLayer,
         UsageMetrics usageMetrics,
@@ -72,9 +78,26 @@ public sealed class UsageMetricsService : IAsyncDisposable
         // Periodic refresh every 60 seconds
         while (!cancellationToken.IsCancellationRequested)
         {
+            Task delayTask;
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(60), this.timeProvider, cancellationToken).ConfigureAwait(false);
+                delayTask = Task.Delay(TimeSpan.FromSeconds(60), this.timeProvider, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            // Test-only hook: signal that the delay has been registered with the TimeProvider.
+            // This allows tests to safely advance FakeTimeProvider without racing timer registration.
+            if (this.DelayScheduled != null)
+            {
+                await this.DelayScheduled().ConfigureAwait(false);
+            }
+
+            try
+            {
+                await delayTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
