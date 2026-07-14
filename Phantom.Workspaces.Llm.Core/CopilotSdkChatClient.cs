@@ -909,7 +909,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     // Resolve the token that the SDK is actually using. When this.gitHubToken is null
                     // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
-                    var tokenForUpsert = this.gitHubToken ?? GitHubAuthTokenResolver.Resolve();
+                    var tokenForUpsert = this.gitHubToken ?? await GitHubAuthTokenResolver.ResolveAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(tokenForUpsert))
                     {
                         await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
