@@ -235,9 +235,34 @@ public sealed class AgentChatSubAgentRegistryTests
         var sink = await Task.Run(() => parent.GetOrCreateAsync("agent-1", subDef, "tool-call-1"));
         var child = (AgentChat)Assert.Single(parent.SubAgents);
 
+        // Option D (issue #840) removed the outer collection's Replace notification when only
+        // inner items change. Now we must subscribe to the first running item's inner Items
+        // collection to observe mutations on the foreground scheduler.
+        AgentChatRunningItem? firstRunningItem = null;
         var observed = new TaskCompletionSource<TaskScheduler?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        ((System.Collections.Specialized.INotifyCollectionChanged)child.RunningItems).CollectionChanged +=
-            (_, _) => observed.TrySetResult(TaskScheduler.Current);
+        var outerHandler = new System.Collections.Specialized.NotifyCollectionChangedEventHandler(
+            (_, e) =>
+            {
+                // If a new running item is added, subscribe to its inner Items collection
+                if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Add &&
+                    e.NewItems?[0] is AgentChatRunningItem newItem &&
+                    firstRunningItem == null)
+                {
+                    firstRunningItem = newItem;
+                    ((System.Collections.Specialized.INotifyCollectionChanged)newItem.Items).CollectionChanged +=
+                        (_, _) => observed.TrySetResult(TaskScheduler.Current);
+                }
+            });
+        
+        ((System.Collections.Specialized.INotifyCollectionChanged)child.RunningItems).CollectionChanged += outerHandler;
+
+        // If there's already a running item (from child startup), subscribe to it immediately
+        if (child.RunningItems.Count > 0)
+        {
+            firstRunningItem = child.RunningItems[0];
+            ((System.Collections.Specialized.INotifyCollectionChanged)firstRunningItem.Items).CollectionChanged +=
+                (_, _) => observed.TrySetResult(TaskScheduler.Current);
+        }
 
         sink.Push(new ChatResponseUpdate
         {
