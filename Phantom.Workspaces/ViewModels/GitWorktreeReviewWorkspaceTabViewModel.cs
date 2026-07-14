@@ -34,8 +34,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         this.fileDiffs = new ObservableCollection<GitDiffViewModel>();
         this.BranchNames = new ObservableCollection<string>();
 
-        // Default target branch will be determined asynchronously
-        this.targetBranch = "main";
+        // Read target branch synchronously (entity data or repository probe)
+        this.targetBranch = GetDefaultTargetBranch(entityViewModel, repositoryPath);
 
         if (repositoryPath is not null)
         {
@@ -171,15 +171,13 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     private async Task InitializeAsync(SubscribedEntityViewModel entityViewModel, CancellationToken ct = default)
     {
-        var (defaultBranch, branchNames) = await Task.Run(() =>
+        var branchNames = await Task.Run(() =>
         {
-            var target = GetDefaultTargetBranch(entityViewModel, this.RepositoryPath);
             var branches = new System.Collections.Generic.List<string>();
             LoadBranchNames(this.RepositoryPath, branches);
-            return (target, branches);
+            return branches;
         }, ct);
 
-        this.targetBranch = defaultBranch;
         foreach (var branch in branchNames)
         {
             this.BranchNames.Add(branch);
@@ -391,9 +389,23 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     private async Task RebuildFileDiffsAsync(IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct)
     {
-        var newDiffs = await this.BuildFileDiffsAsync(this.FileList, selectedCommits, ct);
-        ct.ThrowIfCancellationRequested();
-        this.FileDiffs = newDiffs;
+        async Task RebuildCore()
+        {
+            var newDiffs = await this.BuildFileDiffsAsync(this.FileList, selectedCommits, ct);
+            ct.ThrowIfCancellationRequested();
+            
+            // Modify existing collection in-place to fire CollectionChanged
+            this.FileDiffs.Clear();
+            foreach (var diff in newDiffs)
+            {
+                this.FileDiffs.Add(diff);
+            }
+        }
+
+        var rebuildTask = RebuildCore();
+        this.currentRefresh = rebuildTask;
+        this.RaisePropertyChanged(nameof(this.CurrentRefresh));
+        await rebuildTask;
     }
 
     private void OnWatcherChanged(object? sender, EventArgs e)
@@ -459,9 +471,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         return null;
     }
 
-    private static string GetDefaultTargetBranch(SubscribedEntityViewModel entityViewModel, string? repositoryPath)
+    private static string? GetTargetBranchFromEntityData(SubscribedEntityViewModel entityViewModel)
     {
-        // 1. Check entity data for explicit target-branch
         if (entityViewModel.Data is JsonElement data
             && data.TryGetProperty("target-branch", out var targetBranchElement)
             && targetBranchElement.ValueKind == JsonValueKind.String
@@ -470,7 +481,11 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             return explicitBranch;
         }
 
-        // 2. Probe the repository for main/master
+        return null;
+    }
+
+    private static string ProbeRepositoryForDefaultBranch(string? repositoryPath)
+    {
         if (repositoryPath is not null && !string.IsNullOrEmpty(repositoryPath))
         {
             try
@@ -495,6 +510,18 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         return "main";
+    }
+
+    private static string GetDefaultTargetBranch(SubscribedEntityViewModel entityViewModel, string? repositoryPath)
+    {
+        // 1. Check entity data for explicit target-branch
+        if (GetTargetBranchFromEntityData(entityViewModel) is { } explicitBranch)
+        {
+            return explicitBranch;
+        }
+
+        // 2. Probe the repository for main/master
+        return ProbeRepositoryForDefaultBranch(repositoryPath);
     }
 
     private static void LoadBranchNames(string? repositoryPath, System.Collections.Generic.List<string> branchNames)
