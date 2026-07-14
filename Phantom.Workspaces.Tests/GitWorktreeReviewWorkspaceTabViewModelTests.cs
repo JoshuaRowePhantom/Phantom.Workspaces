@@ -1010,16 +1010,21 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
     {
         this.InitRepoWithBranch("main");
 
-        using var repo = new Repository(this.repoDir);
-        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+        Commit commit;
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
 
-        var featureBranch = repo.CreateBranch("feature");
-        Commands.Checkout(repo, featureBranch);
+            var featureBranch = repo.CreateBranch("feature");
+            Commands.Checkout(repo, featureBranch);
 
-        var filePath = Path.Combine(repo.Info.WorkingDirectory, "feature.txt");
-        File.WriteAllText(filePath, "feature content");
-        Commands.Stage(repo, "feature.txt");
-        var commit = repo.Commit("Add feature", sig, sig);
+            var filePath = Path.Combine(repo.Info.WorkingDirectory, "feature.txt");
+            File.WriteAllText(filePath, "feature content");
+            Commands.Stage(repo, "feature.txt");
+            commit = repo.Commit("Add feature", sig, sig);
+        }
+
+        await Task.Delay(100);
 
         var entityJson = $$"""
             {
@@ -1035,8 +1040,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         var vm = CreateViewModel(entityJson);
         await using (vm)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => { });
-            await vm.RefreshAsync();
+            await vm.CurrentRefresh!;
 
             vm.CommitList.SelectedCommits.Add(vm.CommitList.Commits.First());
             await Dispatcher.UIThread.InvokeAsync(() => { });
@@ -1051,21 +1055,25 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
     {
         this.InitRepoWithBranch("main");
 
-        using var repo = new Repository(this.repoDir);
-        var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
 
-        var featureBranch = repo.CreateBranch("feature");
-        Commands.Checkout(repo, featureBranch);
+            var featureBranch = repo.CreateBranch("feature");
+            Commands.Checkout(repo, featureBranch);
 
-        var filePath1 = Path.Combine(repo.Info.WorkingDirectory, "feature1.txt");
-        File.WriteAllText(filePath1, "feature content 1");
-        Commands.Stage(repo, "feature1.txt");
-        repo.Commit("Add feature 1", sig, sig);
+            var filePath1 = Path.Combine(repo.Info.WorkingDirectory, "feature1.txt");
+            File.WriteAllText(filePath1, "feature content 1");
+            Commands.Stage(repo, "feature1.txt");
+            repo.Commit("Add feature 1", sig, sig);
 
-        var filePath2 = Path.Combine(repo.Info.WorkingDirectory, "feature2.txt");
-        File.WriteAllText(filePath2, "feature content 2");
-        Commands.Stage(repo, "feature2.txt");
-        repo.Commit("Add feature 2", sig, sig);
+            var filePath2 = Path.Combine(repo.Info.WorkingDirectory, "feature2.txt");
+            File.WriteAllText(filePath2, "feature content 2");
+            Commands.Stage(repo, "feature2.txt");
+            repo.Commit("Add feature 2", sig, sig);
+        }
+
+        await Task.Delay(100);
 
         var entityJson = $$"""
             {
@@ -1081,8 +1089,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         var vm = CreateViewModel(entityJson);
         await using (vm)
         {
-            await Dispatcher.UIThread.InvokeAsync(() => { });
-            await vm.RefreshAsync();
+            await vm.CurrentRefresh!;
 
             vm.CommitList.SelectedCommits.Add(vm.CommitList.Commits[0]);
             vm.CommitList.SelectedCommits.Add(vm.CommitList.Commits[1]);
@@ -1143,6 +1150,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
+            await vm.CurrentRefresh!;
+            
             Assert.NotNull(vm.BranchNames);
             Assert.Contains("main", vm.BranchNames);
             Assert.Contains("feature-1", vm.BranchNames);
@@ -1279,7 +1288,13 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             await vm.CurrentRefresh!;
 
             vm.FullFile = true;
-            await vm.CurrentRefresh!;
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            
+            while (vm.FileDiffs.Count == 0 && vm.CurrentRefresh != null)
+            {
+                await vm.CurrentRefresh;
+                await Dispatcher.UIThread.InvokeAsync(() => { });
+            }
 
             var diff = vm.FileDiffs.FirstOrDefault();
             Assert.NotNull(diff);
