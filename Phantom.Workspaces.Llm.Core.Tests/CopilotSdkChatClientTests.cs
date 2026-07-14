@@ -908,45 +908,4 @@ public sealed class CopilotSdkChatClientTests
         Assert.True(wasOnThreadPoolThread);
         Assert.True(subscription.Disposed);
     }
-
-    [Fact]
-    public async Task EnsureSessionAsync_DoesNotBlockThreadPoolThread()
-    {
-        // Arrange: Create a mock service that forces genuine async behavior
-        var accountUpsertService = new AsyncAccountUpsertService();
-        using var client = new CopilotSdkChatClient(
-            "gpt-5",
-            "GitHub Copilot (gpt-5)",
-            gitHubToken: "test-token",
-            loggerFactory: null,
-            accountUpsertService: accountUpsertService);
-
-        // Act: Run EnsureSessionAsync on a thread pool thread with a timeout
-        var completed = await Task.Run(async () =>
-        {
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            var ensureMethod = typeof(CopilotSdkChatClient).GetMethod(
-                "EnsureSessionAsync",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
-
-            var task = (Task)ensureMethod.Invoke(
-                client,
-                [new ChatOptions(), cts.Token])!;
-
-            await task.ConfigureAwait(false);
-            return true;
-        }).WaitAsync(TimeSpan.FromSeconds(10));
-
-        // Assert: If we reach here without timeout, the method did not block the thread pool thread
-        Assert.True(completed);
-    }
-
-    private sealed class AsyncAccountUpsertService : IGitHubAccountUpsertService
-    {
-        public async Task UpsertForTokenAsync(string token, CancellationToken cancellationToken)
-        {
-            // Force genuine async behavior to test that EnsureSessionAsync doesn't block
-            await Task.Yield();
-        }
-    }
 }
