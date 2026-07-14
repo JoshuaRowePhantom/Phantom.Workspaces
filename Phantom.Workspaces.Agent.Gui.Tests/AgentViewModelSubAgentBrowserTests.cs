@@ -209,7 +209,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var scheduler = new CapturingTaskScheduler();
         
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, scheduler);
 
         // Act: Add a lazy sub-agent via reflection, then drain all scheduled tasks.
         AddSubAgentViaReflection(chat, subAgentChat, scheduler);
@@ -231,7 +231,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var scheduler = new CapturingTaskScheduler();
         
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, scheduler);
 
         // Act: Add a lazy sub-agent via reflection, then drain all scheduled tasks.
         AddSubAgentViaReflection(chat, subAgentChat, scheduler);
@@ -253,7 +253,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var scheduler = new CapturingTaskScheduler();
         
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, scheduler);
 
         // Act: Add a lazy sub-agent via reflection, but DON'T drain the scheduler yet.
         AddSubAgentViaReflection(chat, subAgentChat, scheduler);
@@ -276,7 +276,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var scheduler = new CapturingTaskScheduler();
         
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory, scheduler);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, scheduler);
 
         // Act: Add the fake lazy sub-agents via reflection, then drain all scheduled tasks.
         AddSubAgentViaReflection(chat, subAgentChat1, scheduler);
@@ -304,7 +304,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
 
         Assert.False(subAgentViewModel.AcceptsUserInput);
     }
@@ -320,7 +320,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
 
         Assert.Null(subAgentViewModel.InputQueue);
     }
@@ -331,7 +331,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Selecting a factory-path sub-agent in the nav tree should create a view with InputQueue = null.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "sub1", "Sub Agent");
 
@@ -349,7 +349,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Root/parent agents should have InputQueue created.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         Assert.True(viewModel.AcceptsUserInput);
         Assert.NotNull(viewModel.InputQueue);
@@ -512,7 +512,13 @@ public sealed class AgentViewModelSubAgentBrowserTests
             throw new NotImplementedException();
         }
 
-        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            CancellationToken ct = default)
         {
             throw new NotImplementedException();
         }

@@ -83,7 +83,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
         }
         ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
-        ((INotifyCollectionChanged)this.subAgentsContainerDetail.Slots).CollectionChanged += this.OnSubAgentSlotsCollectionChanged;
 
         // Create detail content slots.
         this.detailContentSlots.Add(new DetailContentSlot(this.conversationDetail) { IsVisible = true });
@@ -545,12 +544,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.AddSubAgentSlot(subAgent);
             }
         }
-    }
-
-    private void OnSubAgentSlotsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        // When slots are added/removed (e.g. after async lease acquisition), rebuild the navigation tree
-        this.BuildEditorTree();
     }
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
