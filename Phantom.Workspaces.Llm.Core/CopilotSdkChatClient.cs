@@ -536,17 +536,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 this.queueManager.QueueStateChanged += OnQueueChanged;
             }
 
-            var subscription = new DelegateDisposable(() =>
+            var subscription = new AsyncDelegateDisposable(async () =>
             {
                 eventSubscription.Dispose();
                 eventChannel.Writer.Complete();
-                dispatchLoop.GetAwaiter().GetResult();
+                await dispatchLoop;
                 if (this.queueManager is not null)
                 {
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
                 }
 
-                _ = Task.Run(router.DisposeRemainingLeasesAsync);
+                await router.DisposeRemainingLeasesAsync();
             });
 
             return new StreamingTurnContext(
@@ -581,7 +581,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // session. This is kept in a separate (non-iterator) method because async iterators
             // do not permit yield inside a try block that has catch clauses.
             var turn = await this.GetReadyTurnAsync(beginTurnAsync, cancellationToken).ConfigureAwait(false);
-            using (turn.Subscription)
+            await using (turn.Subscription)
             {
                 try
                 {
@@ -623,7 +623,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             // The resumed session's pipe is broken. Dispose its subscription, invalidate the session
             // without re-arming the resume id, then retry once with a brand-new session.
-            turn.Subscription.Dispose();
+            await turn.Subscription.DisposeAsync();
             await turn.OnPipeBrokenAsync().ConfigureAwait(false);
 
             turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
@@ -633,7 +633,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
             catch
             {
-                turn.Subscription.Dispose();
+                await turn.Subscription.DisposeAsync();
                 throw;
             }
         }
@@ -1093,7 +1093,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 /// </param>
 internal sealed record StreamingTurnContext(
     System.Threading.Channels.ChannelReader<ChatResponseUpdate> Reader,
-    IDisposable Subscription,
+    IAsyncDisposable Subscription,
     Func<CancellationToken, Task> SendAsync,
     Func<Task> OnCancelledAsync,
     Func<Task> OnPipeBrokenAsync);

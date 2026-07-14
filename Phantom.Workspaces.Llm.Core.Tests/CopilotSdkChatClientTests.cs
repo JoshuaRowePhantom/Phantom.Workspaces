@@ -306,11 +306,15 @@ public sealed class CopilotSdkChatClientTests
         Assert.True(subscription.Disposed);
     }
 
-    private sealed class FlagDisposable : IDisposable
+    private sealed class FlagDisposable : IAsyncDisposable
     {
         public bool Disposed { get; private set; }
 
-        public void Dispose() => this.Disposed = true;
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     [Fact]
