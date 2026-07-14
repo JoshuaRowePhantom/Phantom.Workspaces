@@ -3,7 +3,9 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
+using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -34,6 +36,25 @@ public sealed class AgentViewModelSlashCommandTests
         Assert.Equal("/alpha", completions[0].Label);
         Assert.Equal("/Beta", completions[1].Label);
         Assert.Equal("/Gamma", completions[2].Label);
+    }
+
+    [Fact]
+    public async Task ConfigureSlashCommands_DoesNotRegisterDiagnosticsCommand()
+    {
+        // Arrange — verify that /diagnostics command is not registered
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        // Act — check that /diagnostics is not in the commands list
+        var commands = chat.SlashCommands.Commands;
+
+        // Assert — /diagnostics should not be present
+        Assert.DoesNotContain(commands, cmd => cmd.Name.Equals("diagnostics", StringComparison.OrdinalIgnoreCase));
     }
 
     private static AgentDefinition CreateAgentDefinition()

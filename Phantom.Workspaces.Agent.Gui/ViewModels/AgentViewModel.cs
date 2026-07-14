@@ -38,7 +38,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private readonly TaskScheduler foregroundScheduler;
     private bool isReasoningVisible;
-    private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
     private bool showChatInputHelpText = true;
     private string agentSessionId;
@@ -300,12 +299,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         private set => this.SetProperty(ref this.isReasoningVisible, value);
     }
 
-    public bool IsDiagnosticsVisible
-    {
-        get => this.isDiagnosticsVisible;
-        private set => this.SetProperty(ref this.isDiagnosticsVisible, value);
-    }
-
     public bool AutoScrollEnabled
     {
         get => this.autoScrollEnabled;
@@ -338,8 +331,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public IAgentStatusSink StatusSink => this.conversationDetail.StatusLine;
 
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
-
-    public void ToggleDiagnosticsVisibility() => this.SetDiagnosticsVisibility(!this.IsDiagnosticsVisible);
 
     public event EventHandler? OpenLogWindowRequested;
 
@@ -389,9 +380,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
             getValue: () => this.ShowChatInputHelpText,
             setValue: v => this.ShowChatInputHelpText = v));
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new DiagnosticsSlashCommandHandler(
-            getValue: () => this.IsDiagnosticsVisible,
-            setValue: v => this.SetDiagnosticsVisibility(v)));
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new ReasoningSlashCommandHandler(
             getValue: () => this.IsReasoningVisible,
             setValue: v => this.SetReasoningVisibility(v)));
@@ -456,9 +444,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public void SetReasoningVisibility(bool visible)
         => this.IsReasoningVisible = visible;
-
-    public void SetDiagnosticsVisibility(bool visible)
-        => this.IsDiagnosticsVisible = visible;
 
     private void OnAgentSessionIdChanged(object? sender, string sessionId)
     {

@@ -226,8 +226,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible) ||
-            e.PropertyName == nameof(AgentViewModel.IsDiagnosticsVisible))
+        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible))
         {
             this.outputModel?.Refresh();
         }
@@ -261,7 +260,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 vm.RunningItems,
                 isReasoningVisible: () => vm.IsReasoningVisible,
                 sink: this,
-                isDiagnosticsVisible: () => vm.IsDiagnosticsVisible,
                 toolFactory: DefaultToolFactory,
                 statusSink: this,
                 resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
