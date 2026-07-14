@@ -183,11 +183,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.agentDefinition = resolvedAgentDefinition;
        var clientInfo = this.request.ClientOverride is not null
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : AgentFactory.CreateChatClient(
+           : await AgentFactory.CreateChatClientAsync(
                resolvedAgentDefinition,
                this.request.AgentServices,
                queueManager: this.queueManager,
-               subAgentChatRegistry: this);
+               subAgentChatRegistry: this,
+               cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
        var resolvedClient = clientInfo.ChatClient;
        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
        if (resolvedClient is SubAgentChatClient sac)

@@ -72,5 +72,6 @@ public sealed class AgentFactorySteeringTests
     private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
     {
         public string ResolveApiKey(string? apiKeyValue, string? serverName) => key;
+        public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default) => Task.FromResult(key);
     }
 }
