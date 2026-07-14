@@ -80,4 +80,42 @@ public sealed class GitHubAuthTokenResolverTests
             Logs.Add((logLevel, formatter(state, exception)));
         }
     }
+
+    [Fact]
+    public async Task ResolveFromCliCoreAsync_ReturnsToken_WhenCliSucceeds()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+
+        var result = await GitHubAuthTokenResolver.ResolveFromCliCoreAsync(
+            logger,
+            new RunProcessParameters("cmd.exe", ["/c", "echo", "ghs_asynctoken"]));
+
+        Assert.Equal("ghs_asynctoken", result);
+        if (logger.Logs.Any())
+        {
+            Assert.All(logger.Logs, log => Assert.Equal(LogLevel.Debug, log.Level));
+        }
+    }
+
+    [Fact]
+    public async Task ResolveFromCliCoreAsync_ReturnsNull_WhenCliFails()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+
+        var result = await GitHubAuthTokenResolver.ResolveFromCliCoreAsync(
+            logger,
+            new RunProcessParameters("cmd.exe", ["/c", "exit", "1"]));
+
+        Assert.Null(result);
+    }
 }
