@@ -20,7 +20,8 @@ public sealed record RunProcessParameters(
     IReadOnlyList<string> Arguments,
     KillOnCloseAction KillOnClose = KillOnCloseAction.None,
     string? WorkingDirectory = null,
-    TimeSpan? Timeout = null);
+    TimeSpan? Timeout = null,
+    IReadOnlyDictionary<string, string>? EnvironmentVariables = null);
 
 /// <summary>Controls whether a child process tree is killed when the parent process exits.</summary>
 public enum KillOnCloseAction
@@ -82,6 +83,14 @@ public static class ProcessRunner
         foreach (var arg in parameters.Arguments)
         {
             startInfo.ArgumentList.Add(arg);
+        }
+
+        if (parameters.EnvironmentVariables is not null)
+        {
+            foreach (var (key, value) in parameters.EnvironmentVariables)
+            {
+                startInfo.EnvironmentVariables[key] = value;
+            }
         }
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

@@ -88,14 +88,15 @@ internal static class VsCodeCliLocator
     internal static RunProcessParameters BuildRunProcessParameters(
         string cliPath,
         string arguments,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         var argTokens = arguments.Split(' ');
         if (OperatingSystem.IsWindows() && cliPath.EndsWith(".cmd", StringComparison.OrdinalIgnoreCase))
         {
-            return new RunProcessParameters("cmd.exe", ["/c", cliPath, ..argTokens], Timeout: timeout);
+            return new RunProcessParameters("cmd.exe", ["/c", cliPath, ..argTokens], Timeout: timeout, EnvironmentVariables: environmentVariables);
         }
 
-        return new RunProcessParameters(cliPath, argTokens, Timeout: timeout);
+        return new RunProcessParameters(cliPath, argTokens, Timeout: timeout, EnvironmentVariables: environmentVariables);
     }
 }
