@@ -286,16 +286,33 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
     public Task<int> WaitForExitAsync(CancellationToken ct = default)
     {
-        return Task.Run(() =>
-        {
-            using var mre = new ManualResetEvent(false);
-            mre.SafeWaitHandle = new SafeWaitHandle(_hProcess.DangerousGetHandle(), ownsHandle: false);
-            mre.WaitOne();
+        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var waitHandle = new ManualResetEvent(false);
+        waitHandle.SafeWaitHandle = new SafeWaitHandle(_hProcess.DangerousGetHandle(), ownsHandle: false);
 
-            GetExitCodeProcess(_hProcess, out uint code);
-            GC.KeepAlive(_hProcess);
-            return (int)code;
-        }, ct);
+        RegisteredWaitHandle? registration = null;
+        registration = ThreadPool.RegisterWaitForSingleObject(
+            waitHandle,
+            (_, timedOut) =>
+            {
+                registration?.Unregister(null);
+                waitHandle.Dispose();
+                GetExitCodeProcess(_hProcess, out uint code);
+                GC.KeepAlive(_hProcess);
+                tcs.TrySetResult((int)code);
+            },
+            state: null,
+            millisecondsTimeOutInterval: -1,
+            executeOnlyOnce: true);
+
+        ct.Register(() =>
+        {
+            registration?.Unregister(null);
+            waitHandle.Dispose();
+            tcs.TrySetCanceled(ct);
+        });
+
+        return tcs.Task;
     }
 
     public async ValueTask DisposeAsync()
