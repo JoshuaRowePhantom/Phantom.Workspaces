@@ -70,58 +70,20 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             var gitMetadata = GitRepositoryMetadataReader.TryReadMetadata(discoveredWorktreePath, this.logger);
-            var gitWorktreeEntityName = new EntityName("git-worktrees", discoveredWorktreePath);
-            var names = new JsonArray(new JsonArray("git-worktrees", discoveredWorktreePath));
-            if (currentProfileNames.Length > 0)
-            {
-                names.Add(new JsonArray(currentProfileNames[0].Components.Select(component => (JsonNode)component).ToArray()));
-            }
+            var normalizedPath = NormalizeRepositoryPath(discoveredWorktreePath);
+            var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
 
-            var gitObject = new JsonObject();
-            if (!string.IsNullOrWhiteSpace(gitMetadata?.BranchName))
-            {
-                gitObject["branch"] = gitMetadata.BranchName;
-            }
+            var entityData = GitWorkspaceEntityData.Build(
+                discoveredWorktreePath,
+                currentProfileNames,
+                gitMetadata,
+                owningRepositoryPath);
 
-            if (!string.IsNullOrWhiteSpace(gitMetadata?.HeadCommitHash))
-            {
-                gitObject["head-commit"] = gitMetadata.HeadCommitHash;
-            }
-
-            if (!string.IsNullOrWhiteSpace(gitMetadata?.OriginRemoteUrl))
-            {
-                gitObject["remotes"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["name"] = "origin",
-                        ["url"] = gitMetadata.OriginRemoteUrl,
-                    });
-            }
-
-            var entityData = new JsonObject
-            {
-                ["entity-types"] = new JsonArray("entity", "git-worktree", "filesystem-path"),
-                ["names"] = names,
-                ["display-name"] = new JsonObject
-                {
-                    ["default"] = Path.GetFileName(discoveredWorktreePath),
-                },
-                ["path"] = discoveredWorktreePath,
-            };
-            if (!string.IsNullOrWhiteSpace(owningRepositoryPath))
-            {
-                entityData["owning-repository"] = owningRepositoryPath;
-            }
-
-            if (gitObject.Count > 0)
-            {
-                entityData["git"] = gitObject;
-            }
-
-            _ = await WorkspaceToolEntityUtilities.UpsertEntityByPrimaryNameAsync(
+            _ = await WorkspaceToolEntityUtilities.UpsertEntityByDeterministicIdAsync(
                 context.DataAccessLayer,
-                gitWorktreeEntityName,
+                deterministicId,
                 entityData,
+                GitWorkspaceEntityData.MergePreservingUserEditableFields,
                 "Discover git worktree entities.",
                 context.CancellationToken);
         }
@@ -183,6 +145,13 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
     {
         var participantNames = WorkspaceEntitySnapshotReader.GetEntityNames(participant);
         return participantNames.Any(participantName => currentProfileNames.Contains(participantName));
+    }
+
+    private static string NormalizeRepositoryPath(string repositoryPath)
+    {
+        return Path.GetFullPath(repositoryPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .ToLowerInvariant();
     }
 }
 
