@@ -149,7 +149,7 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         await DispatchAsync(router, StartedEvent("agent-1"));
         await DispatchAsync(router, DeltaEvent("agent-1", "hello from sub-agent"));
 
-        var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        var receiver = factory.CreatedReceiver!;
         // Drain the receiver
         receiver.Complete();
         var updates = new List<ChatResponseUpdate>();
@@ -299,6 +299,7 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
 
         public List<(AgentDefinition Definition, AgentSessionId SessionId)> CreateCalls { get; } = new();
         public RunningAgentChatLease? CreatedLease { get; private set; }
+        public CopilotSubAgentChatClient? CreatedReceiver { get; private set; }
 
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
 
@@ -307,7 +308,11 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
             _exposeReceiver = exposeReceiver;
         }
 
-        public void ResetLease() => CreatedLease = null;
+        public void ResetLease()
+        {
+            CreatedLease = null;
+            CreatedReceiver = null;
+        }
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.CreateAsync(
             AgentDefinition definition,
@@ -317,9 +322,17 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         {
             CreateCalls.Add((definition, sessionId));
 
-            IChatClient client = _exposeReceiver
-                ? new CopilotSubAgentChatClient()
-                : new NonReceiverChatClient();
+            IChatClient client;
+            if (_exposeReceiver)
+            {
+                var receiver = new CopilotSubAgentChatClient();
+                CreatedReceiver = receiver;
+                client = receiver;
+            }
+            else
+            {
+                client = new NonReceiverChatClient();
+            }
 
             // Create AgentChat using the internal constructor, skipping CreateAsync/InitializeAsync
             // to avoid starting the background processing loop that would consume from the channel.
