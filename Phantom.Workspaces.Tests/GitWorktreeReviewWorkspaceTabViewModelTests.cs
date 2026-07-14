@@ -202,7 +202,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
     }
 
     [PhantomAvaloniaFact(Timeout = 10_000)]
-    public async Task ChangingTargetBranchTriggersCommitListRefresh()
+    public async Task TargetBranch_Set_TriggersCommitListRefreshAndClearsPreviousCommits()
     {
         // Use no valid repo path so RefreshAsync completes quickly.
         var vm = CreateViewModel("""
@@ -216,8 +216,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            // Allow the constructor's fire-and-forget RefreshAsync to complete.
-            await Task.Yield();
+            // Wait for the constructor's initial refresh to complete
+            Assert.NotNull(vm.CurrentRefresh);
+            await vm.CurrentRefresh!;
 
             // Plant a sentinel commit to verify it is cleared when CommitList refreshes.
             var sentinel = new GitCommitModel
@@ -230,29 +231,12 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             vm.CommitList.Commits.Add(sentinel);
             Assert.Single(vm.CommitList.Commits);
 
-            // Wait for IsRefreshing to complete its true→false cycle (event-driven sync).
-            var refreshCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var wasRefreshing = false;
-            vm.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(vm.IsRefreshing))
-                {
-                    if (vm.IsRefreshing)
-                    {
-                        wasRefreshing = true;
-                    }
-                    else if (wasRefreshing)
-                    {
-                        refreshCompleted.TrySetResult(true);
-                    }
-                }
-            };
-
             vm.TargetBranch = "develop";
 
-            await refreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            // Wait for the new refresh to complete
+            await vm.CurrentRefresh!;
 
-            // Commits.Clear() is called during every RefreshAsync; the sentinel should be gone.
+            // The sentinel should be gone - new CommitList instance was swapped in
             Assert.Empty(vm.CommitList.Commits);
         }
     }
@@ -274,7 +258,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             """);
 
         // Allow the constructor's initial refresh to complete.
-        await Task.Yield();
+        await vm.CurrentRefresh!;
         var refreshCountBeforeDispose = vm.CommitList.Commits.Count;
 
         await vm.DisposeAsync();
@@ -322,7 +306,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
@@ -367,7 +351,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
             Assert.NotNull(file1);
@@ -423,7 +407,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
             Assert.NotNull(file1);
@@ -479,7 +463,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             Assert.Equal(2, vm.FileList.Files.Count);
 
@@ -532,7 +516,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var commits = vm.CommitList.Commits.Where(c => !c.IsUnstaged && !c.IsStaged).ToList();
             Assert.Equal(2, commits.Count);
@@ -584,7 +568,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
             Assert.NotNull(commit);
@@ -640,7 +624,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
             Assert.NotNull(commit);
@@ -687,7 +671,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
             Assert.NotNull(commit);
@@ -726,7 +710,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
             Assert.NotNull(commit);
@@ -768,7 +752,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var commit = vm.CommitList.Commits.FirstOrDefault(c => !c.IsUnstaged && !c.IsStaged);
             Assert.NotNull(commit);
@@ -846,7 +830,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var deleteCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Delete"));
             Assert.NotNull(deleteCommit);
@@ -897,7 +881,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var addCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Add file2"));
             Assert.NotNull(addCommit);
@@ -951,7 +935,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var secondCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Delete"));
             Assert.NotNull(secondCommit);
@@ -1168,7 +1152,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
     }
 
     [PhantomAvaloniaFact(Timeout = 10_000)]
-    public async Task BranchDropdown_SelectBranch_UpdatesTargetBranch()
+    public async Task BranchDropdown_SelectBranch_UpdatesTargetBranchAndCommitList()
     {
         var vm = CreateViewModel("""
             {
@@ -1181,7 +1165,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            // Wait for the constructor's initial refresh to complete
+            Assert.NotNull(vm.CurrentRefresh);
+            await vm.CurrentRefresh!;
 
             var sentinel = new GitCommitModel
             {
@@ -1192,26 +1178,10 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             };
             vm.CommitList.Commits.Add(sentinel);
 
-            var refreshCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var wasRefreshing = false;
-            vm.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName == nameof(vm.IsRefreshing))
-                {
-                    if (vm.IsRefreshing)
-                    {
-                        wasRefreshing = true;
-                    }
-                    else if (wasRefreshing)
-                    {
-                        refreshCompleted.TrySetResult(true);
-                    }
-                }
-            };
-
             vm.TargetBranch = "feature-branch";
 
-            await refreshCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            // Wait for the new refresh to complete
+            await vm.CurrentRefresh!;
 
             Assert.Equal("feature-branch", vm.TargetBranch);
             Assert.Empty(vm.CommitList.Commits);
@@ -1253,7 +1223,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var initialDiffCount = vm.FileDiffs.Count;
 
@@ -1306,10 +1276,10 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         await using (vm)
         {
             vm.ContextLines = 3;
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             vm.FullFile = true;
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var diff = vm.FileDiffs.FirstOrDefault();
             Assert.NotNull(diff);
@@ -1356,7 +1326,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             while (vm.FileDiffs.Count == 0)
             {
@@ -1413,7 +1383,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             while (vm.FileDiffs.Count == 0)
             {
@@ -1470,7 +1440,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             var diffRebuildCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted.TrySetResult(true);
@@ -1526,7 +1496,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             while (vm.FileDiffs.Count == 0)
             {
@@ -1583,7 +1553,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             Assert.NotEmpty(vm.FileDiffs);
             Assert.All(vm.FileDiffs, diff => Assert.False(diff.SideBySide));
@@ -1635,7 +1605,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
-            await Task.Yield();
+            await vm.CurrentRefresh!;
 
             Assert.NotEmpty(vm.FileDiffs);
             var initialDiff = vm.FileDiffs[0];

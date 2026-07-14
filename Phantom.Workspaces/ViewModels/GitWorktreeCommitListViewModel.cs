@@ -12,55 +12,60 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
     public ObservableCollection<GitCommitModel> Commits { get; } = new();
     public ObservableCollection<GitCommitModel> SelectedCommits { get; } = new();
 
-    public Task RefreshAsync(string repositoryPath, string targetBranch, CancellationToken ct = default)
+    public async Task RefreshAsync(string repositoryPath, string targetBranch, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
 
-        var commits = new System.Collections.Generic.List<GitCommitModel>();
-        bool hasUnstaged = false;
-        bool hasStaged = false;
-
-        try
+        var (commits, hasUnstaged, hasStaged) = await Task.Run(() =>
         {
-            using var repo = new Repository(repositoryPath);
+            var commitsList = new System.Collections.Generic.List<GitCommitModel>();
+            bool unstaged = false;
+            bool staged = false;
 
-            // Check for uncommitted changes
-            var status = repo.RetrieveStatus(new StatusOptions());
-            hasStaged = status.Staged.Any();
-            hasUnstaged = status.Modified.Any() || status.Untracked.Any() || status.Missing.Any();
-
-            // Get commits not in target branch
-            var targetCommit = repo.Branches[targetBranch]?.Tip ?? repo.Lookup<Commit>(targetBranch);
-            if (targetCommit is not null && repo.Head.Tip is not null)
+            try
             {
-                var filter = new CommitFilter
-                {
-                    IncludeReachableFrom = repo.Head.Tip,
-                    ExcludeReachableFrom = targetCommit,
-                };
+                using var repo = new Repository(repositoryPath);
 
-                foreach (var commit in repo.Commits.QueryBy(filter))
+                // Check for uncommitted changes
+                var status = repo.RetrieveStatus(new StatusOptions());
+                staged = status.Staged.Any();
+                unstaged = status.Modified.Any() || status.Untracked.Any() || status.Missing.Any();
+
+                // Get commits not in target branch
+                var targetCommit = repo.Branches[targetBranch]?.Tip ?? repo.Lookup<Commit>(targetBranch);
+                if (targetCommit is not null && repo.Head.Tip is not null)
                 {
-                    ct.ThrowIfCancellationRequested();
-                    commits.Add(new GitCommitModel
+                    var filter = new CommitFilter
                     {
-                        Oid = commit.Sha,
-                        ShortMessage = commit.MessageShort,
-                        AuthorName = commit.Author.Name,
-                        AuthorDate = commit.Author.When,
-                    });
+                        IncludeReachableFrom = repo.Head.Tip,
+                        ExcludeReachableFrom = targetCommit,
+                    };
+
+                    foreach (var commit in repo.Commits.QueryBy(filter))
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        commitsList.Add(new GitCommitModel
+                        {
+                            Oid = commit.Sha,
+                            ShortMessage = commit.MessageShort,
+                            AuthorName = commit.Author.Name,
+                            AuthorDate = commit.Author.When,
+                        });
+                    }
                 }
             }
-        }
-        catch (RepositoryNotFoundException)
-        {
-        }
-        catch (LibGit2SharpException)
-        {
-        }
-        catch (ArgumentException)
-        {
-        }
+            catch (RepositoryNotFoundException)
+            {
+            }
+            catch (LibGit2SharpException)
+            {
+            }
+            catch (ArgumentException)
+            {
+            }
+
+            return (commitsList, unstaged, staged);
+        }, ct);
 
         // Preserve selection state by OID
         var selectedOids = new System.Collections.Generic.HashSet<string>(
@@ -98,7 +103,5 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
                 this.SelectedCommits.Add(commit);
             }
         }
-
-        return Task.CompletedTask;
     }
 }

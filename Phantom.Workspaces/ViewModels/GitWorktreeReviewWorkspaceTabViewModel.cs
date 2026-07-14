@@ -18,20 +18,24 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     private int contextLines = 10;
     private bool isRefreshing;
     private CancellationTokenSource? refreshCts;
+    private Task? currentRefresh;
     private readonly GitWorktreeWatcher? watcher;
+    private GitWorktreeCommitListViewModel commitList;
+    private GitWorktreeFileListViewModel fileList;
+    private ObservableCollection<GitDiffViewModel> fileDiffs;
 
     public GitWorktreeReviewWorkspaceTabViewModel(SubscribedEntityViewModel entityViewModel)
     {
         var repositoryPath = GetRepositoryPath(entityViewModel);
 
         this.RepositoryPath = repositoryPath ?? string.Empty;
-        this.CommitList = new GitWorktreeCommitListViewModel();
-        this.FileList = new GitWorktreeFileListViewModel();
-        this.FileDiffs = new ObservableCollection<GitDiffViewModel>();
+        this.commitList = new GitWorktreeCommitListViewModel();
+        this.fileList = new GitWorktreeFileListViewModel();
+        this.fileDiffs = new ObservableCollection<GitDiffViewModel>();
         this.BranchNames = new ObservableCollection<string>();
 
-        this.targetBranch = GetDefaultTargetBranch(entityViewModel, repositoryPath);
-        LoadBranchNames(repositoryPath, this.BranchNames);
+        // Default target branch will be determined asynchronously
+        this.targetBranch = "main";
 
         if (repositoryPath is not null)
         {
@@ -40,10 +44,13 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             this.watcher.Start();
         }
 
-        this.FileList.SelectedFiles.CollectionChanged += this.OnSelectedFilesChanged;
-        this.CommitList.SelectedCommits.CollectionChanged += this.OnSelectedCommitsChanged;
+        this.fileList.SelectedFiles.CollectionChanged += this.OnSelectedFilesChanged;
+        this.commitList.SelectedCommits.CollectionChanged += this.OnSelectedCommitsChanged;
 
-        Lifetime.Run(this.RefreshAsync);
+        // Start initialization and expose it as CurrentRefresh immediately
+        var initTask = this.InitializeAsync(entityViewModel, Lifetime.Token);
+        this.currentRefresh = initTask;
+        Lifetime.Run(_ => initTask);
     }
 
     public string RepositoryPath { get; }
@@ -140,34 +147,93 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         private set => this.SetProperty(ref this.isRefreshing, value);
     }
 
-    public GitWorktreeCommitListViewModel CommitList { get; }
+    public Task? CurrentRefresh => this.currentRefresh;
 
-    public GitWorktreeFileListViewModel FileList { get; }
+    public GitWorktreeCommitListViewModel CommitList
+    {
+        get => this.commitList;
+        private set => this.SetProperty(ref this.commitList, value);
+    }
 
-    public ObservableCollection<GitDiffViewModel> FileDiffs { get; }
+    public GitWorktreeFileListViewModel FileList
+    {
+        get => this.fileList;
+        private set => this.SetProperty(ref this.fileList, value);
+    }
+
+    public ObservableCollection<GitDiffViewModel> FileDiffs
+    {
+        get => this.fileDiffs;
+        private set => this.SetProperty(ref this.fileDiffs, value);
+    }
 
     public ObservableCollection<string> BranchNames { get; }
 
-    public async Task RefreshAsync(CancellationToken ct = default)
+    private async Task InitializeAsync(SubscribedEntityViewModel entityViewModel, CancellationToken ct = default)
+    {
+        var (defaultBranch, branchNames) = await Task.Run(() =>
+        {
+            var target = GetDefaultTargetBranch(entityViewModel, this.RepositoryPath);
+            var branches = new System.Collections.Generic.List<string>();
+            LoadBranchNames(this.RepositoryPath, branches);
+            return (target, branches);
+        }, ct);
+
+        this.targetBranch = defaultBranch;
+        foreach (var branch in branchNames)
+        {
+            this.BranchNames.Add(branch);
+        }
+
+        // Call RefreshCoreAsync directly to avoid overwriting currentRefresh
+        await this.RefreshCoreAsync(ct);
+    }
+
+    public Task RefreshAsync(CancellationToken ct = default)
+    {
+        return this.currentRefresh = this.RefreshCoreAsync(ct);
+    }
+
+    private async Task RefreshCoreAsync(CancellationToken ct = default)
     {
         this.refreshCts?.Cancel();
+        this.refreshCts?.Dispose();
         this.refreshCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var token = this.refreshCts.Token;
 
         try
         {
             this.IsRefreshing = true;
-            await this.CommitList.RefreshAsync(this.RepositoryPath, this.targetBranch, token);
 
-            var selectedCommits = this.CommitList.SelectedCommits.Count > 0
-                ? (IReadOnlyList<GitCommitModel>)this.CommitList.SelectedCommits
-                : (IReadOnlyList<GitCommitModel>)this.CommitList.Commits;
+            // Build detached VMs on background thread
+            var newCommitList = new GitWorktreeCommitListViewModel();
+            await newCommitList.RefreshAsync(this.RepositoryPath, this.targetBranch, token);
 
-            await this.FileList.RefreshAsync(this.RepositoryPath, selectedCommits, token);
-            await this.RebuildFileDiffsAsync(selectedCommits, token);
+            // Preserve commit selection by OID
+            PreserveCommitSelection(this.CommitList, newCommitList);
+
+            var selectedCommits = newCommitList.SelectedCommits.Count > 0
+                ? (IReadOnlyList<GitCommitModel>)newCommitList.SelectedCommits
+                : (IReadOnlyList<GitCommitModel>)newCommitList.Commits;
+
+            var newFileList = new GitWorktreeFileListViewModel();
+            await newFileList.RefreshAsync(this.RepositoryPath, selectedCommits, token);
+
+            // Preserve file selection by path
+            PreserveFileSelection(this.FileList, newFileList);
+
+            var newDiffs = await this.BuildFileDiffsAsync(newFileList, selectedCommits, token);
+
+            token.ThrowIfCancellationRequested();
+
+            // Atomic swap - only writes back to visible state
+            this.AttachCommitList(newCommitList);
+            this.AttachFileList(newFileList);
+            this.FileDiffs = newDiffs;
         }
         catch (OperationCanceledException)
         {
+            // Detached VMs simply go out of scope; visible state is untouched
         }
         finally
         {
@@ -178,90 +244,156 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
     }
 
-    private Task RebuildFileDiffsAsync(IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct)
+    private void AttachCommitList(GitWorktreeCommitListViewModel newList)
     {
-        ct.ThrowIfCancellationRequested();
-
-        var selectedFiles = this.FileList.SelectedFiles.Count > 0
-            ? (IReadOnlyList<GitWorktreeFileEntryViewModel>)this.FileList.SelectedFiles
-            : (IReadOnlyList<GitWorktreeFileEntryViewModel>)this.FileList.Files;
-
-        var newDiffs = new List<GitDiffViewModel>();
-
-        var effectiveContextLines = this.fullFile ? int.MaxValue / 2 : this.contextLines;
-
-        try
+        if (this.commitList is { } old)
         {
-            using var repo = new Repository(this.RepositoryPath);
+            old.SelectedCommits.CollectionChanged -= this.OnSelectedCommitsChanged;
+        }
 
-            foreach (var fileEntry in selectedFiles)
+        this.CommitList = newList;
+        newList.SelectedCommits.CollectionChanged += this.OnSelectedCommitsChanged;
+        this.RaisePropertyChanged(nameof(this.FileListHeader));
+    }
+
+    private void AttachFileList(GitWorktreeFileListViewModel newList)
+    {
+        if (this.fileList is { } old)
+        {
+            old.SelectedFiles.CollectionChanged -= this.OnSelectedFilesChanged;
+        }
+
+        this.FileList = newList;
+        newList.SelectedFiles.CollectionChanged += this.OnSelectedFilesChanged;
+    }
+
+    private static void PreserveCommitSelection(GitWorktreeCommitListViewModel oldList, GitWorktreeCommitListViewModel newList)
+    {
+        var selectedOids = new HashSet<string>(
+            oldList.SelectedCommits.Select(c => c.Oid),
+            StringComparer.Ordinal);
+
+        foreach (var commit in newList.Commits)
+        {
+            if (selectedOids.Contains(commit.Oid))
             {
-                ct.ThrowIfCancellationRequested();
+                newList.SelectedCommits.Add(commit);
+            }
+        }
+    }
 
-                foreach (var commit in selectedCommits)
+    private static void PreserveFileSelection(GitWorktreeFileListViewModel oldList, GitWorktreeFileListViewModel newList)
+    {
+        var selectedPaths = new HashSet<string>(
+            oldList.SelectedFiles.Select(f => f.RelativePath),
+            StringComparer.Ordinal);
+
+        foreach (var file in newList.Files)
+        {
+            if (selectedPaths.Contains(file.RelativePath))
+            {
+                file.IsSelected = true;
+                newList.SelectedFiles.Add(file);
+            }
+        }
+    }
+
+    private Task<ObservableCollection<GitDiffViewModel>> BuildFileDiffsAsync(
+        GitWorktreeFileListViewModel fileListVm,
+        IReadOnlyList<GitCommitModel> selectedCommits,
+        CancellationToken ct)
+    {
+        return Task.Run(() =>
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var selectedFiles = fileListVm.SelectedFiles.Count > 0
+                ? (IReadOnlyList<GitWorktreeFileEntryViewModel>)fileListVm.SelectedFiles
+                : (IReadOnlyList<GitWorktreeFileEntryViewModel>)fileListVm.Files;
+
+            var newDiffs = new List<GitDiffViewModel>();
+
+            var effectiveContextLines = this.fullFile ? int.MaxValue / 2 : this.contextLines;
+
+            try
+            {
+                using var repo = new Repository(this.RepositoryPath);
+
+                foreach (var fileEntry in selectedFiles)
                 {
-                    Patch? patch = null;
+                    ct.ThrowIfCancellationRequested();
 
-                    if (commit.IsUnstaged)
+                    foreach (var commit in selectedCommits)
                     {
-                        patch = repo.Diff.Compare<Patch>(
-                            repo.Head.Tip?.Tree,
-                            DiffTargets.WorkingDirectory,
-                            new[] { fileEntry.RelativePath },
-                            new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
-                            new CompareOptions { ContextLines = effectiveContextLines });
-                    }
-                    else if (commit.IsStaged)
-                    {
-                        patch = repo.Diff.Compare<Patch>(
-                            repo.Head.Tip?.Tree,
-                            DiffTargets.Index,
-                            new[] { fileEntry.RelativePath },
-                            new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
-                            new CompareOptions { ContextLines = effectiveContextLines });
-                    }
-                    else
-                    {
-                        var c = repo.Lookup<Commit>(commit.Oid);
-                        if (c?.Parents.FirstOrDefault() is { } parent)
+                        Patch? patch = null;
+
+                        if (commit.IsUnstaged)
                         {
                             patch = repo.Diff.Compare<Patch>(
-                                parent.Tree,
-                                c.Tree,
+                                repo.Head.Tip?.Tree,
+                                DiffTargets.WorkingDirectory,
                                 new[] { fileEntry.RelativePath },
                                 new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
                                 new CompareOptions { ContextLines = effectiveContextLines });
                         }
-                    }
-
-                    if (patch is not null)
-                    {
-                        foreach (var entry in patch)
+                        else if (commit.IsStaged)
                         {
-                            newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, effectiveContextLines, this.sideBySide));
+                            patch = repo.Diff.Compare<Patch>(
+                                repo.Head.Tip?.Tree,
+                                DiffTargets.Index,
+                                new[] { fileEntry.RelativePath },
+                                new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
+                                new CompareOptions { ContextLines = effectiveContextLines });
+                        }
+                        else
+                        {
+                            var c = repo.Lookup<Commit>(commit.Oid);
+                            if (c?.Parents.FirstOrDefault() is { } parent)
+                            {
+                                patch = repo.Diff.Compare<Patch>(
+                                    parent.Tree,
+                                    c.Tree,
+                                    new[] { fileEntry.RelativePath },
+                                    new ExplicitPathsOptions { ShouldFailOnUnmatchedPath = false },
+                                    new CompareOptions { ContextLines = effectiveContextLines });
+                            }
+                        }
+
+                        if (patch is not null)
+                        {
+                            foreach (var entry in patch)
+                            {
+                                newDiffs.Add(GitDiffViewModel.FromPatchEntry(entry, effectiveContextLines, this.sideBySide));
+                            }
                         }
                     }
                 }
             }
-        }
-        catch (RepositoryNotFoundException)
-        {
-        }
-        catch (LibGit2SharpException)
-        {
-        }
-        catch (ArgumentException)
-        {
-        }
+            catch (RepositoryNotFoundException)
+            {
+            }
+            catch (LibGit2SharpException)
+            {
+            }
+            catch (ArgumentException)
+            {
+            }
 
-        // Update in place
-        this.FileDiffs.Clear();
-        foreach (var diff in newDiffs)
-        {
-            this.FileDiffs.Add(diff);
-        }
+            var result = new ObservableCollection<GitDiffViewModel>();
+            foreach (var diff in newDiffs)
+            {
+                result.Add(diff);
+            }
 
-        return Task.CompletedTask;
+            return result;
+        }, ct);
+    }
+
+    private async Task RebuildFileDiffsAsync(IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct)
+    {
+        var newDiffs = await this.BuildFileDiffsAsync(this.FileList, selectedCommits, ct);
+        ct.ThrowIfCancellationRequested();
+        this.FileDiffs = newDiffs;
     }
 
     private void OnWatcherChanged(object? sender, EventArgs e)
@@ -339,7 +471,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         // 2. Probe the repository for main/master
-        if (repositoryPath is not null)
+        if (repositoryPath is not null && !string.IsNullOrEmpty(repositoryPath))
         {
             try
             {
@@ -365,9 +497,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         return "main";
     }
 
-    private static void LoadBranchNames(string? repositoryPath, ObservableCollection<string> branchNames)
+    private static void LoadBranchNames(string? repositoryPath, System.Collections.Generic.List<string> branchNames)
     {
-        if (repositoryPath is null)
+        if (repositoryPath is null || string.IsNullOrEmpty(repositoryPath))
         {
             return;
         }
