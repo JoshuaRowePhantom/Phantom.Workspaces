@@ -225,4 +225,136 @@ public sealed class QueueComposerInputHistoryTests
 
         inputQueue.Dispose();
     }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_WithSingleEntry_ShowsMostRecentMessage()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "only message";
+        composer.Submit();
+        composer.InputText = "draft";
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+
+        Assert.True(navigated);
+        Assert.Equal("only message", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_WithMultipleEntries_FirstPressShowsMostRecentMessage()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first message";
+        composer.Submit();
+        composer.InputText = "second message";
+        composer.Submit();
+        composer.InputText = "third message";
+        composer.Submit();
+        composer.InputText = "draft";
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+
+        Assert.True(navigated);
+        Assert.Equal("third message", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_SecondPress_ShowsSecondMostRecentMessage()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first message";
+        composer.Submit();
+        composer.InputText = "second message";
+        composer.Submit();
+        composer.InputText = "third message";
+        composer.Submit();
+        composer.InputText = "draft";
+
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+
+        Assert.True(navigated);
+        Assert.Equal("second message", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_WhenHistoryIsEmpty_ReturnsFalse()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "draft";
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+
+        Assert.False(navigated);
+        Assert.Equal(string.Empty, text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_AtOldestEntry_StaysAtOldestEntry()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first message";
+        composer.Submit();
+        composer.InputText = "second message";
+        composer.Submit();
+        composer.InputText = "third message";
+        composer.Submit();
+
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+
+        Assert.True(navigated);
+        Assert.Equal("first message", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryDown_AtCurrentInput_ReturnsFalse()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first message";
+        composer.Submit();
+
+        var navigated = composer.TryNavigateHistoryDown(out var text, out _);
+
+        Assert.False(navigated);
+        Assert.Equal(string.Empty, text);
+
+        inputQueue.Dispose();
+    }
 }
