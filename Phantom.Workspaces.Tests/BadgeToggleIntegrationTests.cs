@@ -164,6 +164,60 @@ public sealed class BadgeToggleIntegrationTests
         Assert.False(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
+    [PhantomAvaloniaFact]
+    public async Task EntityCardViewModel_ToggleInterestCommand_WhenToggleFails_PropagatesException()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+
+        // Create a bogus entity that doesn't exist
+        var bogusId = new EntityId(Guid.NewGuid());
+        var bogusSnapshot = new EntitySnapshot
+        {
+            EntityId = bogusId,
+            ConcurrencyTag = null,
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+            Data = JsonDocument.Parse("""{"entity-id":"00000000-0000-0000-0000-000000000000","entity-types":["entity", "task"]}""").RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        
+        // Wire up toggle function that will fail
+        var toggleFunc = async (SubscribedEntityViewModel entity, string interestTypeName) =>
+        {
+            await InterestToggle.ToggleAsync(broker, entity.Snapshot, interestTypeName, ct);
+        };
+        var subscribedEntity = new SubscribedEntityViewModel(bogusSnapshot, null, toggleFunc);
+
+        var cardNode = new EntityListNodeViewModel(
+            subscribedEntity,
+            new[] { "tasks", "bogus-task" },
+            "bogus-task");
+
+        var badgesModel = new BadgesModel();
+        badgesModel.SetBadges(new[]
+        {
+            new BadgeModel("actionable", "📌", "Mark as actionable", IsActive: false),
+        });
+
+        var badgesViewModel = new BadgesViewModel(badgesModel);
+
+        // Set up the badges (this wires up ToggleInterestCommand)
+        cardNode.Card.SetBadges(badgesViewModel);
+
+        // Execute the command - this should propagate the exception via the LastExecutionTask
+        Assert.NotNull(cardNode.Card.ToggleInterestCommand);
+        cardNode.Card.ToggleInterestCommand.Execute(badgesViewModel.Badges.First());
+
+        // Get the underlying task from AsyncRelayCommand
+        var asyncCommand = Assert.IsType<AsyncRelayCommand>(cardNode.Card.ToggleInterestCommand);
+        var executionTask = asyncCommand.LastExecutionTask;
+        Assert.NotNull(executionTask);
+
+        // The task should fail with an exception
+        var exception = await Assert.ThrowsAnyAsync<Exception>(async () => await executionTask);
+        Assert.NotNull(exception);
+    }
+
     private static async Task SeedTaskAsync(IDataAccessLayer dataAccessLayer, EntityId id)
     {
         using var document = JsonDocument.Parse(

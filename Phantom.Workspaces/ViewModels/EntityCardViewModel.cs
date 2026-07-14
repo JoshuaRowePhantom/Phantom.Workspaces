@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Windows.Input;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -129,7 +130,7 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public RelayCommand? ActivateShortcutCommand { get; private set; }
 
-    public RelayCommand? ToggleInterestCommand { get; private set; }
+    public ICommand? ToggleInterestCommand { get; private set; }
 
     public RelayCommand ToggleEditModeCommand { get; }
 
@@ -267,7 +268,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         BadgesViewModel badges)
     {
         this.Badges = badges;
-        this.ToggleInterestCommand = new RelayCommand(
+        this.ToggleInterestCommand = new AsyncRelayCommand(
             async parameter =>
             {
                 if (parameter is BadgeModel badge && this.entity is not null)
