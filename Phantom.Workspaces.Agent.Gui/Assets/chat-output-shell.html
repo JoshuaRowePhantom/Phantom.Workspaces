@@ -6,20 +6,56 @@
   <title>Chat output</title>
   <style>
     :root {
-      --chat-background: ;
-      --chat-foreground: ;
+      /* Campbell — Windows Terminal / VS Code dark terminal palette */
+      --ansi-black:            #0C0C0C;
+      --ansi-red:              #C50F1F;
+      --ansi-green:            #13A10E;
+      --ansi-yellow:           #C19C00;
+      --ansi-blue:             #0037DA;
+      --ansi-magenta:          #881798;
+      --ansi-cyan:             #3A96DD;
+      --ansi-white:            #CCCCCC;
+
+      --ansi-bright-black:     #767676;
+      --ansi-bright-red:       #E74856;
+      --ansi-bright-green:     #16C60C;
+      --ansi-bright-yellow:    #F9F1A5;
+      --ansi-bright-blue:      #3B78FF;
+      --ansi-bright-magenta:   #B4009E;
+      --ansi-bright-cyan:      #61D6D6;
+      --ansi-bright-white:     #F2F2F2;
+
+      --terminal-background:   #0C0C0C;
+      --terminal-foreground:   #CCCCCC;
+      --terminal-cursor:       #FFFFFF;
+      --terminal-selection:    #FFFFFF;
+
+      /* Semantic chat variables — Campbell-derived defaults (dark) */
+      --chat-background:          var(--terminal-background);
+      --chat-foreground:          var(--terminal-foreground);
       --chat-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
       --chat-font-size: 13px;
-      --chat-role: ;
-      --chat-user: ;
-      --chat-reasoning: ;
-      --chat-meta: ;
-      --chat-error: ;
-      --chat-uri: ;
-      --chat-tool-summary: #c586c0;
-      --chat-tool-body-background: ;
-      --copy-btn-color: ;
-      --copy-btn-hover-color: ;
+      --chat-role:                var(--ansi-bright-cyan);
+      --chat-user:                var(--ansi-bright-green);
+      --chat-reasoning:           var(--ansi-bright-black);
+      --chat-meta:                var(--ansi-bright-black);
+      --chat-error:               var(--ansi-bright-red);
+      --chat-uri:                 var(--ansi-bright-blue);
+      --chat-tool-summary:        var(--ansi-bright-magenta);
+      --chat-tool-body-background:#1B1B1B;
+      --copy-btn-color:           var(--ansi-bright-black);
+      --copy-btn-hover-color:     var(--ansi-white);
+      --copy-btn-confirmed-color: var(--ansi-bright-green);
+    }
+
+    /* Light-mode override: host adds `light` class to <body> when ActualThemeVariant == Light. */
+    body.light {
+      --chat-background:          #FFFFFF;
+      --chat-foreground:          #0C0C0C;
+      --chat-tool-body-background:#F3F3F3;
+      --chat-reasoning:           #6E6E6E;
+      --chat-meta:                #6E6E6E;
+      /* ANSI slot values themselves stay Campbell — only the semantic overlays change for light. */
     }
 
     html, body {
@@ -708,6 +744,10 @@
             scrollToBottom();
             break;
           case "theme": {
+            // Support both className (new Campbell-based approach) and variables (legacy).
+            if (command.className) {
+              document.body.className = command.className;
+            }
             if (command.variables) {
               var root = document.documentElement;
               Object.keys(command.variables).forEach(function (key) {

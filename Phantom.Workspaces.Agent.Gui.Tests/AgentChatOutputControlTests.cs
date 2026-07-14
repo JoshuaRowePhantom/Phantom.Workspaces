@@ -1193,6 +1193,98 @@ public sealed class AgentChatOutputControlTests
         return (ViewModels.DocumentModels.ChatOutputHtmlModel?)field!.GetValue(control);
     }
 
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_UsesCampbellBackground()
+    {
+        // Verify that the CSS :root block defines --terminal-background as Campbell's #0C0C0C.
+        var html = ReadShellHtml();
+
+        Assert.Contains("--terminal-background:", html, StringComparison.Ordinal);
+        Assert.Contains("#0C0C0C", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_UsesCampbellForeground()
+    {
+        // Verify that the CSS :root block defines --terminal-foreground as Campbell's #CCCCCC.
+        var html = ReadShellHtml();
+
+        Assert.Contains("--terminal-foreground:", html, StringComparison.Ordinal);
+        Assert.Contains("#CCCCCC", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_DefinesAll16AnsiColors()
+    {
+        // Verify that all 16 ANSI color CSS variables are defined in :root.
+        var html = ReadShellHtml();
+
+        // Normal colors
+        Assert.Contains("--ansi-black:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-red:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-green:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-yellow:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-blue:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-magenta:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-cyan:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-white:", html, StringComparison.Ordinal);
+
+        // Bright colors
+        Assert.Contains("--ansi-bright-black:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-red:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-green:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-yellow:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-blue:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-magenta:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-cyan:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-white:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_ToolSummaryUsesCampbellBrightMagenta()
+    {
+        // Verify that --chat-tool-summary points to Campbell's bright magenta (#B4009E),
+        // not the old hardcoded #c586c0.
+        var html = ReadShellHtml();
+
+        Assert.Contains("--ansi-bright-magenta:", html, StringComparison.Ordinal);
+        Assert.Contains("#B4009E", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-tool-summary:", html, StringComparison.Ordinal);
+        Assert.Contains("var(--ansi-bright-magenta)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_LightMode_OverridesBackgroundAndForeground()
+    {
+        // Verify that body.light provides light-mode overrides for background/foreground.
+        var html = ReadShellHtml();
+
+        Assert.Contains("body.light", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-background:", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-foreground:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_CampbellColorScheme_MatchesCSharpValues()
+    {
+        // Verify that key Campbell colors in the HTML match the CampbellColorScheme.cs constants.
+        var html = ReadShellHtml();
+
+        // Background and foreground
+        Assert.Contains("#0C0C0C", html, StringComparison.Ordinal); // Background
+        Assert.Contains("#CCCCCC", html, StringComparison.Ordinal); // Foreground/White
+
+        // Sample ANSI colors (spot check a few key ones)
+        Assert.Contains("#C50F1F", html, StringComparison.Ordinal); // Red
+        Assert.Contains("#13A10E", html, StringComparison.Ordinal); // Green
+        Assert.Contains("#0037DA", html, StringComparison.Ordinal); // Blue
+        Assert.Contains("#881798", html, StringComparison.Ordinal); // Magenta
+        Assert.Contains("#B4009E", html, StringComparison.Ordinal); // BrightMagenta
+        Assert.Contains("#E74856", html, StringComparison.Ordinal); // BrightRed
+        Assert.Contains("#16C60C", html, StringComparison.Ordinal); // BrightGreen
+        Assert.Contains("#F2F2F2", html, StringComparison.Ordinal); // BrightWhite
+    }
+
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()
     {
         var field = typeof(AgentChatOutputControl)

@@ -83,7 +83,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.browser.JavaScriptMessageReceived += this.OnBrowserMessageReceived;
         this.BrowserHost.Child = browserControl;
         this.ActualThemeVariantChanged += (_, _) =>
-            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.GetThemeClassName()));
 
         // Forward WebView2 accelerator-key events (e.g. Alt, Alt+1–0) to the bound AgentViewModel
         // so the MainWindow can update IsAltHeld and route GoToTabAtIndex commands even when focus
@@ -242,7 +242,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private async void OnBrowserReady(object? sender, EventArgs e)
     {
         // Always post the theme first so CSS variables are set before any DOM operations arrive.
-        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.GetThemeClassName()));
 
         // Dispose any model left from a previous load cycle, then rebuild from scratch.
         // This fires on both the initial load and every spontaneous reload, so both paths share
@@ -384,6 +384,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.subscribedViewModel.AutoScrollEnabled = atBottom;
         this.suppressScrollOnEnable = false;
     }
+
+    private string GetThemeClassName()
+        => this.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Light ? "light" : "dark";
 
     private IReadOnlyDictionary<string, string> BuildThemeVariables()
     {

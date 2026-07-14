@@ -71,4 +71,27 @@ public sealed class ChatOutputBrowserCommandsTests
         Assert.Equal("#1e1e1e", emitted.GetProperty("--chat-background").GetString());
         Assert.Equal("#e6e6e6", emitted.GetProperty("--chat-foreground").GetString());
     }
+
+    [Fact]
+    public void Theme_WithClassName_SerializesClassName()
+    {
+        var json = ChatOutputBrowserCommands.Theme("light");
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal("theme", root.GetProperty("type").GetString());
+        Assert.Equal("light", root.GetProperty("className").GetString());
+        Assert.False(root.TryGetProperty("variables", out _));
+    }
+
+    [Fact]
+    public void Theme_WithDarkClassName_SerializesDark()
+    {
+        var json = ChatOutputBrowserCommands.Theme("dark");
+
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        Assert.Equal("theme", root.GetProperty("type").GetString());
+        Assert.Equal("dark", root.GetProperty("className").GetString());
+    }
 }
