@@ -18,9 +18,9 @@
              them as "Cancel" or "Ctrl+Shift+Pause" never fires because the real key is Cancel and the
              Ctrl modifier is present. -->
         <KeyBinding Gesture="Ctrl+Cancel" Command="{Binding InterruptCommand}" />
-        <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
+        <KeyBinding Gesture="Pause" Command="{Binding ToggleHoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Shift+Pause" Command="{Binding HoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding UnholdAllQueuesCommand}" />
     </UserControl.KeyBindings>
 
     <UserControl.Resources>

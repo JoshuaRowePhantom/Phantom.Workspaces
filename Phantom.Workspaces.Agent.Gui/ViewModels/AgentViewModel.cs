@@ -71,6 +71,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.agentChat.DefaultInputQueue,
                 this.agentChat.InputQueueManager)
             : null;
+        this.ToggleHoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.ToggleHoldAllQueuesCommand.Execute(null));
+        this.HoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.HoldAllQueuesCommand.Execute(null));
+        this.UnholdAllQueuesCommand = new RelayCommand(() => this.InputQueue?.UnholdAllQueuesCommand.Execute(null));
         this.EditorItems = [];
 
         this.NavigateToAgentHandler = this.NavigateToSubAgent;
@@ -228,6 +231,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public ICommand ToggleReasoningVisibilityCommand { get; }
 
     public ICommand RequestOpenLogWindowCommand { get; }
+
+    public ICommand ToggleHoldAllQueuesCommand { get; }
+
+    public ICommand HoldAllQueuesCommand { get; }
+
+    public ICommand UnholdAllQueuesCommand { get; }
 
     public InputQueueViewModel? InputQueue { get; }
 

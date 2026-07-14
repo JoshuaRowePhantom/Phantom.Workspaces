@@ -344,15 +344,15 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Pause\" Command=\"{Binding InputQueue.ToggleHoldAllQueuesCommand}\"",
+            "Gesture=\"Pause\" Command=\"{Binding ToggleHoldAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Shift+Pause\" Command=\"{Binding InputQueue.HoldAllQueuesCommand}\"",
+            "Gesture=\"Shift+Pause\" Command=\"{Binding HoldAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Ctrl+Shift+Cancel\" Command=\"{Binding InputQueue.UnholdAllQueuesCommand}\"",
+            "Gesture=\"Ctrl+Shift+Cancel\" Command=\"{Binding UnholdAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(

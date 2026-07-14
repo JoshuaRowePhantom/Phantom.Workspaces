@@ -355,6 +355,33 @@ public sealed class AgentViewModelSubAgentBrowserTests
         Assert.NotNull(viewModel.InputQueue);
     }
 
+    [Fact]
+    public async Task SubAgentView_KeyboardShortcuts_QueueCommands_NotActive_WhenAcceptsUserInput_False()
+    {
+        // Sub-agents with AcceptsUserInput = false should have null-safe queue command wrappers
+        // that can execute without throwing NullReferenceException.
+        var chat = await CreateChatAsync();
+        await AddSubAgentAsync(chat, "sub1", "Sub Agent");
+
+        var subAgentEntry = chat.SubAgents.Single(s => s.AgentId == "sub1");
+        var subAgentChat = (AgentChat)subAgentEntry;
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
+
+        Assert.Null(subAgentViewModel.InputQueue);
+        
+        // These commands should exist and be safe to execute (no-op when InputQueue is null).
+        Assert.NotNull(subAgentViewModel.ToggleHoldAllQueuesCommand);
+        Assert.NotNull(subAgentViewModel.HoldAllQueuesCommand);
+        Assert.NotNull(subAgentViewModel.UnholdAllQueuesCommand);
+        
+        // Execute should not throw.
+        subAgentViewModel.ToggleHoldAllQueuesCommand.Execute(null);
+        subAgentViewModel.HoldAllQueuesCommand.Execute(null);
+        subAgentViewModel.UnholdAllQueuesCommand.Execute(null);
+    }
+
     // Helpers ───────────────────────────────────────────────────────────────
 
     private static AgentDefinition CreateAgentDefinition()
