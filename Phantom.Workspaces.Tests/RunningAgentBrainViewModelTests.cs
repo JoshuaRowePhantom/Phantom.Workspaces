@@ -493,8 +493,8 @@ public sealed class RunningAgentBrainViewModelTests
         var chatA = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
         var chatB = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
 
-        await using var agentVmA = new AgentViewModel(chatA, "session-A", new ObservableLoggerFactory());
-        await using var agentVmB = new AgentViewModel(chatB, "session-B", new ObservableLoggerFactory());
+        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory());
+        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory());
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "tab-A", Title = "A", AgentSessionId = "session-A" };
         var tabB = new AgentSessionWorkspaceTabViewModel { Id = "tab-B", Title = "B", AgentSessionId = "session-B" };

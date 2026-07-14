@@ -52,6 +52,7 @@ public sealed class SubAgent : IRunningSubAgent
 
     string IRunningSubAgent.AgentId => AgentChat?.AgentId ?? SessionId.Value;
     string IRunningSubAgent.DisplayName => AgentChat?.DisplayName ?? SessionId.Value;
+    string IRunningSubAgent.Description => AgentChat?.Description ?? string.Empty;
     AgentChatCompletionState IRunningSubAgent.CompletionState => AgentChat?.CompletionState ?? AgentChatCompletionState.Unknown;
     DateTime IRunningSubAgent.LastUpdatedAt => AgentChat?.LastUpdatedAt ?? DateTime.MinValue;
     IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => AgentChat?.SubAgents ?? (IReadOnlyList<IRunningSubAgent>)[];

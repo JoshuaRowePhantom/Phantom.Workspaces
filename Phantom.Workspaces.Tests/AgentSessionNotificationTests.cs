@@ -106,7 +106,7 @@ public sealed class AgentSessionNotificationTests
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -148,7 +148,7 @@ public sealed class AgentSessionNotificationTests
         // AgentSessionWorkspaceTabViewModel passes the notification through unconditionally.
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "agent-tab-active" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -187,7 +187,7 @@ public sealed class AgentSessionNotificationTests
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
 
@@ -250,7 +250,7 @@ public sealed class AgentSessionNotificationTests
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

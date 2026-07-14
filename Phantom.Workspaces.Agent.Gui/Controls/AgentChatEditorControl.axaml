@@ -195,9 +195,15 @@
                                                Text="⟳"
                                                VerticalAlignment="Center"
                                                IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsRunning}}"/>
-                                    <TextBlock Text="{Binding DisplayName}"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontWeight="Bold"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Description}"
+                                                   Classes="muted"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                    </StackPanel>
                                 </DockPanel>
                             </Border>
                         </DataTemplate>

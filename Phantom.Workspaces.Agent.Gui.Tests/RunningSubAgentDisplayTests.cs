@@ -147,4 +147,34 @@ public sealed class RunningSubAgentDisplayTests
         Assert.Equal(2, sut.RecentActivity.Count);
         Assert.Equal(SubAgentActivityKind.ToolCall, sut.RecentActivity[1].Kind);
     }
+
+    [Fact]
+    public async Task RunningSubAgentDisplay_Description_ReflectsAgentChatDescription()
+    {
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "test-agent",
+              "description": "This is a test description",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal("This is a test description", display.Description);
+    }
 }

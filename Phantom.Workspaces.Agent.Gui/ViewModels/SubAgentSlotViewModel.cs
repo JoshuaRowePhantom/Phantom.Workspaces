@@ -19,6 +19,10 @@ public sealed class SubAgentSlotViewModel : ViewModelBase
 
     public AgentViewModel SubAgentViewModel { get; }
 
+    public string DisplayName => this.SubAgentViewModel.DisplayName;
+
+    public string Description => this.SubAgentViewModel.Description;
+
     public bool IsSelected
     {
         get => this.isSelected;

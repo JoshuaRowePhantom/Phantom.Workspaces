@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -257,7 +257,7 @@ public sealed class ToolVisualizationTests
     public async Task AgentChatStatusLineViewModel_UpdateStatus_SetsIntentDisplay()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agent = new AgentViewModel(CreateChat(), "test", loggerFactory);
+        await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
         statusLine.UpdateStatus(AgentStatusField.Intent, "doing a thing");
@@ -269,7 +269,7 @@ public sealed class ToolVisualizationTests
     public async Task AgentChatStatusLineViewModel_IntentDisplay_ClearedWhenThinkingStops()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agent = new AgentViewModel(CreateChat(), "test", loggerFactory);
+        await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
         var runningItem = agent.AgentChat.CreateRunningItem(new AgentChatHistoryItem
@@ -290,7 +290,7 @@ public sealed class ToolVisualizationTests
     public async Task AgentChatStatusLineViewModel_UpdateStatus_EmptyValue_ClearsDisplay()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agent = new AgentViewModel(CreateChat(), "test", loggerFactory);
+        await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
         statusLine.UpdateStatus(AgentStatusField.Intent, "something");

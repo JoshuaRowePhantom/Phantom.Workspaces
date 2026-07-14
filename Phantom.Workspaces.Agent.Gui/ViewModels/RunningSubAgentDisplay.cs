@@ -23,6 +23,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     public const int MaxActivityLines = 5;
     private readonly string agentId;
     private readonly string displayName;
+    private readonly string description;
     private readonly Func<AgentChatCompletionState> getCompletionState;
     private readonly AgentChatRunningItemCollection runningItems;
     private readonly INotifyCollectionChanged subAgentsSource;
@@ -39,6 +40,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         : this(
             agentChat.AgentId,
             agentChat.DisplayName,
+            agentChat.Description,
             () => agentChat.CompletionState,
             agentChat.RunningItems,
             (INotifyCollectionChanged)agentChat.SubAgents,
@@ -75,10 +77,12 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     internal RunningSubAgentDisplay(
         AgentChatRunningItemCollection runningItems,
         string agentId = "",
-        string displayName = "")
+        string displayName = "",
+        string description = "")
         : this(
             agentId,
             displayName,
+            description,
             () => AgentChatCompletionState.Running,
             runningItems,
             new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>(),
@@ -90,6 +94,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     private RunningSubAgentDisplay(
         string agentId,
         string displayName,
+        string description,
         Func<AgentChatCompletionState> getCompletionState,
         AgentChatRunningItemCollection runningItems,
         INotifyCollectionChanged subAgentsSource,
@@ -98,6 +103,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     {
         this.agentId = agentId;
         this.displayName = displayName;
+        this.description = description;
         this.getCompletionState = getCompletionState;
         this.runningItems = runningItems;
         this.subAgentsSource = subAgentsSource;
@@ -129,6 +135,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
     public string AgentId => this.agentId;
     public string DisplayName => this.displayName;
+    public string Description => this.description;
     public AgentChatCompletionState CompletionState => this.getCompletionState();
     public IReadOnlyList<SubAgentActivityLine> RecentActivity => this.recentActivity;
     public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgents { get; }

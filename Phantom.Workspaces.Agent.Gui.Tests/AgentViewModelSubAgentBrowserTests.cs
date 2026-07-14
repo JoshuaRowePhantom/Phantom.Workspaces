@@ -15,7 +15,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Agent Alpha");
 
@@ -28,7 +28,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Alpha");
         await AddSubAgentAsync(chat, "a2", "Beta");
@@ -86,7 +86,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "running", "Running Agent");
         await AddSubAgentAsync(chat, "done", "Done Agent");
@@ -107,7 +107,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "running", "Running");
         var subAgentChat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "running");
@@ -125,7 +125,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub A");
         await AddSubAgentAsync(chat, "a2", "Sub B");
@@ -151,7 +151,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
 
         Assert.False(subAgentViewModel.AcceptsUserInput);
     }
@@ -162,7 +162,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Root/parent agents use a real chat client → AcceptsUserInput is true.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         Assert.True(viewModel.AcceptsUserInput);
     }
@@ -174,7 +174,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
 
         await AddSubAgentAsync(chat, "a1", "Sub A");
         await AddSubAgentAsync(chat, "a2", "Sub B");
@@ -252,6 +252,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         public string AgentId { get; } = agentId;
         public string DisplayName { get; } = displayName;
+        public string Description => string.Empty;
         public AgentChatCompletionState CompletionState { get; } = completionState;
         public DateTime LastUpdatedAt { get; } = lastUpdatedAt;
         public IReadOnlyList<IRunningSubAgent> SubAgents => [];

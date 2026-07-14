@@ -217,7 +217,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
-       this.Description = this.request.DescriptionOverride ?? string.Empty;
+       this.Description = this.request.DescriptionOverride ?? resolvedAgentDefinition.Description ?? string.Empty;
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -809,7 +809,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             }
         }
 
-        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId);
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty);
 
         // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
         // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
@@ -826,6 +826,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 ConfiguredStore = this.request.ConfiguredStore,
                 ClientOverride = chatClient,
                 DisplayNameOverride = subAgentDefinition.Name ?? agentId,
+                DescriptionOverride = subAgentDefinition.Description ?? string.Empty,
                 ForegroundScheduler = this.foregroundScheduler,
                 CancellationToken = cancellationToken,
             }),
