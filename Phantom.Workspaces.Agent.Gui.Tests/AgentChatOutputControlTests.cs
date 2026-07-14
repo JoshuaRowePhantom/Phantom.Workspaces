@@ -1196,11 +1196,11 @@ public sealed class AgentChatOutputControlTests
     [Fact]
     public void ChatOutputShellHtml_DarkMode_UsesCampbellBackground()
     {
-        // Verify that the CSS :root block defines --terminal-background as Campbell's #0C0C0C.
+        // Verify that the CSS :root block defines --terminal-background as Campbell Absolute's #000000.
         var html = ReadShellHtml();
 
         Assert.Contains("--terminal-background:", html, StringComparison.Ordinal);
-        Assert.Contains("#0C0C0C", html, StringComparison.Ordinal);
+        Assert.Contains("#000000", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1271,7 +1271,7 @@ public sealed class AgentChatOutputControlTests
         var html = ReadShellHtml();
 
         // Background and foreground
-        Assert.Contains("#0C0C0C", html, StringComparison.Ordinal); // Background
+        Assert.Contains("#000000", html, StringComparison.Ordinal); // Background
         Assert.Contains("#CCCCCC", html, StringComparison.Ordinal); // Foreground/White
 
         // Sample ANSI colors (spot check a few key ones)
