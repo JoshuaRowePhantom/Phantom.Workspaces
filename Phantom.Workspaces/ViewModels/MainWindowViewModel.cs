@@ -4119,6 +4119,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    public void WireWindowFocus(Action focusWindow)
+    {
+        if (this.notificationsViewModel is not null)
+        {
+            this.notificationsViewModel.FocusWindowCallback = focusWindow;
+        }
+    }
+
     public override async ValueTask DisposeAsync()
     {
         this.refreshTimer.Stop();

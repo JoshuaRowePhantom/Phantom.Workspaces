@@ -265,6 +265,7 @@ public partial class App : Application
 
             loadingViewModel.StatusText = "Opening main window.";
             var mainWindow = new MainWindow(viewModel);
+            viewModel.WireWindowFocus(() => RestoreMainWindow(mainWindow));
             mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
             desktop.MainWindow = mainWindow;
             mainWindow.Show();
