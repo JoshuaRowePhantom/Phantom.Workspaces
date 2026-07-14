@@ -11,6 +11,7 @@ using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
+[Collection("Avalonia")]
 public sealed class SharedStylesTests
 {
     [PhantomAvaloniaFact(Timeout = 15_000)]
