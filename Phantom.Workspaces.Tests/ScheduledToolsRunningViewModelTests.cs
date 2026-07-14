@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -6,6 +8,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -337,5 +340,74 @@ public sealed class ScheduledToolsRunningViewModelTests
 
         row.ExpandCommand.Execute(null);
         Assert.False(row.IsExpanded);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_PreservesSynchronizationContext_MutatesToolsOnCapturedContext()
+    {
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+
+        var observedThreadIds = new ConcurrentBag<int>();
+        viewModel.Tools.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+        };
+
+        await pump.PostAsync(async () =>
+        {
+            await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        var singleThreadId = Assert.Single(observedThreadIds.Distinct());
+        Assert.Equal(pump.ThreadId, singleThreadId);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_ConcurrentWithRefresh_DoesNotThrow()
+    {
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var tool = new GatedTool();
+        var (dataAccessLayer, host, hostId) = await CreateHostAsync(tool);
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+
+        var exceptionCaught = false;
+        viewModel.Tools.CollectionChanged += (sender, args) =>
+        {
+            try
+            {
+                var _ = viewModel.Tools.Count;
+            }
+            catch (InvalidOperationException)
+            {
+                exceptionCaught = true;
+            }
+        };
+
+        var refreshHistoryTask = pump.PostAsync(async () =>
+        {
+            await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName, cts.Token);
+
+        await tool.Started.Task;
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        tool.Release.TrySetResult();
+
+        await Task.WhenAll(refreshHistoryTask, runTask);
+
+        Assert.False(exceptionCaught, "ObservableCollection was mutated from multiple threads");
     }
 }

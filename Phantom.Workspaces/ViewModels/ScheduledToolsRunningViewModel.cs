@@ -243,7 +243,7 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                     },
                 ],
             },
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken);
 
         // Parse all top-level run entities (SuffixComponents.Length == 2: [toolName, startTimestamp]).
         var topLevelRuns = queryResult.Batches
