@@ -865,4 +865,137 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal("new message", result.Prompt);
         Assert.Null(result.Attachments);
     }
+
+    [Fact]
+    public async Task RunStreamingTurnAsync_Dispose_DoesNotBlockThreadPoolThread()
+    {
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, "test"));
+        channel.Writer.Complete();
+
+        var subscription = new FlagDisposable();
+
+        Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _) =>
+            Task.FromResult(new StreamingTurnContext(
+                channel.Reader,
+                subscription,
+                _ => Task.CompletedTask,
+                () => Task.CompletedTask,
+                () => Task.CompletedTask));
+
+        var enumerator = client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None)
+            .GetAsyncEnumerator();
+
+        Assert.True(await enumerator.MoveNextAsync());
+
+        bool wasOnThreadPoolThread = false;
+        var disposalCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            wasOnThreadPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+            enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            disposalCompleted.SetResult();
+        });
+
+        var completed = await Task.WhenAny(
+            disposalCompleted.Task,
+            Task.Delay(TimeSpan.FromSeconds(2)));
+
+        Assert.Same(disposalCompleted.Task, completed);
+        Assert.True(wasOnThreadPoolThread);
+        Assert.True(subscription.Disposed);
+    }
+
+    [Fact]
+    public async Task RunStreamingTurnAsync_ConcurrentTeardown_DoesNotStarveThreadPool()
+    {
+        const int concurrentTurns = 5;
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var enumerators = new List<IAsyncEnumerator<ChatResponseUpdate>>();
+        var subscriptions = new List<FlagDisposable>();
+
+        for (int i = 0; i < concurrentTurns; i++)
+        {
+            var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+            channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, $"turn {i}"));
+            channel.Writer.Complete();
+
+            var subscription = new FlagDisposable();
+            subscriptions.Add(subscription);
+
+            Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _) =>
+                Task.FromResult(new StreamingTurnContext(
+                    channel.Reader,
+                    subscription,
+                    _ => Task.CompletedTask,
+                    () => Task.CompletedTask,
+                    () => Task.CompletedTask));
+
+            var enumerator = client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None)
+                .GetAsyncEnumerator();
+
+            await enumerator.MoveNextAsync();
+            enumerators.Add(enumerator);
+
+            await Task.Delay(10);
+        }
+
+        var disposalTasks = new List<Task>();
+        foreach (var enumerator in enumerators)
+        {
+            disposalTasks.Add(Task.Run(async () =>
+            {
+                await enumerator.DisposeAsync();
+            }));
+        }
+
+        var allCompleted = await Task.WhenAny(
+            Task.WhenAll(disposalTasks),
+            Task.Delay(TimeSpan.FromSeconds(3)));
+
+        Assert.Same(Task.WhenAll(disposalTasks), allCompleted);
+        Assert.All(subscriptions, sub => Assert.True(sub.Disposed));
+    }
+
+    [Fact]
+    public async Task EnsureSessionAsync_DoesNotBlockThreadPoolThread()
+    {
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: "test-token", loggerFactory: null);
+
+        bool wasOnThreadPoolThread = false;
+        var ensureCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            wasOnThreadPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+            try
+            {
+                var ensureMethod = typeof(CopilotSdkChatClient).GetMethod(
+                    "EnsureSessionAsync",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+                var task = (Task)ensureMethod.Invoke(
+                    client,
+                    [new ChatOptions(), CancellationToken.None])!;
+
+                task.GetAwaiter().GetResult();
+                ensureCompleted.SetResult();
+            }
+            catch (Exception ex)
+            {
+                ensureCompleted.SetException(ex);
+            }
+        });
+
+        var completed = await Task.WhenAny(
+            ensureCompleted.Task,
+            Task.Delay(TimeSpan.FromSeconds(5)));
+
+        Assert.Same(ensureCompleted.Task, completed);
+        Assert.True(wasOnThreadPoolThread);
+    }
 }
