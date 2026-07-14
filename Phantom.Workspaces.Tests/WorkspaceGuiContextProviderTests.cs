@@ -106,6 +106,9 @@ public sealed class WorkspaceGuiContextProviderTests
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB); // tabB is active after opening
 
+        // Yield to ensure activation state propagates through the Dock layout manager
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }, Avalonia.Threading.DispatcherPriority.Background);
+
         var tool = await GetToolAsync(viewModel, "tab_list");
         var result = await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>()), CancellationToken.None);
 
