@@ -1582,7 +1582,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.SelectedWorkspacePane = workspacePane;
 
         // Phase 2: populate tabs asynchronously (fire and forget)
-        _ = this.PopulateWorkspacePaneTabsAsync(workspacePane, workspaceEntity, workspaceData);
+        var populateTask = this.PopulateWorkspacePaneTabsAsync(workspacePane, workspaceEntity, workspaceData);
+        _ = populateTask.ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception != null)
+            {
+                workspacePane.SignalPopulated(t.Exception.GetBaseException());
+            }
+            else
+            {
+                workspacePane.SignalPopulated();
+            }
+        }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     /// <summary>

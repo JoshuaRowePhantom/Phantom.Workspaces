@@ -2725,10 +2725,114 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(restoredPane);
 
         // Wait for PopulateWorkspacePaneTabsAsync to populate the tabs
-        await WaitForWorkspacePaneTabsAsync(restoredPane!);
+        await WaitForPanePopulatedAsync(restoredPane!);
 
         Assert.NotEmpty(restoredPane!.Tabs);
         Assert.Contains(restoredPane.Tabs, t => t is WebViewModel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PopulateWorkspacePaneTabsAsync_WhenDockLayoutRestoreCompletes_SignalsPanePopulated()
+    {
+        // Verifies the Populated task completes successfully for the happy path
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://signals-populated.example.com")
+        {
+            Id = "sp-tab",
+            Title = "Signals Populated",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var serializer = new DockSerializer(typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var spContentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(spContentDock);
+        await WaitForWorkspaceTabAsync(spContentDock!, "sp-tab");
+
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("e570ee01-0000-4000-8000-000000000002");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "e570ee01-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Signals Populated WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+
+        // The Populated task should complete without throwing
+        await WaitForPanePopulatedAsync(restoredPane!);
+        Assert.NotEmpty(restoredPane!.Tabs);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PopulateWorkspacePaneTabsAsync_WhenNoDockLayoutAndNoTabs_SignalsPanePopulatedAfterDefaultTabAdd()
+    {
+        // Verifies the default-tab fallback path signals completion
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("e570ee01-0000-4000-8000-000000000003");
+        var workspaceJson = """
+            {
+              "entity-id": "e570ee01-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Default Tab Fallback WS" },
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var pane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(pane);
+
+        // The Populated task should complete even when using the default-tab fallback
+        await WaitForPanePopulatedAsync(pane!);
+        Assert.NotEmpty(pane!.Tabs);
+        Assert.Contains(pane.Tabs, t => t is EntityWorkspaceTabViewModel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task WaitForPanePopulatedAsync_WhenPopulateHangs_ThrowsTimeoutExceptionWithDiagnostics()
+    {
+        // Verifies the timeout diagnostic message includes pane ID and Tabs.Count
+        var entitySnapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId("e570ee01-0000-4000-8000-000000000004"),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = JsonDocument.Parse("""
+                {
+                  "entity-id": "e570ee01-0000-4000-8000-000000000004",
+                  "entity-types": ["entity", "workspace"],
+                  "display-name": { "default": "Hang Test WS" }
+                }
+                """).RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var subscribedEntity = new SubscribedEntityViewModel(entitySnapshot);
+        var pane = new WorkspacePaneViewModel(subscribedEntity, "e570ee01-0000-4000-8000-000000000004", null);
+
+        // The Populated task should never complete (SignalPopulated is never called)
+        var exception = await Assert.ThrowsAsync<TimeoutException>(
+            async () => await WaitForPanePopulatedAsync(pane, TimeSpan.FromSeconds(1)));
+
+        Assert.Contains("e570ee01-0000-4000-8000-000000000004", exception.Message);
+        Assert.Contains("Tabs.Count=0", exception.Message);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -2990,6 +3094,26 @@ public sealed class MainWindowIntegrationTests
         {
             pane.Tabs.CollectionChanged -= OnCollectionChanged;
         }
+    }
+
+    /// <summary>
+    /// Waits for <see cref="WorkspacePaneViewModel.Populated"/> to complete with a bounded timeout.
+    /// Throws <see cref="TimeoutException"/> with diagnostic details if populate does not complete in time.
+    /// Propagates any exception raised during populate.
+    /// </summary>
+    private static async Task WaitForPanePopulatedAsync(WorkspacePaneViewModel pane, TimeSpan? timeout = null)
+    {
+        var populateTask = pane.Populated;
+        var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(10);
+        var timeoutTask = Task.Delay(effectiveTimeout);
+
+        if (await Task.WhenAny(populateTask, timeoutTask) == timeoutTask)
+        {
+            throw new TimeoutException(
+                $"Pane {pane.Id} was not populated within {effectiveTimeout.TotalSeconds}s. Tabs.Count={pane.Tabs.Count}");
+        }
+
+        await populateTask; // propagate exception if populate failed
     }
 
     private static async Task WaitForWorkspacePaneAsync(MainWindowViewModel viewModel, string paneId)
