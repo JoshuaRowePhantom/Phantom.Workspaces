@@ -1652,6 +1652,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return !string.Equals(pane.Id, DefaultWorkspaceId, StringComparison.Ordinal);
     }
 
+    public async Task CloseWorkspacePaneAsync(WorkspacePaneViewModel pane)
+    {
+        await this.RemoveWorkspacePaneAsync(pane);
+    }
+
     private async void OnCloseWorkspace(object? parameter)
     {
        if (parameter is not WorkspacePaneViewModel pane)
@@ -1659,7 +1664,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
            return;
        }
 
-       await this.RemoveWorkspacePaneAsync(pane);
+       await this.CloseWorkspacePaneAsync(pane);
     }
 
     private void OnCloseActiveTab()

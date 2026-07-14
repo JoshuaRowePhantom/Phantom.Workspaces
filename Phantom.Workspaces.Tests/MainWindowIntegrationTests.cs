@@ -4313,16 +4313,12 @@ public sealed class MainWindowIntegrationTests
         var defaultPane = viewModel.WorkspacePanes
             .FirstOrDefault(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
         Assert.NotNull(defaultPane);
-        viewModel.CloseWorkspaceCommand.Execute(defaultPane!);
-
-        // Wait for async workspace re-open to complete
-        await WaitForWorkspacePaneAsync(viewModel, workspaceId.ToString());
+        await viewModel.CloseWorkspacePaneAsync(defaultPane!);
 
         // After closing, the default workspace should be re-opened instead of Getting Started
         Assert.Contains(
             viewModel.WorkspacePanes,
-            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal)
-                || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
         Assert.DoesNotContain(
             viewModel.WorkspacePanes,
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
