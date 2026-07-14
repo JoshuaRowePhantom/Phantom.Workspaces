@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -60,6 +61,12 @@ public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXuni
         typeof(HeadlessUnitTestSession).GetField(
             "_cancellationTokenSource", BindingFlags.NonPublic | BindingFlags.Instance);
 
+    // Shared STA thread pool for running tests. With shared-app isolation (no PerTest),
+    // all tests in an assembly must run on the same STA thread to avoid cross-thread
+    // Dispatcher access errors during HeadlessUnitTestSession.EnsureIsolatedApplication.
+    // See: https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/815
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<Assembly, StaTaskScheduler> _staSchedulers = new();
+
     private IXunitTestCase _inner;
 
     [Obsolete("Called by the de-serializer; should only be called by deserializers")]
@@ -80,25 +87,59 @@ public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXuni
         ExceptionAggregator aggregator,
         CancellationTokenSource cancellationTokenSource)
     {
-        // AvaloniaTestCase.Run intentionally blocks its calling thread (via Task.Run + .GetResult())
-        // to hold xunit's concurrency throttle slot. The correct pattern (per Xunit.StaFact PR #55)
-        // is to do that blocking on a dedicated non-thread-pool thread, not a pool thread, to
-        // avoid starving the pool when test execution itself needs thread pool threads.
+        // With shared-app isolation (no PerTest), all tests in an assembly must run on the same
+        // STA thread to avoid cross-thread Dispatcher access. Get or create the STA scheduler
+        // for this assembly.
+        var testAssembly = _inner.TestClass?.Class?.Assembly;
+        var scheduler = testAssembly != null
+            ? _staSchedulers.GetOrAdd(testAssembly, _ => new StaTaskScheduler())
+            : null;
+
         var tcs = new TaskCompletionSource<RunSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var thread = new Thread(() =>
+
+        if (scheduler != null)
         {
-            try
+            // Run the test on the shared STA thread for this assembly
+            _ = Task.Factory.StartNew(
+                () =>
+                {
+                    try
+                    {
+                        var task = ((ISelfExecutingXunitTestCase)_inner).Run(
+                            explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
+                        tcs.SetResult(task.AsTask().GetAwaiter().GetResult());
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.SetException(ex);
+                    }
+                },
+                CancellationToken.None,
+                TaskCreationOptions.None,
+                scheduler);
+        }
+        else
+        {
+            // Fallback: no assembly info, use old behavior with a new thread
+            var thread = new Thread(() =>
             {
-                var task = ((ISelfExecutingXunitTestCase)_inner).Run(
-                    explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
-                tcs.SetResult(task.AsTask().GetAwaiter().GetResult());
-            }
-            catch (Exception ex)
+                try
+                {
+                    var task = ((ISelfExecutingXunitTestCase)_inner).Run(
+                        explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
+                    tcs.SetResult(task.AsTask().GetAwaiter().GetResult());
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            }) { IsBackground = true };
+            if (OperatingSystem.IsWindows())
             {
-                tcs.SetException(ex);
+                thread.SetApartmentState(ApartmentState.STA);
             }
-        }) { IsBackground = true };
-        thread.Start();
+            thread.Start();
+        }
 
         // Safety net against HeadlessUnitTestSession queue-processor death (#643).
         // If the session's dispatch loop exits before our background thread's item is processed
@@ -220,4 +261,56 @@ public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXuni
     // IAsyncDisposable
     ValueTask IAsyncDisposable.DisposeAsync() =>
         _inner is IAsyncDisposable d ? d.DisposeAsync() : ValueTask.CompletedTask;
+}
+
+/// <summary>
+/// STA thread-based TaskScheduler for running Avalonia tests. Ensures all tests in an assembly
+/// run on the same STA thread to avoid cross-thread Dispatcher access errors with shared-app isolation.
+/// </summary>
+internal sealed class StaTaskScheduler : TaskScheduler, IDisposable
+{
+    private readonly BlockingCollection<Task> _tasks = new();
+    private readonly Thread _thread;
+
+    public StaTaskScheduler()
+    {
+        _thread = new Thread(ThreadProc)
+        {
+            IsBackground = true,
+            Name = "Avalonia Test STA Thread"
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            _thread.SetApartmentState(ApartmentState.STA);
+        }
+        _thread.Start();
+    }
+
+    private void ThreadProc()
+    {
+        foreach (var task in _tasks.GetConsumingEnumerable())
+        {
+            TryExecuteTask(task);
+        }
+    }
+
+    protected override void QueueTask(Task task)
+    {
+        _tasks.Add(task);
+    }
+
+    protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+    {
+        return Thread.CurrentThread == _thread && TryExecuteTask(task);
+    }
+
+    protected override IEnumerable<Task>? GetScheduledTasks()
+    {
+        return _tasks.ToArray();
+    }
+
+    public void Dispose()
+    {
+        _tasks.CompleteAdding();
+    }
 }
