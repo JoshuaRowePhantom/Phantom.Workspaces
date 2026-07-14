@@ -2,7 +2,7 @@ namespace Phantom.Workspaces.Install.Tests;
 
 /// <summary>
 /// Lints <c>scripts/run-tests.ps1</c> to ensure the crash-detection guard is present.
-/// Addresses issue #433 (missing guard from #147).
+/// Addresses issue #433 (missing guard from #147) and #378 (TRX-based crash detection).
 /// </summary>
 public sealed class RunTestsScriptLintTests
 {
@@ -10,21 +10,29 @@ public sealed class RunTestsScriptLintTests
         Path.Combine(FindRepositoryRoot().FullName, "scripts", "run-tests.ps1"));
 
     [Fact]
-    public void RunTestsScript_ContainsCrashDetectionGuard_AbortString()
+    public void RunTestsScript_ContainsCrashDetectionGuard_TrxLogger()
     {
-        Assert.Contains("Test Run was aborted", ScriptContent);
+        Assert.Contains("--logger", ScriptContent);
+        Assert.Contains("trx", ScriptContent);
     }
 
     [Fact]
-    public void RunTestsScript_ContainsCrashDetectionGuard_HostExitString()
+    public void RunTestsScript_ContainsCrashDetectionGuard_TrxParsing()
     {
-        Assert.Contains("host process exited unexpectedly", ScriptContent);
+        Assert.Contains("$trxFiles = Get-ChildItem", ScriptContent);
+        Assert.Contains("$trxOutcome", ScriptContent);
     }
 
     [Fact]
-    public void RunTestsScript_ContainsCrashDetectionGuard_ExitCodeOverride()
+    public void RunTestsScript_ContainsCrashDetectionGuard_AbortedOutcome()
     {
-        Assert.Contains("$exitCode -eq 0 -and $hostCrashed", ScriptContent);
+        Assert.Contains("$trxOutcome -eq 'Aborted'", ScriptContent);
+    }
+
+    [Fact]
+    public void RunTestsScript_ContainsCrashDetectionGuard_BenignEmptyMatchFilter()
+    {
+        Assert.Contains("Could not find files for the given pattern", ScriptContent);
     }
 
     private static DirectoryInfo FindRepositoryRoot()

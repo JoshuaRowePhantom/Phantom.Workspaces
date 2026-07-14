@@ -18,6 +18,8 @@ using VtNetCore.VirtualTerminal.Enums;
 using VtNetCore.VirtualTerminal.Model;
 using VtNetCore.XTermParser;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 /// <summary>Tests for <see cref="TerminalControl"/> and <see cref="TerminalSessionViewModel"/>.</summary>
@@ -354,6 +356,68 @@ public sealed class TerminalControlTests
         Assert.Equal(10, result.Value.R);
         Assert.Equal(20, result.Value.G);
         Assert.Equal(30, result.Value.B);
+    }
+
+    // ── Cell metrics – pixel snapping (issue #708) ───────────────────────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellWidth_IsWholePixel()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        Assert.True(control.CellWidth > 0, "CellWidth must be positive");
+        Assert.Equal(Math.Floor(control.CellWidth), control.CellWidth);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellHeight_IsWholePixel()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        Assert.True(control.CellHeight > 0, "CellHeight must be positive");
+        Assert.Equal(Math.Floor(control.CellHeight), control.CellHeight);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_CellHeight_HasNoExtraLeading()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        // Compute the expected height using glyph metrics (ascent+descent, no line gap).
+        var typeface = new Typeface("Cascadia Mono,Cascadia Code,Consolas,Courier New,monospace");
+        var m = typeface.GlyphTypeface.Metrics;
+        double expected = Math.Ceiling((Math.Abs(m.Ascent) + Math.Abs(m.Descent)) * 12.0 / m.DesignEmHeight);
+
+        Assert.Equal(expected, control.CellHeight);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_AdjacentCellOrigins_LandOnWholePixels()
+    {
+        var control = new TerminalControl();
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        control.MeasureCells();
+
+        // Every column origin must be an integer so box-drawing characters tile without sub-pixel gaps.
+        for (int col = 0; col <= 200; col++)
+        {
+            double x = col * control.CellWidth;
+            Assert.Equal(Math.Floor(x), x);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────────────────
@@ -1168,7 +1232,8 @@ public sealed class TerminalControlTests
         // method executes without crashing. Stream content verification would require clipboard mock.
         Assert.NotNull(control.Vtc);
     }
-
+
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_Scroll_MovesViewport()
     {
@@ -1794,6 +1859,79 @@ public sealed class TerminalControlTests
 
         Assert.Null(ex);
         window.Close();
+    }
+
+    // ── ScheduleResize timer does not leak after detach (issue #784) ─────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_ScheduleResize_DoesNotLeakAfterVisualTreeDetach()
+    {
+        var resizeCallCount = 0;
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        var panel = new StackPanel();
+        panel.Children.Add(control);
+
+        var window = new Window { Content = panel };
+        window.Show();
+
+        control.Session = vm;
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+
+        // Removing from the visual tree stops the pending DispatcherTimer.
+        panel.Children.Remove(control);
+
+        var countAfterDetach = resizeCallCount;
+
+        // Pumping the dispatcher must NOT fire any pending resize.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(countAfterDetach, resizeCallCount);
+        window.Close();
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void TerminalControl_ScheduleResize_DoesNotLeakAfterSessionDetach()
+    {
+        var resizeCallCount = 0;
+        var vm = new TerminalSessionViewModel
+        {
+            Stream = new MemoryStream(),
+            ResizeCallback = (_, _, _) =>
+            {
+                resizeCallCount++;
+                return ValueTask.CompletedTask;
+            },
+        };
+
+        var control = new TerminalControl { ResizeDebounceDelay = TimeSpan.Zero };
+        control.Measure(new Size(800, 600));
+        control.Arrange(new Rect(0, 0, 800, 600));
+        control.Session = vm;
+
+        // Measure/Arrange a second time to schedule a resize timer.
+        control.Measure(new Size(900, 700));
+        control.Arrange(new Rect(0, 0, 900, 700));
+
+        // Detaching the session stops the pending DispatcherTimer.
+        control.Session = null;
+
+        var countAfterDetach = resizeCallCount;
+
+        // Pumping the dispatcher must NOT fire any pending resize.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(countAfterDetach, resizeCallCount);
     }
 
     // ── Helper for tests ──────────────────────────────────────────────────────────────────────

@@ -6,6 +6,8 @@ using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 /// <summary>

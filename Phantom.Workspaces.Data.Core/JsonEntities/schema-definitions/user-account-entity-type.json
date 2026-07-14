@@ -1,0 +1,38 @@
+{
+  "entity-id": "fc9c6d8f-83c5-4abe-82a8-9925e1ca50e1",
+  "entity-display-order": 181,
+  "entity-types": [
+    "entity",
+    "entity-type",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/user-account.json"
+    ],
+    [
+      "entity-types",
+      "user-account"
+    ]
+  ],
+  "display-name": {
+    "default": "User Account Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/user-account-schema.md"
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/user-account.json"
+  },
+  "default-name-prefixes": [
+    [
+      "${USER}",
+      "user-accounts"
+    ]
+  ]
+}

@@ -40,4 +40,11 @@ public static class ChatOutputBrowserCommands
             ["type"] = ThemeType,
             ["variables"] = variables,
         });
+
+    public static string Theme(string className)
+        => JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["type"] = ThemeType,
+            ["className"] = className,
+        });
 }

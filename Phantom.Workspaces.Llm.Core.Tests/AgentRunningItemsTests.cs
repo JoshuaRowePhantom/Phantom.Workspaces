@@ -59,7 +59,7 @@ public sealed class AgentRunningItemsTests
     }
 
     [Fact]
-    public void Update_DoesFireOuterReplace_WhenInnerItemsChange()
+    public void Update_InnerItemsChanged_DoesNotRaiseCollectionChanged_OnOuterCollection()
     {
         var outer = new AgentChatRunningItemCollection();
         var sut = new AgentRunningItems(outer);
@@ -76,9 +76,10 @@ public sealed class AgentRunningItemsTests
             }
         };
 
-        // Different reference with changed content — inner Replace fires → outer SetItem fires.
+        // Option D: subscribing to the outer AgentChatRunningItemCollection receives no
+        // Replace when only inner items changed.
         sut.Update(runningItem, [MakeItem("world")]);
 
-        Assert.Equal(1, outerReplacesFired);
+        Assert.Equal(0, outerReplacesFired);
     }
 }

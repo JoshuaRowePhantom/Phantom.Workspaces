@@ -50,11 +50,10 @@
             <KeyBinding Gesture="Alt+D" Command="{Binding FocusUrlBarCommand}" />
         </Grid.KeyBindings>
 
-        <!-- WebView control -->
-        <entityControls:ConfiguredWebView
+        <!-- WebView control host (factory-created in code-behind) -->
+        <Border
+            x:Name="WebViewHost"
             Grid.Row="1"
-            Source="{Binding SourceUri}"
-            ViewModel="{Binding}"
             IsVisible="{Binding !HasError}" />
 
         <!-- Error state -->

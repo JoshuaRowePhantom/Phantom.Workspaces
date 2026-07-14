@@ -28,9 +28,10 @@ internal sealed record InternalCreateAgentChatRequest
     /// <summary>
     /// The scheduler used to run UI-bound work (history mutations, running-item updates, the
     /// processing loop).  When set, this takes precedence over
-    /// <see cref="System.Threading.SynchronizationContext.Current"/> so that callers that
-    /// construct <see cref="AgentChat"/> off the UI thread (e.g. inside <c>Task.Run</c>) can
-    /// still supply the UI scheduler captured before leaving the UI thread.
+    /// <see cref="System.Threading.SynchronizationContext.Current"/>. Construction and
+    /// initialization must occur on the foreground context: when this is a
+    /// <see cref="SynchronizationContextTaskScheduler"/>, the <see cref="AgentChat"/> constructor
+    /// verifies the creating thread is on that context and throws otherwise (issue #909).
     /// </summary>
     public TaskScheduler? ForegroundScheduler { get; init; }
 

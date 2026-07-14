@@ -32,6 +32,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = new(ReferenceEqualityComparer<AgentChatRunningItem>.Instance);
     private readonly NotifyCollectionChangedEventHandler onRunningItemsChanged;
     private readonly NotifyCollectionChangedEventHandler onSubAgentsChanged;
+    private readonly EventHandler? onAgentChatCompletionStateChanged;
+    private readonly AgentChat? agentChat;
 
     public RunningSubAgentDisplay(AgentChat agentChat)
         : this(
@@ -40,7 +42,29 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             () => agentChat.CompletionState,
             agentChat.RunningItems,
             (INotifyCollectionChanged)agentChat.SubAgents,
-            subAgent => new RunningSubAgentDisplay((AgentChat)subAgent))
+            subAgent =>
+            {
+                // Check if this is an eager SubAgent (AgentChat already available) or lazy.
+                if (subAgent is SubAgent sa && sa.AgentChat is not null)
+                {
+                    // Eager path: AgentChat is already available, use it directly.
+                    // Note: For eager SubAgents, we don't acquire a lease because the factory might be null.
+                    return new RunningSubAgentDisplay(sa.AgentChat);
+                }
+                else if (subAgent is SubAgent subAgentWrapper)
+                {
+                    // Lazy path: AgentChat needs to be materialized.
+                    var lease = subAgentWrapper.AcquireLeaseAsync().Result;
+                    var chat = lease.AgentChat;
+                    lease.DisposeAsync().AsTask().Wait();
+                    return new RunningSubAgentDisplay(chat);
+                }
+                else
+                {
+                    return new RunningSubAgentDisplay((AgentChat)subAgent);
+                }
+            },
+            agentChat)
     {
     }
 
@@ -58,7 +82,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             () => AgentChatCompletionState.Running,
             runningItems,
             new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>(),
-            _ => throw new NotSupportedException("Child factory not provided in test constructor."))
+            _ => throw new NotSupportedException("Child factory not provided in test constructor."),
+            null)
     {
     }
 
@@ -68,7 +93,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         Func<AgentChatCompletionState> getCompletionState,
         AgentChatRunningItemCollection runningItems,
         INotifyCollectionChanged subAgentsSource,
-        Func<IRunningSubAgent, RunningSubAgentDisplay> childFactory)
+        Func<IRunningSubAgent, RunningSubAgentDisplay> childFactory,
+        AgentChat? agentChat)
     {
         this.agentId = agentId;
         this.displayName = displayName;
@@ -76,6 +102,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         this.runningItems = runningItems;
         this.subAgentsSource = subAgentsSource;
         this.childFactory = childFactory;
+        this.agentChat = agentChat;
         this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
 
         this.onRunningItemsChanged = this.OnRunningItemsChanged;
@@ -83,6 +110,12 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
         ((INotifyCollectionChanged)runningItems).CollectionChanged += this.onRunningItemsChanged;
         subAgentsSource.CollectionChanged += this.onSubAgentsChanged;
+        
+        if (agentChat is not null)
+        {
+            this.onAgentChatCompletionStateChanged = (sender, e) => this.CompletionStateChanged?.Invoke(this, e);
+            agentChat.CompletionStateChanged += this.onAgentChatCompletionStateChanged;
+        }
 
         foreach (var item in runningItems)
             this.SubscribeToRunningItem(item);
@@ -102,6 +135,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     IReadOnlyList<IRunningSubAgentDisplay> IRunningSubAgentDisplay.SubAgents => this.SubAgents;
 
     public event EventHandler? ActivityChanged;
+
+    public event EventHandler? CompletionStateChanged;
 
     private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -185,6 +220,11 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     {
         ((INotifyCollectionChanged)this.runningItems).CollectionChanged -= this.onRunningItemsChanged;
         this.subAgentsSource.CollectionChanged -= this.onSubAgentsChanged;
+
+        if (this.agentChat is not null && this.onAgentChatCompletionStateChanged is not null)
+        {
+            this.agentChat.CompletionStateChanged -= this.onAgentChatCompletionStateChanged;
+        }
 
         foreach (var (item, handler) in this.runningItemHandlers)
             item.Items.CollectionChanged -= handler;

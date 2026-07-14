@@ -20,6 +20,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Testing.Gui\Phantom.Workspaces.Testing.Gui.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="xunit.runner.json">

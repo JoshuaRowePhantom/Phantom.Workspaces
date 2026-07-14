@@ -8,7 +8,6 @@ using Dock.Avalonia.Themes.Fluent;
 using Phantom.Workspaces.Templates;
 
 [assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Tests.AvaloniaTestAppBuilder))]
-[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerTest)]
 
 namespace Phantom.Workspaces.Tests;
 
@@ -17,6 +16,7 @@ public static class AvaloniaTestAppBuilder
     public static AppBuilder BuildAvaloniaApp()
     {
         Phantom.Workspaces.Gui.Shared.Controls.ControllableBrowserFactory.Create = static () => new HeadlessControllableBrowser();
+        Phantom.Workspaces.Controls.ConfiguredWebViewFactory.Create = static () => new HeadlessConfiguredWebView();
         return AppBuilder.Configure<TestApplication>()
             .UseHeadless(
                 new AvaloniaHeadlessPlatformOptions

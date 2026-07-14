@@ -2,6 +2,8 @@ using System.IO;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class RepositorySourceTests

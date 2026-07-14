@@ -16,6 +16,8 @@ public sealed class EntityRepository
 {
     private readonly IDataAccessLayer coreDataAccessLayer;
 
+    internal static Func<MongoDB.Driver.IMongoDatabase, string, MongoDbEntityDataAccessLayer>? TestMongoDbEntityDataAccessLayerFactory { get; set; }
+
     private EntityRepository(
         RepositorySource repositorySource,
         IDataAccessLayer coreDataAccessLayer,
@@ -31,12 +33,11 @@ public sealed class EntityRepository
 
     public WorkspaceEntitySession WorkspaceEntitySession { get; }
 
-    public IDataAccessLayer DataAccessLayer { get; }
+    public IDataAccessLayer DataAccessLayer { get; private set; }
 
-    public static EntityRepository Create(
-        RepositorySource repositorySource)
+    internal void SetDataAccessLayerForTesting(IDataAccessLayer dataAccessLayer)
     {
-        return CreateAsync(repositorySource).GetAwaiter().GetResult();
+        this.DataAccessLayer = dataAccessLayer;
     }
 
     public static async Task<EntityRepository> CreateAsync(
@@ -60,6 +61,13 @@ public sealed class EntityRepository
         }
         if (!isWebSource)
         {
+            // For MongoDB data access layers, ensure indexes and migrate schema before any reads
+            if (underlyingDataAccessLayer is MongoDbEntityDataAccessLayer mongoDbDataAccessLayer)
+            {
+                await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
+                await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
+            }
+
             await EnsureSeedDataIfNeededAsync(innerDataAccessLayer).ConfigureAwait(false);
         }
 
@@ -159,7 +167,14 @@ public sealed class EntityRepository
         var mongoDbConnectionBroker = new MongoDbConnectionBroker();
         var mongoDbClient = await mongoDbConnectionBroker.GetClientAsync(connectionDefinition).ConfigureAwait(false);
         var mongoDbDatabase = mongoDbClient.GetDatabase(mongoDbDatabaseName);
-        return new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.RootCollectionName);
+        
+        var mongoDbDataAccessLayer = TestMongoDbEntityDataAccessLayerFactory?.Invoke(mongoDbDatabase, repositorySource.RootCollectionName)
+            ?? new MongoDbEntityDataAccessLayer(mongoDbDatabase, repositorySource.RootCollectionName);
+        
+        await mongoDbDataAccessLayer.EnsureIndexesAsync().ConfigureAwait(false);
+        await mongoDbDataAccessLayer.MigrateAsync().ConfigureAwait(false);
+        
+        return mongoDbDataAccessLayer;
     }
 
     private static async Task EnsureSeedDataIfNeededAsync(

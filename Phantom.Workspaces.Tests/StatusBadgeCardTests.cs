@@ -5,6 +5,8 @@ using Avalonia.Media;
 using Phantom.Workspaces.Converters;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class StatusBadgeCardTests

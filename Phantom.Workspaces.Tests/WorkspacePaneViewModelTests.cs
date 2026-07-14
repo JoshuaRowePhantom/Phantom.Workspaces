@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspacePaneViewModelTests

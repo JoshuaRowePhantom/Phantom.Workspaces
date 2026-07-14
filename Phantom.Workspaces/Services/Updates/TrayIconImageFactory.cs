@@ -70,7 +70,7 @@ internal static class TrayIconImageFactory
         }
 
         var stream = new MemoryStream();
-        writeable.Save(stream);
+        writeable.Save(stream, PngBitmapEncoderOptions.Default);
 
         if (stream.Length == 0)
         {
@@ -124,7 +124,7 @@ internal static class TrayIconImageFactory
         // indistinguishable from rendered pixels.
         using (var probe = new MemoryStream())
         {
-            renderTarget.Save(probe);
+            renderTarget.Save(probe, PngBitmapEncoderOptions.Default);
             if (probe.Length > 0)
             {
                 using var writeable = new WriteableBitmap(pixelSize, dpi, PixelFormats.Bgra8888, AlphaFormat.Premul);

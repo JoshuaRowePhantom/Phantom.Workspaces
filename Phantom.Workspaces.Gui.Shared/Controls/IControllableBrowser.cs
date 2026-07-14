@@ -14,6 +14,14 @@ public interface IControllableBrowser
     /// <summary>The static HTML shell to load into the page.</summary>
     string? HtmlShell { get; set; }
 
+    /// <summary>
+    /// Loads <paramref name="html"/> as the page shell, always re-navigating — even when the markup
+    /// equals the currently loaded shell. Raises <see cref="Ready"/> once the shell has loaded.
+    /// Use this instead of assigning <see cref="HtmlShell"/> when a reload must be guaranteed
+    /// (property-based assignment may be deduplicated for unchanged values).
+    /// </summary>
+    void LoadShell(string html) => this.HtmlShell = html;
+
     /// <summary>Raised once the shell has loaded and the startup scripts have run.</summary>
     event EventHandler? Ready;
 

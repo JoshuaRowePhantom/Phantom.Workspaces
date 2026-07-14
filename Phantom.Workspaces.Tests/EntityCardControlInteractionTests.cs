@@ -3,6 +3,8 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Phantom.Workspaces.Controls;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardControlInteractionTests

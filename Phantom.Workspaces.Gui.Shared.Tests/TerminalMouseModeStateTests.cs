@@ -9,6 +9,8 @@ using Phantom.Workspaces.Gui.Shared.ViewModels;
 using Xunit;
 using VtMouseMode = Phantom.Workspaces.Gui.Shared.Encoding.VtMouseMode;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class TerminalMouseModeStateTests

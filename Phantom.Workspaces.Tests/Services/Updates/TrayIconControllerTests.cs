@@ -6,6 +6,8 @@ using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Install;
 using Phantom.Workspaces.Services.Updates;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests.Updates;
 
 public sealed class TrayIconControllerTests

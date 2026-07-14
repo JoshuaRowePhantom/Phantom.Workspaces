@@ -1,6 +1,8 @@
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.ViewModels.Configuration;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class RemoteAccessSettingsViewModelTests

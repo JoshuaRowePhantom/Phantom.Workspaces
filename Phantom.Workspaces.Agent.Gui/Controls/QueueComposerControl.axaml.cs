@@ -407,7 +407,7 @@ public partial class QueueComposerControl : UserControl
     private byte[] BitmapToBytes(Bitmap bitmap)
     {
         using var memory = new MemoryStream();
-        bitmap.Save(memory);
+        bitmap.Save(memory, PngBitmapEncoderOptions.Default);
         return memory.ToArray();
     }
 

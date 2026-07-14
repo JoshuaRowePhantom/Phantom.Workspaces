@@ -4,6 +4,8 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Markup.Xaml;
 using Avalonia.VisualTree;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class RunningIndicatorStylesTests

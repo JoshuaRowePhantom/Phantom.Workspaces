@@ -84,7 +84,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
     // ── Session resolution ──────────────────────────────────────────────────────
 
-    private AgentChat? TryResolveAgentChat(string? sessionId)
+    private async ValueTask<AgentChat?> TryResolveAgentChatAsync(string? sessionId, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(sessionId) || sessionId == ".")
             return _parentChatRef.Chat;
@@ -98,8 +98,20 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
         foreach (var subAgent in ParentChat.SubAgents)
         {
-            if (subAgent is SubAgent sa && sa.SessionId.Value == sessionId && sa.AgentChat is not null)
-                return sa.AgentChat;
+            if (subAgent is SubAgent sa && sa.SessionId.Value == sessionId)
+            {
+                var lease = await sa.AcquireLeaseAsync(cancellationToken);
+                
+                lock (_leasesLock)
+                {
+                    if (!_leases.TryAdd(id, lease))
+                    {
+                        lease.DisposeAsync().AsTask().Wait();
+                        return _leases[id].AgentChat;
+                    }
+                }
+                return lease.AgentChat;
+            }
             if (subAgent is AgentChat ac && ac.AgentSessionId == sessionId)
                 return ac;
         }
@@ -266,7 +278,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
             // Register with parent's sub-agent table
             var parentChat = _toolset.ParentChat;
-            ((ISubAgentTable)parentChat).Add(lease.AgentChat);
+            await ((ISubAgentTable)parentChat).Add(lease.AgentChat);
 
             lock (_toolset._leasesLock)
             {
@@ -319,17 +331,43 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             var parentChat = _toolset.ParentChat;
 
             var sessions = parentChat.SubAgents
-                .Select(static sub =>
+                .Select(sub =>
                 {
-                    var chat = sub is SubAgent sa ? sa.AgentChat : sub as AgentChat;
+                    var chat = sub as AgentChat;
                     var sessionId = sub is SubAgent subAgent ? subAgent.SessionId.Value
                         : chat?.AgentSessionId ?? string.Empty;
-                    var status = chat is not null ? GetStatus(chat) : "unknown";
+                    
+                    string status;
+                    DateTime? lastActivity;
+                    
+                    if (chat is not null)
+                    {
+                        status = GetStatus(chat);
+                        lastActivity = chat.LastUpdatedAt;
+                    }
+                    else if (sub is SubAgent)
+                    {
+                        var completionState = sub.CompletionState;
+                        status = completionState switch
+                        {
+                            AgentChatCompletionState.Succeeded => "stopped",
+                            AgentChatCompletionState.Failed => "error",
+                            AgentChatCompletionState.Unknown => "unknown",
+                            _ => "idle",
+                        };
+                        lastActivity = sub.LastUpdatedAt == DateTime.MinValue ? null : sub.LastUpdatedAt;
+                    }
+                    else
+                    {
+                        status = "unknown";
+                        lastActivity = null;
+                    }
+                    
                     return new
                     {
                         session_id = sessionId,
                         status,
-                        last_activity_at = chat?.LastUpdatedAt.ToString("O"),
+                        last_activity_at = lastActivity?.ToString("O"),
                     };
                 })
                 .Where(s => statusFilter is null || s.status == statusFilter)
@@ -363,16 +401,15 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
         public override string Description => "Get the current status and running items of a session.";
         public override JsonElement JsonSchema => Schema;
 
-        protected override ValueTask<object?> InvokeCoreAsync(
+        protected override async ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments,
             CancellationToken cancellationToken)
         {
-            _ = cancellationToken;
             var sessionId = GetString(arguments, "session_id");
-            var chat = _toolset.TryResolveAgentChat(sessionId);
+            var chat = await _toolset.TryResolveAgentChatAsync(sessionId, cancellationToken);
 
             if (chat is null)
-                return ValueTask.FromResult<object?>(Serialize(new { error = $"Unknown session_id: '{sessionId}'." }));
+                return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
             var runningItems = chat.RunningItems
                 .SelectMany(static item => item.Items)
@@ -384,14 +421,14 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                 })
                 .ToArray();
 
-            return ValueTask.FromResult<object?>(Serialize(new
+            return Serialize(new
             {
                 session_id = chat.AgentSessionId,
                 status = GetStatus(chat),
                 is_busy = chat.IsBusy,
                 running_items = runningItems,
                 last_activity_at = chat.LastUpdatedAt.ToString("O"),
-            }));
+            });
         }
     }
 
@@ -428,21 +465,20 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
         public override string Description => "Inject a text message into a subagent session's input queue.";
         public override JsonElement JsonSchema => Schema;
 
-        protected override ValueTask<object?> InvokeCoreAsync(
+        protected override async ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments,
             CancellationToken cancellationToken)
         {
-            _ = cancellationToken;
             var sessionId = GetString(arguments, "session_id");
             var text = GetString(arguments, "text");
             var immediacy = GetString(arguments, "immediacy");
 
             if (string.IsNullOrEmpty(text))
-                return ValueTask.FromResult<object?>(Serialize(new { error = "text is required." }));
+                return Serialize(new { error = "text is required." });
 
-            var chat = _toolset.TryResolveAgentChat(sessionId);
+            var chat = await _toolset.TryResolveAgentChatAsync(sessionId, cancellationToken);
             if (chat is null)
-                return ValueTask.FromResult<object?>(Serialize(new { error = $"Unknown session_id: '{sessionId}'." }));
+                return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
             var queue = string.Equals(immediacy, "immediate", StringComparison.OrdinalIgnoreCase)
                 ? chat.ImmediateInputQueue
@@ -450,7 +486,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
             chat.EnqueueUserMessage(text, queue);
 
-            return ValueTask.FromResult<object?>(Serialize(new { ok = true }));
+            return Serialize(new { ok = true });
         }
     }
 
@@ -486,11 +522,10 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             AIFunctionArguments arguments,
             CancellationToken cancellationToken)
         {
-            _ = cancellationToken;
             var sessionId = GetString(arguments, "session_id");
             var dispose = GetBool(arguments, "dispose");
 
-            var chat = _toolset.TryResolveAgentChat(sessionId);
+            var chat = await _toolset.TryResolveAgentChatAsync(sessionId, cancellationToken);
             if (chat is null)
                 return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
@@ -555,11 +590,10 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
         public override string Description => "Read event history from a session with optional type and content filters.";
         public override JsonElement JsonSchema => Schema;
 
-        protected override ValueTask<object?> InvokeCoreAsync(
+        protected override async ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments,
             CancellationToken cancellationToken)
         {
-            _ = cancellationToken;
             var sessionId = GetString(arguments, "session_id");
             var afterTimestamp = GetString(arguments, "after_timestamp");
             var search = GetString(arguments, "search");
@@ -581,9 +615,9 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                     eventTypeFilter = new HashSet<string>(typeList, StringComparer.OrdinalIgnoreCase);
             }
 
-            var chat = _toolset.TryResolveAgentChat(sessionId);
+            var chat = await _toolset.TryResolveAgentChatAsync(sessionId, cancellationToken);
             if (chat is null)
-                return ValueTask.FromResult<object?>(Serialize(new { error = $"Unknown session_id: '{sessionId}'." }));
+                return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
             DateTimeOffset? afterCursor = null;
             if (!string.IsNullOrEmpty(afterTimestamp)
@@ -619,12 +653,12 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                 ? page[^1].Timestamp?.ToString("O")
                 : null;
 
-            return ValueTask.FromResult<object?>(Serialize(new
+            return Serialize(new
             {
                 events,
                 total_matching = matched.Length,
                 next_cursor = nextCursor,
-            }));
+            });
         }
     }
 
@@ -668,7 +702,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             var timeoutSeconds = GetInt(arguments, "timeout_seconds", 30, 0, 300);
             var waitForIdle = GetBool(arguments, "wait_for_idle");
 
-            var chat = _toolset.TryResolveAgentChat(sessionId);
+            var chat = await _toolset.TryResolveAgentChatAsync(sessionId, cancellationToken);
             if (chat is null)
                 return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
@@ -754,20 +788,19 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
         public override string Description => "Register a callback: when the session becomes idle or reaches a terminal state, enqueue a message on the parent agent's immediate queue.";
         public override JsonElement JsonSchema => Schema;
 
-        protected override ValueTask<object?> InvokeCoreAsync(
+        protected override async ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments,
             CancellationToken cancellationToken)
         {
-            _ = cancellationToken;
             var sessionId = GetString(arguments, "session_id");
             var message = GetString(arguments, "message");
 
             if (string.IsNullOrEmpty(message))
-                return ValueTask.FromResult<object?>(Serialize(new { error = "message is required." }));
+                return Serialize(new { error = "message is required." });
 
-            var chat = _toolset.TryResolveAgentChat(sessionId);
+            var chat = await _toolset.TryResolveAgentChatAsync(sessionId, cancellationToken);
             if (chat is null)
-                return ValueTask.FromResult<object?>(Serialize(new { error = $"Unknown session_id: '{sessionId}'." }));
+                return Serialize(new { error = $"Unknown session_id: '{sessionId}'." });
 
             var parentChat = _toolset.ParentChat;
 
@@ -775,7 +808,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             if (chat.RunningItems.Count == 0 || chat.CompletionState != AgentChatCompletionState.Running)
             {
                 parentChat.EnqueueUserMessage(message, parentChat.ImmediateInputQueue);
-                return ValueTask.FromResult<object?>(Serialize(new { registered = true, fired_immediately = true }));
+                return Serialize(new { registered = true, fired_immediately = true });
             }
 
             // Register a background watcher that fires when the session finishes its current turn.
@@ -821,7 +854,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                     parentChat.EnqueueUserMessage(message, parentChat.ImmediateInputQueue);
             });
 
-            return ValueTask.FromResult<object?>(Serialize(new { registered = true, fired_immediately = false }));
+            return Serialize(new { registered = true, fired_immediately = false });
         }
     }
 

@@ -22,4 +22,11 @@
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Shared\Phantom.Workspaces.Gui.Shared.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Shares the scripted BYOK server and CLI locator with the Llm.Core test suite (issue #912).
+         Linked as sources (not a project reference) because the two test projects use different
+         xunit major versions. -->
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\ScriptedByokChatServer.cs" Link="ScriptedByokChatServer.cs" />
+    <Compile Include="..\Phantom.Workspaces.Llm.Core.Tests\CopilotCliLocator.cs" Link="CopilotCliLocator.cs" />
+  </ItemGroup>
 </Project>

@@ -5,6 +5,8 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatStatusLineViewModelTests

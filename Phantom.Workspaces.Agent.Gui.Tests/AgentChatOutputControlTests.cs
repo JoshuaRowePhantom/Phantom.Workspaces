@@ -5,10 +5,13 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using AgentSchema;
+using Avalonia.Controls;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+
+using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
@@ -478,7 +481,6 @@ public sealed class AgentChatOutputControlTests
         Assert.True(browser.PostedMessages.Count > 0, "Expected incremental update messages.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollsToBottom_AfterInitialContentLoad()
     {
@@ -519,7 +521,6 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'scroll' command to be posted after the initial content load.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()
     {
@@ -542,7 +543,6 @@ public sealed class AgentChatOutputControlTests
         Assert.True(viewModel.AutoScrollEnabled, "AutoScrollEnabled must be true after OnBrowserReady.");
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_DoesNotDoubleScroll_WhenSettingAutoScrollEnabled()
     {
@@ -583,7 +583,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, scrollCount);
     }
 
-    [Trait("Category", "SlowLayout")]
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollIsPostedAfterAllBatchMessages()
     {
@@ -781,22 +780,6 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("diag-0", receivedContentId);
     }
 
-    [Fact]
-    public async Task DiagnosticSidebarPanel_ShowsIndividualItems_NotJustCounts()
-    {
-        // Verify that the "chat-diagnostics" nav node's detail content is DiagnosticInspectorViewModel
-        // (the per-item list) not the old AgentChatDiagnosticsDetailViewModel aggregate counts panel.
-        var chat = await AgentFactory.CreateAgentChatAsync(
-            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
-        using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
-
-        var root = Assert.Single(viewModel.EditorItems);
-        var diagnosticsNode = root.Children.FirstOrDefault(c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
-        Assert.NotNull(diagnosticsNode);
-        Assert.IsType<DiagnosticInspectorViewModel>(diagnosticsNode!.DetailContent);
-    }
-
     [PhantomAvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_500ItemHistory_BrowserReceivesMultipleBatches()
     {
@@ -869,11 +852,11 @@ public sealed class AgentChatOutputControlTests
     }
 
     [PhantomAvaloniaFact(Timeout = 30_000)]
-    public async Task OnBrowserReady_SuppressSinkScroll_TrueDuringLoadingFalseAfterFirstChunk()
+    public async Task OnBrowserReady_ScrollsToBottomAfterFirstChunk()
     {
-        // suppressSinkScroll is set to true before constructing the model and cleared by
-        // ScrollToBottom() when the model delivers the first (newest) history chunk.
-        // After HistoryLoaded it must be false, and exactly one scroll command must exist.
+        // Auto-scroll is enabled from the start. ScrollToBottom() is called when the model
+        // delivers the first (newest) history chunk. After HistoryLoaded, exactly one scroll
+        // command must exist (from the first chunk).
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         for (var i = 0; i < 300; i++)
@@ -897,12 +880,6 @@ public sealed class AgentChatOutputControlTests
 
         control.DataContext = viewModel;
         await control.HistoryLoaded;
-
-        // After loading, suppressSinkScroll must be false.
-        var suppressField = typeof(AgentChatOutputControl)
-            .GetField("suppressSinkScroll", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(suppressField);
-        Assert.False((bool)suppressField!.GetValue(control)!, "suppressSinkScroll must be false after HistoryLoaded.");
 
         // Exactly one scroll command must have been posted (by the newest history chunk).
         var scrollCount = browser.PostedMessages.Count(msg =>
@@ -1015,6 +992,297 @@ public sealed class AgentChatOutputControlTests
             });
 
         Assert.True(historyUpdateCount > 0, "Expected 'update' commands in history batches.");
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_HtmlShellSameValueReassigned_DoesNotRaiseReady()
+    {
+        // Mirrors the real ControllableWebViewControl: HtmlShell is a StyledProperty, and the
+        // Avalonia property system suppresses same-value assignments, so no reload and no Ready.
+        var browser = new HeadlessControllableBrowser();
+        browser.HtmlShell = "<html></html>";
+
+        var readyCount = 0;
+        browser.Ready += (_, _) => readyCount++;
+
+        browser.HtmlShell = "<html></html>";
+
+        Assert.Equal(0, readyCount);
+    }
+
+    [Fact]
+    public void HeadlessControllableBrowser_LoadShell_SameValue_RaisesReady()
+    {
+        // Mirrors ControllableWebViewControl.LoadShell: the reload is forced even when the markup
+        // is unchanged, so Ready fires again.
+        var browser = new HeadlessControllableBrowser();
+        browser.HtmlShell = "<html></html>";
+
+        var readyCount = 0;
+        browser.Ready += (_, _) => readyCount++;
+
+        browser.LoadShell("<html></html>");
+
+        Assert.Equal(1, readyCount);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_DetachReattach_RebuildsOutputModel()
+    {
+        // Regression for issue #904: detaching disposes the output model; reattaching re-runs
+        // AttachOutputModel with an unchanged shell string. The reload must still happen so a
+        // fresh ChatOutputHtmlModel is built — otherwise the view is dead until a manual refresh.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.HistoryLoaded;
+            Assert.NotNull(GetOutputModel(control));
+
+            window.Content = null;
+            Assert.Null(GetOutputModel(control));
+
+            window.Content = control;
+
+            Assert.NotNull(GetOutputModel(control));
+            await control.HistoryLoaded;
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_DetachReattach_LiveHistoryAddPostsUpdate()
+    {
+        // Regression for issue #904 at the message level: after a detach/reattach cycle, a live
+        // History.Add must still flow through a (rebuilt) ChatOutputHtmlModel to the browser sink.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl { DataContext = viewModel };
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.HistoryLoaded;
+
+            window.Content = null;
+            window.Content = control;
+            await control.HistoryLoaded;
+
+            browser.PostedMessages.Clear();
+            chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("live-reply")] });
+
+            Assert.True(
+                browser.PostedMessages.Any(msg =>
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(msg);
+                        return doc.RootElement.TryGetProperty("type", out var t)
+                            && t.GetString() == "update"
+                            && doc.RootElement.TryGetProperty("content", out var content)
+                            && (content.GetString() ?? string.Empty).Contains("live-reply", StringComparison.Ordinal);
+                    }
+                    catch (JsonException) { return false; }
+                }),
+                "Expected an 'update' command for the live history item added after reattach.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatOutputControl_ChatCreatedOnBackgroundThread_LiveTurnPostsOnUIThread()
+    {
+        // Regression for issue #908: production sessions (loaded and freshly launched) create their
+        // AgentChat on a background thread, passing the captured UI scheduler as ForegroundScheduler.
+        // Since 873bc7ae, StartProcessingLoop invoked the process loop eagerly on that background
+        // thread, so live History/RunningItems mutations — and hence the sink's
+        // PostMessageToJavaScript calls — happened off the UI thread, where the real WebView sink's
+        // auto-flush DispatcherTimer never fires and live text silently never renders.
+        var uiScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var chat = await Task.Run(() => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = CreateAgentDefinition(),
+                ForegroundScheduler = uiScheduler,
+            }));
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var control = new AgentChatOutputControl { DataContext = viewModel };
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var window = new Window { Content = control };
+        window.Show();
+        try
+        {
+            await control.HistoryLoaded;
+            browser.PostedMessages.Clear();
+            browser.PostedOnUIThread.Clear();
+
+            var turnComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+            {
+                if (chat.RunningItems.Count == 0
+                    && chat.History.Count >= 2
+                    && chat.History[^1].Role == ChatRole.Assistant)
+                {
+                    turnComplete.TrySetResult();
+                }
+            }
+
+            var historyNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.History;
+            var runningItemsNotifications = (System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems;
+            historyNotifications.CollectionChanged += OnCollectionChanged;
+            runningItemsNotifications.CollectionChanged += OnCollectionChanged;
+            try
+            {
+                chat.EnqueueUserMessage("hello-live");
+                await turnComplete.Task;
+            }
+            finally
+            {
+                historyNotifications.CollectionChanged -= OnCollectionChanged;
+                runningItemsNotifications.CollectionChanged -= OnCollectionChanged;
+            }
+
+            Assert.True(
+                browser.PostedMessages.Any(msg => msg.Contains("hello-live", StringComparison.Ordinal)),
+                "Expected the live user message to be posted to the browser sink.");
+            Assert.NotEmpty(browser.PostedOnUIThread);
+            Assert.True(
+                browser.PostedOnUIThread.All(onUI => onUI),
+                "Expected every live PostMessageToJavaScript call to be made on the UI thread; " +
+                "off-thread posts never render in the real WebView sink.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static ViewModels.DocumentModels.ChatOutputHtmlModel? GetOutputModel(AgentChatOutputControl control)
+    {
+        var field = typeof(AgentChatOutputControl)
+            .GetField("outputModel", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (ViewModels.DocumentModels.ChatOutputHtmlModel?)field!.GetValue(control);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_UsesCampbellBackground()
+    {
+        // Verify that the CSS :root block defines --terminal-background as Campbell's #0C0C0C.
+        var html = ReadShellHtml();
+
+        Assert.Contains("--terminal-background:", html, StringComparison.Ordinal);
+        Assert.Contains("#0C0C0C", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_UsesCampbellForeground()
+    {
+        // Verify that the CSS :root block defines --terminal-foreground as Campbell's #CCCCCC.
+        var html = ReadShellHtml();
+
+        Assert.Contains("--terminal-foreground:", html, StringComparison.Ordinal);
+        Assert.Contains("#CCCCCC", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_DefinesAll16AnsiColors()
+    {
+        // Verify that all 16 ANSI color CSS variables are defined in :root.
+        var html = ReadShellHtml();
+
+        // Normal colors
+        Assert.Contains("--ansi-black:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-red:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-green:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-yellow:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-blue:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-magenta:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-cyan:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-white:", html, StringComparison.Ordinal);
+
+        // Bright colors
+        Assert.Contains("--ansi-bright-black:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-red:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-green:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-yellow:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-blue:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-magenta:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-cyan:", html, StringComparison.Ordinal);
+        Assert.Contains("--ansi-bright-white:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_ToolSummaryUsesCampbellBrightMagenta()
+    {
+        // Verify that --chat-tool-summary points to Campbell's bright magenta (#B4009E),
+        // not the old hardcoded #c586c0.
+        var html = ReadShellHtml();
+
+        Assert.Contains("--ansi-bright-magenta:", html, StringComparison.Ordinal);
+        Assert.Contains("#B4009E", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-tool-summary:", html, StringComparison.Ordinal);
+        Assert.Contains("var(--ansi-bright-magenta)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_LightMode_OverridesBackgroundAndForeground()
+    {
+        // Verify that body.light provides light-mode overrides for background/foreground.
+        var html = ReadShellHtml();
+
+        Assert.Contains("body.light", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-background:", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-foreground:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_CampbellColorScheme_MatchesCSharpValues()
+    {
+        // Verify that key Campbell colors in the HTML match the CampbellColorScheme.cs constants.
+        var html = ReadShellHtml();
+
+        // Background and foreground
+        Assert.Contains("#0C0C0C", html, StringComparison.Ordinal); // Background
+        Assert.Contains("#CCCCCC", html, StringComparison.Ordinal); // Foreground/White
+
+        // Sample ANSI colors (spot check a few key ones)
+        Assert.Contains("#C50F1F", html, StringComparison.Ordinal); // Red
+        Assert.Contains("#13A10E", html, StringComparison.Ordinal); // Green
+        Assert.Contains("#0037DA", html, StringComparison.Ordinal); // Blue
+        Assert.Contains("#881798", html, StringComparison.Ordinal); // Magenta
+        Assert.Contains("#B4009E", html, StringComparison.Ordinal); // BrightMagenta
+        Assert.Contains("#E74856", html, StringComparison.Ordinal); // BrightRed
+        Assert.Contains("#16C60C", html, StringComparison.Ordinal); // BrightGreen
+        Assert.Contains("#F2F2F2", html, StringComparison.Ordinal); // BrightWhite
     }
 
     private static IReadOnlyDictionary<string, string> GetThemeVariableResourceKeys()

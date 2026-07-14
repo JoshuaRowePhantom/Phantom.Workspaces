@@ -7,6 +7,8 @@ using Avalonia.Styling;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class SharedStylesTests
@@ -152,9 +154,11 @@ public sealed class SharedStylesTests
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void StatusThemeResources_AreSolidColorBrushes()
     {
+        // Theme.Status.* resources were moved to theme dictionaries (Dark.axaml and Light.axaml)
+        // as part of issue #905. This test now verifies they are NOT in SharedStyles anymore.
         var sharedStyles = LoadSharedStyles();
 
-        var expectedKeys = new List<string>
+        var statusKeys = new List<string>
         {
             "Theme.Status.Good",
             "Theme.Status.Bad",
@@ -162,13 +166,13 @@ public sealed class SharedStylesTests
         };
         for (var index = 0; index < 6; index++)
         {
-            expectedKeys.Add($"Theme.Status.Palette.{index}");
+            statusKeys.Add($"Theme.Status.Palette.{index}");
         }
 
-        foreach (var key in expectedKeys)
+        foreach (var key in statusKeys)
         {
-            Assert.True(sharedStyles.Resources.TryGetValue(key, out var value), $"Expected resource key '{key}' to exist.");
-            _ = Assert.IsAssignableFrom<ISolidColorBrush>(value);
+            Assert.False(sharedStyles.Resources.ContainsKey(key), 
+                $"Theme status resource '{key}' should be in theme dictionaries, not SharedStyles.");
         }
     }
 
@@ -359,5 +363,181 @@ public sealed class SharedStylesTests
         {
             return ex.Types.Where(static t => t is not null)!;
         }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_HiddenByDefault()
+    {
+        var sharedStyles = LoadSharedStyles();
+
+        var shortcutButton = new Button();
+        shortcutButton.Classes.Add("workspace-entity-shortcut-button");
+
+        var entityCard = new Border();
+        entityCard.Classes.Add("entity-card");
+        entityCard.Child = shortcutButton;
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(entityCard);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.0, shortcutButton.Opacity);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_VisibleOnPointerOver()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:pointerover Button.workspace-entity-shortcut-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:pointerover Button.workspace-entity-shortcut-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_VisibleOnFocusWithin()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:focus-within Button.workspace-entity-shortcut-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:focus-within Button.workspace-entity-shortcut-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_Shortcuts_HaveOpacityTransition()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        var selectorStart = content.IndexOf("Button.workspace-entity-shortcut-button", StringComparison.Ordinal);
+        Assert.True(selectorStart >= 0, "Button.workspace-entity-shortcut-button style must exist.");
+
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        Assert.True(selectorEnd > selectorStart, "Button.workspace-entity-shortcut-button style must be closed.");
+
+        var styleBlock = content[selectorStart..selectorEnd];
+        Assert.Contains("DoubleTransition", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_DefaultOpacity_IsZero()
+    {
+        // Issue #810: JSON button should be hidden by default like other shortcut buttons
+        var sharedStyles = LoadSharedStyles();
+
+        var jsonButton = new Button();
+        jsonButton.Classes.Add("workspace-edit-indicator-button");
+
+        var entityCard = new Border();
+        entityCard.Classes.Add("entity-card");
+        entityCard.Child = jsonButton;
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(entityCard);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        Assert.Equal(0.0, jsonButton.Opacity);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_OnPointerOver_OpacityIsOne()
+    {
+        // Issue #810: JSON button should fade in on pointer over
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:pointerover Button.workspace-edit-indicator-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:pointerover Button.workspace-edit-indicator-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_OnFocusWithin_OpacityIsOne()
+    {
+        // Issue #810: JSON button should fade in on focus within
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        Assert.Contains("Border.entity-card:focus-within Button.workspace-edit-indicator-button", content, StringComparison.Ordinal);
+
+        var selectorStart = content.IndexOf("Border.entity-card:focus-within Button.workspace-edit-indicator-button", StringComparison.Ordinal);
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        var styleBlock = content[selectorStart..selectorEnd];
+
+        Assert.Contains("Opacity", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("1", styleBlock, StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCard_JsonButton_HasOpacityTransition()
+    {
+        // Issue #810: JSON button should have smooth fade-in transition
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var content = File.ReadAllText(stylesPath);
+
+        var selectorStart = content.IndexOf("Button.workspace-edit-indicator-button", StringComparison.Ordinal);
+        Assert.True(selectorStart >= 0, "Button.workspace-edit-indicator-button style must exist.");
+
+        var selectorEnd = content.IndexOf("</Style>", selectorStart, StringComparison.Ordinal);
+        Assert.True(selectorEnd > selectorStart, "Button.workspace-edit-indicator-button style must be closed.");
+
+        var styleBlock = content[selectorStart..selectorEnd];
+        Assert.Contains("DoubleTransition", styleBlock, StringComparison.Ordinal);
+        Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
     }
 }

@@ -13,60 +13,65 @@ public sealed class GitWorktreeFileListViewModel : ViewModelBase
     public ObservableCollection<GitWorktreeFileEntryViewModel> Files { get; } = new();
     public ObservableCollection<GitWorktreeFileEntryViewModel> SelectedFiles { get; } = new();
 
-    public Task RefreshAsync(string repositoryPath, IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct = default)
+    public async Task RefreshAsync(string repositoryPath, IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
 
-        var entries = new List<(string path, int added, int removed)>();
-
-        try
+        var entries = await Task.Run(() =>
         {
-            using var repo = new Repository(repositoryPath);
-            var commitList = selectedCommits.Count > 0 ? selectedCommits : null;
+            var entryList = new List<(string path, int added, int removed)>();
 
-            foreach (var commit in commitList ?? Array.Empty<GitCommitModel>())
+            try
             {
-                ct.ThrowIfCancellationRequested();
+                using var repo = new Repository(repositoryPath);
+                var commitList = selectedCommits.Count > 0 ? selectedCommits : null;
 
-                if (commit.IsUnstaged)
+                foreach (var commit in commitList ?? Array.Empty<GitCommitModel>())
                 {
-                    var patch = repo.Diff.Compare<Patch>(repo.Head.Tip?.Tree, DiffTargets.WorkingDirectory);
-                    foreach (var entry in patch)
+                    ct.ThrowIfCancellationRequested();
+
+                    if (commit.IsUnstaged)
                     {
-                        entries.Add((entry.Path, entry.LinesAdded, entry.LinesDeleted));
-                    }
-                }
-                else if (commit.IsStaged)
-                {
-                    var patch = repo.Diff.Compare<Patch>(repo.Head.Tip?.Tree, DiffTargets.Index);
-                    foreach (var entry in patch)
-                    {
-                        entries.Add((entry.Path, entry.LinesAdded, entry.LinesDeleted));
-                    }
-                }
-                else
-                {
-                    var c = repo.Lookup<Commit>(commit.Oid);
-                    if (c?.Parents.FirstOrDefault() is { } parent)
-                    {
-                        var patch = repo.Diff.Compare<Patch>(parent.Tree, c.Tree);
+                        var patch = repo.Diff.Compare<Patch>(repo.Head.Tip?.Tree, DiffTargets.WorkingDirectory);
                         foreach (var entry in patch)
                         {
-                            entries.Add((entry.Path, entry.LinesAdded, entry.LinesDeleted));
+                            entryList.Add((entry.Path, entry.LinesAdded, entry.LinesDeleted));
+                        }
+                    }
+                    else if (commit.IsStaged)
+                    {
+                        var patch = repo.Diff.Compare<Patch>(repo.Head.Tip?.Tree, DiffTargets.Index);
+                        foreach (var entry in patch)
+                        {
+                            entryList.Add((entry.Path, entry.LinesAdded, entry.LinesDeleted));
+                        }
+                    }
+                    else
+                    {
+                        var c = repo.Lookup<Commit>(commit.Oid);
+                        if (c?.Parents.FirstOrDefault() is { } parent)
+                        {
+                            var patch = repo.Diff.Compare<Patch>(parent.Tree, c.Tree);
+                            foreach (var entry in patch)
+                            {
+                                entryList.Add((entry.Path, entry.LinesAdded, entry.LinesDeleted));
+                            }
                         }
                     }
                 }
             }
-        }
-        catch (RepositoryNotFoundException)
-        {
-        }
-        catch (LibGit2SharpException)
-        {
-        }
-        catch (ArgumentException)
-        {
-        }
+            catch (RepositoryNotFoundException)
+            {
+            }
+            catch (LibGit2SharpException)
+            {
+            }
+            catch (ArgumentException)
+            {
+            }
+
+            return entryList;
+        }, ct);
 
         // Merge by path
         var merged = entries
@@ -98,7 +103,5 @@ public sealed class GitWorktreeFileListViewModel : ViewModelBase
 
             this.Files.Add(item);
         }
-
-        return Task.CompletedTask;
     }
 }

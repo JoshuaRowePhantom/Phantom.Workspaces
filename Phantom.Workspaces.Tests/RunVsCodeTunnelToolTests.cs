@@ -19,6 +19,7 @@ public sealed class RunVsCodeTunnelToolTests
     {
         public string CliPath { get; init; } = "";
         public string Arguments { get; init; } = "";
+        public IReadOnlyDictionary<string, string>? EnvironmentVariables { get; init; }
     }
 
     private WorkspaceToolExecutionContext Context(
@@ -53,9 +54,9 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
                 return Task.FromResult(("service is running", 0));
             });
 
@@ -74,18 +75,24 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
-                return Task.FromResult(("", 1));
-            });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
+                // First status check returns 1 (not installed), login returns 0 (success), install returns 0
+                // Post-install status check returns running
+                if (args.Contains("status") && calls.Count == 1) return Task.FromResult(("", 1));
+                if (args.Contains("status")) return Task.FromResult(("service is running", 0));
+                return Task.FromResult(("", 0));
+            },
+            tokenResolver: () => "fake-token");
 
         await tool.ExecuteAsync(this.Context());
 
-        Assert.Equal(2, calls.Count);
+        Assert.True(calls.Count >= 3);
         Assert.Equal("tunnel service status", calls[0].Arguments);
-        Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[1].Arguments);
-        Assert.Contains("test-machine", calls[1].Arguments);
+        Assert.Equal("tunnel user login --provider github", calls[1].Arguments);
+        Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[2].Arguments);
+        Assert.Contains("test-machine", calls[2].Arguments);
     }
 
     [Fact]
@@ -94,19 +101,21 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
                 return Task.FromResult(("service is stopped", 0));
-            });
+            },
+            tokenResolver: () => "fake-token");
 
         await tool.ExecuteAsync(this.Context());
 
-        Assert.Equal(4, calls.Count);
+        Assert.Equal(5, calls.Count);
         Assert.Equal("tunnel service status", calls[0].Arguments);
         Assert.Equal("tunnel service uninstall", calls[1].Arguments);
-        Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[2].Arguments);
-        Assert.Equal("tunnel service status", calls[3].Arguments);
+        Assert.Equal("tunnel user login --provider github", calls[2].Arguments);
+        Assert.Contains("tunnel service install --accept-server-license-terms --name", calls[3].Arguments);
+        Assert.Equal("tunnel service status", calls[4].Arguments);
     }
 
     [Fact]
@@ -120,9 +129,9 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
                 return Task.FromResult(args switch
                 {
                     "tunnel service status" => ("service was running on port 3000", 0),
@@ -144,11 +153,12 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
                 return Task.FromResult(("", 0));
-            });
+            },
+            tokenResolver: () => "fake-token");
 
         await tool.ExecuteAsync(this.Context());
 
@@ -162,9 +172,9 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
                 return Task.FromResult(("service is running", 0));
             });
 
@@ -179,11 +189,14 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
-                return Task.FromResult(("", 1));
-            });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
+                // status returns 1 (not installed), login returns 0 (success), install returns 0
+                if (args.Contains("status")) return Task.FromResult(("", 1));
+                return Task.FromResult(("", 0));
+            },
+            tokenResolver: () => "fake-token");
 
         await tool.ExecuteAsync(this.Context(tunnelName: "my-custom-tunnel"));
 
@@ -198,9 +211,9 @@ public sealed class RunVsCodeTunnelToolTests
         var calls = new List<CliCall>();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
-                calls.Add(new CliCall { CliPath = cli, Arguments = args });
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
                 return Task.FromResult(("service is running", 0));
             },
             defaultCliPathResolver: () => @"C:\fake\code.cmd");
@@ -215,7 +228,7 @@ public sealed class RunVsCodeTunnelToolTests
     {
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) => throw new InvalidOperationException($"Failed to start process: {cli}"));
+            (cli, args, env, _) => throw new InvalidOperationException($"Failed to start process: {cli}"));
 
         var result = await tool.ExecuteAsync(this.Context());
 
@@ -230,12 +243,13 @@ public sealed class RunVsCodeTunnelToolTests
         var callCount = 0;
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
                 callCount++;
-                // First call: status check exits 1 (not installed); second call: install exits 2 (failure)
-                return Task.FromResult(("", callCount == 1 ? 1 : 2));  // exit 1 → NotInstalled; exit 2 → install failure
-            });
+                // First call: status check exits 1 (not installed); second: login success; third: install exits 2 (failure)
+                return Task.FromResult(("", callCount switch { 1 => 1, 2 => 0, _ => 2 }));
+            },
+            tokenResolver: () => "fake-token");
 
         var result = await tool.ExecuteAsync(this.Context());
 
@@ -250,7 +264,7 @@ public sealed class RunVsCodeTunnelToolTests
         var callCount = 0;
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
                 callCount++;
                 // First call: status check exits 0 without "running" (stopped); second call: uninstall exits 1 (failure)
@@ -270,16 +284,18 @@ public sealed class RunVsCodeTunnelToolTests
         var callCount = 0;
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
                 callCount++;
                 return Task.FromResult(callCount switch
                 {
                     1 => ("", 1),                      // status: not installed (exit non-zero)
-                    2 => ("", 0),                      // install: success
+                    2 => ("", 0),                      // login: success
+                    3 => ("", 0),                      // install: success
                     _ => ("service is stopped", 0),    // follow-up status: still not running
                 });
-            });
+            },
+            tokenResolver: () => "fake-token");
 
         var result = await tool.ExecuteAsync(this.Context());
 
@@ -293,16 +309,18 @@ public sealed class RunVsCodeTunnelToolTests
         var callCount = 0;
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
                 callCount++;
                 return Task.FromResult(callCount switch
                 {
                     1 => ("", 1),                    // status: not installed (exit non-zero)
-                    2 => ("", 0),                    // install: success
+                    2 => ("", 0),                    // login: success
+                    3 => ("", 0),                    // install: success
                     _ => ("service is running", 0),  // follow-up status: running
                 });
-            });
+            },
+            tokenResolver: () => "fake-token");
 
         var result = await tool.ExecuteAsync(this.Context());
 
@@ -318,6 +336,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             defaultCliPathResolver: () => "nonexistent_cli.cmd",
+            tokenResolver: () => "fake-token",
             logger: testLogger);
 
         await tool.ExecuteAsync(this.Context());
@@ -330,7 +349,7 @@ public sealed class RunVsCodeTunnelToolTests
     {
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) => args switch
+            (cli, args, env, _) => args switch
             {
                 "tunnel service status" => Task.FromResult(("service is running", 0)),
                 "tunnel status" => Task.FromResult(("Connected to tunnel: my-machine", 0)),
@@ -349,7 +368,7 @@ public sealed class RunVsCodeTunnelToolTests
     {
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) => args switch
+            (cli, args, env, _) => args switch
             {
                 "tunnel service status" => Task.FromResult(("service is running", 0)),
                 "tunnel status" => Task.FromResult(("", 1)),
@@ -367,7 +386,7 @@ public sealed class RunVsCodeTunnelToolTests
     {
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) => args switch
+            (cli, args, env, _) => args switch
             {
                 "tunnel service status" => Task.FromResult(("service is running", 0)),
                 "tunnel status" => Task.FromResult(("", 0)),
@@ -386,7 +405,7 @@ public sealed class RunVsCodeTunnelToolTests
         var callCount = 0;
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
                 if (args == "tunnel status")
                     return Task.FromResult(("Connected to tunnel: test-machine", 0));
@@ -394,10 +413,12 @@ public sealed class RunVsCodeTunnelToolTests
                 return Task.FromResult(callCount switch
                 {
                     1 => ("", 1),                    // status: not installed
-                    2 => ("", 0),                    // install: success
+                    2 => ("", 0),                    // login: success
+                    3 => ("", 0),                    // install: success
                     _ => ("service is running", 0),  // follow-up status: running
                 });
-            });
+            },
+            tokenResolver: () => "fake-token");
 
         var result = await tool.ExecuteAsync(this.Context());
 
@@ -412,7 +433,7 @@ public sealed class RunVsCodeTunnelToolTests
         var callCount = 0;
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, _) =>
+            (cli, args, env, _) =>
             {
                 if (args == "tunnel status")
                     return Task.FromResult(("Connected to tunnel: test-machine", 0));
@@ -421,10 +442,12 @@ public sealed class RunVsCodeTunnelToolTests
                 {
                     1 => ("service is stopped", 0),  // status: stopped
                     2 => ("", 0),                    // uninstall: success
-                    3 => ("", 0),                    // install: success
+                    3 => ("", 0),                    // login: success
+                    4 => ("", 0),                    // install: success
                     _ => ("service is running", 0),  // follow-up status: running
                 });
-            });
+            },
+            tokenResolver: () => "fake-token");
 
         var result = await tool.ExecuteAsync(this.Context());
 
@@ -449,4 +472,99 @@ public sealed class RunVsCodeTunnelToolTests
 
         Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
     }
+
+    [Fact]
+    public async Task ExecuteAsync_TimeoutException_ReturnsFailureWithTimeoutMessage()
+    {
+        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, ct) =>
+            {
+                if (args.Contains("login"))
+                {
+                    throw new TimeoutException("Process timed out");
+                }
+                return Task.FromResult(("", args.Contains("status") ? 1 : 0));
+            },
+            tokenResolver: () => "fake-token",
+            logger: testLogger);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("timed out", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task InstallServiceAsync_WithToken_InvokesPreLoginWithTokenViaEnvironmentVariable()
+    {
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
+                return Task.FromResult(("", args.Contains("status") ? 1 : 0));
+            },
+            tokenResolver: () => "test-github-token");
+
+        await tool.ExecuteAsync(this.Context());
+
+        var loginCall = calls.FirstOrDefault(c => c.Arguments == "tunnel user login --provider github");
+        Assert.NotNull(loginCall);
+        Assert.NotNull(loginCall!.EnvironmentVariables);
+        Assert.True(loginCall.EnvironmentVariables.ContainsKey("VSCODE_CLI_ACCESS_TOKEN"));
+        Assert.Equal("test-github-token", loginCall.EnvironmentVariables["VSCODE_CLI_ACCESS_TOKEN"]);
+        Assert.DoesNotContain("test-github-token", loginCall.Arguments);
+    }
+
+    [Fact]
+    public async Task InstallServiceAsync_NoToken_FailsFastWithoutInvokingInstall()
+    {
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
+                return Task.FromResult(("", 1));
+            },
+            tokenResolver: () => null);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("GitHub", result.ErrorMessage);
+        Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel user login"));
+        Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service install"));
+    }
+
+    [Fact]
+    public async Task InstallServiceAsync_LoginFails_FailsFastWithoutInvokingInstall()
+    {
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
+                if (args.Contains("login"))
+                    return Task.FromResult(("insufficient_scope", 1));
+                return Task.FromResult(("", args.Contains("status") ? 1 : 0));
+            },
+            tokenResolver: () => "token-lacking-scopes");
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        var loginCall = calls.FirstOrDefault(c => c.Arguments.Contains("login"));
+        Assert.NotNull(loginCall);
+        var installCall = calls.FirstOrDefault(c => c.Arguments.Contains("tunnel service install"));
+        Assert.Null(installCall);
+    }
 }
+

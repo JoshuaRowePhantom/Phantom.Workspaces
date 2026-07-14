@@ -6,10 +6,30 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Phantom.Workspaces.Agent.Gui.Controls;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentChatEditorControlTests
 {
+    [Fact]
+    public void AgentChatEditorControl_AutoScrollCheckbox_HasToolTipMentioningScrollLockKey()
+    {
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "agent-chat-autoscroll-toggle",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        var checkboxStart = axamlContent.IndexOf("agent-chat-autoscroll-toggle", StringComparison.Ordinal);
+        var checkboxEnd = axamlContent.IndexOf("/>", checkboxStart, StringComparison.Ordinal);
+        var checkboxXaml = axamlContent.Substring(checkboxStart, checkboxEnd - checkboxStart);
+
+        Assert.Contains("ToolTip.Tip", checkboxXaml, StringComparison.Ordinal);
+        Assert.Contains("Scroll Lock", checkboxXaml, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void DetailContentSlots_ItemsPanel_IsPanel_NotStackPanel()
     {
@@ -42,6 +62,23 @@ public sealed class AgentChatEditorControlTests
 
         Assert.DoesNotContain(
             "<StackPanel/>",
+            axamlContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_DoesNotContain_DiagnosticTabDataTemplate()
+    {
+        // Issue #819: The Diagnostics tab was removed from the agent edit view.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.DoesNotContain(
+            "DataType=\"vm:DiagnosticInspectorViewModel\"",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "DataType=\"vm:DiagnosticItemViewModel\"",
             axamlContent,
             StringComparison.Ordinal);
     }
@@ -83,6 +120,165 @@ public sealed class AgentChatEditorControlTests
         // The panel must be base Panel, not StackPanel
         Assert.IsType<Panel>(panel);
         Assert.IsNotType<StackPanel>(panel);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_SubAgentSlotTemplate_DoesNotInstantiateAgentChatEditorControl()
+    {
+        // Issue #884, #903: The SubAgentSlotViewModel DataTemplate must not instantiate a
+        // nested AgentChatEditorControl (with TreeView, GridSplitter, ToggleButton chrome).
+        // It should render only the conversation detail content via ContentControl.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var subAgentSlotStart = axamlContent.IndexOf(
+            "DataType=\"vm:SubAgentSlotViewModel\"",
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotStart > 0, "Could not find SubAgentSlotViewModel DataTemplate");
+
+        var subAgentSlotEnd = axamlContent.IndexOf(
+            "</DataTemplate>",
+            subAgentSlotStart,
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotEnd > subAgentSlotStart);
+
+        var subAgentSlotXaml = axamlContent.Substring(
+            subAgentSlotStart,
+            subAgentSlotEnd - subAgentSlotStart);
+
+        Assert.DoesNotContain(
+            "AgentChatEditorControl",
+            subAgentSlotXaml,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_SubAgentSlotTemplate_BindsContentToSubAgentConversationDetail()
+    {
+        // Issue #884, #903: The SubAgentSlotViewModel DataTemplate must bind ContentControl.Content
+        // to SubAgentViewModel.ConversationDetail so the AgentChatConversationDetailViewModel
+        // DataTemplate renders output + conditional input queue without editor chrome.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var subAgentSlotStart = axamlContent.IndexOf(
+            "DataType=\"vm:SubAgentSlotViewModel\"",
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotStart > 0);
+
+        var subAgentSlotEnd = axamlContent.IndexOf(
+            "</DataTemplate>",
+            subAgentSlotStart,
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotEnd > subAgentSlotStart);
+
+        var subAgentSlotXaml = axamlContent.Substring(
+            subAgentSlotStart,
+            subAgentSlotEnd - subAgentSlotStart);
+
+        Assert.Contains(
+            "ContentControl",
+            subAgentSlotXaml,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "Content=\"{Binding SubAgentViewModel.ConversationDetail}\"",
+            subAgentSlotXaml,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_SubAgentSlotTemplate_IsVisibleBindingIsOnWrapperNotEditor()
+    {
+        // Issue #884, #903: The IsVisible binding must be on the wrapper Panel element, not on
+        // a nested AgentChatEditorControl. This ensures proper visibility control for sub-agent
+        // slots without triggering AXAML DataContext/IsVisible binding order bugs.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var subAgentSlotStart = axamlContent.IndexOf(
+            "DataType=\"vm:SubAgentSlotViewModel\"",
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotStart > 0);
+
+        var subAgentSlotEnd = axamlContent.IndexOf(
+            "</DataTemplate>",
+            subAgentSlotStart,
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotEnd > subAgentSlotStart);
+
+        var subAgentSlotXaml = axamlContent.Substring(
+            subAgentSlotStart,
+            subAgentSlotEnd - subAgentSlotStart);
+
+        Assert.Contains(
+            "<Panel IsVisible=\"{Binding IsSelected}\">",
+            subAgentSlotXaml,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "AgentChatEditorControl",
+            subAgentSlotXaml,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_SubAgentSlotTemplate_UsesCompiledBindings()
+    {
+        // Issue #903: The SubAgentSlotViewModel DataTemplate must use x:CompileBindings="True"
+        // for better performance and compile-time binding validation.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var subAgentSlotStart = axamlContent.IndexOf(
+            "DataType=\"vm:SubAgentSlotViewModel\"",
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotStart > 0);
+
+        var subAgentSlotEnd = axamlContent.IndexOf(
+            "</DataTemplate>",
+            subAgentSlotStart,
+            StringComparison.Ordinal);
+        Assert.True(subAgentSlotEnd > subAgentSlotStart);
+
+        var subAgentSlotXaml = axamlContent.Substring(
+            subAgentSlotStart,
+            subAgentSlotEnd - subAgentSlotStart);
+
+        Assert.Contains(
+            "x:CompileBindings=\"True\"",
+            subAgentSlotXaml,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_ConversationDetailTemplate_InputQueueIsVisibleBindingUsesAcceptsUserInput()
+    {
+        // Issue #903: The AgentChatConversationDetailViewModel DataTemplate must bind the
+        // AgentChatInputQueueControl IsVisible property to Agent.AcceptsUserInput, not a
+        // different property. This ensures input queue is hidden for sub-agents.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var conversationDetailStart = axamlContent.IndexOf(
+            "DataType=\"vm:AgentChatConversationDetailViewModel\"",
+            StringComparison.Ordinal);
+        Assert.True(conversationDetailStart > 0);
+
+        var conversationDetailEnd = axamlContent.IndexOf(
+            "</DataTemplate>",
+            conversationDetailStart,
+            StringComparison.Ordinal);
+        Assert.True(conversationDetailEnd > conversationDetailStart);
+
+        var conversationDetailXaml = axamlContent.Substring(
+            conversationDetailStart,
+            conversationDetailEnd - conversationDetailStart);
+
+        Assert.Contains(
+            "AgentChatInputQueueControl",
+            conversationDetailXaml,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "IsVisible=\"{Binding Agent.AcceptsUserInput}\"",
+            conversationDetailXaml,
+            StringComparison.Ordinal);
     }
 
     private static string ReadAxaml(string fileName)

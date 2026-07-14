@@ -58,6 +58,7 @@
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"
                                   VerticalAlignment="Center"
+                                  ToolTip.Tip="Toggle auto-scroll (Scroll Lock)"
                                   IsChecked="{Binding Agent.AutoScrollEnabled, Mode=TwoWay}"
                                   Classes.scroll-locked="{Binding Agent.AutoScrollEnabled}"/>
                         <Button Classes="agent-chat-status-line-reasoning-toggle"
@@ -219,47 +220,14 @@
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="vm:SubAgentSlotViewModel">
-                            <controls:AgentChatEditorControl DataContext="{Binding SubAgentViewModel}"
-                                                             IsVisible="{Binding IsSelected}"/>
+                        <DataTemplate DataType="vm:SubAgentSlotViewModel" x:CompileBindings="True">
+                            <Panel IsVisible="{Binding IsSelected}">
+                                <ContentControl Content="{Binding SubAgentViewModel.ConversationDetail}"/>
+                            </Panel>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </Panel>
-        </DataTemplate>
-        <DataTemplate DataType="vm:DiagnosticInspectorViewModel">
-            <DockPanel>
-                <StackPanel Spacing="4" Margin="12">
-                    <TextBlock Text="Diagnostics"
-                               Classes="agent-section-title"/>
-                    <ItemsControl ItemsSource="{Binding Items}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate DataType="vm:DiagnosticItemViewModel">
-                                <Border Classes="agent-surface compact"
-                                        Margin="0,2">
-                                    <DockPanel>
-                                        <Button DockPanel.Dock="Right"
-                                                Command="{Binding InspectCommand}"
-                                                Content="🔍"
-                                                ToolTip.Tip="Inspect"
-                                                Classes="queue-action-button"
-                                                VerticalAlignment="Top"/>
-                                        <TextBlock Text="{Binding ContentId}"
-                                                   Classes="chat-monospace muted"
-                                                   TextWrapping="NoWrap"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center"/>
-                                    </DockPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock Text="No diagnostic events recorded."
-                               Classes="muted"
-                               TextWrapping="Wrap"
-                               IsVisible="{Binding !Items.Count}"/>
-                </StackPanel>
-            </DockPanel>
         </DataTemplate>
     </UserControl.DataTemplates>
 

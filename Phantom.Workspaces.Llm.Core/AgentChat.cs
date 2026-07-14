@@ -106,8 +106,13 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     // collections from two threads at once.
     private readonly TaskScheduler foregroundScheduler;
 
+    // Test-only accessor for verifying foreground-scheduler flow through sub-agent creation
+    // paths (issue #913).
+    internal TaskScheduler ForegroundSchedulerForTesting => this.foregroundScheduler;
+
     internal AgentChat(InternalCreateAgentChatRequest request)
     {
+       VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
@@ -119,6 +124,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            ?? (SynchronizationContext.Current is not null
                ? TaskScheduler.FromCurrentSynchronizationContext()
                : this.foregroundSchedulerPair.ExclusiveScheduler);
+    }
+
+    // Enforces the foreground-context affinity invariant (issue #909): AgentChat construction and
+    // initialization must happen on the foreground context, never on a background thread that
+    // merely holds a reference to the foreground scheduler. The invariant is only verifiable for
+    // SynchronizationContextTaskScheduler, which exposes its context; plain schedulers (e.g.
+    // TaskScheduler.Default in headless hosts such as the CLI and tests) carry no thread affinity
+    // to verify. When no scheduler is provided, the foreground context is captured from the
+    // current thread and is therefore consistent by construction. Verification fails fast rather
+    // than marshalling, so caller bugs surface immediately instead of silently binding downstream
+    // UI machinery to the wrong thread (issue #908).
+    private static void VerifyOnForegroundContext(TaskScheduler? foregroundScheduler)
+    {
+        if (foregroundScheduler is SynchronizationContextTaskScheduler contextScheduler
+            && !contextScheduler.IsOnSynchronizationContext
+            && TaskScheduler.Current != contextScheduler)
+        {
+            throw new InvalidOperationException(
+                "AgentChat must be constructed and initialized on its foreground context (the UI thread in GUI hosts). "
+                + "The provided ForegroundScheduler's SynchronizationContext is not current on this thread. "
+                + "Invoke creation on the foreground context instead of a background thread (issue #909).");
+        }
     }
 
     internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
@@ -166,6 +193,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        if (resolvedClient is SubAgentChatClient sac)
        {
            this.subAgentChatClientSource = sac;
+
+           // SubAgentChatClient.Complete/Fail run on the Copilot SDK event drain loop (a
+           // thread-pool thread). Re-raising synchronously would run UI subscribers
+           // (RunningSubAgentDisplay → WebView bridge) off the UI thread, which now fails loudly
+           // (issue #913) — marshal onto the chat's foreground scheduler like every other
+           // foreground mutation.
+           sac.CompletionStateChanged += (_, _) => _ = Task.Factory.StartNew(
+               () => this.CompletionStateChanged?.Invoke(this, EventArgs.Empty),
+               CancellationToken.None,
+               TaskCreationOptions.DenyChildAttach,
+               this.foregroundScheduler);
        }
 
        var useProvidedChatClientAsIs= this.request.OverrideUseProvidedChatClientAsIs
@@ -300,6 +338,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
+    
+    /// <summary>
+    /// Fired when the completion state of this agent changes.
+    /// Only relevant for sub-agents; root agents always remain in <see cref="AgentChatCompletionState.Running"/> state.
+    /// </summary>
+    public event EventHandler? CompletionStateChanged;
 
     /// <summary>Completed conversation turns, in order.</summary>
     public AgentChatHistoryCollection History => this.history;
@@ -633,6 +677,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private void AddHistoryItem(AgentChatHistoryItem item)
     {
+        this.lastUpdatedAt = DateTime.UtcNow;
         this.History.Add(item);
     }
 
@@ -762,14 +807,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId);
-        var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
-        {
-            AgentDefinition = subAgentDefinition,
-            ConfiguredStore = this.request.ConfiguredStore,
-            ClientOverride = chatClient,
-            DisplayNameOverride = subAgentDefinition.Name ?? agentId,
-            CancellationToken = cancellationToken,
-        });
+
+        // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
+        // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
+        // PromoteItemsToHistory) runs on thread-pool threads and downstream UI machinery (e.g.
+        // the WebView auto-flush DispatcherTimer) binds to a dispatcher that never pumps,
+        // silently dropping all live sub-agent output. Flow the parent's foreground scheduler to
+        // the child and construct it on that scheduler — mirroring
+        // AgentChatFactory.CreateChatOnForegroundAsync — which also satisfies the #909
+        // construction-affinity guard.
+        var childChat = await Task.Factory.StartNew(
+            () => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = subAgentDefinition,
+                ConfiguredStore = this.request.ConfiguredStore,
+                ClientOverride = chatClient,
+                DisplayNameOverride = subAgentDefinition.Name ?? agentId,
+                ForegroundScheduler = this.foregroundScheduler,
+                CancellationToken = cancellationToken,
+            }),
+            cancellationToken,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler).Unwrap();
         childChat.agentId = agentId;
         childChat.parentAgent = this;
 
@@ -821,7 +880,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     /// <inheritdoc/>
-    SubAgent ISubAgentTable.Add(AgentChat agentChat)
+    async Task<SubAgent> ISubAgentTable.Add(AgentChat agentChat)
     {
         var sessionId = new AgentSessionId(agentChat.AgentSessionId);
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
@@ -844,7 +903,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
 
-        _ = this.request.ConfiguredStore.AddSubAgentLinkAsync(this.agentSessionId, agentChat.AgentSessionId);
+        await this.request.ConfiguredStore.AddSubAgentLinkAsync(this.agentSessionId, agentChat.AgentSessionId);
 
         return subAgent;
     }
@@ -873,14 +932,21 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
     {
+        var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
+            this.agentSessionId, cancellationToken);
+
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
         if (factory is null)
         {
+            if (childIds.Count > 0)
+            {
+                var logger = this.request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>();
+                logger?.LogWarning(
+                    "Cannot restore {Count} subagent(s): IRunningAgentChatFactory unavailable",
+                    childIds.Count);
+            }
             return;
         }
-
-        var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
-            this.agentSessionId, cancellationToken);
 
         foreach (var childId in childIds)
         {
@@ -1475,6 +1541,104 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
+    private async Task RunHostedProcessLoopAsync(
+        CancellationToken cancellationToken)
+    {
+        var currentSession = this.GetSession();
+        AgentChatRunningItem? runningItem = null;
+        PartialResponseConflator? partialResponses = null;
+        try
+        {
+            runningItem = this.CreateRunningItem([
+                new AgentChatHistoryItem
+                {
+                    Role = ChatRole.Assistant,
+                    Timestamp = DateTimeOffset.UtcNow,
+                }]);
+
+            partialResponses = new PartialResponseConflator(
+                this,
+                runningItem);
+
+            lock (this.steeringLock)
+            {
+                this.activeConflator = partialResponses;
+            }
+
+            var providerEnumerator = this.StartRun(
+                    [],
+                    currentSession,
+                    cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+
+            try
+            {
+                while (await providerEnumerator.MoveNextAsync())
+                {
+                    this.AccumulateUsage(providerEnumerator.Current);
+                    partialResponses.Notify(providerEnumerator.Current);
+                }
+            }
+            finally
+            {
+                await DisposeProviderEnumeratorAsync(providerEnumerator);
+            }
+
+            await partialResponses.DrainAsync();
+            this.SetCompletionState(AgentChatCompletionState.Succeeded);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            if (runningItem is not null)
+            {
+                var errorItems = runningItem.Items
+                    .ToArray()
+                    .Concat([
+                        new AgentChatHistoryItem
+                        {
+                            Role = AgentChatHistoryItem.DiagnosticChatRole,
+                            Contents = [new ErrorContent($"Hosted sub-agent error: {ex.Message}")],
+                            Timestamp = DateTimeOffset.UtcNow,
+                        },
+                    ])
+                    .ToArray();
+
+                this.UpdateRunningItem(runningItem, errorItems);
+            }
+
+            this.SetCompletionState(AgentChatCompletionState.Failed);
+        }
+        finally
+        {
+            if (partialResponses is not null)
+            {
+                await DrainQuietlyAsync(partialResponses);
+            }
+
+            lock (this.steeringLock)
+            {
+                if (ReferenceEquals(this.activeConflator, partialResponses))
+                {
+                    this.activeConflator = null;
+                }
+            }
+
+            if (runningItem is not null)
+            {
+                this.CompleteRunningItem(runningItem);
+            }
+
+            lock (this.processingStateLock)
+            {
+                this.isBusy = false;
+                this.processingStarted = false;
+            }
+        }
+    }
+
     /// <summary>
     /// Cleans up a run's provider enumerator and cancellation source in the background. The in-flight
     /// read (if any) is awaited first so the enumerator is never disposed while a <c>MoveNextAsync</c>
@@ -1682,8 +1846,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             // the exclusive scheduler, which serializes the loop's running-item lifecycle operations
             // (create/update/complete) with the conflator's running-item population so the
             // collections are never mutated concurrently.
+            // The loop must be invoked inside the StartNew delegate: invoking the async method
+            // eagerly here would run it (and its await continuations) on the calling thread —
+            // and StartNew would merely wrap the already-running task without scheduling
+            // anything (issue #908). Construction is now verified to occur on the foreground
+            // context (issue #909), but this explicit scheduling remains the mechanism that
+            // binds the loop to the foreground scheduler: even on the UI thread,
+            // TaskScheduler.Current is TaskScheduler.Default outside a scheduled task.
             this.processTask = Task.Factory.StartNew(
-                () => this.RunProcessLoopAsync(this.cts.Token),
+                () => this.acceptsUserInput
+                    ? this.RunProcessLoopAsync(this.cts.Token)
+                    : this.RunHostedProcessLoopAsync(this.cts.Token),
                 this.cts.Token,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler).Unwrap();

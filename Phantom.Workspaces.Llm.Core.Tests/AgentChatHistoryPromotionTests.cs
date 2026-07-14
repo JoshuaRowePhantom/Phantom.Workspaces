@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using System.Collections.Specialized;
+using static Phantom.Workspaces.Llm.Tests.AgentChatForegroundContextTests;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -265,42 +266,60 @@ public class AgentChatHistoryPromotionTests
         //
         // While the third update (assistant text) is still gated, the running item must expose
         // only the blank placeholder (the active tail).
-        var client = new DeterministicTestChatClient();
-        var stream = client.EnqueueStreamingResponse(isReady: false);
+        
+        // Run the test body on a SingleThreadPump to avoid cross-thread enumeration issues.
+        // All async continuations will resume on the pump's SynchronizationContext, so reads
+        // of RunningItems/Items are serialized with UpdateRunningItem/SyncItems.
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        
+        await pump.PostAsync(async () =>
+        {
+            var client = new DeterministicTestChatClient();
+            var stream = client.EnqueueStreamingResponse(isReady: false);
 
-        await using var chat = await CreateChatAsync(client);
+            // Create chat with the foreground scheduler from the pump's SynchronizationContext
+            var foregroundScheduler = new SynchronizationContextTaskScheduler(SynchronizationContext.Current!);
+            await using var chat = await CreateChatAsync(client, foregroundScheduler);
 
-        stream.EnqueueUpdate(
-            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool")] },
-            isReady: true);
-        stream.EnqueueUpdate(
-            new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "result")] },
-            isReady: true);
-        var third = stream.EnqueueUpdate(
-            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("active")], FinishReason = new ChatFinishReason("stop") },
-            isReady: false);
-        var terminal = stream.Complete(isReady: false);
+            stream.EnqueueUpdate(
+                new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool")] },
+                isReady: true);
+            stream.EnqueueUpdate(
+                new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "result")] },
+                isReady: true);
+            var third = stream.EnqueueUpdate(
+                new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("active")], FinishReason = new ChatFinishReason("stop") },
+                isReady: false);
+            var terminal = stream.Complete(isReady: false);
 
-        stream.MarkReady();
-        chat.EnqueueUserMessage("hi");
+            stream.MarkReady();
+            chat.EnqueueUserMessage("hi");
 
-        // Wait until assistant(func-call) and tool-result have been promoted to History
-        // (user + func-call + tool-result = 3 items).
-        await WaitForHistoryCountAsync(chat.History, 3, "stable items promoted");
+            // Wait until assistant(func-call) and tool-result have been promoted to History
+            // (user + func-call + tool-result = 3 items).
+            await WaitForHistoryCountAsync(chat.History, 3, "stable items promoted");
 
-        // The running item should hold only the blank placeholder (active tail).
-        Assert.Single(chat.RunningItems);
-        var runningItem = chat.RunningItems[0];
-        Assert.Single(runningItem.Items);
-        Assert.Equal(ChatRole.Assistant, runningItem.Items[0].Role);
-        // Blank placeholder has no text content.
-        Assert.Empty(string.Concat(runningItem.Items[0].Contents.OfType<TextContent>().Select(c => c.Text)));
+            // Wait for the ExclusiveScheduler's UpdateRunningItem task (Step B) to complete.
+            await WaitForRunningItemCountAsync(chat.RunningItems, 1, "active tail only");
 
-        third.MarkReady();
-        terminal.MarkReady();
+            // The awaits above resumed on the foreground SynchronizationContext, so we are
+            // on the pump thread here. Reads are serialized with UpdateRunningItem / SyncItems
+            // on the same ExclusiveScheduler — no race, no explicit scheduling.
+            Assert.Single(chat.RunningItems);
+            var runningItem = chat.RunningItems[0];
+            Assert.Single(runningItem.Items);
+            Assert.Equal(ChatRole.Assistant, runningItem.Items[0].Role);
+            // Blank placeholder has no text content.
+            Assert.Empty(string.Concat(runningItem.Items[0].Contents.OfType<TextContent>().Select(c => c.Text)));
+
+            third.MarkReady();
+            terminal.MarkReady();
+            
+            return Task.CompletedTask;
+        });
     }
 
-    private static async Task<AgentChat> CreateChatAsync(IChatClient client)
+    private static async Task<AgentChat> CreateChatAsync(IChatClient client, TaskScheduler? foregroundScheduler = null)
     {
         return await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
@@ -308,6 +327,7 @@ public class AgentChatHistoryPromotionTests
             ConfiguredStore = new InMemoryAgentPersistenceStore(),
             ClientOverride = client,
             DisplayNameOverride = "test",
+            ForegroundScheduler = foregroundScheduler,
         });
     }
 
@@ -342,6 +362,54 @@ public class AgentChatHistoryPromotionTests
         finally
         {
             collection.CollectionChanged -= OnChanged;
+        }
+    }
+
+    private static async Task WaitForRunningItemCountAsync(
+        INotifyCollectionChanged collection,
+        int expectedCount,
+        string description)
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var timeout = Task.Delay(TimeSpan.FromSeconds(30));
+
+        void OnChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (TryCheckCount())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        collection.CollectionChanged += OnChanged;
+        try
+        {
+            if (TryCheckCount())
+            {
+                return;
+            }
+
+            var completed = await Task.WhenAny(signal.Task, timeout);
+            if (completed == timeout)
+            {
+                throw new TimeoutException($"Timeout waiting for {description}.");
+            }
+        }
+        finally
+        {
+            collection.CollectionChanged -= OnChanged;
+        }
+
+        bool TryCheckCount()
+        {
+            try
+            {
+                return ((System.Collections.ICollection)collection).Count >= expectedCount;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
         }
     }
 

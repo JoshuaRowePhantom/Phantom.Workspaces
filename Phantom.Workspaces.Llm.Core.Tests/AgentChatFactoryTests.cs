@@ -285,6 +285,64 @@ public sealed class AgentChatFactoryTests
         Assert.Equal(2, trackingClient.DisposeCount);
     }
 
+    // ── Foreground-context affinity (issue #909) ─────────────────────────────
+
+    [Fact]
+    public async Task GetOrCreateAsync_CalledOffForegroundContext_CreatesChatOnForegroundContext()
+    {
+        var sessionId = new AgentSessionId("session-fg-1");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        using var pump = new AgentChatForegroundContextTests.SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        await using var factory = CreateFactory(store: store, foregroundScheduler: scheduler);
+
+        // Callers such as agent tools invoke the factory from thread-pool threads; the factory
+        // must schedule chat creation onto its foreground scheduler so the AgentChat
+        // constructor's affinity verification is satisfied.
+        await using var lease = await Task.Run(() => factory.GetOrCreateAsync(sessionId));
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Same(scheduler, GetForegroundScheduler(lease.AgentChat));
+    }
+
+    [Fact]
+    public async Task GetAsync_CalledOffForegroundContext_CreatesChatOnForegroundContext()
+    {
+        var sessionId = new AgentSessionId("session-fg-2");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        using var pump = new AgentChatForegroundContextTests.SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        await using var factory = CreateFactory(store: store, foregroundScheduler: scheduler);
+
+        await using var lease = await Task.Run(() => factory.GetAsync(sessionId));
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Same(scheduler, GetForegroundScheduler(lease.AgentChat));
+    }
+
+    [Fact]
+    public async Task CreateAsync_CalledOffForegroundContext_CreatesChatOnForegroundContext()
+    {
+        var sessionId = new AgentSessionId("session-fg-3");
+        using var pump = new AgentChatForegroundContextTests.SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        await using var factory = CreateFactory(foregroundScheduler: scheduler);
+
+        await using var lease = await Task.Run(() => factory.CreateAsync(EchoAgentDefinition, sessionId));
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Same(scheduler, GetForegroundScheduler(lease.AgentChat));
+    }
+
+    private static TaskScheduler? GetForegroundScheduler(AgentChat chat)
+    {
+        var field = typeof(AgentChat).GetField(
+            "foregroundScheduler",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(field);
+        return (TaskScheduler?)field!.GetValue(chat);
+    }
+
     // ── Test doubles ──────────────────────────────────────────────────────────
 
     private sealed class DisposalTrackingChatClient : IChatClient, IAsyncDisposable

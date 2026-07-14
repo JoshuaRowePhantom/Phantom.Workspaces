@@ -7,72 +7,30 @@
         <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
         <x:Double x:Key="Theme.FontSize.Base">13</x:Double>
 
-        <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#1E1E1E</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#2A2A2A</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#242424</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#343434</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBackground">#2A2A2A</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBorder">#5EA0FF</SolidColorBrush>
-
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.Background">#252525</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#3A3A3A</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#303030</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#505050</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#2A2A2A</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#5EA0FF</SolidColorBrush>
-
-        <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#2C2C2C</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Surface.Popup.Border">#3A3A3A</SolidColorBrush>
-
-        <SolidColorBrush x:Key="Theme.Class.normal.Foreground">#E6E6E6</SolidColorBrush>
+        <!-- Text class sizing/weight resources (variant-agnostic) -->
         <x:Double x:Key="Theme.Class.normal.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.normal.FontSize">13</x:Double>
         <FontWeight x:Key="Theme.Class.normal.FontWeight">Normal</FontWeight>
 
-        <SolidColorBrush x:Key="Theme.Class.heading.Foreground">#E6E6E6</SolidColorBrush>
         <x:Double x:Key="Theme.Class.heading.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.heading.FontSize">16</x:Double>
         <FontWeight x:Key="Theme.Class.heading.FontWeight">Bold</FontWeight>
 
-        <SolidColorBrush x:Key="Theme.Class.section-title.Foreground">#E6E6E6</SolidColorBrush>
         <x:Double x:Key="Theme.Class.section-title.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.section-title.FontSize">14</x:Double>
         <FontWeight x:Key="Theme.Class.section-title.FontWeight">Bold</FontWeight>
 
-        <SolidColorBrush x:Key="Theme.Class.caption.Foreground">#E6E6E6</SolidColorBrush>
         <x:Double x:Key="Theme.Class.caption.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.caption.FontSize">11</x:Double>
         <FontWeight x:Key="Theme.Class.caption.FontWeight">Normal</FontWeight>
 
-        <SolidColorBrush x:Key="Theme.Class.muted.Foreground">#B3B3B3</SolidColorBrush>
         <x:Double x:Key="Theme.Class.muted.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.muted.FontSize">13</x:Double>
         <FontWeight x:Key="Theme.Class.muted.FontWeight">Normal</FontWeight>
 
-        <SolidColorBrush x:Key="Theme.Class.accent.Foreground">#5EA0FF</SolidColorBrush>
         <x:Double x:Key="Theme.Class.accent.Opacity">1</x:Double>
         <x:Double x:Key="Theme.Class.accent.FontSize">13</x:Double>
         <FontWeight x:Key="Theme.Class.accent.FontWeight">Normal</FontWeight>
-
-        <!-- Status badge palette. Good is green, Bad is red; the six palette colors are distinct,
-             vibrant hues with no red or green, chosen so the single status foreground reads on all. -->
-        <SolidColorBrush x:Key="Theme.Status.Good">#2E7D32</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Bad">#C62828</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Foreground">#F5F5F5</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Palette.0">#1565C0</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Palette.1">#4527A0</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Palette.2">#6A1B9A</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Palette.3">#00838F</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Palette.4">#FF8F00</SolidColorBrush>
-        <SolidColorBrush x:Key="Theme.Status.Palette.5">#455A64</SolidColorBrush>
-
-        <!-- Terminal control palette. Background is near-black; foreground is the default
-             text color; cursor is a prominent blue; status-bar background matches the surface. -->
-        <SolidColorBrush x:Key="Terminal.Background">#0D1117</SolidColorBrush>
-        <SolidColorBrush x:Key="Terminal.Foreground">#C9D1D9</SolidColorBrush>
-        <SolidColorBrush x:Key="Terminal.Cursor">#58A6FF</SolidColorBrush>
-        <SolidColorBrush x:Key="Terminal.SelectionBackground">#264F78</SolidColorBrush>
     </Styles.Resources>
     <Style Selector="TextBox.copyable-text">
         <Setter Property="IsReadOnly" Value="True" />
@@ -538,6 +496,18 @@
         <Setter Property="Padding" Value="4,0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-edit-indicator-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card:focus-within Button.workspace-edit-indicator-button">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="Button.workspace-edit-action-button">
         <Setter Property="HorizontalAlignment" Value="Right" />
@@ -563,6 +533,18 @@
         <Setter Property="VerticalAlignment" Value="Stretch" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.workspace-entity-shortcut-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card:focus-within Button.workspace-entity-shortcut-button">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="Button.workspace-entity-badge-button">
         <Setter Property="MinWidth" Value="0" />

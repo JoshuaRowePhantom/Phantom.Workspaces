@@ -7,6 +7,31 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentViewModelEditorTreeTests
 {
     [Fact]
+    public async Task AgentViewModel_DoesNotExpose_DiagnosticsInspectorProperty()
+    {
+        // Issue #819: The DiagnosticsInspector property was removed.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var property = typeof(AgentViewModel).GetProperty("DiagnosticsInspector");
+        Assert.Null(property);
+    }
+
+    [Fact]
+    public async Task AgentViewModel_DoesNotContain_DiagnosticsNavigationItem()
+    {
+        // Issue #819: The Diagnostics navigation item (tab) was removed.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var diagnosticsNav = root.Children.FirstOrDefault(c => c.Id == "chat-diagnostics");
+        Assert.Null(diagnosticsNav);
+    }
+
+    [Fact]
     public async Task ToolsNavItem_IdentityStable_AfterToolsChanged()
     {
         var chat = await CreateChatAsync();
@@ -130,13 +155,14 @@ public sealed class AgentViewModelEditorTreeTests
         await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
-        var diagnosticsNav = root.Children.First(c => c.Id == "chat-diagnostics");
+        // Issue #819: Use chat-details instead of removed chat-diagnostics
+        var chatDetailsNav = root.Children.First(c => c.Id == "chat-details");
 
-        viewModel.SelectedEditorItem = diagnosticsNav;
+        viewModel.SelectedEditorItem = chatDetailsNav;
 
         chat.RaiseToolsChanged();
 
-        Assert.Same(diagnosticsNav, viewModel.SelectedEditorItem);
+        Assert.Same(chatDetailsNav, viewModel.SelectedEditorItem);
     }
 
     [Fact]
@@ -204,8 +230,9 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task SubAgentNavItem_HasDiagnosticsChild()
+    public async Task SubAgentNavItem_DoesNotHave_DiagnosticsChild()
     {
+        // Issue #819: Diagnostics tab was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
@@ -216,7 +243,7 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
         var subAgentNav = Assert.Single(subAgentsNav.Children);
 
-        Assert.Contains(subAgentNav.Children, c => c.Id == "chat-diagnostics");
+        Assert.DoesNotContain(subAgentNav.Children, c => c.Id == "chat-diagnostics");
     }
 
     [Fact]
@@ -277,7 +304,8 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentSubAgentsNav = subAgentNav.Children.First(c => c.Id == "chat-sub-agents");
 
         var grandchildNav = Assert.Single(subAgentSubAgentsNav.Children);
-        Assert.Equal(5, grandchildNav.Children.Count);
+        // Issue #819: Diagnostics tab was removed, so count is now 4 instead of 5
+        Assert.Equal(4, grandchildNav.Children.Count);
     }
 
     [Fact]
@@ -287,7 +315,8 @@ public sealed class AgentViewModelEditorTreeTests
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
-        Assert.Equal(6, viewModel.DetailContentSlots.Count);
+        // Issue #819: Diagnostics slot was removed, so count is now 5 instead of 6
+        Assert.Equal(5, viewModel.DetailContentSlots.Count);
     }
 
     [Fact]
@@ -298,13 +327,14 @@ public sealed class AgentViewModelEditorTreeTests
         await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
-        var diagnosticsNav = root.Children.First(c => c.Id == "chat-diagnostics");
+        // Issue #819: Use chat-details instead of removed chat-diagnostics
+        var chatDetailsNav = root.Children.First(c => c.Id == "chat-details");
 
-        viewModel.SelectedEditorItem = diagnosticsNav;
+        viewModel.SelectedEditorItem = chatDetailsNav;
 
         var visibleSlots = viewModel.DetailContentSlots.Where(s => s.IsVisible).ToList();
         var slot = Assert.Single(visibleSlots);
-        Assert.Same(diagnosticsNav.DetailContent, slot.Content);
+        Assert.Same(chatDetailsNav.DetailContent, slot.Content);
     }
 
     [Fact]
@@ -358,6 +388,59 @@ public sealed class AgentViewModelEditorTreeTests
             .First(s => s.Content is AgentChatConversationDetailViewModel);
 
         Assert.True(conversationSlot.IsVisible);
+    }
+
+    [Fact]
+    public async Task SubAgentsNavItem_AutoExpands_WhenFirstSubAgentAdded()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
+
+        Assert.False(subAgentsNav.IsExpanded);
+
+        await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
+
+        Assert.True(subAgentsNav.IsExpanded);
+    }
+
+    [Fact]
+    public async Task SubAgentsNavItem_RemainsExpanded_WhenSecondSubAgentAdded()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
+
+        await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
+        Assert.True(subAgentsNav.IsExpanded);
+
+        await AddSubAgentAsync(chat, "sub-agent-2", "Sub Agent 2");
+        Assert.True(subAgentsNav.IsExpanded);
+    }
+
+    [Fact]
+    public async Task AgentViewModel_ConversationDetail_ReturnsSameInstanceUsedByEditorTree()
+    {
+        // Issue #903: Verify that the ConversationDetail property exposes the same instance
+        // that is used by the editor tree, so the SubAgentSlotViewModel DataTemplate can bind
+        // directly to it without instantiating a nested AgentChatEditorControl.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", loggerFactory);
+
+        var conversationDetail = viewModel.ConversationDetail;
+        Assert.NotNull(conversationDetail);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var rootDetailContent = root.DetailContent;
+
+        Assert.Same(conversationDetail, rootDetailContent);
     }
 
     private static AgentDefinition CreateAgentDefinition()
@@ -435,17 +518,44 @@ public sealed class AgentViewModelEditorTreeTests
 
     private static async Task WaitForMcpToolsLoadedAsync(AgentChat chat)
     {
-        const int timeoutMs = 30_000;
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        cts.CancelAfter(timeoutMs);
-        while (chat.GetToolSnapshot().Count == 0 && !cts.Token.IsCancellationRequested)
+        if (chat.GetToolSnapshot().Count > 0)
         {
-            await Task.Delay(100, cts.Token);
+            return;
         }
 
-        if (cts.Token.IsCancellationRequested)
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnToolsChanged(object? _, EventArgs __)
         {
-            throw new TimeoutException($"MCP tools did not load within {timeoutMs}ms");
+            if (chat.GetToolSnapshot().Count > 0)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.ToolsChanged += OnToolsChanged;
+        try
+        {
+            if (chat.GetToolSnapshot().Count > 0)
+            {
+                return;
+            }
+
+            const int timeoutMs = 30_000;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            cts.CancelAfter(timeoutMs);
+
+            try
+            {
+                await signal.Task.WaitAsync(cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw new TimeoutException($"MCP tools did not load within {timeoutMs}ms");
+            }
+        }
+        finally
+        {
+            chat.ToolsChanged -= OnToolsChanged;
         }
     }
 }

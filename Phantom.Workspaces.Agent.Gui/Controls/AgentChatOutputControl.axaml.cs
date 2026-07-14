@@ -52,7 +52,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private AgentViewModel? subscribedViewModel;
     private bool isAttached;
     private bool suppressScrollOnEnable;
-    private bool suppressSinkScroll;
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
@@ -84,7 +83,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.browser.JavaScriptMessageReceived += this.OnBrowserMessageReceived;
         this.BrowserHost.Child = browserControl;
         this.ActualThemeVariantChanged += (_, _) =>
-            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+            this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.GetThemeClassName()));
 
         // Forward WebView2 accelerator-key events (e.g. Alt, Alt+1–0) to the bound AgentViewModel
         // so the MainWindow can update IsAltHeld and route GoToTabAtIndex commands even when focus
@@ -115,13 +114,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     public void ScrollToBottom()
     {
-        // Clear the load-time scroll suppression. Set true in OnBrowserReady before constructing
-        // the model; cleared on first call (from the model after the newest history chunk in Phase B).
-        if (this.suppressSinkScroll)
-        {
-            this.suppressSinkScroll = false;
-        }
-
         if (this.subscribedViewModel?.AutoScrollEnabled == false)
         {
             return;
@@ -169,6 +161,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         ChatOutputUpdateLocation.Before => "before",
         ChatOutputUpdateLocation.After => "after",
         ChatOutputUpdateLocation.Append => "append",
+        ChatOutputUpdateLocation.Prepend => "prepend",
         _ => throw new ArgumentOutOfRangeException(nameof(location), location, null),
     };
 
@@ -208,12 +201,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.subscribedViewModel = agentViewModel;
         agentViewModel.PropertyChanged += this.OnViewModelPropertyChanged;
 
-        // Reload the shell so a reused control starts from an empty page.
+        // Reload the shell so a reused control starts from an empty page. LoadShell always
+        // re-navigates — a plain HtmlShell assignment is deduplicated by the property system when
+        // the markup is unchanged (the common case: the shell string is deterministic), which would
+        // skip the reload, never re-raise Ready, and leave outputModel null after a reattach.
         // OnBrowserReady creates the ChatOutputHtmlModel once the shell is ready, and again on
         // every subsequent reload, so both the first-load and spontaneous-reload paths are unified.
         var html = ReadShellHtml();
         var themeVariables = this.BuildThemeVariables();
-        this.browser.HtmlShell = InjectThemeIntoHtml(html, themeVariables);
+        this.browser.LoadShell(InjectThemeIntoHtml(html, themeVariables));
     }
 
     private void DetachOutputModel()
@@ -246,7 +242,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private async void OnBrowserReady(object? sender, EventArgs e)
     {
         // Always post the theme first so CSS variables are set before any DOM operations arrive.
-        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.BuildThemeVariables()));
+        this.browser.PostMessageToJavaScript(ChatOutputBrowserCommands.Theme(this.GetThemeClassName()));
 
         // Dispose any model left from a previous load cycle, then rebuild from scratch.
         // This fires on both the initial load and every spontaneous reload, so both paths share
@@ -257,11 +253,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         if (this.subscribedViewModel is { } vm)
         {
-            // suppressSinkScroll stays true until the model delivers ScrollToBottom after the
-            // first (newest) history chunk in Phase B. The BeginBatch/EndBatch here wraps only
-            // Phase A (running-items initial DOM); each history chunk gets its own batch inside
-            // LoadHistoryChunksAsync.
-            this.suppressSinkScroll = true;
+            // Auto-scroll is enabled from the start. ScrollToBottom will be called after the
+            // first (newest) history chunk in Phase B, making recent content visible immediately.
             this.browser.BeginBatch();
             this.outputModel = new ChatOutputHtmlModel(
                 vm.History,
@@ -275,8 +268,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 subAgents: vm.SubAgentDisplays,
                 ancestors: BuildAncestors(vm.AgentChat));
             this.browser.EndBatch();
-            // suppressSinkScroll is cleared by ScrollToBottom() when the model delivers
-            // the first history chunk scroll — no explicit clear here.
 
             // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom
             // is issued by the model after the first history chunk, not here.
@@ -305,6 +296,10 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
         switch (typeProp.GetString())
         {
+            case "renderComplete":
+            {
+                break;
+            }
             case "scrollState":
             {
                 var atBottom = root.TryGetProperty("atBottom", out var ab) && ab.GetBoolean();
@@ -389,6 +384,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.subscribedViewModel.AutoScrollEnabled = atBottom;
         this.suppressScrollOnEnable = false;
     }
+
+    private string GetThemeClassName()
+        => this.ActualThemeVariant == Avalonia.Styling.ThemeVariant.Light ? "light" : "dark";
 
     private IReadOnlyDictionary<string, string> BuildThemeVariables()
     {

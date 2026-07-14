@@ -192,7 +192,24 @@ public static class AgentFactory
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
 
         var model = (agent as PromptAgent)?.Model;
-        if (model is null || string.IsNullOrEmpty(model.Id))
+        if (model is null)
+        {
+            throw new InvalidOperationException("Agent definition does not specify a model.");
+        }
+
+        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
+
+        // The sub-agent receiver provider must resolve before the model-ID validation: it mirrors
+        // a CLI-hosted sub-agent whose model is chosen by the CLI, so its definition legitimately
+        // carries no model ID (see CopilotSubAgentRouter.SubAgentDefinition). Requiring an
+        // ID here made every real sub-agent creation throw, killing the session event dispatch
+        // loop and silently dropping all further live output (issue #912).
+        if (provider == "github-copilot-subagent")
+        {
+            return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
+        }
+
+        if (string.IsNullOrEmpty(model.Id))
         {
             throw new InvalidOperationException("Agent definition does not specify a model ID.");
         }
@@ -202,18 +219,15 @@ public static class AgentFactory
             return new ChatClientResult(new TestProviderChatClient(), "Test Chat Client");
         }
 
-        var provider = model.Provider?.ToLowerInvariant() ?? "unknown";
         return provider switch
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
             "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
             "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
-            "github-copilot-subagent" => new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent"),
+            "openai" or "azure-openai" => CreateGitHubCopilotByokResult(provider, model, services, queueManager, resolver, subAgentChatRegistry),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
-            "openai" => throw new NotImplementedException("OpenAI provider resolution not yet implemented."),
-            "azure" => throw new NotImplementedException("Azure provider resolution not yet implemented."),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure-openai"),
         };
     }
 
@@ -245,6 +259,18 @@ public static class AgentFactory
         ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
         var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver, subAgentChatRegistry);
+        return new ChatClientResult(client, displayName);
+    }
+
+    private static ChatClientResult CreateGitHubCopilotByokResult(
+        string provider,
+        Model model,
+        AgentServices? services,
+        AgentInputQueueManager? queueManager,
+        IApiKeyResolver resolver,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
+    {
+        var (client, displayName) = CreateGitHubCopilotByokClient(provider, model, services, queueManager, resolver, subAgentChatRegistry);
         return new ChatClientResult(client, displayName);
     }
 
@@ -522,6 +548,10 @@ public static class AgentFactory
         }
     }
 
+    // Creates the built-in GitHub Copilot client. The factory resolves only model.Connection here
+    // (an optional GitHub token); model.Options is forwarded verbatim to the client, which
+    // interprets provider-specific keys itself (issue #896). model.Id is a value forwarded to the
+    // chat client; it is never inspected to route provider selection.
     private static (IChatClient client, string displayName) CreateGitHubCopilotClient(
         Model model,
         AgentServices? services,
@@ -534,71 +564,81 @@ public static class AgentFactory
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub Copilot provider requires a model id.");
 
-        string? gitHubToken = null;
-        CopilotByokOptions? byokOptions = null;
-        string displayName;
-
-        if (model.Connection is ApiKeyConnection conn && !string.IsNullOrWhiteSpace(conn.Endpoint))
+        if (model.Connection is ApiKeyConnection connWithEndpoint && !string.IsNullOrWhiteSpace(connWithEndpoint.Endpoint))
         {
-            // BYOK mode: a custom endpoint is supplied — authenticate to that endpoint, not GitHub.
-            var resolvedApiKey = string.IsNullOrWhiteSpace(conn.ApiKey)
-                ? null
-                : resolver.ResolveApiKey(conn.ApiKey, "github-copilot");
-
-            // Optional BYOK configuration fields come from options.additionalProperties in the
-            // manifest because AgentSchema.ApiKeyConnection does not carry an AdditionalProperties
-            // bag; extra JSON fields in the connection object are silently dropped by the parser.
-            var additionalProps = model.Options?.AdditionalProperties;
-            string? providerType = null;
-            string? wireApi = null;
-            string? wireModel = null;
-            if (additionalProps is not null)
-            {
-                if (additionalProps.TryGetValue("providerType", out var ptv)) providerType = ptv as string;
-                if (additionalProps.TryGetValue("wireApi", out var wav)) wireApi = wav as string;
-                if (additionalProps.TryGetValue("wireModel", out var wmv)) wireModel = wmv as string;
-            }
-
-            IReadOnlyDictionary<string, string>? headers = null;
-            if (additionalProps is not null
-                && additionalProps.TryGetValue("headers", out var headersObj)
-                && headersObj is IDictionary<string, object> rawHeaders)
-            {
-                headers = rawHeaders
-                    .Where(static kvp => kvp.Value is string)
-                    .ToDictionary(static kvp => kvp.Key, static kvp => (string)kvp.Value!);
-            }
-
-            byokOptions = new CopilotByokOptions
-            {
-                BaseUrl      = conn.Endpoint,
-                ApiKey       = resolvedApiKey,
-                ProviderType = providerType ?? "openai",
-                WireApi      = wireApi      ?? "chat-completions",
-                WireModel    = wireModel,
-                Headers      = headers,
-            };
-
-            // gitHubToken stays null — no GitHub auth required in BYOK mode.
-            displayName = $"GitHub Copilot BYOK ({modelId} @ {conn.Endpoint})";
+            // Custom endpoints are BYOK; they are selected by the provider string, not by an
+            // endpoint-presence heuristic on the built-in provider (issue #896).
+            throw new InvalidOperationException(
+                "The github-copilot provider is for built-in Copilot models and does not accept a connection endpoint. "
+                + "Use provider 'openai' or 'azure-openai' for a custom (BYOK) endpoint.");
         }
-        else
+
+        // Authenticate as a Copilot user, optionally with an explicit GitHub token. When no token
+        // is provided the SDK falls back to the logged-in Copilot user.
+        var gitHubToken = model.Connection switch
         {
-            // Standard mode: authenticate as a Copilot user, optionally with an explicit GitHub
-            // token. When no token is provided the SDK falls back to the logged-in Copilot user.
-            gitHubToken = model.Connection switch
-            {
-                ApiKeyConnection apiKeyConn when !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey)
-                    => resolver.ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
-                _ => null,
-            };
-            displayName = $"GitHub Copilot ({modelId})";
-        }
+            ApiKeyConnection apiKeyConn when !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey)
+                => resolver.ResolveApiKey(apiKeyConn.ApiKey, "github-copilot"),
+            _ => null,
+        };
+        var displayName = $"GitHub Copilot ({modelId})";
 
         var client = new CopilotSdkChatClient(
             modelId,
             displayName,
             gitHubToken,
+            services?.LoggerFactory,
+            queueManager: queueManager,
+            modelOptions: model.Options,
+            subAgentChatRegistry: subAgentChatRegistry);
+
+        return (client, displayName);
+    }
+
+    // Creates a BYOK Copilot client for the openai / azure-openai providers. The factory resolves
+    // model.Connection into the endpoint + credential pair; the wire knobs (wireApi, wireModel,
+    // headers) stay in model.Options, which is forwarded verbatim and interpreted by the Copilot
+    // SDK via CopilotSdkChatClient.CreateProviderConfig (issue #896).
+    private static (IChatClient client, string displayName) CreateGitHubCopilotByokClient(
+        string provider,
+        Model model,
+        AgentServices? services,
+        AgentInputQueueManager? queueManager = null,
+        IApiKeyResolver? resolver = null,
+        ISubAgentChatRegistry? subAgentChatRegistry = null)
+    {
+        resolver ??= EnvironmentApiKeyResolver.Instance;
+
+        var modelId = model.Id
+            ?? throw new InvalidOperationException($"The {provider} provider requires a model id.");
+
+        var conn = model.Connection as ApiKeyConnection
+            ?? throw new InvalidOperationException($"The {provider} provider requires an ApiKeyConnection.");
+
+        var endpoint = conn.Endpoint;
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            throw new InvalidOperationException($"The {provider} provider requires a connection endpoint.");
+        }
+
+        var resolvedApiKey = string.IsNullOrWhiteSpace(conn.ApiKey)
+            ? null
+            : resolver.ResolveApiKey(conn.ApiKey, provider);
+
+        var byokOptions = new CopilotByokOptions
+        {
+            Provider = provider,
+            BaseUrl = endpoint,
+            ApiKey = resolvedApiKey,
+        };
+
+        // gitHubToken stays null — no GitHub auth is required in BYOK mode.
+        var displayName = $"GitHub Copilot BYOK ({modelId} @ {endpoint})";
+
+        var client = new CopilotSdkChatClient(
+            modelId,
+            displayName,
+            gitHubToken: null,
             services?.LoggerFactory,
             byokOptions: byokOptions,
             queueManager: queueManager,

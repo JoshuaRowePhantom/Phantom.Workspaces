@@ -71,6 +71,79 @@ internal static class WorkspaceToolEntityUtilities
         return entityResult.CurrentEntity ?? throw new InvalidOperationException($"Entity {resultingEntityId} update did not return a snapshot.");
     }
 
+    public static async Task<EntitySnapshot> UpsertEntityByDeterministicIdAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId deterministicId,
+        JsonObject entityData,
+        Func<JsonElement, JsonObject, JsonObject> mergeStrategy,
+        string updateComment,
+        CancellationToken cancellationToken)
+    {
+        var existingEntity = await TryGetEntityByIdAsync(dataAccessLayer, deterministicId, cancellationToken);
+
+        JsonObject finalData;
+        if (existingEntity?.Data is { } existingData)
+        {
+            finalData = mergeStrategy(existingData, entityData);
+        }
+        else
+        {
+            finalData = entityData;
+        }
+
+        finalData["entity-id"] = deterministicId.ToString();
+        using var entityDataDocument = JsonDocument.Parse(finalData.ToJsonString());
+
+        var updateResult = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = updateComment,
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = deterministicId,
+                        ConcurrencyTag = existingEntity?.ConcurrencyTag,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = entityDataDocument.RootElement.Clone(),
+                    },
+                ],
+            },
+            cancellationToken);
+
+        var entityResult = AssertSingleEntityUpdate(updateResult, deterministicId);
+        return entityResult.CurrentEntity ?? throw new InvalidOperationException($"Entity {deterministicId} update did not return a snapshot.");
+    }
+
+    public static async Task<EntitySnapshot?> TryGetEntityByIdAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityId entityId,
+        CancellationToken cancellationToken)
+    {
+        var getResult = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityId = entityId,
+                    },
+                ],
+            },
+            cancellationToken);
+
+        return getResult.Batches
+            .SelectMany(static batch => batch.Entities)
+            .FirstOrDefault();
+    }
+
     public static EntityId CreateDeterministicEntityId(
         EntityName entityName,
         string stableNamespace)

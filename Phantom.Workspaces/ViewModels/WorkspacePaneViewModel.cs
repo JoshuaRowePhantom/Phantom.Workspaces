@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading.Tasks;
 using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
@@ -19,6 +20,7 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
     private readonly List<(WorkspaceTabViewModel tab, System.ComponentModel.PropertyChangedEventHandler tabHandler)> subscribedTabs = [];
     private readonly List<(IStatusItem tabStatus, System.ComponentModel.PropertyChangedEventHandler handler)> subscribedTabStatuses = [];
+    private readonly TaskCompletionSource populatedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
@@ -44,6 +46,13 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     public SubscribedEntityViewModel Entity { get; }
 
     public RelayCommand? CloseCommand { get; }
+
+    /// <summary>
+    /// Task that completes when <see cref="MainWindowViewModel.PopulateWorkspacePaneTabsAsync"/> finishes.
+    /// Exceptions raised during populate are propagated to this task.
+    /// Tests should await this instead of relying on implicit Tabs.CollectionChanged events.
+    /// </summary>
+    public Task Populated => this.populatedTcs.Task;
 
     /// <summary>
     /// Ordered list of open tabs in their current visual order (left to right).
@@ -158,5 +167,21 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     {
         var running = this.Tabs.Any(t => t.TabStatus?.RunningStatus == RunningStatus.Running);
         this.AnyTabIsRunning = running;
+    }
+
+    /// <summary>
+    /// Signals that <see cref="MainWindowViewModel.PopulateWorkspacePaneTabsAsync"/> has completed.
+    /// Called by <see cref="MainWindowViewModel"/> after populate finishes (successfully or with error).
+    /// </summary>
+    internal void SignalPopulated(Exception? error = null)
+    {
+        if (error is not null)
+        {
+            this.populatedTcs.TrySetException(error);
+        }
+        else
+        {
+            this.populatedTcs.TrySetResult();
+        }
     }
 }

@@ -8,7 +8,6 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
-using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
 
@@ -182,67 +181,69 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         };
         await this.mainWindowViewModel.OpenTabAsync(loadingTab);
 
-        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
 
         if (data.TryGetProperty("manifest", out var manifestElement))
         {
             var manifestJson = manifestElement.GetRawText();
-            _ = Task.Run(async () =>
+            // AgentChat must be constructed on the UI thread (issue #909); the work is fully
+            // async, so running it here keeps the UI responsive without a Task.Run hop.
+            this.Lifetime.Run(_ => InitializeSessionTabAsync(async () =>
             {
-                try
-                {
-                    var loggerFactory = new ObservableLoggerFactory();
-                    var agentServices = await this.agentSessionShortcutContext
-                        .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
-                    var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
-                    var agentChat = await AgentFactory.CreateAgentChatAsync(
-                        new CreateAgentChatRequest
-                        {
-                            AgentManifest = agentManifest,
-                            Parameters = parametersDict,
-                            ToolResourceFactory = agentServices.ToolResourceFactory,
-                            AgentSessionId = agentSessionId,
-                            AgentServices = agentServices,
-                            ForegroundScheduler = foregroundScheduler,
-                        });
-                    var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                        this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id);
-                    await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetReady(agent, loggerFactory));
-                }
-                catch (Exception ex)
-                {
-                    await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetFailed(ex.Message));
-                }
-            }, ct);
+                var loggerFactory = new ObservableLoggerFactory();
+                var agentServices = await this.agentSessionShortcutContext
+                    .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
+                var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
+                var agentChat = await AgentFactory.CreateAgentChatAsync(
+                    new CreateAgentChatRequest
+                    {
+                        AgentManifest = agentManifest,
+                        Parameters = parametersDict,
+                        ToolResourceFactory = agentServices.ToolResourceFactory,
+                        AgentSessionId = agentSessionId,
+                        AgentServices = agentServices,
+                        ForegroundScheduler = foregroundScheduler,
+                    });
+                return (agentChat, loggerFactory);
+            }, createdAgentSessionEntity, loadingTab));
         }
         else if (data.TryGetProperty("definition", out var definitionElement))
         {
             var definitionJson = definitionElement.GetRawText();
-            _ = Task.Run(async () =>
+            this.Lifetime.Run(_ => InitializeSessionTabAsync(async () =>
             {
-                try
-                {
-                    var loggerFactory = new ObservableLoggerFactory();
-                    var agentServices = await this.agentSessionShortcutContext
-                        .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
-                    var agentDefinition = AgentDefinition.FromJson(definitionJson);
-                    var agentChat = await AgentFactory.CreateAgentChatAsync(
-                        new CreateAgentChatRequest
-                        {
-                            AgentDefinition = agentDefinition,
-                            AgentSessionId = agentSessionId,
-                            AgentServices = agentServices,
-                            ForegroundScheduler = foregroundScheduler,
-                        });
-                    var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                        this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id);
-                    await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetReady(agent, loggerFactory));
-                }
-                catch (Exception ex)
-                {
-                    await Dispatcher.UIThread.InvokeAsync(() => loadingTab.SetFailed(ex.Message));
-                }
-            }, ct);
+                var loggerFactory = new ObservableLoggerFactory();
+                var agentServices = await this.agentSessionShortcutContext
+                    .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
+                var agentDefinition = AgentDefinition.FromJson(definitionJson);
+                var agentChat = await AgentFactory.CreateAgentChatAsync(
+                    new CreateAgentChatRequest
+                    {
+                        AgentDefinition = agentDefinition,
+                        AgentSessionId = agentSessionId,
+                        AgentServices = agentServices,
+                        ForegroundScheduler = foregroundScheduler,
+                    });
+                return (agentChat, loggerFactory);
+            }, createdAgentSessionEntity, loadingTab));
+        }
+    }
+
+    private async Task InitializeSessionTabAsync(
+        Func<Task<(AgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
+        SubscribedEntityViewModel createdAgentSessionEntity,
+        AgentSessionWorkspaceTabViewModel loadingTab)
+    {
+        try
+        {
+            var (agentChat, loggerFactory) = await createChatAsync();
+            var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
+                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id);
+            loadingTab.SetReady(agent, loggerFactory);
+        }
+        catch (Exception ex)
+        {
+            loadingTab.SetFailed(ex.Message);
         }
     }
 

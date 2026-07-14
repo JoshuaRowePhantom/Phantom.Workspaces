@@ -1,6 +1,8 @@
 using Phantom.Workspaces.ViewModels;
 using System.Globalization;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityFieldEditorViewModelTests

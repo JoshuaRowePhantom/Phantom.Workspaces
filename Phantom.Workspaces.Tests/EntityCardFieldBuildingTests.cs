@@ -3,6 +3,8 @@ using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardFieldBuildingTests
@@ -137,6 +139,32 @@ public sealed class EntityCardFieldBuildingTests
         var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "agent-manifest");
 
         Assert.NotEmpty(fieldEditors);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task FieldEditorFactory_RendersNoFields_WhenNoEntityTypeViewRegistered()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        // Empty catalog — no view registered for the entity type.
+        var entityTypeViewCatalog = new EntityTypeViewCatalog([]);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "b9c0d1e2-6f7a-4b8c-9d0e-5f6a7b8c9d0f",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["agent-definitions", "example"]],
+              "display-name": { "default": "Example Agent" },
+              "template": { "display-name": "Example" }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "agent-definition");
+
+        Assert.Empty(fieldEditors);
     }
 
     [PhantomAvaloniaFact]

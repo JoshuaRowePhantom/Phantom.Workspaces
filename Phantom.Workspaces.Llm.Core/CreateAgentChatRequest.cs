@@ -42,10 +42,12 @@ public struct CreateAgentChatRequest
 
     /// <summary>
     /// The scheduler used to run UI-bound work (history mutations, running-item updates, the
-    /// processing loop).  Capture <see cref="TaskScheduler.FromCurrentSynchronizationContext"/>
-    /// on the UI thread and pass it here whenever the agent chat is constructed off the UI thread
-    /// (e.g. inside <c>Task.Run</c>), so the foreground scheduler is always the UI scheduler
-    /// regardless of which thread builds the request.
+    /// processing loop). Chat construction and initialization must occur <em>on</em> the
+    /// foreground context: when a <see cref="SynchronizationContextTaskScheduler"/> is supplied,
+    /// the <see cref="AgentChat"/> constructor verifies the creating thread is on that context
+    /// and throws otherwise (issue #909). Capture
+    /// <see cref="SynchronizationContextTaskScheduler.FromCurrent"/> on the UI thread and create
+    /// the chat on the UI thread; never construct the chat inside <c>Task.Run</c>.
     /// </summary>
     public TaskScheduler? ForegroundScheduler { get; init; }
 

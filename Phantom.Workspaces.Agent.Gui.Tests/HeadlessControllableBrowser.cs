@@ -19,20 +19,38 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
     private List<string>? currentBatch;
 
     /// <summary>
-    /// Setting this to a non-empty value fires <see cref="Ready"/> synchronously, mirroring what
-    /// <see cref="ControllableWebViewControl"/> does via <c>NavigationCompleted</c>.
+    /// Mirrors <see cref="ControllableWebViewControl"/> semantics: assignment is deduplicated for
+    /// unchanged values (the Avalonia property system suppresses same-value changes, so no reload
+    /// and no <see cref="Ready"/>); a genuine change to a non-empty value fires <see cref="Ready"/>
+    /// synchronously, mirroring <c>NavigationCompleted</c>.
     /// </summary>
     public string? HtmlShell
     {
         get => this.htmlShell;
         set
         {
+            if (string.Equals(this.htmlShell, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
             this.htmlShell = value;
             if (!string.IsNullOrEmpty(value))
             {
                 this.Ready?.Invoke(this, EventArgs.Empty);
             }
         }
+    }
+
+    /// <summary>
+    /// Mirrors <see cref="ControllableWebViewControl.LoadShell"/>: always reloads, so
+    /// <see cref="Ready"/> fires even when <paramref name="html"/> equals the current shell.
+    /// </summary>
+    public void LoadShell(string html)
+    {
+        ArgumentNullException.ThrowIfNull(html);
+        this.htmlShell = html;
+        this.Ready?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>All messages posted via <see cref="PostMessageToJavaScript"/>, in order.</summary>

@@ -6,20 +6,56 @@
   <title>Chat output</title>
   <style>
     :root {
-      --chat-background: ;
-      --chat-foreground: ;
+      /* Campbell — Windows Terminal / VS Code dark terminal palette */
+      --ansi-black:            #0C0C0C;
+      --ansi-red:              #C50F1F;
+      --ansi-green:            #13A10E;
+      --ansi-yellow:           #C19C00;
+      --ansi-blue:             #0037DA;
+      --ansi-magenta:          #881798;
+      --ansi-cyan:             #3A96DD;
+      --ansi-white:            #CCCCCC;
+
+      --ansi-bright-black:     #767676;
+      --ansi-bright-red:       #E74856;
+      --ansi-bright-green:     #16C60C;
+      --ansi-bright-yellow:    #F9F1A5;
+      --ansi-bright-blue:      #3B78FF;
+      --ansi-bright-magenta:   #B4009E;
+      --ansi-bright-cyan:      #61D6D6;
+      --ansi-bright-white:     #F2F2F2;
+
+      --terminal-background:   #0C0C0C;
+      --terminal-foreground:   #CCCCCC;
+      --terminal-cursor:       #FFFFFF;
+      --terminal-selection:    #FFFFFF;
+
+      /* Semantic chat variables — Campbell-derived defaults (dark) */
+      --chat-background:          var(--terminal-background);
+      --chat-foreground:          var(--terminal-foreground);
       --chat-font-family: "Cascadia Code", Consolas, "Courier New", monospace;
       --chat-font-size: 13px;
-      --chat-role: ;
-      --chat-user: ;
-      --chat-reasoning: ;
-      --chat-meta: ;
-      --chat-error: ;
-      --chat-uri: ;
-      --chat-tool-summary: #c586c0;
-      --chat-tool-body-background: ;
-      --copy-btn-color: ;
-      --copy-btn-hover-color: ;
+      --chat-role:                var(--ansi-bright-cyan);
+      --chat-user:                var(--ansi-bright-green);
+      --chat-reasoning:           var(--ansi-bright-black);
+      --chat-meta:                var(--ansi-bright-black);
+      --chat-error:               var(--ansi-bright-red);
+      --chat-uri:                 var(--ansi-bright-blue);
+      --chat-tool-summary:        var(--ansi-bright-magenta);
+      --chat-tool-body-background:#1B1B1B;
+      --copy-btn-color:           var(--ansi-bright-black);
+      --copy-btn-hover-color:     var(--ansi-white);
+      --copy-btn-confirmed-color: var(--ansi-bright-green);
+    }
+
+    /* Light-mode override: host adds `light` class to <body> when ActualThemeVariant == Light. */
+    body.light {
+      --chat-background:          #FFFFFF;
+      --chat-foreground:          #0C0C0C;
+      --chat-tool-body-background:#F3F3F3;
+      --chat-reasoning:           #6E6E6E;
+      --chat-meta:                #6E6E6E;
+      /* ANSI slot values themselves stay Campbell — only the semantic overlays change for light. */
     }
 
     html, body {
@@ -355,12 +391,45 @@
     #raw-details-close-btn:hover {
       opacity: 1;
     }
+    
+    /* Running sub-agents panel styles */
+    .running-subagents-panel {
+      margin: 1em 0;
+    }
+    
+    .running-subagents-header {
+      margin: 0 0 0.5em 0;
+      font-size: 1em;
+      font-weight: 600;
+    }
+    
+    .running-subagent-row[data-depth="1"] {
+      padding-left: 1.5em;
+    }
+    
+    .running-subagent-row[data-depth="2"] {
+      padding-left: 3em;
+    }
+    
+    .running-subagent-row[data-depth="3"] {
+      padding-left: 4.5em;
+    }
+    
+    .running-subagent-row[data-depth="4"] {
+      padding-left: 6em;
+    }
+    
+    .running-subagent-row[data-depth="5"] {
+      padding-left: 7.5em;
+    }
   </style>
 </head>
 <body>
-  <div id="chat-history"></div>
-  <div id="chat-running"></div>
-  <div id="running-subagents"></div>
+  <div id="chat-history-container"></div>
+  <div id="running-items-container"></div>
+  <div id="subagent-panel-sentinel">
+    <div id="subagent-panel-inner"></div>
+  </div>
   <script>
     /* copy-gutter.js — reusable copy-to-clipboard component.
      * Call CopyGutter.init(root) to wire up all [data-copy-target] elements inside root.
@@ -658,6 +727,9 @@
               case "append":
                 target.insertAdjacentHTML("beforeend", command.content);
                 break;
+              case "prepend":
+                target.insertAdjacentHTML("afterbegin", command.content);
+                break;
             }
             break;
           }
@@ -672,6 +744,10 @@
             scrollToBottom();
             break;
           case "theme": {
+            // Support both className (new Campbell-based approach) and variables (legacy).
+            if (command.className) {
+              document.body.className = command.className;
+            }
             if (command.variables) {
               var root = document.documentElement;
               Object.keys(command.variables).forEach(function (key) {
@@ -835,7 +911,7 @@
         this._mutationObserver.disconnect();
       };
 
-      window._stickyScrollEngine = new StickyScrollEngine(document.body);
+      window._stickyScrollEngine = new StickyScrollEngine(document.documentElement);
     })();
   </script>
 </body>

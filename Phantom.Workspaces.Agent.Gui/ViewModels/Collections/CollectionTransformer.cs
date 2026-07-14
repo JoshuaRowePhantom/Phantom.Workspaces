@@ -73,6 +73,12 @@ internal abstract class CollectionTransformer<TSource, TTarget> : IDisposable
     protected virtual void OnRemoveAt(int index, TTarget target) { }
 
     /// <summary>
+    /// Called after an item has been moved within the target collection (the target list is
+    /// already reordered when this is invoked).
+    /// </summary>
+    protected virtual void OnMove(int oldIndex, int newIndex, TTarget target) { }
+
+    /// <summary>
     /// Called when an item is removed and disposed from the target collection.
     /// </summary>
     protected virtual void OnRemoved(TTarget target) { }
@@ -80,6 +86,14 @@ internal abstract class CollectionTransformer<TSource, TTarget> : IDisposable
     protected IReadOnlyList<TSource> Source => this.source;
 
     protected IList<TTarget> Target => this.target;
+
+    /// <summary>
+    /// Applies a source collection-changed event through the same logic used by the live
+    /// subscription. Used to replay events that were buffered while the transformer did not yet
+    /// exist (for example, history mutations captured during asynchronous history loading).
+    /// </summary>
+    protected void ApplySourceEvent(NotifyCollectionChangedEventArgs e)
+        => this.OnSourceCollectionChanged(this, e);
 
     public virtual void Dispose()
     {
@@ -144,6 +158,7 @@ internal abstract class CollectionTransformer<TSource, TTarget> : IDisposable
                    var moved = this.target[e.OldStartingIndex];
                    this.target.RemoveAt(e.OldStartingIndex);
                    this.target.Insert(e.NewStartingIndex, moved);
+                   this.OnMove(e.OldStartingIndex, e.NewStartingIndex, moved);
                }
                break;
 

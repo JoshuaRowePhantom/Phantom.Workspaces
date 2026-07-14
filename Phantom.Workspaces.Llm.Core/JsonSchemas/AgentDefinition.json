@@ -48,7 +48,7 @@
             "github-copilot-subagent",
             "ollama",
             "openai",
-            "azure"
+            "azure-openai"
           ]
         },
         "apiType": {

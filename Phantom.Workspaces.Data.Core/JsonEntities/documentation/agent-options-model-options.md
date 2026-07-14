@@ -24,7 +24,11 @@ All remaining keys in `model.options.additionalProperties` are forwarded verbati
 | Key | Type | Provider(s) | Description |
 |---|---|---|---|
 | `thinking` | bool \| string | `github-copilot` | Enables or configures reasoning/thinking mode. `true`/`"high"` → high effort; `"medium"`/`"med"` → medium; `"low"` → low; `false`/`"none"`/`"off"` → disabled. Maps to `ReasoningOptions.Effort` → `CopilotSdkChatClient` `ReasoningEffort`. |
-| `working-directory` | string | `github-copilot` | Used as a `${working-directory}` placeholder target in parameter substitution. Typically set via `AgentDefinition.workingDirectory` or as a manifest parameter rather than a hardcoded option value. |
+| `working-directory` | string | `github-copilot`, `openai`, `azure-openai` | Used as a `${working-directory}` placeholder target in parameter substitution. The value reaches `CopilotSdkChatClient` through `ChatOptions.AdditionalProperties` (copied from model options by `AgentFactory.ConfigureChatOptions`); the chat client does not read it from model options directly (issue #896). |
+| `cliPath` | string | `github-copilot`, `openai`, `azure-openai` | Explicit path to the Copilot CLI executable. Interpreted by `CopilotSdkChatClient`; when omitted the SDK resolves the CLI itself. |
+| `wireApi` | string | `openai`, `azure-openai` | Wire API the BYOK endpoint speaks (default `chat-completions`). Interpreted by `CopilotSdkChatClient.CreateProviderConfig`. |
+| `wireModel` | string | `openai`, `azure-openai` | Wire model name when it differs from `model.id`. Interpreted by `CopilotSdkChatClient.CreateProviderConfig`. |
+| `headers` | object (string values) | `openai`, `azure-openai` | Extra request headers sent to the BYOK endpoint. Interpreted by `CopilotSdkChatClient.CreateProviderConfig`. |
 | `num_ctx` | int | `ollama` | Context window token count. Passed through to Ollama via `ChatOptions.AdditionalProperties`. |
 | `keep_alive` | string | `ollama` | How long Ollama keeps the model loaded between requests (e.g. `"15m"`, `"1h"`, `"-1"` for forever). |
 | `additionalInstructions` | string | all | Extra instructions appended to the system prompt at runtime. Set programmatically from `PromptAgent.additionalInstructions`; do not set manually. |

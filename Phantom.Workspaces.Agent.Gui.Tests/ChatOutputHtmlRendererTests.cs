@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Xunit;
@@ -388,5 +389,101 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.NotNull(html);
         Assert.Contains("tool call: powershell", html, StringComparison.Ordinal);
         Assert.DoesNotContain("tool call: powershell:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_CallSummary_HasStickyLevel4()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        Assert.Contains("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_ResultSummary_HasStickyLevel4()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        Assert.Contains("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result", html, StringComparison.Ordinal);
+    }
+
+    // ── Issue #893: id surface and shell tests ─────────────────────────────────
+
+    [Fact]
+    public void MessageId_HistoryIndex_ReturnsHistoryDashIndex()
+    {
+        Assert.Equal("history-7", ChatOutputHtmlRenderer.MessageId(7));
+    }
+
+    [Fact]
+    public void RunningMessageId_RunIdAndLocalIndex_ReturnsRunMsgId()
+    {
+        Assert.Equal("run-3-msg-0", ChatOutputHtmlRenderer.RunningMessageId("run-3", 0));
+    }
+
+    [Fact]
+    public void ToolGroupId_FirstHistoryIndex_ReturnsSingleIndexId()
+    {
+        Assert.Equal("tool-group-42", ChatOutputHtmlRenderer.ToolGroupId(42));
+    }
+
+    [Fact]
+    public void Renderer_RemovedAnchorMembers_DoNotExist()
+    {
+        var memberNames = typeof(ChatOutputHtmlRenderer)
+            .GetMembers(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Instance)
+            .Select(member => member.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.DoesNotContain("LoadAfterAnchorId", memberNames);
+        Assert.DoesNotContain("HistoryBeforeAnchorId", memberNames);
+        Assert.DoesNotContain("RunningSubAgentsContainerId", memberNames);
+        Assert.DoesNotContain("InsertAfterItemId", memberNames);
+        Assert.DoesNotContain("InsertAfterContentId", memberNames);
+        Assert.DoesNotContain("ToolGroupInsertAfterId", memberNames);
+        Assert.DoesNotContain("ToolCallGroupId", memberNames);
+    }
+
+    [Fact]
+    public void RenderMessage_Output_ContainsNoInsertAfterDiv()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "history-0",
+            "assistant",
+            [("history-0-0", "<div>content</div>")],
+            null);
+
+        Assert.DoesNotContain("insert-after", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallGroup_Output_ContainsNoInsertAfterDiv()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("tool-group-0", "my_tool", 2, "<div>body</div>");
+
+        Assert.DoesNotContain("insert-after", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Shell_StaticMarkup_ContainsPersistentContainers()
+    {
+        var assembly = typeof(ChatOutputHtmlRenderer).Assembly;
+        var resourceName = Array.Find(
+            assembly.GetManifestResourceNames(),
+            name => name.EndsWith("chat-output-shell.html", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("Embedded chat-output-shell.html resource was not found.");
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("Could not open the chat-output-shell.html resource stream.");
+        using var reader = new System.IO.StreamReader(stream);
+        var shell = reader.ReadToEnd();
+
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.HistoryContainerId}\"", shell);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningContainerId}\"", shell);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.SubAgentPanelSentinelId}\"", shell);
+
+        Assert.DoesNotContain("id=\"load-after\"", shell);
+        Assert.DoesNotContain("id=\"history-before\"", shell);
+        Assert.DoesNotContain("id=\"running-items-inside\"", shell);
+        Assert.DoesNotContain("id=\"subagent-items-inside\"", shell);
     }
 }

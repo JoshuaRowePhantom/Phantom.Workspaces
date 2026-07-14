@@ -36,7 +36,9 @@ $dotnetArgs = @(
     '--no-restore',
     '--nologo',
     '-v',
-    'minimal'
+    'minimal',
+    '--logger',
+    'trx'
 )
 
 if ($NoBuild)
@@ -94,19 +96,11 @@ if ($filterClauses.Count -gt 0)
     $dotnetArgs += @('--filter', ($filterClauses -join '&'))
 }
 
+$runStart = Get-Date
 $rawOutput = & dotnet @dotnetArgs 2>&1
-$exitCode = $LASTEXITCODE
+$dotnetExitCode = $LASTEXITCODE
 
-# dotnet test may exit 0 even when the test host crashes. Detect the abort
-# message explicitly and treat it as a failure.
-$hostCrashed = $rawOutput | Where-Object {
-    $_ -match 'Test Run was aborted' -or $_ -match 'host process exited unexpectedly'
-}
-if ($exitCode -eq 0 -and $hostCrashed)
-{
-    $exitCode = 1
-}
-
+# Write full dotnet output to log before TRX parsing
 $cleanOutput = $rawOutput | ForEach-Object {
     $_.ToString().Replace("`r`n", "`n").Replace("`r", "`n")
 } | ForEach-Object {
@@ -115,4 +109,113 @@ $cleanOutput = $rawOutput | ForEach-Object {
 
 $cleanOutput | Set-Content -Path $TestResultsPath -Encoding utf8
 
-exit $exitCode
+# Find TRX files produced by this run (search recursively in all project TestResults subdirectories)
+$trxFiles = Get-ChildItem -Path $repoRoot -Filter '*.trx' -Recurse -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -ge $runStart }
+
+$failures = @()
+$totalExecuted = 0
+$totalPassed = 0
+$totalFailed = 0
+$benignAbortsDetected = $false
+
+# Check if any TRX files were produced
+if (-not $trxFiles -or $trxFiles.Count -eq 0)
+{
+    $failures += "FAIL: No TRX output files were produced"
+}
+else
+{
+    # Parse each TRX file
+    foreach ($trxFile in $trxFiles)
+    {
+        $xml = [xml](Get-Content $trxFile.FullName -Raw)
+        $run = $xml.TestRun
+        $trxOutcome = $run.ResultSummary.outcome
+        $counters = $run.ResultSummary.Counters
+        $total = [int]$counters.total
+        $executed = [int]$counters.executed
+        $passed = [int]$counters.passed
+        $failed = [int]$counters.failed
+        $assembly = [System.IO.Path]::GetFileNameWithoutExtension($trxFile.Name)
+
+        $totalExecuted += $executed
+        $totalPassed += $passed
+        $totalFailed += $failed
+
+        # Apply failure rules
+        if ($trxOutcome -eq 'Aborted')
+        {
+            if ($total -gt 0)
+            {
+                # Crashed mid-run
+                $failures += "FAIL [$assembly]: test host aborted with $total tests started"
+            }
+            elseif ($total -eq 0)
+            {
+                # Check if this is the benign empty-match crash
+                $emptyMatchPattern = 'Could not find files for the given pattern'
+                $isBenignEmptyMatch = $rawOutput | Where-Object { $_ -match $emptyMatchPattern }
+                
+                if (-not $isBenignEmptyMatch)
+                {
+                    # Unknown abort reason
+                    $failures += "FAIL [$assembly]: test host aborted (reason unknown)"
+                }
+                else
+                {
+                    # Track that we found a benign abort
+                    $benignAbortsDetected = $true
+                }
+            }
+        }
+
+        if ($trxOutcome -eq 'Failed' -and $failed -eq 0)
+        {
+            # Test run marked as failed but no individual tests failed - this is a crash
+            $failures += "FAIL [$assembly]: test host crashed (outcome=Failed but no test failures)"
+        }
+
+        if ($failed -gt 0)
+        {
+            # Collect failing test names
+            $failingTests = $run.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' } | ForEach-Object { $_.testName }
+            $testList = $failingTests -join "`n  "
+            $failures += "FAIL [$assembly]: $failed test(s) failed:`n  $testList"
+        }
+    }
+}
+
+# Check if no tests were executed
+if ($totalExecuted -eq 0)
+{
+    $failures += "FAIL: No tests were executed"
+}
+
+# Check if dotnet exit code is non-zero and unexplained
+# If we detected benign aborts and dotnet exited with code 1, that's expected - don't fail
+if ($dotnetExitCode -ne 0 -and $failures.Count -eq 0 -and -not ($dotnetExitCode -eq 1 -and $benignAbortsDetected))
+{
+    $failures += "FAIL: dotnet test exited with code $dotnetExitCode (unexpected)"
+}
+
+# Emit summary block
+$summary = @"
+
+=== Test Run Summary ===
+Executed : $totalExecuted
+Passed   : $totalPassed
+Failed   : $totalFailed
+"@
+
+Write-Host $summary
+Add-Content -Path $TestResultsPath -Value $summary -Encoding utf8
+
+# Exit with appropriate code
+if ($failures.Count -gt 0)
+{
+    $failures | ForEach-Object { Write-Host $_ }
+    exit 1
+}
+
+exit 0

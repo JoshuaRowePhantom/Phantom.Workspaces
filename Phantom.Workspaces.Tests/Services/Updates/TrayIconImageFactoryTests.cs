@@ -1,6 +1,8 @@
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Services.Updates;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests.Updates;
 
 public sealed class TrayIconImageFactoryTests

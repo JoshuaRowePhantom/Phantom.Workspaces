@@ -24,17 +24,10 @@ public sealed class AgentRunningItems
     {
         ArgumentNullException.ThrowIfNull(runningItem);
         ArgumentNullException.ThrowIfNull(items);
-        var changed = SyncItems(runningItem.Items, items);
-        if (!changed)
-        {
-            return;
-        }
-
-        var index = this.items.IndexOf(runningItem);
-        if (index >= 0)
-        {
-            this.items.SetItem(index, runningItem);
-        }
+        // SyncItems raises fine-grained Add/Remove/Replace notifications on runningItem.Items.
+        // The outer AgentChatRunningItemCollection no longer needs a synthetic Replace
+        // notification, since the running item's identity has not changed.
+        SyncItems(runningItem.Items, items);
     }
 
     public void Remove(AgentChatRunningItem item)

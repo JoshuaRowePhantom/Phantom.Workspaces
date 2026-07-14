@@ -3,6 +3,8 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Gui.Shared.Controls;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class SafeSelectableTextBlockTests

@@ -1,6 +1,8 @@
 using Avalonia;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListViewModelTests

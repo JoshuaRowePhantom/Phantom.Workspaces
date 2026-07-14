@@ -40,6 +40,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly ModelOptions? modelOptions;
     private readonly AgentInputQueueManager? queueManager;
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
+    private readonly IGitHubAccountUpsertService? accountUpsertService;
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
@@ -80,6 +81,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal string? GitHubToken => this.gitHubToken;
 
     /// <summary>
+    /// The explicit Copilot CLI executable path this client was constructed with or read from
+    /// the <c>cliPath</c> model option, or <see langword="null"/> when the SDK resolves the CLI
+    /// itself. Exposed internally for factory wiring tests.
+    /// </summary>
+    internal string? CliPath => this.cliPath;
+
+    /// <summary>
+    /// The model options this client was constructed with, forwarded verbatim by
+    /// <c>AgentFactory</c>. Exposed internally for factory wiring tests.
+    /// </summary>
+    internal ModelOptions? ModelOptions => this.modelOptions;
+
+    /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
     /// </summary>
     /// <param name="modelId">The Copilot model identifier (for example, <c>gpt-5</c>).</param>
@@ -90,22 +104,33 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </param>
     /// <param name="loggerFactory">Optional logger factory for SDK diagnostics.</param>
     /// <param name="byokOptions">
-    /// Optional bring-your-own-key configuration pointing the session at a custom
-    /// OpenAI-compatible endpoint instead of GitHub's hosted models.
+    /// Optional bring-your-own-key connection facts (provider string, endpoint, API key) pointing
+    /// the session at a custom OpenAI-compatible endpoint instead of GitHub's hosted models. The
+    /// remaining BYOK wire knobs (<c>wireApi</c>, <c>wireModel</c>, <c>headers</c>) are read from
+    /// <paramref name="modelOptions"/> (issue #896).
     /// </param>
-    /// <param name="cliPath">Optional explicit path to the Copilot CLI executable.</param>
+    /// <param name="cliPath">
+    /// Optional explicit path to the Copilot CLI executable. When omitted, the <c>cliPath</c>
+    /// model option is used; when that is also absent the SDK resolves the CLI itself.
+    /// </param>
     /// <param name="queueManager">
     /// Optional input-queue manager. When supplied, items added to non-held queues during a streaming
     /// turn are forwarded to the live Copilot session as immediate steering input.
     /// </param>
     /// <param name="modelOptions">
-    /// Optional model-level options from the agent definition (for example <c>working-directory</c>).
-    /// These are fixed for the lifetime of the client and are read at session creation time.
+    /// Optional model-level options from the agent definition, forwarded verbatim by the factory.
+    /// The client interprets provider-specific keys such as <c>cliPath</c>, <c>wireApi</c>,
+    /// <c>wireModel</c>, and <c>headers</c>; the working directory is no longer read from model
+    /// options (issue #896) — it flows through <see cref="ChatOptions.AdditionalProperties"/>.
     /// </param>
     /// <param name="subAgentChatRegistry">
     /// Optional registry for sub-agent chat sessions. When supplied, sub-agent lifecycle events
     /// (<c>SubagentStartedEvent</c>, <c>SubagentCompletedEvent</c>, <c>SubagentFailedEvent</c>) are
     /// forwarded to the corresponding child <see cref="ISubAgentChat"/> sink.
+    /// </param>
+    /// <param name="accountUpsertService">
+    /// Optional service that auto-creates a <c>user-account</c> entity when the first Copilot client
+    /// session is established. When <see langword="null"/>, no upsert is performed.
     /// </param>
     public CopilotSdkChatClient(
         string modelId,
@@ -116,7 +141,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         string? cliPath = null,
         AgentInputQueueManager? queueManager = null,
         ModelOptions? modelOptions = null,
-        ISubAgentChatRegistry? subAgentChatRegistry = null)
+        ISubAgentChatRegistry? subAgentChatRegistry = null,
+        IGitHubAccountUpsertService? accountUpsertService = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -126,45 +152,71 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.gitHubToken = string.IsNullOrWhiteSpace(gitHubToken) ? null : gitHubToken;
         this.loggerFactory = loggerFactory;
         this.byokOptions = byokOptions;
-        this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? null : cliPath;
-        this.queueManager = queueManager;
         this.modelOptions = modelOptions;
+        this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
+        this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
+        this.accountUpsertService = accountUpsertService;
     }
 
     /// <summary>
-    /// Builds the Copilot SDK <see cref="ProviderConfig"/> from BYOK options for the given model.
+    /// Builds the Copilot SDK <see cref="ProviderConfig"/> for a BYOK session. The provider type
+    /// is derived from the agent definition's provider string (<c>openai</c> → <c>openai</c>,
+    /// <c>azure-openai</c> → <c>azure</c>) and the wire knobs (<c>wireApi</c>, <c>wireModel</c>,
+    /// <c>headers</c>) are read from the model options — the SDK, not the factory, is responsible
+    /// for interpreting them (issue #896).
     /// </summary>
-    public static ProviderConfig CreateProviderConfig(CopilotByokOptions byokOptions, string modelId)
+    public static ProviderConfig CreateProviderConfig(
+        CopilotByokOptions byokOptions,
+        string modelId,
+        ModelOptions? modelOptions = null)
     {
         ArgumentNullException.ThrowIfNull(byokOptions);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
         var providerConfig = new ProviderConfig
         {
-            Type = byokOptions.ProviderType,
-            WireApi = byokOptions.WireApi,
+            Type = MapProviderType(byokOptions.Provider),
+            WireApi = GetStringModelOption(modelOptions, "wireApi") ?? "chat-completions",
             BaseUrl = byokOptions.BaseUrl,
             ApiKey = byokOptions.ApiKey,
-            BearerToken = byokOptions.BearerToken,
             ModelId = modelId,
-            WireModel = byokOptions.WireModel,
+            WireModel = GetStringModelOption(modelOptions, "wireModel"),
         };
 
-        if (byokOptions.Headers is not null)
+        if (modelOptions?.AdditionalProperties?.TryGetValue("headers", out var headersObj) == true
+            && headersObj is System.Collections.Generic.IDictionary<string, object> rawHeaders)
         {
-            providerConfig.Headers = new Dictionary<string, string>(byokOptions.Headers);
+            providerConfig.Headers = rawHeaders
+                .Where(static kvp => kvp.Value is string)
+                .ToDictionary(static kvp => kvp.Key, static kvp => (string)kvp.Value!);
         }
 
         return providerConfig;
     }
+
+    // Maps the agent-definition provider string to the provider type understood by the Copilot
+    // runtime. Derived from the provider string rather than a model option so there is a single
+    // source of truth (issue #896).
+    private static string MapProviderType(string provider) => provider switch
+    {
+        "azure-openai" => "azure",
+        _ => provider,
+    };
+
+    private static string? GetStringModelOption(ModelOptions? modelOptions, string key)
+        => modelOptions?.AdditionalProperties?.TryGetValue(key, out var value) == true
+            ? value as string
+            : null;
 
     /// <summary>
     /// Builds the Copilot SDK <see cref="SessionConfig"/> for a turn, forwarding the agent's
     /// model, BYOK provider, reasoning effort, system instructions, working directory, and—critically—its
     /// function tools. The Copilot CLI otherwise only exposes its own built-in tools, so without forwarding
     /// <see cref="ChatOptions.Tools"/> the workspace <see cref="AIFunction"/>s (for example
-    /// <c>workspaces_entity_get</c>) never reach the model.
+    /// <c>workspaces_entity_get</c>) never reach the model. When <see cref="ChatOptions.ModelId"/>
+    /// is set it selects the model for this session, overriding the constructor-fixed model id
+    /// (issue #896).
     /// </summary>
     public static SessionConfig BuildSessionConfig(
         string modelId,
@@ -174,16 +226,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
+        var effectiveModelId = GetEffectiveModelId(modelId, options);
+
         var sessionConfig = new SessionConfig
         {
-            Model = modelId,
+            Model = effectiveModelId,
             Streaming = true,
             OnPermissionRequest = PermissionHandler.ApproveAll,
         };
 
         if (byokOptions is not null)
         {
-            sessionConfig.Provider = CreateProviderConfig(byokOptions, modelId);
+            sessionConfig.Provider = CreateProviderConfig(byokOptions, effectiveModelId, modelOptions);
         }
 
         var reasoningEffort = MapReasoningEffort(options?.Reasoning?.Effort);
@@ -197,7 +251,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
         }
 
-        var workingDirectory = GetWorkingDirectory(options, modelOptions);
+        var workingDirectory = GetWorkingDirectory(options);
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             sessionConfig.WorkingDirectory = workingDirectory;
@@ -226,16 +280,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
+        var effectiveModelId = GetEffectiveModelId(modelId, options);
+
         var resumeConfig = new ResumeSessionConfig
         {
-            Model = modelId,
+            Model = effectiveModelId,
             Streaming = true,
             OnPermissionRequest = PermissionHandler.ApproveAll,
         };
 
         if (byokOptions is not null)
         {
-            resumeConfig.Provider = CreateProviderConfig(byokOptions, modelId);
+            resumeConfig.Provider = CreateProviderConfig(byokOptions, effectiveModelId, modelOptions);
         }
 
         var reasoningEffort = MapReasoningEffort(options?.Reasoning?.Effort);
@@ -249,7 +305,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             resumeConfig.SystemMessage = new SystemMessageConfig { Content = options.Instructions };
         }
 
-        var workingDirectory = GetWorkingDirectory(options, modelOptions);
+        var workingDirectory = GetWorkingDirectory(options);
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             resumeConfig.WorkingDirectory = workingDirectory;
@@ -295,7 +351,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     /// <summary>
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
-    /// <see cref="CopilotSdkTurnEventDispatcher"/> uses to create and register sub-agent
+    /// <see cref="CopilotSubAgentRouter"/> uses to create and register sub-agent
     /// <see cref="AgentChat"/> instances when a <c>SubagentStartedEvent</c> arrives.
     /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created,
     /// in the same block that subscribes to <see cref="SteeringMessageForwarded"/> and
@@ -395,15 +451,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 SingleWriter = true,
             });
 
-            var dispatcher = new CopilotSdkTurnEventDispatcher(
+            var router = new CopilotSubAgentRouter(
                 channel.Writer,
                 this.subAgentChatRegistry,
                 this.runningAgentChatFactory,
                 this.subAgentTable,
-                this.loggerFactory?.CreateLogger<CopilotSdkTurnEventDispatcher>());
+                this.loggerFactory?.CreateLogger<CopilotSubAgentRouter>());
 
             // Fix for GitHub issue #765: serialize event dispatch via a channel to prevent concurrent
-            // DispatchAsync calls from corrupting internal dictionaries. SingleReader ensures the drain
+            // routing calls from corrupting internal dictionaries. SingleReader ensures the drain
             // loop is the only consumer; SingleWriter=false allows multiple SDK event callbacks to write.
             var eventChannel = Channel.CreateUnbounded<SessionEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -412,9 +468,36 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             var dispatchLoop = Task.Run(async () =>
             {
-                await foreach (var sessionEvent in eventChannel.Reader.ReadAllAsync(turnCancellationToken))
+                try
                 {
-                    await dispatcher.DispatchAsync(sessionEvent).ConfigureAwait(false);
+                    // Issue #808 split: CopilotSdkStreamAdapter translates raw SDK events into
+                    // routed ChatResponseUpdate items; CopilotSubAgentRouter interprets the
+                    // stream and pushes each update into the correct sink. The adapter completes
+                    // normally on SessionIdleEvent and faults on SessionErrorEvent, so the turn
+                    // channel is completed here rather than inside the translation layer.
+                    await foreach (var update in CopilotSdkStreamAdapter
+                        .TranslateCopilotSdkSessionEvents(eventChannel.Reader, turnCancellationToken)
+                        .ConfigureAwait(false))
+                    {
+                        await router.RouteAsync(update).ConfigureAwait(false);
+                    }
+
+                    channel.Writer.TryComplete();
+                }
+                catch (OperationCanceledException) when (turnCancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    // Without this, a dispatch failure kills the event loop while the CLI keeps
+                    // streaming: every subsequent session event is dropped and the turn's channel
+                    // never completes, so the remaining output silently never renders (issue
+                    // #912). Fail the turn loudly instead.
+                    this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogError(
+                        exception,
+                        "Session event dispatch failed; failing the turn.");
+                    channel.Writer.TryComplete(exception);
                 }
             }, turnCancellationToken);
 
@@ -463,7 +546,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
                 }
 
-                _ = Task.Run(dispatcher.DisposeRemainingLeasesAsync);
+                _ = Task.Run(router.DisposeRemainingLeasesAsync);
             });
 
             return new StreamingTurnContext(
@@ -785,7 +868,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     private async Task<CopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
-        var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride, this.modelOptions);
+        var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
         if (this.copilotSession is { } existingSession && this.currentSessionSignature == signature)
         {
@@ -812,7 +895,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     CliPath = this.cliPath,
                 };
 
-                var workingDirectory = GetWorkingDirectory(options, this.modelOptions);
+                var workingDirectory = GetWorkingDirectory(options);
                 if (!string.IsNullOrWhiteSpace(workingDirectory))
                 {
                     clientOptions.Cwd = workingDirectory;
@@ -821,6 +904,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 var client = new CopilotClient(clientOptions);
                 await client.StartAsync(cancellationToken).ConfigureAwait(false);
                 this.copilotClient = client;
+
+                if (this.accountUpsertService is not null)
+                {
+                    // Resolve the token that the SDK is actually using. When this.gitHubToken is null
+                    // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
+                    var tokenForUpsert = this.gitHubToken ?? GitHubAuthTokenResolver.Resolve();
+                    if (!string.IsNullOrWhiteSpace(tokenForUpsert))
+                    {
+                        await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
+                    }
+                }
             }
 
             if (this.copilotSession is { } staleSession)
@@ -888,16 +982,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
     /// <summary>
     /// Computes a signature for the session-config inputs that, when changed between turns, require
-    /// recreating the Copilot session (so live tool toggling and working-directory changes take effect).
-    /// The model and BYOK provider are fixed for the lifetime of the client and are therefore not
-    /// included. Tool order is ignored so that only an actual change to the tool set forces a recreation.
+    /// recreating the Copilot session (so live tool toggling, working-directory changes, and call-time
+    /// model selection take effect). The BYOK provider is fixed for the lifetime of the client and is
+    /// therefore not included; the model is included only as the call-time <see cref="ChatOptions.ModelId"/>
+    /// override (issue #896). Tool order is ignored so that only an actual change to the tool set forces
+    /// a recreation.
     /// </summary>
     public static string ComputeSessionSignature(ChatOptions? options)
         => ComputeSessionSignatureCore(options, workingDirectoryOverride: null);
 
     // Core implementation used by both the public static overload and EnsureSessionAsync (which
     // also factors in the in-process working-directory override set by SetWorkingDirectory).
-    private static string ComputeSessionSignatureCore(ChatOptions? options, string? workingDirectoryOverride, ModelOptions? modelOptions = null)
+    private static string ComputeSessionSignatureCore(ChatOptions? options, string? workingDirectoryOverride)
     {
         var toolNames = options?.Tools?
             .OfType<AIFunction>()
@@ -907,15 +1003,22 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         var instructions = options?.Instructions ?? string.Empty;
         var reasoning = MapReasoningEffort(options?.Reasoning?.Effort) ?? string.Empty;
-        var workingDirectory = workingDirectoryOverride ?? GetWorkingDirectory(options, modelOptions) ?? string.Empty;
+        var workingDirectory = workingDirectoryOverride ?? GetWorkingDirectory(options) ?? string.Empty;
+        var modelOverride = string.IsNullOrWhiteSpace(options?.ModelId) ? string.Empty : options!.ModelId;
 
         return string.Join(
             '\u0001',
             "tools=" + string.Join(',', toolNames),
             "instructions=" + instructions,
             "reasoning=" + reasoning,
-            "working-directory=" + workingDirectory);
+            "working-directory=" + workingDirectory,
+            "model=" + modelOverride);
     }
+
+    // Selects the model for a session: the call-time ChatOptions.ModelId when supplied, otherwise
+    // the constructor-fixed model id (issue #896).
+    private static string GetEffectiveModelId(string modelId, ChatOptions? options)
+        => string.IsNullOrWhiteSpace(options?.ModelId) ? modelId : options!.ModelId!;
 
     private static string? MapReasoningEffort(ReasoningEffort? effort)
     {
@@ -942,12 +1045,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         return null;
     }
 
-    // Extracts the working directory, preferring a runtime override in ChatOptions.AdditionalProperties
-    // (set by AgentChat.UpdateParameterValues for the /working-directory slash command) over the
-    // model-level default in ModelOptions.AdditionalProperties (set via manifest parameter substitution
-    // and passed to this client's constructor). Both map to CopilotClientOptions.Cwd (process level)
-    // and SessionConfig.WorkingDirectory / ResumeSessionConfig.WorkingDirectory (session level).
-    private static string? GetWorkingDirectory(ChatOptions? options, ModelOptions? modelOptions)
+    // Extracts the working directory from the runtime ChatOptions.AdditionalProperties override
+    // (set by AgentChat.UpdateParameterValues for the /working-directory slash command, and seeded
+    // from model options by AgentFactory.ConfigureChatOptions). Model options are intentionally not
+    // read here: the chat client does not honour model parameters for the working directory (issue
+    // #896). The value maps to CopilotClientOptions.Cwd (process level) and
+    // SessionConfig.WorkingDirectory / ResumeSessionConfig.WorkingDirectory (session level).
+    private static string? GetWorkingDirectory(ChatOptions? options)
     {
         if (options?.AdditionalProperties?.TryGetValue("working-directory", out var chatValue) == true
             && chatValue is string chatDir
@@ -956,9 +1060,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             return chatDir;
         }
 
-        return modelOptions?.AdditionalProperties?.TryGetValue("working-directory", out var modelValue) == true
-            ? modelValue as string
-            : null;
+        return null;
     }
 
     /// <summary>Gets the human-readable display name for this client.</summary>

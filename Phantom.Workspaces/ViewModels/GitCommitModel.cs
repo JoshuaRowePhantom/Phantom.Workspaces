@@ -15,6 +15,8 @@ public sealed record GitCommitModel
     public bool IsUnstaged => string.Equals(this.Oid, UnstagedSentinelId, StringComparison.Ordinal);
     public bool IsStaged => string.Equals(this.Oid, StagedSentinelId, StringComparison.Ordinal);
 
+    public string ShortOid => this.Oid.Length >= 7 ? this.Oid.Substring(0, 7) : this.Oid;
+
     public static GitCommitModel CreateUnstaged() => new()
     {
         Oid = UnstagedSentinelId,

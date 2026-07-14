@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class QueueComposerSlashCommandTests

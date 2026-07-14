@@ -13,6 +13,7 @@
     <PackageReference Include="Avalonia.Headless.XUnit" />
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Moq" />
     <PackageReference Include="xunit.v3" />
@@ -23,8 +24,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB.Tests\Phantom.Workspaces.Data.MongoDB.Tests.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Shared\Phantom.Workspaces.Gui.Shared.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces\Phantom.Workspaces.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Testing.Gui\Phantom.Workspaces.Testing.Gui.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="xunit.runner.json">

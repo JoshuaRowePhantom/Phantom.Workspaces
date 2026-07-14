@@ -2,7 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:dockFluent="using:Dock.Avalonia.Themes.Fluent"
              x:Class="Phantom.Workspaces.App"
-             RequestedThemeVariant="Dark">
+             RequestedThemeVariant="Default">
 
     <Application.Styles>
         <FluentTheme />
@@ -14,6 +14,12 @@
 
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceInclude x:Key="Light"
+                                 Source="avares://Phantom.Workspaces.Gui.Shared/Themes/Light.axaml" />
+                <ResourceInclude x:Key="Dark"
+                                 Source="avares://Phantom.Workspaces.Gui.Shared/Themes/Dark.axaml" />
+            </ResourceDictionary.ThemeDictionaries>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/QueueStyles.axaml"/>
             </ResourceDictionary.MergedDictionaries>

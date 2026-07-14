@@ -106,6 +106,58 @@ public sealed class GitEntitySchemaTests
         Assert.Equal("git.json#/$defs/git", refValue.GetString());
     }
 
+    [Fact]
+    public void GitWorktreeEntityTypeViewJson_Names_ContainsEntityTypeViewsGitWorktree()
+    {
+        using var document = LoadEmbeddedEntityTypeView("git-worktree-entity-type-view.json");
+
+        Assert.True(document.RootElement.TryGetProperty("names", out var names));
+        Assert.Equal(JsonValueKind.Array, names.ValueKind);
+        var found = names.EnumerateArray().Any(static nameEntry =>
+            nameEntry.ValueKind == JsonValueKind.Array
+            && nameEntry.GetArrayLength() == 2
+            && nameEntry[0].GetString() == "entity-type-views"
+            && nameEntry[1].GetString() == "git-worktree");
+        Assert.True(found, "names must contain [\"entity-type-views\", \"git-worktree\"]");
+    }
+
+    [Fact]
+    public void GitWorktreeEntityTypeViewJson_IsEmbedded_AndHasExpectedFields()
+    {
+        using var document = LoadEmbeddedEntityTypeView("git-worktree-entity-type-view.json");
+
+        Assert.True(document.RootElement.TryGetProperty("fields", out var fields));
+        Assert.Equal(JsonValueKind.Array, fields.ValueKind);
+
+        var fieldPaths = fields.EnumerateArray()
+            .Where(static f => f.TryGetProperty("field-path", out _))
+            .Select(static f => f.GetProperty("field-path").EnumerateArray()
+                .Select(static p => p.GetString()!).ToArray())
+            .ToArray();
+
+        Assert.Contains(fieldPaths, static p => p.SequenceEqual(["path"]));
+        Assert.Contains(fieldPaths, static p => p.SequenceEqual(["git", "branch"]));
+        Assert.Contains(fieldPaths, static p => p.SequenceEqual(["git", "head-commit"]));
+        Assert.Contains(fieldPaths, static p => p.SequenceEqual(["target-branch"]));
+    }
+
+    [Fact]
+    public async Task Populate_IncludesGitWorktreeEntityTypeView()
+    {
+        var seededNames = await GetSeededNamesAsync();
+        Assert.Contains(
+            seededNames,
+            n => n.SequenceEqual(["entity-type-views", "git-worktree"], StringComparer.Ordinal));
+    }
+
+    private static JsonDocument LoadEmbeddedEntityTypeView(string fileName)
+    {
+        var resourceName = $"Phantom.Workspaces.Data.JsonEntities.entity_type_views.{fileName}";
+        using var stream = DataCoreAssembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+        return JsonDocument.Parse(stream!);
+    }
+
     private static JsonDocument LoadEmbeddedSchema(string fileName)
     {
         var resourceName = $"Phantom.Workspaces.Data.JsonSchemas.{fileName}";

@@ -41,7 +41,9 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.entityCardNode.Card.SetBadges(this.Badges);
         this.entityCardNode.Card.SetStatusBadges(this.StatusBadges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
-        this.ToggleExpandCommand = new RelayCommand(_ => this.IsExpanded = !this.IsExpanded);
+        this.ToggleExpandCommand = new RelayCommand(
+            execute: _ => this.IsExpanded = !this.IsExpanded,
+            canExecute: _ => this.HasTraversedChildren);
         this.RefreshCollections();
     }
 
@@ -60,7 +62,13 @@ public sealed class ViewEntityViewModel : ViewModelBase
     public bool HasTraversedChildren
     {
         get => this.hasTraversedChildren;
-        internal set => this.SetProperty(ref this.hasTraversedChildren, value);
+        internal set
+        {
+            if (this.SetProperty(ref this.hasTraversedChildren, value))
+            {
+                this.ToggleExpandCommand.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     public bool IsExpanded
@@ -75,7 +83,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
         }
     }
 
-    public string ExpandArrow => this.isExpanded ? "▼" : "▶";
+    public string ExpandArrow => this.isExpanded ? "▴" : "▾";
 
     public RelayCommand ToggleExpandCommand { get; }
 

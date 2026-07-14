@@ -45,6 +45,13 @@ public sealed class DeterministicTestChatClient : IChatClient
         return queued;
     }
 
+    /// <summary>
+    /// The number of queued streaming responses not yet consumed by a request. Lets adapters
+    /// fronting this client fail loudly when the scripted responses are exhausted instead of
+    /// blocking in <see cref="GetStreamingResponseAsync"/>.
+    /// </summary>
+    public int QueuedStreamingResponseCount => this.streamQueue.Count;
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,

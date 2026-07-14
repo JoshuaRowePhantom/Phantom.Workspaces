@@ -24,7 +24,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
-    private readonly DiagnosticInspectorViewModel diagnosticsDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
@@ -32,7 +31,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
     private readonly AgentEditorNavigationItemViewModel backgroundTasksNavItem;
     private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
-    private readonly AgentEditorNavigationItemViewModel diagnosticsNavItem;
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
     private bool isReasoningVisible;
@@ -56,7 +54,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             "Background task model coming later.");
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
-        this.diagnosticsDetail = new DiagnosticInspectorViewModel(agentChat.History);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
@@ -84,7 +81,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.detailContentSlots.Add(new DetailContentSlot(this.toolsDetail));
         this.detailContentSlots.Add(new DetailContentSlot(this.backgroundTasksDetail));
         this.detailContentSlots.Add(new DetailContentSlot(this.subAgentsContainerDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.diagnosticsDetail));
         this.DetailContentSlots = new ReadOnlyObservableCollection<DetailContentSlot>(this.detailContentSlots);
 
         // Build fixed navigation items once.
@@ -125,15 +121,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.subAgentsContainerDetail,
             []);
 
-        this.diagnosticsNavItem = new AgentEditorNavigationItemViewModel(
-            "chat-diagnostics",
-            "Diagnostics",
-            null,
-            "Diagnostic information",
-            null,
-            this.diagnosticsDetail,
-            []);
-
         var root = new AgentEditorNavigationItemViewModel(
             "chat",
             this.DisplayName,
@@ -141,7 +128,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             null,
             null,
             this.conversationDetail,
-            [this.chatDetailsNavItem, this.toolsNavItem, this.backgroundTasksNavItem, this.subAgentsNavItem, this.diagnosticsNavItem],
+            [this.chatDetailsNavItem, this.toolsNavItem, this.backgroundTasksNavItem, this.subAgentsNavItem],
             isExpanded: false);
 
         this.EditorItems.Add(root);
@@ -166,6 +153,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     }
 
     public string DisplayName { get; }
+
+    public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
@@ -230,8 +219,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public ICommand RequestOpenLogWindowCommand { get; }
 
     public InputQueueViewModel InputQueue { get; }
-
-    public DiagnosticInspectorViewModel DiagnosticsInspector => this.diagnosticsDetail;
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
@@ -486,7 +473,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.subAgentsTransformer.Dispose();
         this.InputQueue.Dispose();
         this.conversationDetail.Dispose();
-        this.diagnosticsDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
         ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
@@ -537,7 +523,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
-        var subAgentChat = (AgentChat)subAgent;
+        // Extract the underlying AgentChat from both AgentChat instances and SubAgent wrappers.
+        AgentChat? subAgentChat = subAgent switch
+        {
+            AgentChat directChat => directChat,
+            SubAgent wrapper => wrapper.AgentChat,
+            _ => null
+        };
+
+        if (subAgentChat is null)
+        {
+            // Skip lazily-restored SubAgent wrappers that haven't been loaded yet.
+            return;
+        }
+
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
@@ -650,6 +649,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         protected override void OnInsert(int index, AgentEditorNavigationItemViewModel target)
         {
             this.UpdateSubAgentsLabel();
+            if (this.Target.Count == 1)
+            {
+                this.subAgentsNavItem.IsExpanded = true;
+            }
         }
 
         protected override void OnRemoveAt(int index, AgentEditorNavigationItemViewModel target)

@@ -542,6 +542,15 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public void ComputeSessionSignature_ChangesWhenModelIdChanges()
+    {
+        var first = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions { ModelId = "gpt-a" });
+        var second = CopilotSdkChatClient.ComputeSessionSignature(new ChatOptions { ModelId = "gpt-b" });
+
+        Assert.NotEqual(first, second);
+    }
+
+    [Fact]
     public void BuildSessionConfig_SetsWorkingDirectory_WhenPresentInAdditionalProperties()
     {
         var options = new ChatOptions
@@ -555,9 +564,10 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
-    public void BuildSessionConfig_SetsWorkingDirectory_WhenPresentInModelOptions()
+    public void BuildSessionConfig_DoesNotReadWorkingDirectoryFromModelOptions()
     {
-        // When ChatOptions has no working-directory override, the value is read from ModelOptions.
+        // The chat client must not honour model parameters for the working directory (issue #896);
+        // only the ChatOptions runtime override path remains.
         var modelOptions = new AgentSchema.ModelOptions
         {
             AdditionalProperties = new Dictionary<string, object> { ["working-directory"] = "/from/model" },
@@ -565,24 +575,69 @@ public sealed class CopilotSdkChatClientTests
 
         var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options: null, modelOptions);
 
-        Assert.Equal("/from/model", config.WorkingDirectory);
+        Assert.Null(config.WorkingDirectory);
     }
 
     [Fact]
-    public void BuildSessionConfig_ChatOptionsOverridesTakesPriorityOverModelOptions()
+    public void BuildSessionConfig_WhenChatOptionsModelIdSet_UsesModelIdFromChatOptions()
     {
-        var options = new ChatOptions
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-constructor",
+            byokOptions: null,
+            new ChatOptions { ModelId = "gpt-call-time" });
+
+        Assert.Equal("gpt-call-time", config.Model);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_WhenChatOptionsModelIdNull_UsesConstructorModelId()
+    {
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-constructor",
+            byokOptions: null,
+            new ChatOptions { ModelId = null });
+
+        Assert.Equal("gpt-constructor", config.Model);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_WhenChatOptionsModelIdWhitespace_UsesConstructorModelId()
+    {
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-constructor",
+            byokOptions: null,
+            new ChatOptions { ModelId = "   " });
+
+        Assert.Equal("gpt-constructor", config.Model);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_WhenChatOptionsModelIdSet_ByokProviderUsesEffectiveModelId()
+    {
+        var byok = new CopilotByokOptions
         {
-            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = "/runtime" },
-        };
-        var modelOptions = new AgentSchema.ModelOptions
-        {
-            AdditionalProperties = new Dictionary<string, object> { ["working-directory"] = "/initial" },
+            Provider = "openai",
+            BaseUrl = "http://localhost:1234/",
         };
 
-        var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options, modelOptions);
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-constructor",
+            byok,
+            new ChatOptions { ModelId = "gpt-call-time" });
 
-        Assert.Equal("/runtime", config.WorkingDirectory);
+        Assert.NotNull(config.Provider);
+        Assert.Equal("gpt-call-time", config.Provider!.ModelId);
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_WhenChatOptionsModelIdSet_UsesModelIdFromChatOptions()
+    {
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig(
+            "gpt-constructor",
+            byokOptions: null,
+            new ChatOptions { ModelId = "gpt-call-time" });
+
+        Assert.Equal("gpt-call-time", config.Model);
     }
 
     [Fact]
@@ -607,9 +662,10 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
-    public void BuildResumeSessionConfig_SetsWorkingDirectory_WhenPresentInModelOptions()
+    public void BuildResumeSessionConfig_DoesNotReadWorkingDirectoryFromModelOptions()
     {
-        // When ChatOptions has no working-directory override, the value is read from ModelOptions.
+        // The chat client must not honour model parameters for the working directory (issue #896);
+        // only the ChatOptions runtime override path remains.
         var modelOptions = new AgentSchema.ModelOptions
         {
             AdditionalProperties = new Dictionary<string, object> { ["working-directory"] = "/from/model" },
@@ -617,7 +673,7 @@ public sealed class CopilotSdkChatClientTests
 
         var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options: null, modelOptions);
 
-        Assert.Equal("/from/model", config.WorkingDirectory);
+        Assert.Null(config.WorkingDirectory);
     }
 
     [Fact]

@@ -126,7 +126,7 @@ Both zones are rendered inside a single browser-hosted surface — a native WebV
 
 The host never manipulates the DOM directly. A testable, push-based model (`ChatOutputHtmlModel`) computes the minimal set of operations — replace, insert before/after, append, remove — and emits them through `IChatOutputHtmlSink`. The renderer control (`AgentChatOutputControl`) serializes each operation with `ChatOutputBrowserCommands` (JSON) and posts it across the bridge, where the shell's `applyCommand` handler applies it. Element ids are assigned by `ChatOutputHtmlRenderer` so updates target stable nodes.
 
-The shell exposes two container elements that map directly onto the two zones: `#chat-history` (completed turns) and `#chat-running` (active items). The page posts `ready`/`scrollState` messages back to the host so it can flush queued commands once the shell has loaded and own the auto-scroll policy.
+The shell exposes three persistent regions that map onto the zones: `#chat-history-container` (completed turns), `#running-items-container` (active items), and `#subagent-panel-sentinel` (a permanent wrapper whose only child, `#subagent-panel-inner`, is rebuilt whenever running sub-agent state changes). The persistent regions are never replaced or removed — history chunks are `prepend`-ed into the history container, live messages `append`/`after` relative to existing top-level elements, and the sub-agent panel is updated by removing `#subagent-panel-inner` and appending a fresh inner node into the sentinel. There are no first-item anchor elements; an empty container is the base case. The page posts `ready`/`scrollState` messages back to the host so it can flush queued commands once the shell has loaded and own the auto-scroll policy.
 
 > **Testing note:** the model and command layers are covered by ordinary headless unit tests; real-browser behavior is covered by the `Phantom.Workspaces.Agent.Gui.WebViewTests` project (Trait `Category=WebView`), which hosts a real native WebView on an STA thread and is excluded from default runs (use `.\scripts\run-tests.ps1 -IncludeWebView`).
 
@@ -148,7 +148,7 @@ The engine attaches to `document.body` as the scroll root and calls `update()` o
 
 #### History zone rendering
 
-- Rendered into the `#chat-history` container as completed turns are appended.
+- Rendered into the `#chat-history-container` region as completed turns are appended.
 - Scroll is anchored to the bottom; new entries cause the view to scroll down unless the user has scrolled up (tracked via the `scrollState` messages the page posts to the host).
 
 #### Active items zone rendering
@@ -161,7 +161,7 @@ Each active item renders two things side by side:
    - For a tool call: shows "calling *tool name*…", then the result or error when finished.
    - For a sub-agent invocation: shows the sub-agent name and its current status.
 
-When an active item completes, it transitions from the `#chat-running` container into `#chat-history` (moved to the bottom of the history list and the active item row is removed).
+When an active item completes, it transitions from the `#running-items-container` region into `#chat-history-container` (moved to the bottom of the history list and the active item row is removed).
 
 ### Input queue control
 

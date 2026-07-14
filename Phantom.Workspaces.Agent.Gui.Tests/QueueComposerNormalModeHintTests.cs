@@ -135,4 +135,55 @@ public sealed class QueueComposerNormalModeHintTests
 
         inputQueue.Dispose();
     }
+
+    [Fact]
+    public async Task NormalModeHint_DefaultComposer_ContainsCtrlBreakInterrupt()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.IsFormattedMode = false;
+
+        Assert.NotNull(composer.NormalModeHint);
+        Assert.Contains("Ctrl+Break", composer.NormalModeHint, StringComparison.Ordinal);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task NormalModeHint_DefaultComposer_ContainsPauseToggleHold()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.IsFormattedMode = false;
+
+        Assert.NotNull(composer.NormalModeHint);
+        Assert.Contains("Pause", composer.NormalModeHint, StringComparison.Ordinal);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task NormalModeHint_DefaultComposer_ContainsShiftPauseHoldAll()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.IsFormattedMode = false;
+
+        Assert.NotNull(composer.NormalModeHint);
+        Assert.Contains("Shift+Pause", composer.NormalModeHint, StringComparison.Ordinal);
+
+        inputQueue.Dispose();
+    }
 }

@@ -71,14 +71,20 @@ public sealed class FieldEditorFactory
                 f => f.DisplayFormat,
                 StringComparer.Ordinal);
         }
-        else
+        else if (expandAll || entityTypeView is not null)
         {
-            // Fall back to enumerating all fields (union across the entity's entity types) from schema
+            // Show all schema fields when: (a) expandAll is set (entity-browser rendering), or
+            // (b) a view was found but omits the fields property (explicit opt-in to show all fields).
             var fieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
                 entityData,
                 Array.Empty<string>(),
                 entityData).ConfigureAwait(false);
             fieldPaths = fieldNames.Select(name => (IReadOnlyList<string>)[name]).ToArray();
+        }
+        else
+        {
+            // No entity-type-view registered for this entity type — default to empty (show no fields).
+            fieldPaths = Array.Empty<IReadOnlyList<string>>();
         }
 
         fieldPaths = await this.OrderFieldPathsAsync(entityData, fieldPaths).ConfigureAwait(false);

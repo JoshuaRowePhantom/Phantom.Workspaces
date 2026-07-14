@@ -1,10 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
+
+using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -25,7 +30,7 @@ public sealed class ShortcutManagerTests
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new TestShortcutHandler(shouldApply: true, handleResult: true));
 
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity");
 
         var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
@@ -44,7 +49,7 @@ public sealed class ShortcutManagerTests
         shortcutManager.AddShortcutHandler(first);
         shortcutManager.AddShortcutHandler(second);
 
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity");
 
         var handled = await shortcutManager.HandleShortcutAsync(mainWindowViewModel, Shortcut.Open, entity);
@@ -59,7 +64,7 @@ public sealed class ShortcutManagerTests
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new TestShortcutHandler(shouldApply: true, handleResult: true));
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity");
 
         var viewEntity = new ViewEntityViewModel(
@@ -78,7 +83,7 @@ public sealed class ShortcutManagerTests
     public async Task ViewEntityViewModel_ProvidesSharedEntityCardNode_WithJsonAndDeleteActions()
     {
         var shortcutManager = new ShortcutManager();
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity", _ => Task.CompletedTask);
 
         var viewEntity = new ViewEntityViewModel(
@@ -101,7 +106,7 @@ public sealed class ShortcutManagerTests
                 shouldApply: true,
                 handleResult: true,
                 supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Delete.Name]));
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity", _ => Task.CompletedTask);
 
         var viewEntity = new ViewEntityViewModel(
@@ -125,7 +130,7 @@ public sealed class ShortcutManagerTests
         var handler = new TestShortcutHandler(shouldApply: true, handleResult: true);
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(handler);
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity");
         var shortcutViewModel = new EntityShortcutViewModel
         {
@@ -145,7 +150,7 @@ public sealed class ShortcutManagerTests
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity", _ => Task.CompletedTask);
 
         var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
@@ -159,7 +164,7 @@ public sealed class ShortcutManagerTests
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new ToggleJsonEntityShortcutHandler());
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity");
         Assert.False(entity.IsRawJsonVisible);
 
@@ -175,7 +180,7 @@ public sealed class ShortcutManagerTests
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
 
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("git-worktree");
 
         var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
@@ -189,7 +194,7 @@ public sealed class ShortcutManagerTests
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
 
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("task");
 
         var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
@@ -203,7 +208,7 @@ public sealed class ShortcutManagerTests
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
 
-        await using var mainWindowViewModel = new MainWindowViewModel(CreateInMemoryRepositorySource());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         await mainWindowViewModel.InitializeAsync();
 
         var entity = CreateEntity("git-worktree");
@@ -215,6 +220,22 @@ public sealed class ShortcutManagerTests
 
     private static RepositorySource CreateInMemoryRepositorySource()
         => new UnknownRepositorySource();
+
+    private static MainWindowViewModel CreateTestMainWindowViewModel()
+    {
+        return new MainWindowViewModel(
+            CreateInMemoryRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = true },
+            new ProfileStore(CreateTempProfileStorePath()),
+            null);
+    }
+
+    private static string CreateTempProfileStorePath()
+    {
+        return Path.Combine(
+            Path.GetTempPath(),
+            $"phantom-test-profile-{Guid.NewGuid()}");
+    }
 
     private static SubscribedEntityViewModel CreateEntity(
         string entityType,

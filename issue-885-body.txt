@@ -1,0 +1,372 @@
+∩╗┐Γê⌐ΓòùΓöÉ## Summary
+
+Two related bugs in the agent chat HTML rendering pipeline share a root cause in the insertion model and must be fixed together as a comprehensive refactoring of ID assignment and DOM insertion:
+
+1. **Live output stops appearing mid-session** Γò¼├┤Γö£├ºΓö£Γòó the pipeline loses track of DOM insertion points after tool-call group promotion replaces element IDs, causing subsequent `document.getElementById` calls to return `null` and DOM commands to be silently dropped.
+2. **History loads in wrong order with auto-scroll suppressed** Γò¼├┤Γö£├ºΓö£Γòó when opening an agent chat, history is loaded oldest-first, so the user sees nothing useful until all history has loaded, then the page jumps to the bottom. The desired behaviour is newest content visible immediately with older history back-filling above.
+
+Both bugs stem from the same architectural weakness: element IDs are assigned by a monotonic counter (encoding *insertion order*, not *logical position*), and insertion points are tracked by scanning adjacent siblings rather than stable anchor elements. The fix replaces the entire ID and insertion model.
+
+---
+
+## Root Cause
+
+### Bug 1 Γò¼├┤Γö£├ºΓö£Γòó Insertion-point loss from tool-call group promotion
+
+**File:** `Phantom.Workspaces.Agent.Gui\ViewModels\DocumentModels\ChatOutputHtmlModels.cs` lines 735Γò¼├┤Γö£├ºΓö£Γöñ753
+
+The current insertion-point resolver scans adjacent siblings via `IsInserted` flags:
+
+```csharp
+public static (ChatOutputUpdateLocation Location, string Reference) ResolveInsertTarget<T>(
+    IList<T> target, int index, string containerPath,
+    Func<T, bool> isInserted, Func<T, string> elementId)
+{
+    if (index - 1 >= 0 && isInserted(target[index - 1]))
+        return (ChatOutputUpdateLocation.After, elementId(target[index - 1]));
+
+    if (index + 1 < target.Count && isInserted(target[index + 1]))
+        return (ChatOutputUpdateLocation.Before, elementId(target[index + 1]));
+
+    return (ChatOutputUpdateLocation.Append, containerPath);
+}
+```
+
+This breaks when tool-call group promotion fires. **File:** `ChatOutputHtmlModels.cs` lines ~510Γò¼├┤Γö£├ºΓö£Γöñ576 (`ChatMessageHtmlTransformer.OnInsert`): when the second consecutive tool-call-only message arrives the previous standalone `msg-N` element is **replaced** wholesale:
+
+```csharp
+this.sink.UpdateContent(
+    prevSlot.Model.ElementId,          // e.g. "msg-5"
+    ChatOutputUpdateLocation.Replace,
+    group.BuildHtml(prevSlot.Model.BuildHtml()));
+// msg-5 is gone from the DOM; grp-12 takes its place
+```
+
+`msg-5` no longer exists. Any `ResolveInsertTarget` call that resolves to `After msg-5` results in `document.getElementById("msg-5")` returning `null`, the JS posts `commandFailed`, and since `NotifyInsertionFailed` only recovers running items (not history items), the command is silently dropped. All subsequent insertions near that slot fail the same way.
+
+### Bug 2 Γò¼├┤Γö£├ºΓö£Γòó Wrong history load iteration order
+
+**File:** `ChatOutputHtmlModels.cs`, line 1036
+
+`ComputeChunkRanges` (line 1222) returns chunks **newest-first**: `chunks[0]` = most recent slice, `chunks[Count-1]` = oldest. The load loop iterates **`Count-1` down to `0`**, so the oldest chunk is rendered first and the newest last:
+
+```csharp
+// Line 1036 Γò¼├┤Γö£├ºΓö£Γòó iterates oldest-first:
+for (var chunkIndex = chunks.Count - 1; chunkIndex >= 0; chunkIndex--)
+```
+
+`isLastChunk` (line 1047) is defined as `chunkIndex == 0` Γò¼├┤Γö£├ºΓö£Γòó the newest chunk Γò¼├┤Γö£├ºΓö£Γòó but because of the inverted loop, this is only reached on the last iteration.
+
+### Bug 3 Γò¼├┤Γö£├ºΓö£Γòó No prepend operation
+
+**File:** `chat-output-shell.html` lines 658Γò¼├┤Γö£├ºΓö£Γöñ660; `IChatOutputHtmlSink.cs`
+
+The JS `applyCommand` handles `replace`, `before`, `after`, `append` but **no `prepend`/`afterbegin`**. All history chunks are appended bottom-to-bottom, so even reversing the loop order alone would render chunks newest-at-top rather than newest-at-bottom.
+
+### Bug 4 Γò¼├┤Γö£├ºΓö£Γòó Auto-scroll suppressed for entire load
+
+**File:** `AgentChatOutputControl.axaml.cs` lines 120Γò¼├┤Γö£├ºΓö£Γöñ123, 264
+
+`suppressSinkScroll = true` is set before loading begins. `ScrollToBottom()` silently clears the flag on first call but does not scroll:
+
+```csharp
+// Lines 120Γò¼├┤Γö£├ºΓö£Γöñ123:
+if (this.suppressSinkScroll)
+{
+    this.suppressSinkScroll = false;   // clears flag, does NOT scroll
+}
+```
+
+Because the loop is inverted (Bug 2), `ScrollToBottom()` is only called after all chunks have been appended. The combined effect: the user sees nothing useful until the entire history load completes, then the page jumps to the bottom.
+
+### Why notifications keep working
+
+`AgentChatStatusLineViewModel` uses pure Avalonia property bindings Γò¼├┤Γö£├ºΓö£Γòó no WebView, no DOM commands. It is completely independent of the `IChatOutputHtmlSink` pipeline and is unaffected by insertion-point loss.
+
+### Secondary contributing factor (#884)
+
+Due to **#884** (`IsVisible` binding resolves against `AgentViewModel` instead of `SubAgentSlotViewModel`), every spawned sub-agent creates a permanently-active `AgentChatEditorControl` with its own live `ChatMessageHtmlTransformer`. Each model fires `CollectionChanged` callbacks at `DispatcherPriority.Normal`, starving the root agent's background-priority auto-flush timer. This exacerbates how quickly the output appears frozen but is a separate bug fixed by #884.
+
+---
+
+## Affected Files
+
+| File | Role |
+|---|---|
+| `Phantom.Workspaces.Agent.Gui\ViewModels\DocumentModels\ChatOutputHtmlModels.cs` | `ResolveInsertTarget`, history chunk loop and direction, group promotion, `NotifyInsertionFailed` |
+| `Phantom.Workspaces.Agent.Gui\Assets\chat-output-shell.html` | Shell structure, `applyCommand` JS (add `prepend`), scroll management |
+| `Phantom.Workspaces.Agent.Gui\ViewModels\DocumentModels\ChatOutputHtmlRenderer.cs` | All ID generation methods |
+| `Phantom.Workspaces.Agent.Gui\Controls\AgentChatOutputControl.axaml.cs` | `suppressSinkScroll` suppression, `ToWireLocation`, auto-scroll during load |
+| `Phantom.Workspaces.Agent.Gui\ViewModels\DocumentModels\IChatOutputHtmlSink.cs` | `ChatOutputUpdateLocation` enum Γò¼├┤Γö£├ºΓö£Γòó add `Prepend` |
+
+---
+
+## Design / Fix
+
+Replace the fragile sibling-scanning insertion model with **positional IDs** and **explicit `insert-after` anchor divs**, and simultaneously fix history load order and auto-scroll.
+
+### 1. New shell structure
+
+Replace the three container divs with four semantic anchor divs:
+
+```html
+<body>
+  <div id="load-after"></div>           <!-- anchor: newest history chunk inserted after this -->
+  <div id="history-before"></div>       <!-- anchor: history updates inserted before this -->
+  <div id="running-items-inside"></div> <!-- container: running (streaming) turns -->
+  <div id="subagent-items-inside"></div><!-- container: sub-agent status panel -->
+  <script>Γò¼├┤Γö£├ºΓö¼┬¼</script>
+</body>
+```
+
+`load-after` is an empty sentinel. During history load the newest chunk is inserted after it (`afterend`); each older chunk is prepended before the previous chunk's first element (`beforebegin`). After load, `load-after` remains as a stable anchor.
+
+### 2. New ID scheme Γò¼├┤Γö£├ºΓö£Γòó positional, not counter-based
+
+Replace `msg-{N}` (monotonic counter) with `history-{idx}-{subidx}` where `idx` = index in `AgentChatHistory` and `subidx` = index of the content block within the item.
+
+| Element | Old ID | New ID |
+|---|---|---|
+| History message wrapper | `msg-3` | `history-3` |
+| History message header | `msg-3-header` | `history-3-header` |
+| History message contents container | `msg-3-contents` | `history-3-contents` |
+| History content block | `msg-3-c0` | `history-3-0` |
+| Insert-after anchor (item-level) | _(none)_ | `insert-after-3` |
+| Insert-after anchor (content-level) | _(none)_ | `insert-after-3-0` |
+| Tool grouping | `grp-12` | `tool-grouping-3-0` (idx/subidx of first tool_use) |
+| Tool grouping summary | `grp-12-summary` | `tool-grouping-3-0-summary` |
+| Tool grouping body | `grp-12-body` | `tool-grouping-3-0-body` |
+| Insert-after for tool grouping | _(none)_ | `insert-after-{highest-idx}-{highest-subidx}` |
+| Running item container | `run-7` | `run-7` _(unchanged)_ |
+| Running item contents | `run-7-contents` | `run-7-contents` _(unchanged)_ |
+
+### 3. Explicit `insert-after` anchor divs
+
+Every inserted item is followed immediately by an empty `<div class="insert-after">` with a stable ID:
+
+```html
+<!-- history item 3 -->
+<div class="chat-message" id="history-3">
+  <div class="chat-header" id="history-3-header">Γò¼├┤Γö£├ºΓö¼┬¼</div>
+  <div class="chat-contents" id="history-3-contents">
+    <div class="chat-content chat-text" id="history-3-0">Γò¼├┤Γö£├ºΓö¼┬¼</div>
+    <div class="insert-after" id="insert-after-3-0"></div>
+  </div>
+</div>
+<div class="insert-after" id="insert-after-3"></div>
+
+<!-- tool grouping starting at item 5, content 0 -->
+<details class="chat-tool-group" id="tool-grouping-5-0">
+  <summary id="tool-grouping-5-0-summary">Γò¼├┤Γö£├ºΓö¼┬¼</summary>
+  <div class="chat-tool-group-body" id="tool-grouping-5-0-body">
+    <div class="chat-message" id="history-5">Γò¼├┤Γö£├ºΓö¼┬¼</div>
+    <div class="insert-after" id="insert-after-5"></div>
+    <div class="chat-message" id="history-6">Γò¼├┤Γö£├ºΓö¼┬¼</div>
+    <div class="insert-after" id="insert-after-6"></div>
+  </div>
+</details>
+<div class="insert-after" id="insert-after-6-0"></div>
+```
+
+Insertions always use `afterend` on the appropriate `insert-after-*` div. Because `insert-after` divs are independent elements (not part of the item being promoted/replaced), **they survive tool-group promotion unchanged**. `ResolveInsertTarget` and `IsInserted` flag scanning are deleted entirely.
+
+### 4. Add `Prepend` to enum and JS
+
+In `IChatOutputHtmlSink.cs`:
+```csharp
+Prepend,   // insertAdjacentHTML("afterbegin") Γò¼├┤Γö£├ºΓö£Γòó insert as first child
+```
+
+In `chat-output-shell.html`, add to `applyCommand`:
+```javascript
+case "prepend":
+    target.insertAdjacentHTML("afterbegin", command.content);
+    break;
+```
+
+In `AgentChatOutputControl.axaml.cs`, update `ToWireLocation` to map `Prepend Γò¼├┤Γö£├æΓö£├Ñ "prepend"`.
+
+### 5. History load order ╬ô├ç├╢ all chunks insert After `load-after`
+
+Because `load-after` is a stable sentinel, every chunk uses `After load-after` (`insertAdjacentHTML("afterend", ╬ô├ç┬¬)`). Each older chunk naturally squeezes in between `load-after` and the previously-inserted chunk:
+
+`
+Initial:           [load-after]
+After chunk 0:     [load-after][chunk-0 ╬ô├ç├╢ newest]
+After chunk 1:     [load-after][chunk-1][chunk-0 ╬ô├ç├╢ newest]
+After chunk 2:     [load-after][chunk-2][chunk-1][chunk-0 ╬ô├ç├╢ newest]
+`
+
+No `isFirst` tracking needed. No `Prepend` operation needed for the load path:
+
+```csharp
+// Iterate chunks[0] (newest) first ╬ô├ç├╢ all target load-after
+for (var chunkIndex = 0; chunkIndex < chunks.Count; chunkIndex++)
+{
+    // ╬ô├ç┬¬ render chunk off-thread, replay commands into DOM ╬ô├ç┬¬
+    this.sink.UpdateContent("load-after", ChatOutputUpdateLocation.After, chunkHtml);
+
+    if (chunkIndex == 0)
+        this.sink.ScrollToBottom(); // scroll immediately ╬ô├ç├╢ newest content now visible
+}
+```
+
+Auto-scroll is **enabled from the start** of history load (not suppressed). It keeps the bottom (newest content) visible while older chunks fill in above.
+### 6. Remove `suppressSinkScroll` suppression during load
+
+Remove or reorder the `suppressSinkScroll = true` assignment so it does not suppress the `ScrollToBottom()` call after the newest (first-iterated) chunk. With the corrected loop, `ScrollToBottom()` fires after the very first iteration and the user immediately sees the most recent content.
+
+### 7. Remove `NotifyInsertionFailed` silent-drop for history elements
+
+With explicit `insert-after` divs, history insertion failures should not occur in normal operation. Change the `commandFailed` handler to log an error for history elements rather than silently returning, to catch regressions.
+
+---
+
+## Expected Tests
+
+### Area 1 ΓÇö Shell structure
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `Shell_ContainsLoadAfterDiv` | `AgentChatOutputControlTests` | Rendered shell HTML contains `<div id="load-after">` |
+| `Shell_ContainsHistoryBeforeDiv` | `AgentChatOutputControlTests` | Rendered shell HTML contains `<div id="history-before">` |
+| `Shell_ContainsRunningItemsInsideDiv` | `AgentChatOutputControlTests` | Rendered shell HTML contains `<div id="running-items-inside">` |
+| `Shell_ContainsSubagentItemsInsideDiv` | `AgentChatOutputControlTests` | Rendered shell HTML contains `<div id="subagent-items-inside">` |
+| `Shell_DoesNotContainLegacyContainerIds` | `AgentChatOutputControlTests` | Shell HTML does not contain `chat-history`, `chat-running`, or `running-subagents` |
+
+### Area 2 ΓÇö Positional ID scheme (renderer)
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `MessageId_ReturnsPositionalId` | `ChatOutputHtmlRendererTests` | `MessageId(3)` returns `"history-3"` (not `"msg-3"`) |
+| `HeaderId_ReturnsPositionalHeaderId` | `ChatOutputHtmlRendererTests` | `HeaderId("history-3")` returns `"history-3-header"` |
+| `ContentsContainerId_ReturnsPositionalContentsId` | `ChatOutputHtmlRendererTests` | `ContentsContainerId("history-3")` returns `"history-3-contents"` |
+| `ContentId_ReturnsPositionalContentId` | `ChatOutputHtmlRendererTests` | `ContentId("history-3", 0)` returns `"history-3-0"` (not `"history-3-c0"`) |
+| `ContentId_SecondBlock_ReturnsCorrectIndex` | `ChatOutputHtmlRendererTests` | `ContentId("history-3", 1)` returns `"history-3-1"` |
+| `InsertAfterItemId_ReturnsCorrectId` | `ChatOutputHtmlRendererTests` | `InsertAfterItemId(3)` returns `"insert-after-3"` |
+| `InsertAfterContentId_ReturnsCorrectId` | `ChatOutputHtmlRendererTests` | `InsertAfterContentId(3, 0)` returns `"insert-after-3-0"` |
+| `ToolGroupId_UsesFirstToolUseIndices` | `ChatOutputHtmlRendererTests` | `ToolGroupId(5, 0)` returns `"tool-grouping-5-0"` |
+| `ToolGroupInsertAfterId_UsesHighestContainedIndices` | `ChatOutputHtmlRendererTests` | `ToolGroupInsertAfterId(6, 0)` returns `"insert-after-6-0"` |
+| `ToolGroupSummaryId_ReturnsCorrectId` | `ChatOutputHtmlRendererTests` | `ToolGroupSummaryId("tool-grouping-5-0")` returns `"tool-grouping-5-0-summary"` |
+| `ToolGroupBodyId_ReturnsCorrectId` | `ChatOutputHtmlRendererTests` | `ToolGroupBodyId("tool-grouping-5-0")` returns `"tool-grouping-5-0-body"` |
+
+### Area 3 ΓÇö Insert-after anchor divs in rendered HTML
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `RenderMessage_TrailingInsertAfterDiv_PresentWithCorrectId` | `ChatOutputHtmlRendererTests` | `RenderMessage` output contains `<div class="insert-after" id="insert-after-3">` after the closing message div |
+| `RenderContent_TextBlock_TrailingInsertAfterDiv_PresentWithCorrectId` | `ChatOutputHtmlRendererTests` | A rendered text content block contains `<div class="insert-after" id="insert-after-3-0">` after the content element |
+| `RenderToolCallGroup_TrailingInsertAfterDiv_UsesHighestItemIdx` | `ChatOutputHtmlRendererTests` | A tool group rendered with items at idx 5 and 6 has trailing `<div id="insert-after-6-0">` after `</details>` |
+| `RenderMessage_MultipleContentBlocks_EachHasOwnInsertAfterDiv` | `ChatOutputHtmlRendererTests` | A message with 2 content blocks produces `insert-after-3-0` and `insert-after-3-1` divs |
+| `InsertAfterDiv_HasInsertAfterClass` | `ChatOutputHtmlRendererTests` | All insert-after divs carry `class="insert-after"` so they can be hidden with CSS |
+
+### Area 4 ΓÇö History load order: all chunks insert After `load-after`
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `HistoryLoad_EmptyHistory_NoSinkContentCalls` | `ChatOutputHtmlModelTests` | With 0 items the sink receives no `UpdateContent` calls |
+| `HistoryLoad_EmptyHistory_ScrollToBottomNotCalled` | `ChatOutputHtmlModelTests` | With 0 items `ScrollToBottom` is never called |
+| `HistoryLoad_SingleItem_InsertedAfterLoadAfterAnchor` | `ChatOutputHtmlModelTests` | With 1 item, the sink receives `UpdateContent("load-after", After, ΓÇª)` |
+| `HistoryLoad_SingleItem_ScrollCalledAfterInsert` | `ChatOutputHtmlModelTests` | With 1 item, `ScrollToBottom` is called after the single chunk insert |
+| `HistoryLoad_200Items_SingleChunk_InsertedAfterLoadAfterAnchor` | `ChatOutputHtmlModelTests` | 200 items produce a single chunk inserted After `load-after` |
+| `HistoryLoad_200Items_ScrollToBottom_CalledExactlyOnce` | `ChatOutputHtmlModelTests` | 200 items produce exactly 1 `ScrollToBottom` call |
+| `HistoryLoad_201Items_TwoChunks_BothInsertedAfterLoadAfterAnchor` | `ChatOutputHtmlModelTests` | 201 items produce 2 chunks; both target `load-after` with `After` location |
+| `HistoryLoad_201Items_ScrollCalledAfterFirstChunk_BeforeSecond` | `ChatOutputHtmlModelTests` | `ScrollToBottom` appears in the sink operation list before any operations from chunk[1] |
+| `HistoryLoad_500Items_ThreeChunks_AllAfterLoadAfterAnchor` | `ChatOutputHtmlModelTests` | 500 items produce 3 chunks; every chunk-level insert targets `load-after` |
+| `HistoryLoad_500Items_ScrollCalledExactlyOnce` | `ChatOutputHtmlModelTests` | 500 items produce exactly 1 `ScrollToBottom` call total |
+| `HistoryLoad_MultiChunk_DomOrder_OldestTopNewestBottom` | `ChatOutputHtmlModelTests` | After 2-chunk load, chunk[1]'s first-item ID precedes chunk[0]'s first-item ID in DOM (verified via sink operation sequence) |
+| `HistoryLoad_Chunk0IsNewest_ContainsHighestIndexedItems` | `ChatOutputHtmlModelTests` | The item IDs in the first-emitted chunk are `history-{N-200}` ΓÇª `history-{N-1}` (the most recent 200) |
+| `HistoryLoad_Chunk1IsOlder_ContainsLowerIndexedItems` | `ChatOutputHtmlModelTests` | The item IDs in the second-emitted chunk are `history-0` ΓÇª `history-{N-201}` for a 201-item history |
+
+### Area 5 ΓÇö SuppressSinkScroll removed / auto-scroll correct
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `HistoryLoad_SuppressSinkScroll_DoesNotSwallowNewestChunkScroll` | `ChatOutputHtmlModelTests` | `ScrollToBottom` produces an actual DOM scroll (not swallowed by flag) after the first chunk |
+| `AgentChatOutputControl_SuppressSinkScroll_ClearedBeforeFirstChunk` | `AgentChatOutputControlTests` | `suppressSinkScroll` is `false` by the time the first chunk's `ScrollToBottom` fires |
+
+### Area 6 ΓÇö Insert-after as insertion target (replaces ResolveInsertTarget)
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `AddMessage_FirstItem_InsertedAfterLoadAfterAnchor` | `ChatOutputHtmlModelTests` | Adding the first history item emits `UpdateContent("load-after", After, ΓÇª)` |
+| `AddMessage_SecondItem_InsertedAfterFirstItemInsertAfterDiv` | `ChatOutputHtmlModelTests` | Adding the second item emits `UpdateContent("insert-after-0", After, ΓÇª)` |
+| `AddMessage_ThirdItem_InsertedAfterSecondItemInsertAfterDiv` | `ChatOutputHtmlModelTests` | Adding the third item emits `UpdateContent("insert-after-1", After, ΓÇª)` |
+| `AddMessage_AtIndex0_WhenOtherItemsExist_InsertedAfterLoadAfterAnchor` | `ChatOutputHtmlModelTests` | Inserting at index 0 when items already exist targets `load-after` (appears above all existing items) |
+| `AddMessage_InsertAfterDivId_MatchesPreviousItemIdx` | `ChatOutputHtmlModelTests` | The insertion target is always `insert-after-{index-1}`, never a sibling scan |
+
+### Area 7 ΓÇö Tool-call group promotion: insert-after divs survive
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `SingleToolCallMessage_HasTrailingInsertAfterDiv` | `ChatOutputHtmlModelTests` | Standalone tool-call message produces a trailing `insert-after-{idx}` div in the sink output |
+| `TwoConsecutiveToolCalls_GroupPromotion_InsertAfterDivsStillInGroupBody` | `ChatOutputHtmlModelTests` | After group promotion, `insert-after-0` and `insert-after-1` divs are present inside the group body HTML |
+| `TwoConsecutiveToolCalls_GroupPromotion_NoCommandFailedPosted` | `ChatOutputHtmlModelTests` | No `commandFailed` callback occurs during or after group promotion |
+| `TwoConsecutiveToolCalls_GroupPromotion_GroupHasTrailingInsertAfterWithHighestIdx` | `ChatOutputHtmlModelTests` | The group element is followed by `insert-after-1-0` (the highest contained item's idx) |
+| `ThreeConsecutiveToolCalls_GroupExtended_TrailingInsertAfterUpdatesToHighestIdx` | `ChatOutputHtmlModelTests` | After extending the group to 3 items, the trailing insert-after is `insert-after-2-0` |
+| `TextAfterToolGroup_InsertedAfterGroupTrailingInsertAfterDiv` | `ChatOutputHtmlModelTests` | A text message after a tool group targets `insert-after-{highest-group-idx}-0` (the group's trailing anchor) |
+| `GroupPromotion_OldItemId_NotReferencedByAnySubsequentInsert` | `ChatOutputHtmlModelTests` | No sink operation after promotion targets `history-{N}` for a promoted item's wrapper ID (the group ID is used instead) |
+
+### Area 8 ΓÇö Content block diff with new IDs
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `UpdateMessage_HeaderChanged_ReplacesPositionalHeaderId` | `ChatOutputHtmlModelTests` | Role label change emits `UpdateContent("history-3-header", Replace, ΓÇª)` |
+| `UpdateMessage_ContentBlockChanged_ReplacesPositionalContentId` | `ChatOutputHtmlModelTests` | Changed content block emits `UpdateContent("history-3-0", Replace, ΓÇª)` |
+| `UpdateMessage_ContentBlockAdded_InsertedAfterPreviousInsertAfterContentDiv` | `ChatOutputHtmlModelTests` | Adding a second content block targets `insert-after-3-0` with `After` |
+| `UpdateMessage_ContentBlockRemoved_RemovesPositionalContentId` | `ChatOutputHtmlModelTests` | Removed content block emits `RemoveContent("history-3-0")` |
+| `UpdateMessage_NoChange_EmitsNoOperations` | `ChatOutputHtmlModelTests` | Reference-equal update produces zero sink operations (existing behaviour preserved) |
+
+### Area 9 ΓÇö Cross-message result injection with new IDs
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `FunctionResult_CrossMessage_MatchedByCallId_ReplacesNewContentId` | `ChatOutputHtmlModelTests` | Matched result emits `Replace` on `history-{idx}-{subidx}` (new positional content ID, not `msg-N-cN`) |
+| `FunctionResult_CrossMessage_Unmatched_InsertedStandalone_WithNewId` | `ChatOutputHtmlModelTests` | Unmatched result message is inserted standalone with `history-{idx}` ID |
+| `FunctionResult_CrossMessage_DoesNotTriggerMessageLevelGroup` | `ChatOutputHtmlModelTests` | Result-only message does not count as a tool-call for grouping purposes (existing behaviour preserved with new IDs) |
+
+### Area 10 ΓÇö Running items
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `RunningItem_Container_InsertedIntoRunningItemsInsideDiv` | `ChatOutputHtmlModelTests` | New running item is inserted into `running-items-inside` container (not `chat-running`) |
+| `RunningItem_ReInsert_UsesRunningItemsInsideContainer` | `ChatOutputHtmlModelTests` | `ReInsert` recovery targets `running-items-inside` as the fallback container |
+| `RunningItem_StreamingUpdate_AppendsToRunContentsId` | `ChatOutputHtmlModelTests` | Streaming messages still append to `run-{N}-contents` (unchanged) |
+
+### Area 11 ΓÇö Phase B/C buffering
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `HistoryLoad_CollectionChangedWhileLoading_IsBuffered` | `ChatOutputHtmlModelTests` | Items added during Phase B appear after Phase C completes (existing behaviour preserved) |
+| `HistoryLoad_CollectionChangedAfterLoading_IsProcessedImmediately` | `ChatOutputHtmlModelTests` | Items added after Phase C appear immediately (existing behaviour preserved) |
+| `HistoryLoad_BufferedEvents_NoDropsOrDuplicates` | `ChatOutputHtmlModelTests` | Buffered events replayed exactly once; no event dropped or emitted twice |
+| `HistoryLoad_BufferedItemInsertedAfter_CorrectInsertAfterAnchor` | `ChatOutputHtmlModelTests` | A buffered item (added during Phase B) is inserted using the correct `insert-after-{prev-idx}` anchor, not a positional fallback |
+| `HistoryLoad_PhaseCCancelled_HistoryLoadingResetToFalse` | `ChatOutputHtmlModelTests` | If Phase C is cancelled, `historyLoading` is reset to `false` and `bufferedHistoryEvents` is cleared |
+| `HistoryLoad_PhaseCCancelled_SubsequentItemsNotBufferedIndefinitely` | `ChatOutputHtmlModelTests` | After a cancelled Phase C, new history items are not accumulated in a dead buffer |
+
+### Area 12 ΓÇö commandFailed error handling
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `CommandFailed_RunningItem_TriggersReInsert` | `ChatOutputHtmlModelTests` | `commandFailed` for a `run-N` element still triggers `ReInsert` (existing recovery preserved) |
+| `CommandFailed_HistoryElement_LogsError_DoesNotThrow` | `ChatOutputHtmlModelTests` | `commandFailed` for `history-{idx}` logs a diagnostic error and does not throw |
+| `CommandFailed_HistoryElement_DoesNotSilentlyDrop` | `ChatOutputHtmlModelTests` | After `commandFailed` for a history element, the error is observable (e.g. via a test logger); the call does not return silently without any trace |
+| `CommandFailed_InsertAfterDiv_LogsError` | `ChatOutputHtmlModelTests` | `commandFailed` for `insert-after-{idx}` logs an error (should not occur in normal operation) |
+
+### Area 13 ΓÇö JS `applyCommand` ΓÇö Prepend operation (browser integration)
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `Prepend_InsertsAsFirstChildOfTarget` | `ChatOutputBrowserIntegrationTests` | `applyCommand` with `location: "prepend"` calls `insertAdjacentHTML("afterbegin", ΓÇª)` ΓÇö new element becomes first child |
+| `Prepend_MultipleCallsSameTarget_ResultsInReverseOrder` | `ChatOutputBrowserIntegrationTests` | Two sequential `prepend` calls to the same container produce items in reverse insertion order (second prepend is above first) |
+| `Prepend_AfterAppend_InsertsAboveExistingContent` | `ChatOutputBrowserIntegrationTests` | Prepend to a container that already has an appended child places the new element above the existing child |
+| `Prepend_UnknownTarget_PostsCommandFailed` | `ChatOutputBrowserIntegrationTests` | Prepend to a non-existent element ID causes the page to post `commandFailed` to the host |
+
+### Area 14 ΓÇö Chunk boundary integrity
+
+| Test Name | Class | What It Verifies |
+|---|---|---|
+| `ComputeChunkRanges_ReturnsNewestFirst_Index0IsHighestItems` | `ChatOutputHtmlModelTests` | `chunks[0]` covers `snapshot[Count-200]` ΓÇª `snapshot[Count-1]` (most recent 200) |
+| `GenerateHistoryChunk_AssignsContiguousPositionalIds` | `ChatOutputHtmlModelTests` | IDs within a chunk are `history-{startIdx}` ΓÇª `history-{endIdx-1}` matching their position in `AgentChatHistory` |
+| `GenerateHistoryChunk_ToolRunNotSplitAcrossChunkBoundary` | `ChatOutputHtmlModelTests` | `SnapCutPoint` still prevents a tool-call run from being split across two chunks (existing behaviour preserved) |
+| `HistoryLoad_TwoChunks_ItemIdsContiguous_NoDuplicates` | `ChatOutputHtmlModelTests` | After a 2-chunk load, item IDs across both chunks are contiguous (`history-0` ΓÇª `history-200`) with no gaps or duplicates |

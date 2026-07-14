@@ -151,7 +151,7 @@ The `template` (and the `definition` property on `agent-definition` entities) is
 | Field | Description |
 |---|---|
 | `id` | Model identifier (e.g., `"gpt-4.1-mini"`, `"qwen3.6"`, `"auto"`). |
-| `provider` | Provider hint: `"echo"`, `"github-models"`, `"github-copilot"`, `"ollama"`, `"openai"`, `"azure"`. |
+| `provider` | Provider hint: `"echo"`, `"github-models"`, `"github-copilot"`, `"ollama"`, `"openai"`, `"azure-openai"`. The `openai`/`azure-openai` providers select BYOK mode via the Copilot SDK. |
 | `apiType` | API protocol used by the client (e.g., `"OpenAI"`, `"Ollama"`). |
 | `connection` | Connection configuration (see below). |
 | `options` | Sampling and inference options (see below). |
