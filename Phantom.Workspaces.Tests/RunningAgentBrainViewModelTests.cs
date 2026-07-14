@@ -389,7 +389,6 @@ public sealed class RunningAgentBrainViewModelTests
         // Verify the header text is correct
         Assert.Contains("Running sub-agents", axaml, StringComparison.Ordinal);
     }
-
     // ── Sorting by activity ───────────────────────────────────────────────────
 
     [Fact]

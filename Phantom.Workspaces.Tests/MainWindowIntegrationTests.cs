@@ -7456,7 +7456,7 @@ public sealed class MainWindowIntegrationTests
 
         // Execute /auto-resume — if TrustedExecutorIdentifier and UpdateAutoResumeAsync are wired,
         // the entity is updated with auto-resume.trusted-executor = "."
-        var interceptor = agentTab.Agent!.InputQueue.DefaultComposer.SlashCommandInterceptorAsync;
+        var interceptor = agentTab.Agent!.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync;
         Assert.NotNull(interceptor);
         await interceptor!("/auto-resume");
 
@@ -7507,7 +7507,7 @@ public sealed class MainWindowIntegrationTests
             viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
 
-        var interceptor = agentTab.Agent!.InputQueue.DefaultComposer.SlashCommandInterceptorAsync;
+        var interceptor = agentTab.Agent!.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync;
         Assert.NotNull(interceptor);
 
         // Enable auto-resume first

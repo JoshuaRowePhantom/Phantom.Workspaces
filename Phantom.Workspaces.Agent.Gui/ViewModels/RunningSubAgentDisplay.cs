@@ -44,28 +44,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             () => agentChat.CompletionState,
             agentChat.RunningItems,
             (INotifyCollectionChanged)agentChat.SubAgents,
-            subAgent =>
-            {
-                // Check if this is an eager SubAgent (AgentChat already available) or lazy.
-                if (subAgent is SubAgent sa && sa.AgentChat is not null)
-                {
-                    // Eager path: AgentChat is already available, use it directly.
-                    // Note: For eager SubAgents, we don't acquire a lease because the factory might be null.
-                    return new RunningSubAgentDisplay(sa.AgentChat);
-                }
-                else if (subAgent is SubAgent subAgentWrapper)
-                {
-                    // Lazy path: AgentChat needs to be materialized.
-                    var lease = subAgentWrapper.AcquireLeaseAsync().Result;
-                    var chat = lease.AgentChat;
-                    lease.DisposeAsync().AsTask().Wait();
-                    return new RunningSubAgentDisplay(chat);
-                }
-                else
-                {
-                    return new RunningSubAgentDisplay((AgentChat)subAgent);
-                }
-            },
+            subAgent => new RunningSubAgentDisplay((AgentChat)subAgent),
             agentChat)
     {
     }

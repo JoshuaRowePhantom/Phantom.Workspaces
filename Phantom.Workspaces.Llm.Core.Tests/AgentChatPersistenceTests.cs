@@ -189,4 +189,40 @@ public sealed class AgentChatPersistenceTests
         await using var lease = await stub.AcquireLeaseAsync();
         Assert.True(lease.AgentChat.History.Count > 0);
     }
+
+    [Fact]
+    public async Task InitializeAsync_RestoredSubAgent_AppearInSubAgentsView_AfterLeaseAcquired()
+    {
+        // This test verifies that restored sub-agents appear in the SubAgents collection
+        // after AcquireLeaseAsync completes, ensuring the lazy loading path works correctly.
+        var store = new InMemoryAgentPersistenceStore();
+        string parentSessionId;
+
+        await using (var parent = await CreateParentChatAsync(store))
+        {
+            var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
+            sink.Complete();
+            await Task.Yield();
+            parentSessionId = parent.AgentSessionId;
+        }
+
+        var scheduler = new CapturingTaskScheduler();
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
+        scheduler.Drain();
+
+        // Assert: The restored sub-agent appears in SubAgents as a SubAgent stub
+        var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
+        
+        // When we acquire a lease, the stub materializes into an AgentChat
+        await using var lease = await stub.AcquireLeaseAsync();
+        
+        // Verify the lease provides access to the underlying AgentChat
+        Assert.NotNull(lease.AgentChat);
+        Assert.Equal("sub-agent", lease.AgentChat.AgentDefinition?.Name);
+        
+        // Verify the stub is still present in SubAgents (the stub remains, lease holds the AgentChat)
+        Assert.Single(restoredParent.SubAgents);
+    }
 }
