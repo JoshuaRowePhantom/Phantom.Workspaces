@@ -97,7 +97,7 @@ public sealed class SlashCompletionsViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.SelectedItem));
 
         this.Items.Clear();
-        foreach (var c in completions)
+        foreach (var c in completions.OrderBy(c => c.Label, StringComparer.OrdinalIgnoreCase))
         {
             this.Items.Add(new SlashCompletionItemViewModel(c.CompletionText, c.Label, c.Description));
         }
