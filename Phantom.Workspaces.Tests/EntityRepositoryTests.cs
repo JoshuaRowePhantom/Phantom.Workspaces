@@ -1,6 +1,8 @@
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityRepositoryTests

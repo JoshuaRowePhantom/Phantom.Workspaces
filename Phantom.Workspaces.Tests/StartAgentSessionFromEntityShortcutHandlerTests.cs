@@ -4,6 +4,8 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class StartAgentSessionFromEntityShortcutHandlerTests

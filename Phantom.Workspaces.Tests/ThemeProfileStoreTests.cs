@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class ProfileStoreTests

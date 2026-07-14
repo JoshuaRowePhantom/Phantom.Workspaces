@@ -12,6 +12,8 @@ using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class StartShellOnProfileShortcutHandlerTests

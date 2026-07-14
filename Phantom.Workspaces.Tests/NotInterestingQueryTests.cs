@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class NotInterestingQueryTests

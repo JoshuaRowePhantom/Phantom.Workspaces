@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using Avalonia.Threading;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeWatcherTests : IDisposable

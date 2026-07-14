@@ -8,6 +8,8 @@ using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
 using Xunit;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 /// <summary>

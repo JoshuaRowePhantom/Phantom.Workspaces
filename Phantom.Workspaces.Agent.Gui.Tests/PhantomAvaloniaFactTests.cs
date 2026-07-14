@@ -1,5 +1,7 @@
 using Avalonia.Threading;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class PhantomAvaloniaFactTests

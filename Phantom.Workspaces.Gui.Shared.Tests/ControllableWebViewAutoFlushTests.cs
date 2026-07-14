@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using Phantom.Workspaces.Gui.Shared.Controls;
 using Xunit;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 /// <summary>

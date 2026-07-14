@@ -18,6 +18,8 @@ using VtNetCore.VirtualTerminal.Enums;
 using VtNetCore.VirtualTerminal.Model;
 using VtNetCore.XTermParser;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 /// <summary>Tests for <see cref="TerminalControl"/> and <see cref="TerminalSessionViewModel"/>.</summary>
@@ -1230,7 +1232,8 @@ public sealed class TerminalControlTests
         // method executes without crashing. Stream content verification would require clipboard mock.
         Assert.NotNull(control.Vtc);
     }
-
+
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_Scroll_MovesViewport()
     {

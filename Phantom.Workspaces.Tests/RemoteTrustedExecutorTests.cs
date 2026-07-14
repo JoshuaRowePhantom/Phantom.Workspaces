@@ -11,6 +11,8 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Trust;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class RemoteTrustedExecutorTests

@@ -3,6 +3,8 @@ using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Controls;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspaceTabItemControlTests

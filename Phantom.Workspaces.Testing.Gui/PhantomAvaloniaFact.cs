@@ -10,7 +10,7 @@ using Xunit;
 using Xunit.Sdk;
 using Xunit.v3;
 
-namespace Phantom.Workspaces.Agent.Gui.Tests;
+namespace Phantom.Workspaces.Testing.Gui;
 
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
 [XunitTestCaseDiscoverer(typeof(PhantomAvaloniaFactDiscoverer))]
@@ -31,19 +31,30 @@ public class PhantomAvaloniaFactDiscoverer : AvaloniaFactDiscoverer
     }
 }
 
-internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXunitSerializable, IAsyncDisposable
+public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXunitSerializable, IAsyncDisposable
 {
-    // See Phantom.Workspaces.Tests\PhantomAvaloniaFact.cs for full rationale.
-    // Short version: HeadlessUnitTestSession._dispatchTask backs the queue processor; if it exits
-    // before our item is dispatched, tcs is never resolved and Run hangs.  We use the ContinueWith
-    // watchdog to convert the hang into a test failure with a diagnostic message.
+    // HeadlessUnitTestSession._dispatchTask is the Task.Run backing the queue processor loop.
+    // When it exits — whether normally (DisposeAsync) or faulted (unhandled exception, e.g.
+    // Dispatcher.ResetForUnitTests() throwing InvalidProgramException) — items already in the
+    // queue but not yet processed have their TaskCompletionSource permanently abandoned, hanging
+    // every pending PhantomAvaloniaTestCase.Run indefinitely.  We reflect on this private field
+    // so that we can register a ContinueWith that fires tcs.TrySetException, converting the
+    // hang into a test failure with a diagnostic message.  If the field is renamed in a future
+    // Avalonia release the reflect returns null and we fall back to the pre-fix behaviour.
     // See: https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/643
     private static readonly FieldInfo? _dispatchTaskField =
         typeof(HeadlessUnitTestSession).GetField(
             "_dispatchTask", BindingFlags.NonPublic | BindingFlags.Instance);
 
-    // Second safety net: _cancellationTokenSource is cancelled by DisposeAsync, which covers the
-    // alive-but-stuck case where _dispatchTask never exits.
+    // HeadlessUnitTestSession._cancellationTokenSource is cancelled by DisposeAsync.  The
+    // _dispatchTask safety net above only fires when _dispatchTask actually EXITS.  However,
+    // _dispatchTask can be alive-but-stuck (e.g. RunLoop blocked in ExecuteJob on a re-entrant
+    // dispatcher call, or PushFrame waiting for frame.Continue=false that never fires).  In
+    // those cases _dispatchTask never exits and the ContinueWith never fires.
+    // Registering on _cancellationTokenSource.Token gives us a second trigger: when the test
+    // framework calls session.DisposeAsync() it cancels this token, which fires our callback
+    // synchronously (useSynchronizationContext:false captures no context), unblocking every
+    // pending tcs.Task immediately and converting the hang into a test failure.
     // See: https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/660
     private static readonly FieldInfo? _cancellationTokenSourceField =
         typeof(HeadlessUnitTestSession).GetField(
@@ -69,9 +80,10 @@ internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXu
         ExceptionAggregator aggregator,
         CancellationTokenSource cancellationTokenSource)
     {
-        // Use a dedicated non-thread-pool thread for the blocking GetResult() call inside
-        // AvaloniaTestCase.Run, to avoid starving the thread pool (per Xunit.StaFact PR #55).
-        // Also enables the _dispatchTask watchdog below.
+        // AvaloniaTestCase.Run intentionally blocks its calling thread (via Task.Run + .GetResult())
+        // to hold xunit's concurrency throttle slot. The correct pattern (per Xunit.StaFact PR #55)
+        // is to do that blocking on a dedicated non-thread-pool thread, not a pool thread, to
+        // avoid starving the pool when test execution itself needs thread pool threads.
         var tcs = new TaskCompletionSource<RunSummary>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
@@ -88,6 +100,14 @@ internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXu
         }) { IsBackground = true };
         thread.Start();
 
+        // Safety net against HeadlessUnitTestSession queue-processor death (#643).
+        // If the session's dispatch loop exits before our background thread's item is processed
+        // (e.g. Dispatcher.ResetForUnitTests() throws InvalidProgramException from inside
+        // application.Dispose(), killing the loop because only OperationCanceledException is
+        // caught), tcs is never resolved and this Run hangs forever.
+        // Registering a ContinueWith on the private _dispatchTask converts the hang into a
+        // test failure with a diagnostic message.  The TrySetException is a no-op for tests
+        // whose tcs was already set by the background thread, so normal runs are unaffected.
         if (_inner.TestClass?.Class?.Assembly is { } assembly)
         {
             var session = HeadlessUnitTestSession.GetOrStartForAssembly(assembly);
@@ -119,7 +139,11 @@ internal sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXu
                     TaskScheduler.Default);
             }
 
-            // Second safety net: fire immediately when the session's cancellation token fires (#660).
+            // Second safety net: fire immediately when the session's cancellation token fires
+            // (DisposeAsync calls CancelAsync before awaiting _dispatchTask).  This covers the
+            // alive-but-stuck case where _dispatchTask never exits — e.g. PushFrame waiting for
+            // frame.Continue=false on a dispatcher that silently stopped processing items — so that
+            // pending tests fail with a clear message rather than hanging forever.
             if (_cancellationTokenSourceField?.GetValue(session) is CancellationTokenSource sessionCts)
             {
                 sessionCts.Token.Register(

@@ -8,7 +8,6 @@ using Dock.Avalonia.Themes.Fluent;
 using Phantom.Workspaces.Templates;
 
 [assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Tests.AvaloniaTestAppBuilder))]
-[assembly: AvaloniaTestIsolation(AvaloniaTestIsolationLevel.PerTest)]
 
 namespace Phantom.Workspaces.Tests;
 

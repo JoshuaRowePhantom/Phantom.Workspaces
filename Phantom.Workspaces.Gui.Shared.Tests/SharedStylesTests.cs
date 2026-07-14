@@ -7,6 +7,8 @@ using Avalonia.Styling;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class SharedStylesTests

@@ -7,6 +7,8 @@ using Phantom.Workspaces.Controls;
 using Phantom.Workspaces.Models;
 using Phantom.Workspaces.ViewModels;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Tests;
 
 public sealed class UsageTrackerControlTests

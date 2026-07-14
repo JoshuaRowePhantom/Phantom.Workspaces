@@ -7,6 +7,8 @@ using Avalonia.Markup.Xaml;
 using Avalonia.Styling;
 using Phantom.Workspaces.Agent.Gui.Controls;
 
+using Phantom.Workspaces.Testing.Gui;
+
 namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class MainWindowAxamlTests
