@@ -102,13 +102,21 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             {
                 var lease = await sa.AcquireLeaseAsync(cancellationToken);
                 
+                RunningAgentChatLease? duplicateLease = null;
+                AgentChat? existingChat = null;
                 lock (_leasesLock)
                 {
                     if (!_leases.TryAdd(id, lease))
                     {
-                        lease.DisposeAsync().AsTask().Wait();
-                        return _leases[id].AgentChat;
+                        duplicateLease = lease;
+                        existingChat = _leases[id].AgentChat;
                     }
+                }
+
+                if (duplicateLease is not null)
+                {
+                    await duplicateLease.DisposeAsync();
+                    return existingChat;
                 }
                 return lease.AgentChat;
             }
