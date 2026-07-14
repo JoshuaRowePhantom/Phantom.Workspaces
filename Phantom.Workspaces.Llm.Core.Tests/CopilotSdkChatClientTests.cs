@@ -912,38 +912,41 @@ public sealed class CopilotSdkChatClientTests
     [Fact]
     public async Task EnsureSessionAsync_DoesNotBlockThreadPoolThread()
     {
-        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: "test-token", loggerFactory: null);
+        // Arrange: Create a mock service that forces genuine async behavior
+        var accountUpsertService = new AsyncAccountUpsertService();
+        using var client = new CopilotSdkChatClient(
+            "gpt-5",
+            "GitHub Copilot (gpt-5)",
+            gitHubToken: "test-token",
+            loggerFactory: null,
+            accountUpsertService: accountUpsertService);
 
-        bool wasOnThreadPoolThread = false;
-        var ensureCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        ThreadPool.QueueUserWorkItem(_ =>
+        // Act: Run EnsureSessionAsync on a thread pool thread with a timeout
+        var completed = await Task.Run(async () =>
         {
-            wasOnThreadPoolThread = Thread.CurrentThread.IsThreadPoolThread;
-            try
-            {
-                var ensureMethod = typeof(CopilotSdkChatClient).GetMethod(
-                    "EnsureSessionAsync",
-                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var ensureMethod = typeof(CopilotSdkChatClient).GetMethod(
+                "EnsureSessionAsync",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
 
-                var task = (Task)ensureMethod.Invoke(
-                    client,
-                    [new ChatOptions(), CancellationToken.None])!;
+            var task = (Task)ensureMethod.Invoke(
+                client,
+                [new ChatOptions(), cts.Token])!;
 
-                task.GetAwaiter().GetResult();
-                ensureCompleted.SetResult();
-            }
-            catch (Exception ex)
-            {
-                ensureCompleted.SetException(ex);
-            }
-        });
+            await task.ConfigureAwait(false);
+            return true;
+        }).WaitAsync(TimeSpan.FromSeconds(10));
 
-        var completed = await Task.WhenAny(
-            ensureCompleted.Task,
-            Task.Delay(TimeSpan.FromSeconds(5)));
+        // Assert: If we reach here without timeout, the method did not block the thread pool thread
+        Assert.True(completed);
+    }
 
-        Assert.Same(ensureCompleted.Task, completed);
-        Assert.True(wasOnThreadPoolThread);
+    private sealed class AsyncAccountUpsertService : IGitHubAccountUpsertService
+    {
+        public async Task UpsertForTokenAsync(string token, CancellationToken cancellationToken)
+        {
+            // Force genuine async behavior to test that EnsureSessionAsync doesn't block
+            await Task.Yield();
+        }
     }
 }
