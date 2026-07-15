@@ -4,6 +4,9 @@
   "allOf": [
     {
       "$ref": "entity.json"
+    },
+    {
+      "$ref": "shell-parameters.json"
     }
   ],
   "type": "object",
@@ -50,3 +53,5 @@
     "command"
   ]
 }
+
+

@@ -1,0 +1,32 @@
+{
+  "entity-id": "c278fe3e-6a80-4a9f-ba8c-db61f17c5ae3",
+  "entity-types": [
+    "entity",
+    "json-schema",
+    "note"
+  ],
+  "names": [
+    [
+      "json-schemas",
+      "https://schemas.workspaces.phantom.to/workspaces/data/core/shell-parameters.json"
+    ],
+    [
+      "entity-types",
+      "shell-parameters-json-schema"
+    ]
+  ],
+  "display-name": {
+    "default": "Shell Parameters Schema"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Shell Parameters Schema\n\nReusable shell execution parameters used by shell entities and transport stream-open requests."
+      }
+    }
+  },
+  "schema": {
+    "$ref": "/JsonSchemas/shell-parameters.json"
+  }
+}
