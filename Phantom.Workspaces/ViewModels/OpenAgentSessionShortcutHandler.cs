@@ -39,13 +39,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.Open
-            && entityViewModel.IsEntityType("agent-session");
+        return ValueTask.FromResult(shortcut == Shortcut.Open
+            && entityViewModel.IsEntityType("agent-session"));
     }
 
     public override async Task<bool> Handle(
@@ -677,3 +677,5 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             });
     }
 }
+
+

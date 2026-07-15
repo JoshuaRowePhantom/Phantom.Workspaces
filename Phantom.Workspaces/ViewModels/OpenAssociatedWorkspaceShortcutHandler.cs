@@ -5,14 +5,14 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class OpenAssociatedWorkspaceShortcutHandler : ShortcutHandler
 {
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.OpenWorkspace
+        return ValueTask.FromResult(shortcut == Shortcut.OpenWorkspace
             && !entityViewModel.IsEntityType("workspace")
-            && GetRelatedWorkspaceIds(mainWindowViewModel, entityViewModel).Count > 0;
+            && GetRelatedWorkspaceIds(mainWindowViewModel, entityViewModel).Count > 0);
     }
 
     public override async Task<bool> Handle(
@@ -76,3 +76,5 @@ public sealed class OpenAssociatedWorkspaceShortcutHandler : ShortcutHandler
         return result;
     }
 }
+
+

@@ -28,7 +28,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             processRunner: null,
             urlLauncher: null);
 
-        Assert.True(handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel));
+        Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -103,12 +103,12 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             processRunner: null,
             urlLauncher: null);
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel);
         Assert.True(result);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task Handle_RemoteEntityWithoutTunnel_ReturnsFalse()
+    public async Task Handle_LocalEntity_CodeNotFound_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
@@ -123,17 +123,14 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             processRunner: null,
             urlLauncher: null);
 
-        // ShouldApplyTo should return true because entity has path
-        var shouldApply = handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel);
+        var shouldApply = await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel);
         Assert.True(shouldApply);
-        
-        // But Handle should succeed for local entities (process will fail but that's expected in test)
-        // Note: This would actually try to run 'code' which will fail in test environment,
-        // but that's OK - we're testing the logic, not the actual process execution
-        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(async () =>
-        {
-            await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
-        });
+
+        var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+        Assert.False(handled);
+        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+            notification.Heading.Contains("VS Code CLI", StringComparison.Ordinal)
+            && notification.Description.Contains("PATH", StringComparison.Ordinal));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -150,7 +147,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             processRunner: null,
             urlLauncher: null);
 
-        Assert.False(handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel));
+        Assert.False(await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel));
     }
 
     // ---- Handle ------------------------------------------------------------------------------
@@ -186,7 +183,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task Handle_LocalEntity_CodeNotFound_PropagatesException()
+    public async Task Handle_LocalEntity_CodeNotFound_ShowsNotification()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
@@ -199,11 +196,41 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             processRunner: null,
             urlLauncher: null);
 
-        // Exception propagates since there's no error handling
-        await Assert.ThrowsAsync<System.ComponentModel.Win32Exception>(async () =>
-        {
-            await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
-        });
+        var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.False(handled);
+        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+            notification.Heading.Contains("VS Code CLI", StringComparison.Ordinal)
+            && notification.Description.Contains("code", StringComparison.Ordinal));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ShouldApplyTo_RemoteEntityWithoutTunnel_ReturnsFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var remoteProfileId = new EntityId(Guid.NewGuid());
+        var snapshot = MakeSnapshot($$"""
+            {
+              "entity-id":"{{remoteProfileId.Value}}",
+              "entity-types":["entity","user-computer-profile","filesystem-path"],
+              "names":[["computer-user-profiles","users","username","remote-user-without-tunnel","computers","hostname","remote-host"]],
+              "display-name":{"default":"remote-user-without-tunnel@remote-host"},
+              "path":"/remote/repo"
+            }
+            """);
+        snapshot = snapshot with { EntityId = remoteProfileId };
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: null,
+            urlLauncher: null);
+
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.False(result);
     }
 
     // Note: Comprehensive testing of remote entity scenarios (with profile/tunnel lookups)
@@ -231,3 +258,4 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         return Assert.IsType<EntityBroker>(entityBrokerProperty!.GetValue(viewModel));
     }
 }
+

@@ -15,8 +15,17 @@ public sealed class ShortcutManager
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel entityViewModel)
     {
-        return this.shortcuts.Where(shortcut =>
-            this.shortcutHandlers.Any(handler => handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel)));
+        foreach (var shortcut in this.shortcuts)
+        {
+            foreach (var handler in this.shortcutHandlers)
+            {
+                if (handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel).AsTask().GetAwaiter().GetResult())
+                {
+                    yield return shortcut;
+                    break;
+                }
+            }
+        }
     }
 
     public void AddShortcutHandler(
@@ -32,7 +41,7 @@ public sealed class ShortcutManager
     {
         foreach (var shortcutHandler in this.shortcutHandlers)
         {
-            if (!shortcutHandler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
+            if (!await shortcutHandler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
             {
                 continue;
             }
@@ -46,3 +55,5 @@ public sealed class ShortcutManager
         return false;
     }
 }
+
+

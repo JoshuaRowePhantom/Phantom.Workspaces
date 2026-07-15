@@ -28,18 +28,18 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
         this.tabOpener = tabOpener;
     }
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
         if (shortcut != Shortcut.VsCodeWeb)
         {
-            return false;
+            return ValueTask.FromResult(false);
         }
 
         var path = TryGetPath(entityViewModel);
-        return path is not null;
+        return ValueTask.FromResult(path is not null);
     }
 
     public override async Task<bool> Handle(
@@ -235,3 +235,5 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
         return null;
     }
 }
+
+

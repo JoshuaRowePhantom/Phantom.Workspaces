@@ -4,13 +4,13 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class EditAgentManifestShortcutHandler : ShortcutHandler
 {
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.Edit
-            && entityViewModel.IsEntityType("agent-manifest");
+        return ValueTask.FromResult(shortcut == Shortcut.Edit
+            && entityViewModel.IsEntityType("agent-manifest"));
     }
 
     public override Task<bool> Handle(
@@ -31,3 +31,5 @@ public sealed class EditAgentManifestShortcutHandler : ShortcutHandler
         return Task.FromResult(true);
     }
 }
+
+

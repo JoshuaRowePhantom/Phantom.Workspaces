@@ -17,7 +17,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","git"],"path":"/home/user/repo"}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.True(result);
     }
@@ -29,7 +29,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","user-computer-profile"],"home-directory":"C:\\Users\\tester"}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.True(result);
     }
@@ -41,7 +41,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","workspace"],"display-name":{"default":"My Workspace"}}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.False(result);
     }
@@ -53,7 +53,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","git"],"path":"/home/user/repo"}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.Open, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.Open, entity);
 
         Assert.False(result);
     }
@@ -71,7 +71,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
             Relationships = Array.Empty<EntitySnapshot>(),
         });
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.False(result);
     }
@@ -127,3 +127,4 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
             });
     }
 }
+

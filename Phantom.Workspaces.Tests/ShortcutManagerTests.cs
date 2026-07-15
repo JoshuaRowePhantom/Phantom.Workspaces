@@ -280,12 +280,12 @@ public sealed class ShortcutManagerTests
 
         public int HandleCallCount { get; private set; }
 
-        public override bool ShouldApplyTo(
+        public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
             SubscribedEntityViewModel entityViewModel)
-            => this.shouldApply
-                && this.supportedShortcutNames.Contains(shortcut.Name, StringComparer.Ordinal);
+            => ValueTask.FromResult(this.shouldApply
+                && this.supportedShortcutNames.Contains(shortcut.Name, StringComparer.Ordinal));
 
         public override Task<bool> Handle(
             MainWindowViewModel mainWindowViewModel,

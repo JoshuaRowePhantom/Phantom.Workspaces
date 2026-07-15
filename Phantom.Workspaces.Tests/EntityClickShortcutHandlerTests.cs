@@ -55,8 +55,8 @@ public sealed class EntityClickShortcutHandlerTests
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
 
-        Assert.True(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("workspace")));
-        Assert.False(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
+        Assert.True(await clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("workspace")));
+        Assert.False(await clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
     }
 
     [PhantomAvaloniaFact]
@@ -110,11 +110,11 @@ public sealed class EntityClickShortcutHandlerTests
 
         public SubscribedEntityViewModel? LastEntity { get; private set; }
 
-        public override bool ShouldApplyTo(
+        public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
             SubscribedEntityViewModel entityViewModel)
-            => shortcut == Shortcut.Open;
+            => ValueTask.FromResult(shortcut == Shortcut.Open);
 
         public override Task<bool> Handle(
             MainWindowViewModel mainWindowViewModel,
@@ -128,3 +128,4 @@ public sealed class EntityClickShortcutHandlerTests
         }
     }
 }
+

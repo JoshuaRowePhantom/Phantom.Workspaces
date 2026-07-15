@@ -29,13 +29,13 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
         this.sessionOpener = sessionOpener;
     }
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.StartShell
-            && entityViewModel.IsEntityType("user-computer-profile");
+        return ValueTask.FromResult(shortcut == Shortcut.StartShell
+            && entityViewModel.IsEntityType("user-computer-profile"));
     }
 
     public override async Task<bool> Handle(
@@ -171,4 +171,6 @@ public sealed class StartShellOnProfileShortcutHandler : ShortcutHandler
         public ValueTask DisposeAsync() => this.channelStream.DisposeAsync();
     }
 }
+
+
 
