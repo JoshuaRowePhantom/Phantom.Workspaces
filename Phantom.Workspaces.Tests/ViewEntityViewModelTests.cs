@@ -101,6 +101,28 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         Assert.True(viewModel.ToggleExpandCommand.CanExecute(null));
     }
 
+    [Fact]
+    public void Children_ExposedAsObservableCollection_ForTreeView()
+    {
+        var viewModel = this.CreateViewModel();
+
+        Assert.Empty(viewModel.Children);
+    }
+
+    [Fact]
+    public void AddChild_AddsNestedEntityAndMarksParent()
+    {
+        var parent = this.CreateViewModel();
+        var child = this.CreateViewModel();
+
+        parent.AddChild(child);
+
+        Assert.Single(parent.Children);
+        Assert.Same(child, parent.Children[0]);
+        Assert.True(parent.HasTraversedChildren);
+        Assert.True(child.HasParent);
+    }
+
     private ViewEntityViewModel CreateViewModel(bool isExpanded = true)
     {
         var entity = CreateTestEntity();

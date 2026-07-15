@@ -82,6 +82,27 @@ public static class EntityPresentation
         return false;
     }
 
+    public static IReadOnlyList<string> GetNonAbstractEntityTypeNames(EntitySnapshot snapshot)
+    {
+        if (snapshot.Data is not JsonElement data
+            || !data.TryGetProperty("entity-types", out var types)
+            || types.ValueKind != JsonValueKind.Array)
+        {
+            return Array.Empty<string>();
+        }
+
+        return types.EnumerateArray()
+            .Where(static type => type.ValueKind == JsonValueKind.String)
+            .Select(static type => type.GetString())
+            .Where(static type => !string.IsNullOrWhiteSpace(type)
+                && !string.Equals(type, "entity", StringComparison.Ordinal)
+                && !string.Equals(type, "abstract", StringComparison.Ordinal))
+            .Cast<string>()
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static type => type, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public static IReadOnlyCollection<EntityDisplayItemViewModel> GetDisplayItems(
         EntitySnapshot snapshot)
     {

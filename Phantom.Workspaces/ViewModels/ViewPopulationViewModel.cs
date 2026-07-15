@@ -18,6 +18,8 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
 
     public ObservableCollection<ViewEntityViewModel> Entities { get; } = [];
 
+    public ObservableCollection<ViewEntityViewModel> RootEntities { get; } = [];
+
     internal CancellationToken CancellationToken => _cts.Token;
 
     internal void AddGetSubscription(SubscribedGet subscription) =>

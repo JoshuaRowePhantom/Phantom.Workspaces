@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text.Json;
 using Avalonia;
+using Avalonia.Media;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -15,6 +17,7 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class EntityListNodeViewModel : ViewModelBase
 {
     private bool isExpanded;
+    private IBrush? parentColorBrush;
     private Action<EntityListNodeViewModel, bool>? onExpansionChanged;
 
     public EntityListNodeViewModel(
@@ -72,6 +75,20 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public bool HasChildren => this.Children.Count > 0;
 
+    public IBrush? ParentColorBrush
+    {
+        get => this.parentColorBrush;
+        private set
+        {
+            if (this.SetProperty(ref this.parentColorBrush, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasParent));
+            }
+        }
+    }
+
+    public bool HasParent => this.ParentColorBrush is not null;
+
     public bool IsExpanded
     {
         get => this.isExpanded;
@@ -112,6 +129,11 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.Children.Clear();
         foreach (var child in children)
         {
+            child.ParentColorBrush = Converters.EntityTypeColorConverter.Instance.Convert(
+                this.Entity?.NonAbstractEntityTypeNames,
+                typeof(IBrush),
+                null,
+                CultureInfo.InvariantCulture) as IBrush;
             this.Children.Add(child);
         }
 

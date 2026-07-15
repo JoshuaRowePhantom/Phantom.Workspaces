@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Collections.Generic;
 using System.Text.Json;
 using Avalonia;
+using Avalonia.Media;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -13,6 +14,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
     private readonly EntityListNodeViewModel entityCardNode;
     private bool hasTraversedChildren;
     private bool isExpanded = true;
+    private IBrush? parentColorBrush;
 
     public ViewEntityViewModel(
         SubscribedEntityViewModel entity,
@@ -95,11 +97,36 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
 
+    public ObservableCollection<ViewEntityViewModel> Children { get; } = [];
+
     public EntityListNodeViewModel EntityCardNode => this.entityCardNode;
 
     public bool HasShortcuts => this.Shortcuts.Count > 0;
 
-    public Thickness IndentMargin => new(this.IndentLevel * 20, 0, 0, 0);
+    public IBrush? ParentColorBrush
+    {
+        get => this.parentColorBrush;
+        private set
+        {
+            if (this.SetProperty(ref this.parentColorBrush, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasParent));
+            }
+        }
+    }
+
+    public bool HasParent => this.ParentColorBrush is not null;
+
+    public void AddChild(ViewEntityViewModel child)
+    {
+        child.ParentColorBrush = Converters.EntityTypeColorConverter.Instance.Convert(
+            this.Entity.NonAbstractEntityTypeNames,
+            typeof(IBrush),
+            null,
+            System.Globalization.CultureInfo.InvariantCulture) as IBrush;
+        this.Children.Add(child);
+        this.HasTraversedChildren = true;
+    }
 
     private void OnEntityPropertyChanged(
         object? sender,

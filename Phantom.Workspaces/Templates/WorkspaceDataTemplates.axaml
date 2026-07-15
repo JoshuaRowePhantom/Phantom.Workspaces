@@ -7,21 +7,29 @@
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
                xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
-    <DataTemplate DataType="vm:EntityListNodeViewModel">
-        <StackPanel Classes="workspace-entity-node-root">
-            <entityControls:EntityCardControl DataContext="{Binding Card}" />
-            <Border IsVisible="{Binding HasChildren}"
-                    Classes="entity-card-expand-section"
-                    CornerRadius="{Binding ExpandSectionCornerRadius}">
-                <Button Classes="entity-card-expand-button"
-                        Content="{Binding ExpandArrow}"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Command="{Binding ToggleExpandCommand}" />
+    <TreeDataTemplate DataType="vm:EntityListNodeViewModel"
+                      ItemsSource="{Binding Children}">
+        <Panel>
+            <Border Classes="entity-card-tree-parent-bar"
+                    BorderBrush="{Binding ParentColorBrush}"
+                    IsVisible="{Binding HasParent}">
+                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                    <Border Width="4"
+                            Classes="entity-card-tree-type-bar"
+                            Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}" />
+                    <entityControls:EntityCardControl Grid.Column="1" DataContext="{Binding Card}" />
+                </Grid>
             </Border>
-            <ItemsControl ItemsSource="{Binding VisibleChildren}" Classes="workspace-visible-children" />
-        </StackPanel>
-    </DataTemplate>
+            <Grid ColumnDefinitions="Auto,*"
+                  ColumnSpacing="6"
+                  IsVisible="{Binding !HasParent}">
+                <Border Width="4"
+                        Classes="entity-card-tree-type-bar"
+                        Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}" />
+                <entityControls:EntityCardControl Grid.Column="1" DataContext="{Binding Card}" />
+            </Grid>
+        </Panel>
+    </TreeDataTemplate>
 
     <DataTemplate DataType="vm:EntityListItemViewModel">
         <StackPanel Margin="{Binding IndentMargin}" Classes="workspace-entity-node-root"

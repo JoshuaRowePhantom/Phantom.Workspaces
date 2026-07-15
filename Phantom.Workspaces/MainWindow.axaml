@@ -168,21 +168,24 @@
                     </StackPanel>
                 </Border>
 
-                <ScrollViewer Grid.Row="1">
-                    <ItemsControl ItemsSource="{Binding CurrentViewPopulation.Entities}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ViewEntityViewModel">
-                                <StackPanel Margin="{Binding IndentMargin}"
-                                            Spacing="6">
+                <TreeView Grid.Row="1"
+                          Classes="entity-card-tree entity-card-tree-entity"
+                          ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
+                    <TreeView.ItemTemplate>
+                        <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
+                                          ItemsSource="{Binding Children}">
+                            <Panel>
+                                <Border Classes="entity-card-tree-parent-bar"
+                                        BorderBrush="{Binding ParentColorBrush}"
+                                        IsVisible="{Binding HasParent}">
                                     <ContentControl Content="{Binding EntityCardNode}" />
-                                    <Border IsVisible="{Binding HasTraversedChildren}" Classes="entity-card-expand-section">
-                                        <Button Classes="entity-card-expand-button" Content="{Binding ExpandArrow}" Command="{Binding ToggleExpandCommand}" />
-                                    </Border>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                                </Border>
+                                <ContentControl Content="{Binding EntityCardNode}"
+                                                IsVisible="{Binding !HasParent}" />
+                            </Panel>
+                        </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
             </Grid>
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />

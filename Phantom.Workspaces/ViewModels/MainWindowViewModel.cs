@@ -1103,7 +1103,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (associatedNoteEntity is not null)
         {
-            next.Entities.Add(this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
+            var viewEntity = this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true);
+            next.Entities.Add(viewEntity);
+            next.RootEntities.Add(viewEntity);
         }
 
         await this.LoadSubViewEntitiesAsync(selectedViewData);
@@ -1120,7 +1122,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    next.Entities.Add(this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0));
+                    var viewEntity = this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0);
+                    next.Entities.Add(viewEntity);
+                    next.RootEntities.Add(viewEntity);
                     continue;
                 }
 
@@ -1446,7 +1450,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private void AddHierarchyNode(
         ViewPopulationViewModel population,
         ViewHierarchyNode node,
-        int indentLevel)
+        int indentLevel,
+        ViewEntityViewModel? parent = null)
     {
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
@@ -1457,14 +1462,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 vm.HasTraversedChildren = true;
             }
 
-            population.Entities.Add(vm);
+            if (parent is null)
+            {
+                population.Entities.Add(vm);
+                population.RootEntities.Add(vm);
+            }
+            else
+            {
+                population.Entities.Add(vm);
+                parent.AddChild(vm);
+            }
         }
 
         if (vm is null || vm.IsExpanded)
         {
             foreach (var child in node.Children)
             {
-                this.AddHierarchyNode(population, child, indentLevel + 1);
+                this.AddHierarchyNode(population, child, indentLevel + 1, vm ?? parent);
             }
         }
     }
