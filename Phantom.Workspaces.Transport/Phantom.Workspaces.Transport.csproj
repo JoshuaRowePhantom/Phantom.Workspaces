@@ -7,8 +7,11 @@
 
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
   </ItemGroup>
 </Project>
+
+
