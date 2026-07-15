@@ -75,6 +75,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             Entity = entityViewModel,
             NotificationService = mainWindowViewModel.NotificationService,
             AgentSessionId = agentSessionId,
+            WorkspacePaneId = paneId,
         };
         await mainWindowViewModel.OpenTabAsync(loadingTab);
 
@@ -151,6 +152,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             Entity = agentSessionEntity,
             NotificationService = mainWindowViewModel.NotificationService,
             AgentSessionId = agentSessionId,
+            WorkspacePaneId = mainWindowViewModel.SelectedWorkspacePane?.Id,
         };
 
         var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
@@ -257,6 +259,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             Entity = agentSessionEntity,
             NotificationService = mainWindowViewModel.NotificationService,
             AgentSessionId = agentChat.AgentSessionId,
+            WorkspacePaneId = mainWindowViewModel.SelectedWorkspacePane?.Id,
         };
         tab.SetReady(agent, loggerFactory);
         return tab;

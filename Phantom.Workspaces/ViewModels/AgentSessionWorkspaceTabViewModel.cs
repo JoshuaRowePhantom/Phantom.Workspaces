@@ -59,6 +59,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public string? AgentSessionId { get; init; }
 
+    public string? WorkspacePaneId { get; init; }
+
     public RunningAgentChatLease? Lease => this.lease;
 
     public void SetLease(RunningAgentChatLease value) => this.lease = value;
@@ -171,7 +173,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.lastStreamingNotifyTicks = Environment.TickCount64;
             var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(vm.History, vm.RunningItems);
             this.NotificationService?.Notify(new Notification(
-                new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                this.CreateTabDescriptor(),
                 "Running",
                 textSummary ?? string.Empty,
                 DateTime.UtcNow,
@@ -184,7 +186,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             var heading = interrupted ? "Interrupted" : "Completed";
             var reason = interrupted ? "Interrupted" : BuildIdleReason(vm);
             this.NotificationService?.Notify(new Notification(
-                new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                this.CreateTabDescriptor(),
                 heading,
                 reason,
                 DateTime.UtcNow,
@@ -200,7 +202,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.lastStreamingNotifyTicks = now;
                 var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(vm.History, vm.RunningItems);
                 this.NotificationService?.Notify(new Notification(
-                    new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                    this.CreateTabDescriptor(),
                     "Running",
                     textSummary ?? string.Empty,
                     DateTime.UtcNow,
@@ -216,6 +218,14 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         this.RaiseAltKeyStateChanged(isAltHeld);
     }
+
+    private TabDescriptor CreateTabDescriptor()
+        => new()
+        {
+            TabId = this.Id,
+            TabTitle = this.Title,
+            WorkspaceId = this.WorkspacePaneId,
+        };
 
     private void OnAgentGoToTabAtIndexRequested(object? sender, int index)
     {

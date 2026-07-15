@@ -283,4 +283,45 @@ public sealed class AgentSessionNotificationTests
                 call => call.RunningState == RunningState.Idle && call.TabDescriptor.TabTitle == "My Full Agent Title");
         }
     }
+
+    [Fact]
+    public async Task Notify_SetsWorkspaceId_FromWorkspacePaneId()
+    {
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Idle)
+            {
+                notifyTcs.TrySetResult();
+            }
+        };
+
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab-workspace-test",
+            Title = "Agent",
+            WorkspacePaneId = "workspace-pane-1",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        timeoutCts.Token.Register(() => notifyTcs.TrySetCanceled());
+        await notifyTcs.Task;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls,
+                call => call.RunningState == RunningState.Idle
+                    && call.TabDescriptor.WorkspaceId == "workspace-pane-1");
+        }
+    }
 }
