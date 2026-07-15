@@ -96,7 +96,7 @@ public sealed class HttpTransport : ITransport
             if (this.socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
                 await this.SendFrameAsync(new TransportFrame { Type = TransportFrame.Types.TransportClose }, CancellationToken.None).ConfigureAwait(false);
-                await this.socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "disposed", CancellationToken.None).ConfigureAwait(false);
+                await this.socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "disposed", CancellationToken.None).ConfigureAwait(false);
             }
         }
         catch

@@ -3,6 +3,8 @@ using Phantom.Workspaces.Data.Web.Server;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Web.Server;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,6 +13,9 @@ builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 
 var reverseExecutionRegistry = new ReverseExecutionRegistry();
 builder.Services.AddSingleton(reverseExecutionRegistry);
+var transportRegistry = new TransportRegistry();
+builder.Services.AddSingleton(transportRegistry);
+builder.Services.AddSingleton<HttpServerTransportFactory>();
 
 builder.Services.AddSingleton<AgentChatSessionCache>();
 
@@ -27,6 +32,7 @@ app.MapGet("/", () => $"Phantom.Workspaces.Web.Server ({typeof(WebServerMarker).
 app.MapWebDataAccessEndpoints();
 app.MapAgentEndpoints();
 app.MapReverseEndpoints(reverseExecutionRegistry);
+app.Services.GetRequiredService<HttpServerTransportFactory>().Map(app);
 app.MapStreamEndpoints();
 app.MapWorkspaceToolEndpoints();
 app.MapAgentPersistenceEndpoints();

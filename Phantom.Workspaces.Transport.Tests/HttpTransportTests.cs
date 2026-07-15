@@ -193,6 +193,184 @@ public class HttpTransportTests
     }
 }
 
+public class ServerHttpTransportTests
+{
+    [Fact]
+    public async Task ServerHttpTransport_ChannelOpen_RoutesToListener()
+    {
+        using var socket = new TestWebSocket();
+        var registry = new TransportRegistry();
+        var listener = new RecordingListener();
+        registry.Register(listener);
+        await using var transport = new ServerHttpTransport(socket, registry, TimeSpan.FromHours(1));
+        var runTask = transport.RunAsync();
+
+        await socket.ReceiveTextAsync(new TransportFrame
+        {
+            Type = TransportFrame.Types.ChannelOpen,
+            ChannelId = "channel-1",
+            Request = Json("{\"target\":\"echo\"}"),
+        });
+        var channel = await listener.Channel.Task.WaitAsync(TestTimeout);
+        await socket.ReceiveTextAsync(new TransportFrame
+        {
+            Type = TransportFrame.Types.ChannelMessage,
+            ChannelId = "channel-1",
+            Payload = Json("{\"value\":\"hello\"}"),
+        });
+
+        var message = await channel.Reader.ReadAsync(TestCancellationToken());
+
+        Assert.Equal("echo", listener.Request.GetProperty("target").GetString());
+        Assert.Equal("hello", message.GetProperty("value").GetString());
+        await transport.DisposeAsync();
+        try { await runTask.WaitAsync(TestTimeout); } catch { }
+    }
+
+    [Fact]
+    public async Task ServerHttpTransport_ChannelOpen_NoListener_SendsNotFound()
+    {
+        using var socket = new TestWebSocket();
+        var registry = new TransportRegistry();
+        await using var transport = new ServerHttpTransport(socket, registry, TimeSpan.FromHours(1));
+        var runTask = transport.RunAsync();
+
+        await socket.ReceiveTextAsync(new TransportFrame
+        {
+            Type = TransportFrame.Types.ChannelOpen,
+            ChannelId = "channel-1",
+            Request = Json("{}"),
+        });
+
+        var frame = await socket.ReadSentFrameAsync();
+
+        Assert.Equal(TransportFrame.Types.ChannelOpenError, frame.Type);
+        Assert.Equal("not-found", frame.ErrorCode);
+        await transport.DisposeAsync();
+        try { await runTask.WaitAsync(TestTimeout); } catch { }
+    }
+
+    [Fact]
+    public async Task ServerHttpTransport_LeaseExpiry_SendsTransportClose()
+    {
+        using var socket = new TestWebSocket();
+        var registry = new TransportRegistry();
+        await using var transport = new ServerHttpTransport(socket, registry, TimeSpan.FromMilliseconds(20));
+        var runTask = transport.RunAsync();
+
+        var frame = await socket.ReadSentFrameAsync();
+
+        Assert.Equal(TransportFrame.Types.TransportClose, frame.Type);
+        try { await runTask.WaitAsync(TestTimeout); } catch { }
+    }
+
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
+
+    private static CancellationToken TestCancellationToken()
+    {
+        var cts = new CancellationTokenSource(TestTimeout);
+        return cts.Token;
+    }
+
+    private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    private sealed class RecordingListener : ITransportListener
+    {
+        public TaskCompletionSource<IMessageChannel> Channel { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public JsonElement Request { get; private set; }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+        {
+            this.Request = request.Clone();
+            this.Channel.SetResult(channel);
+            return Task.FromResult<IAsyncDisposable?>(this);
+        }
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+    }
+
+    private sealed class TestWebSocket : WebSocket
+    {
+        private readonly Channel<ReceiveMessage> received = Channel.CreateUnbounded<ReceiveMessage>();
+        private readonly Channel<SentMessage> sent = Channel.CreateUnbounded<SentMessage>();
+        private WebSocketState state = WebSocketState.Open;
+
+        public override WebSocketCloseStatus? CloseStatus => null;
+
+        public override string? CloseStatusDescription => null;
+
+        public override string? SubProtocol => null;
+
+        public override WebSocketState State => this.state;
+
+        public async Task ReceiveTextAsync(TransportFrame frame)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(frame);
+            await this.received.Writer.WriteAsync(new ReceiveMessage(bytes, WebSocketMessageType.Text));
+        }
+
+        public async Task<TransportFrame> ReadSentFrameAsync()
+        {
+            while (true)
+            {
+                var message = await this.sent.Reader.ReadAsync(TestCancellationToken());
+                if (message.MessageType == WebSocketMessageType.Text)
+                {
+                    return JsonSerializer.Deserialize<TransportFrame>(message.Payload)!;
+                }
+            }
+        }
+
+        public override void Abort()
+        {
+            this.state = WebSocketState.Aborted;
+            this.received.Writer.TryComplete();
+            this.sent.Writer.TryComplete();
+        }
+
+        public override Task CloseAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+        {
+            this.state = WebSocketState.Closed;
+            this.received.Writer.TryComplete();
+            return Task.CompletedTask;
+        }
+
+        public override Task CloseOutputAsync(WebSocketCloseStatus closeStatus, string? statusDescription, CancellationToken cancellationToken)
+        {
+            this.state = WebSocketState.CloseSent;
+            return Task.CompletedTask;
+        }
+
+        public override void Dispose()
+        {
+            this.state = WebSocketState.Closed;
+            this.received.Writer.TryComplete();
+            this.sent.Writer.TryComplete();
+        }
+
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(ArraySegment<byte> buffer, CancellationToken cancellationToken)
+        {
+            var message = await this.received.Reader.ReadAsync(cancellationToken);
+            message.Payload.CopyTo(buffer.AsSpan());
+            return new WebSocketReceiveResult(message.Payload.Length, message.MessageType, true);
+        }
+
+        public override async Task SendAsync(ArraySegment<byte> buffer, WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken)
+        {
+            var payload = buffer.AsSpan().ToArray();
+            await this.sent.Writer.WriteAsync(new SentMessage(payload, messageType), cancellationToken);
+        }
+
+        private sealed record ReceiveMessage(byte[] Payload, WebSocketMessageType MessageType);
+
+        private sealed record SentMessage(byte[] Payload, WebSocketMessageType MessageType);
+    }
+}
+
 public class HttpClientTransportFactoryTests
 {
     [Fact]
@@ -365,3 +543,4 @@ public class HttpClientTransportFactoryTests
 
     private sealed record HandshakeRequest(string Method, string Path, IReadOnlyDictionary<string, string> Headers);
 }
+
