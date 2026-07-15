@@ -177,33 +177,37 @@
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
         <Setter Property="Template">
             <ControlTemplate>
-                <StackPanel Classes="entity-card-tree-item">
-                    <ContentPresenter IsVisible="{Binding HasChildren}"
-                                      Classes="branch-header"
-                                      Content="{TemplateBinding Header}"
-                                      ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    <ContentPresenter IsVisible="{Binding NotHasChildren}"
-                                      Classes="leaf"
-                                      Content="{TemplateBinding Header}"
-                                      ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card-expand-section branch-footer">
-                        <Button Classes="entity-card-expand-button"
-                                Content="{Binding ExpandArrow}"
-                                HorizontalAlignment="Stretch"
-                                HorizontalContentAlignment="Center"
-                                Command="{Binding ToggleExpandCommand}" />
-                    </Border>
-                    <Grid ColumnDefinitions="2,*"
-                          IsVisible="{Binding HasChildren}">
-                        <Border Grid.Column="0"
-                                Background="{Binding ChildRailBrush}"
-                                VerticalAlignment="Stretch" />
-                        <ItemsPresenter Grid.Column="1"
-                                        Margin="18,0,0,0"
-                                        IsVisible="{Binding IsExpanded}" />
-                    </Grid>
-                </StackPanel>
+                <Grid RowDefinitions="Auto,Auto"
+                      ColumnDefinitions="21,*">
+                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2"
+                                Classes="entity-card-tree-item">
+                        <ContentPresenter IsVisible="{Binding HasChildren}"
+                                          Classes="branch-header"
+                                          VerticalAlignment="Top"
+                                          Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                        <ContentPresenter IsVisible="{Binding NotHasChildren}"
+                                          Classes="leaf"
+                                          VerticalAlignment="Top"
+                                          Content="{TemplateBinding Header}"
+                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                        <Border IsVisible="{Binding HasChildren}"
+                                Classes="entity-card-expand-section branch-footer">
+                            <Button Classes="entity-card-expand-button"
+                                    Content="{Binding ExpandArrow, FallbackValue=▼}"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Command="{Binding ToggleExpandCommand}" />
+                        </Border>
+                    </StackPanel>
+                    <Border Grid.Column="0" Grid.Row="1"
+                            Background="{Binding ChildRailBrush, FallbackValue=#808080}"
+                            Width="3"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Stretch" />
+                    <ItemsPresenter Grid.Column="1" Grid.Row="1"
+                                    IsVisible="{Binding IsExpanded}" />
+                </Grid>
             </ControlTemplate>
         </Setter>
     </Style>

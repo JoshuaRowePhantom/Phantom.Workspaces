@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Media;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -33,6 +34,7 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.HasChildren));
             this.RaisePropertyChanged(nameof(this.NotHasChildren));
+            this.RaisePropertyChanged(nameof(this.ExpandArrow));
             this.ToggleExpandCommand.RaiseCanExecuteChanged();
         };
     }
@@ -93,6 +95,10 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
 
     public bool NotHasChildren => !this.HasChildren;
 
+    public string ExpandArrow => this.IsExpanded ? "▴" : "▾";
+
+    public IBrush ChildRailBrush { get; } = Brushes.Gray;
+
     public RelayCommand ToggleExpandCommand { get; }
 
     public object DetailContent { get; }
@@ -109,6 +115,7 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
                 return;
             }
 
+            this.RaisePropertyChanged(nameof(this.ExpandArrow));
         }
     }
 }

@@ -201,7 +201,7 @@ public sealed class MainWindowAxamlTests
             "<ItemsPresenter Grid.Column=\"1\"",
             sharedStylesContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "Margin=\"18,0,0,0\"",
             sharedStylesContent,
             StringComparison.Ordinal);
@@ -316,6 +316,45 @@ public sealed class MainWindowAxamlTests
         Assert.DoesNotContain(
             "<Setter Property=\"VerticalAlignment\" Value=\"Stretch\" />",
             typeBarStyle,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedStyles_EntityCardTreeControlTemplate_CentersChildRailInIndentColumn()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+
+        Assert.Contains(
+            "ColumnDefinitions=\"21,*\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Width=\"3\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HorizontalAlignment=\"Center\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FallbackValue=▼",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FallbackValue=#808080",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ColumnDefinitions=\"2,*\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ColumnDefinitions=\"20,*\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Margin=\"18,0,0,0\"",
+            sharedStylesContent,
             StringComparison.Ordinal);
     }
 

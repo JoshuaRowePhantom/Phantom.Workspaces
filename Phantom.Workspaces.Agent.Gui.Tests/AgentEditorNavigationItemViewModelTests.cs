@@ -94,4 +94,42 @@ public sealed class AgentEditorNavigationItemViewModelTests
         Assert.True(canExecuteChangedRaised);
         Assert.True(navItem.ToggleExpandCommand.CanExecute(null));
     }
+
+    [Fact]
+    public void ExpandArrow_UpdatesWhenExpandedChanges()
+    {
+        var navItem = new AgentEditorNavigationItemViewModel(
+            "test-id",
+            "Test Item",
+            null,
+            null,
+            null,
+            new object(),
+            []);
+
+        var propertyChangedEvents = new List<string?>();
+        navItem.PropertyChanged += (_, e) => propertyChangedEvents.Add(e.PropertyName);
+
+        Assert.Equal("▾", navItem.ExpandArrow);
+
+        navItem.IsExpanded = true;
+
+        Assert.Equal("▴", navItem.ExpandArrow);
+        Assert.Contains(nameof(navItem.ExpandArrow), propertyChangedEvents);
+    }
+
+    [Fact]
+    public void ChildRailBrush_IsAvailableForSharedTreeTemplate()
+    {
+        var navItem = new AgentEditorNavigationItemViewModel(
+            "test-id",
+            "Test Item",
+            null,
+            null,
+            null,
+            new object(),
+            []);
+
+        Assert.NotNull(navItem.ChildRailBrush);
+    }
 }
