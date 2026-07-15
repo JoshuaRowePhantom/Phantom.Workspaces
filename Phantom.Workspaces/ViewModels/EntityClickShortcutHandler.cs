@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 /// <remarks>
 /// This handler is deliberately <b>not</b> registered with the <see cref="ShortcutManager"/>: because
-/// <see cref="ShortcutManager.GetShortcutsFor"/> only consults registered handlers, leaving it
+/// <see cref="ShortcutManager.GetShortcutsForAsync"/> only consults registered handlers, leaving it
 /// unregistered guarantees it contributes no shortcut button. It is invoked directly from the entity
 /// card click wiring instead. See <c>docs/design/entity-click-shortcut-handler.md</c>.
 /// </remarks>

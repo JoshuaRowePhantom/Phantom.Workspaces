@@ -63,17 +63,17 @@ public sealed class EntityClickShortcutHandlerTests
     public async Task UnregisteredClickHandler_ContributesNoShortcutButton()
     {
         // The production wiring keeps the click handler out of the manager, so it never affects the
-        // buttons returned by GetShortcutsFor.
+        // buttons returned by GetShortcutsForAsync.
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var workspace = CreateEntity("workspace");
 
-        var before = shortcutManager.GetShortcutsFor(mainWindowViewModel, workspace).ToArray();
+        var before = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, workspace);
 
         // Constructing the click handler (without registering it) must not change the buttons.
         _ = new EntityClickShortcutHandler(["workspace"], shortcutManager);
-        var after = shortcutManager.GetShortcutsFor(mainWindowViewModel, workspace).ToArray();
+        var after = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, workspace);
 
         Assert.Equal(before, after);
         Assert.Contains(Shortcut.Open, after);
@@ -100,6 +100,20 @@ public sealed class EntityClickShortcutHandlerTests
                 Relationships = Array.Empty<EntitySnapshot>(),
             },
             deleteEntityAsync: null);
+    }
+
+    private static async Task<Shortcut[]> GetShortcutsAsync(
+        ShortcutManager shortcutManager,
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entity)
+    {
+        var shortcuts = new List<Shortcut>();
+        await foreach (var shortcut in shortcutManager.GetShortcutsForAsync(mainWindowViewModel, entity))
+        {
+            shortcuts.Add(shortcut);
+        }
+
+        return shortcuts.ToArray();
     }
 
     private sealed class RecordingOpenHandler : ShortcutHandler

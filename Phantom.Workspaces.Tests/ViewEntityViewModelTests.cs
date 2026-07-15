@@ -1,5 +1,6 @@
 using System;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -123,6 +124,25 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         Assert.True(child.HasParent);
     }
 
+    [Fact]
+    public async Task InitializeAsync_PopulatesShortcuts()
+    {
+        var entity = CreateTestEntity();
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler());
+        var viewModel = new ViewEntityViewModel(
+            entity,
+            this.mainWindowViewModel,
+            shortcutManager,
+            indentLevel: 0);
+
+        Assert.Empty(viewModel.Shortcuts);
+
+        await viewModel.InitializeAsync();
+
+        Assert.Contains(viewModel.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
+    }
+
     private ViewEntityViewModel CreateViewModel(bool isExpanded = true)
     {
         var entity = CreateTestEntity();
@@ -149,5 +169,23 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         };
 
         return new SubscribedEntityViewModel(snapshot);
+    }
+
+    private sealed class TestShortcutHandler : ShortcutHandler
+    {
+        public override async ValueTask<bool> ShouldApplyTo(
+            MainWindowViewModel mainWindowViewModel,
+            Shortcut shortcut,
+            SubscribedEntityViewModel entityViewModel)
+        {
+            await Task.Yield();
+            return shortcut == Shortcut.Open;
+        }
+
+        public override Task<bool> Handle(
+            MainWindowViewModel mainWindowViewModel,
+            Shortcut shortcut,
+            SubscribedEntityViewModel entityViewModel)
+            => Task.FromResult(true);
     }
 }

@@ -1103,7 +1103,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (associatedNoteEntity is not null)
         {
-            var viewEntity = this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true);
+            var viewEntity = await this.CreateViewEntityViewModelAsync(associatedNoteEntity, indentLevel: 0, isParentContext: true);
             next.Entities.Add(viewEntity);
             next.RootEntities.Add(viewEntity);
         }
@@ -1122,7 +1122,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    var viewEntity = this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0);
+                    var viewEntity = await this.CreateViewEntityViewModelAsync(subViewEntity, indentLevel: 0);
                     next.Entities.Add(viewEntity);
                     next.RootEntities.Add(viewEntity);
                     continue;
@@ -1367,7 +1367,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// existing interest relationship of that type targeting the entity, or creates one (targeting the
     /// entity, by the current user) when none exists.
     /// </summary>
-    private ViewEntityViewModel CreateViewEntityViewModel(
+    private async Task<ViewEntityViewModel> CreateViewEntityViewModelAsync(
         SubscribedEntityViewModel entity,
         int indentLevel,
         bool isExpanded = true,
@@ -1392,6 +1392,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             isExpanded: this.expandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
             isParentContext: isParentContext,
             fieldEditorFactory: this.fieldEditorFactory);
+        await vm.InitializeAsync();
 
         // Persist expansion state changes and trigger a view rebuild on toggle.
         var entityIdStr = entity.EntityId.ToString();
@@ -1443,11 +1444,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
         foreach (var node in hierarchy)
         {
-            this.AddHierarchyNode(population, node, indentLevel: 0);
+            await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
         }
     }
 
-    private void AddHierarchyNode(
+    private async Task AddHierarchyNodeAsync(
         ViewPopulationViewModel population,
         ViewHierarchyNode node,
         int indentLevel,
@@ -1456,7 +1457,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            vm = this.CreateViewEntityViewModel(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
+            vm = await this.CreateViewEntityViewModelAsync(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
             if (node.Children.Count > 0)
             {
                 vm.HasTraversedChildren = true;
@@ -1478,7 +1479,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             foreach (var child in node.Children)
             {
-                this.AddHierarchyNode(population, child, indentLevel + 1, vm ?? parent);
+                await this.AddHierarchyNodeAsync(population, child, indentLevel + 1, vm ?? parent);
             }
         }
     }

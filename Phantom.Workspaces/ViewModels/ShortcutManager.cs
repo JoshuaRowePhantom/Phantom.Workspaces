@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -11,7 +10,7 @@ public sealed class ShortcutManager
     // tool description in WorkspaceGuiContextProvider.EntityInvokeShortcutTool.
     private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.OpenWorkspace, Shortcut.Edit, Shortcut.Clone, Shortcut.Review, Shortcut.VsCode, Shortcut.VsCodeWeb, Shortcut.Delete, Shortcut.StartAgentSession, Shortcut.StartShell];
 
-    public IEnumerable<Shortcut> GetShortcutsFor(
+    public async IAsyncEnumerable<Shortcut> GetShortcutsForAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel entityViewModel)
     {
@@ -19,7 +18,7 @@ public sealed class ShortcutManager
         {
             foreach (var handler in this.shortcutHandlers)
             {
-                if (handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel).AsTask().GetAwaiter().GetResult())
+                if (await handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
                 {
                     yield return shortcut;
                     break;

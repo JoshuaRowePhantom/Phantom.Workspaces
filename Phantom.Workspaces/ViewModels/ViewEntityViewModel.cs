@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Media;
 
@@ -12,6 +13,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
 {
     private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
     private readonly EntityListNodeViewModel entityCardNode;
+    private readonly MainWindowViewModel mainWindowViewModel;
+    private readonly ShortcutManager shortcutManager;
     private bool hasTraversedChildren;
     private bool isExpanded = true;
     private IBrush? parentColorBrush;
@@ -26,6 +29,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
         FieldEditorFactory? fieldEditorFactory = null)
     {
         this.Entity = entity;
+        this.mainWindowViewModel = mainWindowViewModel;
+        this.shortcutManager = shortcutManager;
         this.Badges = new BadgesViewModel(entity.Badges);
         this.StatusBadges = new StatusBadgesViewModel(entity.StatusBadges);
         this.IndentLevel = indentLevel;
@@ -38,8 +43,6 @@ public sealed class ViewEntityViewModel : ViewModelBase
             cardViewName: EntityCardViewResolver.RawViewName,
             fieldEditorFactory: fieldEditorFactory);
         mainWindowViewModel.RegisterCardNode(entity, this.entityCardNode);
-        EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
-        this.entityCardNode.Card.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
         this.entityCardNode.Card.SetBadges(this.Badges);
         this.entityCardNode.Card.SetStatusBadges(this.StatusBadges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
@@ -47,6 +50,17 @@ public sealed class ViewEntityViewModel : ViewModelBase
             execute: _ => this.IsExpanded = !this.IsExpanded,
             canExecute: _ => this.HasTraversedChildren);
         this.RefreshCollections();
+    }
+
+    public async Task InitializeAsync()
+    {
+        await EntityShortcutViewModel.PopulateShortcutsAsync(
+            this.Shortcuts,
+            this.mainWindowViewModel,
+            this.Entity,
+            this.shortcutManager);
+        this.entityCardNode.Card.SetShortcuts(this.Shortcuts, this.mainWindowViewModel.ActivateShortcutCommand);
+        this.RaisePropertyChanged(nameof(this.HasShortcuts));
     }
 
     public SubscribedEntityViewModel Entity { get; }
