@@ -57,6 +57,50 @@ public sealed class AgentViewModelSlashCommandTests
         Assert.DoesNotContain(commands, cmd => cmd.Name.Equals("diagnostics", StringComparison.OrdinalIgnoreCase));
     }
 
+    // ── Issue #332: /help command routing tests ───────────────────────────────
+
+    [Fact]
+    public async Task RunSlashCommandAsync_HelpCommand_EnqueuesWithHelpRole()
+    {
+        // Arrange
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        // Act — run /help command
+        await viewModel.RunSlashCommandAsync("/help");
+
+        // Assert — history should contain an item with HelpChatRole
+        var helpItem = chat.History.FirstOrDefault(item => item.Role == AgentChatHistoryItem.HelpChatRole);
+        Assert.NotNull(helpItem);
+        Assert.NotEqual(AgentChatHistoryItem.DiagnosticChatRole, helpItem.Role);
+    }
+
+    [Fact]
+    public async Task RunSlashCommandAsync_OtherCommand_EnqueuesWithDiagnosticRole()
+    {
+        // Arrange
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        // Act — run /toggle command (or any other non-help command)
+        await viewModel.RunSlashCommandAsync("/toggle");
+
+        // Assert — history should contain an item with DiagnosticChatRole, not HelpChatRole
+        var diagnosticItem = chat.History.FirstOrDefault(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.NotNull(diagnosticItem);
+        Assert.DoesNotContain(chat.History, item => item.Role == AgentChatHistoryItem.HelpChatRole);
+    }
+
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson("""
         {

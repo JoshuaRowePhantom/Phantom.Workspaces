@@ -486,4 +486,56 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.DoesNotContain("id=\"running-items-inside\"", shell);
         Assert.DoesNotContain("id=\"subagent-items-inside\"", shell);
     }
+
+    // ── Issue #332: Help role rendering tests ──────────────────────────────────
+
+    [Fact]
+    public void RenderContent_HelpRole_RendersNonCollapsibleBlock()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("Help message text"),
+            includeReasoning: false,
+            isDiagnostic: false,
+            isHelp: true);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-help", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<details", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_DiagnosticRole_RendersCollapsible()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("Diagnostic message"),
+            includeReasoning: false,
+            isDiagnostic: true,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+        Assert.Contains("<details", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RoleClass_HelpRole_ReturnsChatHelpMessage()
+    {
+        var roleClass = ChatOutputHtmlRenderer.RoleClass("help");
+
+        Assert.Equal("chat-help-message", roleClass);
+    }
+
+    [Fact]
+    public void RenderMessage_HelpRole_ShowsHelpLabel()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "help",
+            [("msg-0-c0", "<div>help content</div>")]);
+
+        Assert.Contains("[help]", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("[diagnostic]", html, StringComparison.Ordinal);
+    }
 }

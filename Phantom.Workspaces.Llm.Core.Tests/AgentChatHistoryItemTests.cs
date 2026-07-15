@@ -40,4 +40,12 @@ public sealed class AgentChatHistoryItemTests
 
         Assert.Equal(expected, item.ParentToolCallId);
     }
+
+    // ── Issue #332: HelpChatRole tests ─────────────────────────────────────────
+
+    [Fact]
+    public void HelpChatRole_Value_IsHelp()
+    {
+        Assert.Equal("help", AgentChatHistoryItem.HelpChatRole.Value);
+    }
 }

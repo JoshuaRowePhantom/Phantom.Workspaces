@@ -1902,4 +1902,54 @@ public sealed class AgentChatTests
         Assert.Equal(entityDescription, chat.Description);
     }
 
+    // ── Issue #332: EnqueueHelpNote tests ─────────────────────────────────────
+
+    [Fact]
+    public async Task EnqueueHelpNote_AddsItemWithHelpRole()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        });
+
+        chat.EnqueueHelpNote("Help text goes here");
+
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count > 0,
+            "EnqueueHelpNote should add item to history",
+            CancellationToken.None);
+
+        var item = Assert.Single(chat.History);
+        Assert.Equal(AgentChatHistoryItem.HelpChatRole, item.Role);
+    }
+
+    [Fact]
+    public void EnqueueHelpNote_EmptyText_DoesNotAddItem()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chat = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        }).GetAwaiter().GetResult();
+
+        chat.EnqueueHelpNote("");
+        chat.EnqueueHelpNote("   ");
+        chat.EnqueueHelpNote(null!);
+
+        // Give a brief moment for any tasks to run
+        Thread.Sleep(50);
+
+        Assert.Empty(chat.History);
+    }
+
 }
