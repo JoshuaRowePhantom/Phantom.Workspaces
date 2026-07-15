@@ -1751,22 +1751,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnGoToTabAtIndex(int index)
     {
-        var pane = this.selectedWorkspacePane;
-        if (index < 0 || index >= pane.Tabs.Count)
+        var match = FindTabByAltShortcutIndex(this.ComputeGlobalTabOrder(), index);
+        if (match is null)
         {
             return;
         }
 
-        var tab = pane.Tabs[index];
-        var doc = this.dockFactory.GetDocumentForTab(tab.Id);
-        if (doc is null || pane.ContentLayout is null)
+        var (pane, doc) = match.Value;
+        if (pane.ContentLayout is null)
         {
             return;
         }
 
         var documentDock = this.FindDocumentDock(pane.ContentLayout);
-        if (documentDock is null) return;
+        if (documentDock is null)
+        {
+            return;
+        }
 
+        // Activate the pane that owns the badged tab (which may not be the currently
+        // selected pane), then activate the tab itself.
+        this.SelectedWorkspacePane = pane;
         this.dockFactory.SetActiveDockable(doc);
         this.dockFactory.SetFocusedDockable(documentDock, doc);
         this.notificationService.MarkRead(doc.Id);
@@ -2634,18 +2639,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    /// <summary>
+    /// Maps a zero-based tab position to the Alt-shortcut badge label: 0→"1" … 8→"9", 9→"0";
+    /// positions outside the 1–10 range (including negatives) receive no label.
+    /// This single mapping is shared by badge assignment and Alt-N resolution so the two
+    /// can never diverge.
+    /// </summary>
+    internal static string? AltShortcutLabelForIndex(int index) => index switch
+    {
+        < 0 => null,
+        < 9 => (index + 1).ToString(CultureInfo.InvariantCulture),
+        9 => "0",
+        _ => null,
+    };
+
     internal static void RefreshTabAltShortcutLabels(WorkspacePaneViewModel workspacePane, Func<string, WorkspaceDocument?> getDocumentForTab)
     {
         for (var i = 0; i < workspacePane.Tabs.Count; i++)
         {
             if (getDocumentForTab(workspacePane.Tabs[i].Id) is WorkspaceDocument doc)
             {
-                doc.EffectiveTabHeader.AltShortcutLabel = i switch
-                {
-                    < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
-                    9 => "0",
-                    _ => null,
-                };
+                doc.EffectiveTabHeader.AltShortcutLabel = AltShortcutLabelForIndex(i);
             }
         }
     }
@@ -2659,12 +2673,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var paneDoc = getPaneDocument(workspacePanes[i].Id);
             if (paneDoc is not null)
             {
-                paneDoc.EffectiveTabHeader.AltShortcutLabel = i switch
-                {
-                    < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
-                    9 => "0",
-                    _ => null,
-                };
+                paneDoc.EffectiveTabHeader.AltShortcutLabel = AltShortcutLabelForIndex(i);
             }
         }
     }
@@ -2673,73 +2682,89 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         => RefreshWorkspacePaneAltShortcutLabels(this.WorkspacePanes, this.dockFactory.GetPaneDocument);
 
     private void RefreshGlobalAltShortcutLabels()
+        => AssignGlobalAltShortcutLabels(this.ComputeGlobalTabOrder());
+
+    /// <summary>
+    /// Assigns sequential Alt-shortcut badge labels (1–9, then 0) to the documents in the
+    /// supplied global tab order. Documents beyond the tenth receive no label.
+    /// </summary>
+    internal static void AssignGlobalAltShortcutLabels(
+        IReadOnlyList<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> globalOrder)
     {
-        var activePanes = this.WorkspacePanes
-            .Where(p => !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal) 
-                     && p.ContentLayout is not null)
-            .ToList();
-        
-        var nonDefaultPanes = activePanes
-            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal))
-            .ToList();
-        
-        if (nonDefaultPanes.Count == 0 && activePanes.Count == 1)
+        for (var i = 0; i < globalOrder.Count; i++)
         {
-            RefreshTabAltShortcutLabels(activePanes[0], this.dockFactory.GetDocumentForTab);
-            return;
-        }
-        
-        if (nonDefaultPanes.Count == 1)
-        {
-            RefreshTabAltShortcutLabels(nonDefaultPanes[0], this.dockFactory.GetDocumentForTab);
-            return;
-        }
-        
-        var allTabs = ComputeGlobalTabOrder();
-        for (var i = 0; i < allTabs.Count; i++)
-        {
-            var doc = allTabs[i];
-            doc.EffectiveTabHeader.AltShortcutLabel = i switch
-            {
-                < 9 => (i + 1).ToString(CultureInfo.InvariantCulture),
-                9 => "0",
-                _ => null,
-            };
+            globalOrder[i].Document.EffectiveTabHeader.AltShortcutLabel = AltShortcutLabelForIndex(i);
         }
     }
 
-    private List<WorkspaceDocument> ComputeGlobalTabOrder()
+    /// <summary>
+    /// Resolves the tab whose displayed Alt-shortcut badge matches the requested zero-based
+    /// index. The badge label is the single source of truth, so this always returns the tab
+    /// that visually displays badge N regardless of which pane owns it.
+    /// </summary>
+    internal static (WorkspacePaneViewModel Pane, WorkspaceDocument Document)? FindTabByAltShortcutIndex(
+        IReadOnlyList<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> globalOrder,
+        int index)
     {
-        var allDocuments = new List<WorkspaceDocument>();
-        
-        foreach (var pane in this.WorkspacePanes)
+        var label = AltShortcutLabelForIndex(index);
+        if (label is null)
         {
-            if (string.Equals(pane.Id, "default-workspace", StringComparison.Ordinal))
-                continue;
-            
-            if (pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
-                continue;
-            
-            if (pane.ContentLayout is null) continue;
-            
-            var dock = FindDocumentDock(pane.ContentLayout);
-            if (dock?.VisibleDockables is null) continue;
-            
-            // Collect documents in the order they appear in the dock, but only include
-            // documents that correspond to a tab in the pane's Tabs collection. This filters
-            // out any placeholder or orphaned documents that may exist in the dock.
-            foreach (var dockable in dock.VisibleDockables)
+            return null;
+        }
+
+        foreach (var entry in globalOrder)
+        {
+            if (string.Equals(entry.Document.EffectiveTabHeader.AltShortcutLabel, label, StringComparison.Ordinal))
             {
-                if (dockable is WorkspaceDocument doc 
-                    && doc.Context is WorkspaceTabViewModel tab
-                    && pane.Tabs.Contains(tab))
+                return entry;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Enumerates the global tab order across the supplied panes: pane by pane, and within each
+    /// pane left-to-right in <see cref="WorkspacePaneViewModel.Tabs"/> order (the documented
+    /// visual source of truth, kept in sync with the dock's VisibleDockables).
+    /// </summary>
+    internal static List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> ComputeGlobalTabOrder(
+        IEnumerable<WorkspacePaneViewModel> panes,
+        Func<string, WorkspaceDocument?> getDocumentForTab)
+    {
+        var order = new List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)>();
+        foreach (var pane in panes)
+        {
+            foreach (var tab in pane.Tabs)
+            {
+                if (getDocumentForTab(tab.Id) is WorkspaceDocument doc)
                 {
-                    allDocuments.Add(doc);
+                    order.Add((pane, doc));
                 }
             }
         }
-        
-        return allDocuments;
+
+        return order;
+    }
+
+    private List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> ComputeGlobalTabOrder()
+    {
+        var activePanes = this.WorkspacePanes
+            .Where(p => !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal)
+                     && p.ContentLayout is not null)
+            .ToList();
+
+        var nonDefaultPanes = activePanes
+            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal))
+            .ToList();
+
+        // When only the placeholder default workspace is open, its tabs are the ones that
+        // receive badges; otherwise badges span the real (non-default) workspace panes.
+        var eligiblePanes = nonDefaultPanes.Count == 0 && activePanes.Count == 1
+            ? activePanes
+            : nonDefaultPanes;
+
+        return ComputeGlobalTabOrder(eligiblePanes, this.dockFactory.GetDocumentForTab);
     }
 
     private void PropagateBadgeVisibility(bool isAltHeld, bool isShiftHeld)

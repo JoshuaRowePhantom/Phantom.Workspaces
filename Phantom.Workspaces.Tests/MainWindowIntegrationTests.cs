@@ -4020,7 +4020,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_ThenAlt1_ActivatesTabInNewPane()
+    public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_ThenAltBadge_ActivatesTabInPaneByGlobalBadge()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -4085,22 +4085,46 @@ public sealed class MainWindowIntegrationTests
         dockFactory.SetActiveDockable(paneDoc2);
         Assert.Equal(pane2, viewModel.SelectedWorkspacePane);
 
-        // Alt+1 must activate the first tab of pane 2, not pane 1.
+        // Under the global badge model (#1011), Alt-N activates the tab that visually displays
+        // badge N regardless of which pane is selected. Resolve pane 2's first tab by the badge it
+        // actually displays and assert that pressing that Alt shortcut activates it cross-pane.
         var window = new MainWindow(viewModel);
         window.Show();
         try
         {
-            window.KeyPressQwerty(PhysicalKey.Digit1, RawInputModifiers.Alt);
-
             var documentDock = GetDocumentDock(viewModel);
             Assert.NotNull(documentDock);
-            Assert.Equal("adc-alt1-pane2-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+
+            var pane2aDoc = documentDock!.VisibleDockables!
+                .OfType<WorkspaceDocument>()
+                .First(d => d.Id == "adc-alt1-pane2-a");
+            var badge = pane2aDoc.EffectiveTabHeader.AltShortcutLabel;
+            Assert.False(string.IsNullOrEmpty(badge));
+
+            window.KeyPressQwerty(DigitKeyForAltBadge(badge!), RawInputModifiers.Alt);
+
+            Assert.Equal("adc-alt1-pane2-a", (documentDock.ActiveDockable as WorkspaceDocument)?.Id);
         }
         finally
         {
             await CloseWindowAsync(window);
         }
     }
+
+    private static PhysicalKey DigitKeyForAltBadge(string badge) => badge switch
+    {
+        "1" => PhysicalKey.Digit1,
+        "2" => PhysicalKey.Digit2,
+        "3" => PhysicalKey.Digit3,
+        "4" => PhysicalKey.Digit4,
+        "5" => PhysicalKey.Digit5,
+        "6" => PhysicalKey.Digit6,
+        "7" => PhysicalKey.Digit7,
+        "8" => PhysicalKey.Digit8,
+        "9" => PhysicalKey.Digit9,
+        "0" => PhysicalKey.Digit0,
+        _ => throw new ArgumentOutOfRangeException(nameof(badge), badge, "Unexpected Alt badge label."),
+    };
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_PushesNavigationEntry()
