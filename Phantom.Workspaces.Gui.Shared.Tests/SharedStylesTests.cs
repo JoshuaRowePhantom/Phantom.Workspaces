@@ -302,6 +302,47 @@ public sealed class SharedStylesTests
         Assert.Contains("Text=\"{ReflectionBinding GlyphText}\"", content, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EntityCardStyle_WhenRendered_StretchesAndHasNoFixedMaxWidth()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Styles", "SharedStyles.axaml");
+        var stylesContent = File.ReadAllText(stylesPath);
+        var cardRule = ExtractStyle(stylesContent, "Border.entity-card");
+
+        Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", cardRule, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxWidth", cardRule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardStyle_WhenHasChildren_BottomCornersAreSquare()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Styles", "SharedStyles.axaml");
+        var stylesContent = File.ReadAllText(stylesPath);
+
+        var branchRule = ExtractStyle(stylesContent, "Border.entity-card.branch-header");
+        var leafRule = ExtractStyle(stylesContent, "Border.entity-card.leaf");
+
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"6,6,0,0\" />", branchRule, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"6\" />", leafRule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_DoesNotOverrideSharedAlignmentOrCornerRadius()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var cardPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces", "Controls", "EntityCardControl.axaml");
+        var cardContent = File.ReadAllText(cardPath);
+        var borderStart = cardContent.IndexOf("<Border Classes=\"entity-card\"", StringComparison.Ordinal);
+        Assert.True(borderStart >= 0);
+        var borderEnd = cardContent.IndexOf("Tapped=\"OnEntityCardTapped\"", borderStart, StringComparison.Ordinal);
+        Assert.True(borderEnd > borderStart);
+        var rootBorder = cardContent[borderStart..borderEnd];
+
+        Assert.DoesNotContain("HorizontalAlignment=\"Left\"", rootBorder, StringComparison.Ordinal);
+        Assert.DoesNotContain("CornerRadius=\"6\"", rootBorder, StringComparison.Ordinal);
+    }
     private static DirectoryInfo FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -570,3 +611,4 @@ public sealed class SharedStylesTests
         Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
     }
 }
+

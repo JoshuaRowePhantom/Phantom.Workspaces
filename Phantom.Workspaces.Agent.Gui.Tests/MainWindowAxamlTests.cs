@@ -291,7 +291,7 @@ public sealed class MainWindowAxamlTests
     }
 
     [Fact]
-    public void EntityCardTreeTypeBar_IsConstrainedToCardHeaderAndCardsDoNotStretch()
+    public void EntityCardTreeTypeBar_IsConstrainedToCardHeaderAndCardsStretch()
     {
         var sharedStylesContent = ReadSharedStylesFile();
         var selector = "<Style Selector=\"TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar\">";
@@ -324,14 +324,14 @@ public sealed class MainWindowAxamlTests
         Assert.Contains("Classes=\"entity-card-tree-type-bar\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Grid.Column=\"1\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Grid.Column=\"2\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
 
         Assert.Contains(
-            "<Setter Property=\"HorizontalAlignment\" Value=\"Left\" />",
+            "<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />",
             sharedStylesContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "<Setter Property=\"MaxWidth\" Value=\"760\" />",
             sharedStylesContent,
             StringComparison.Ordinal);
@@ -1040,3 +1040,5 @@ public sealed class MainWindowAxamlTests
     }
 
 }
+
+

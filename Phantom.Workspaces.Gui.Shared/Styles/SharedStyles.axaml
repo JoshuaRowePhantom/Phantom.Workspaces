@@ -85,8 +85,7 @@
         <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
-        <Setter Property="HorizontalAlignment" Value="Left" />
-        <Setter Property="MaxWidth" Value="760" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="ClipToBounds" Value="True" />
     </Style>
     <Style Selector="Border.entity-card:pointerover">
@@ -105,6 +104,7 @@
     <Style Selector="StackPanel.entity-card-tree-item">
         <Setter Property="Spacing" Value="4" />
         <Setter Property="Margin" Value="0,0,0,6" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="StackPanel.entity-card-tree-item.detail">
         <Setter Property="Margin" Value="0,0,0,8" />
@@ -181,20 +181,25 @@
         <Setter Property="Template">
             <ControlTemplate>
                 <Grid RowDefinitions="Auto,Auto"
-                      ColumnDefinitions="21,*">
+                      ColumnDefinitions="21,*"
+                      HorizontalAlignment="Stretch">
                     <StackPanel Grid.Row="0" Grid.ColumnSpan="2"
-                                Classes="entity-card-tree-item">
+                                Classes="entity-card-tree-item"
+                                HorizontalAlignment="Stretch">
                         <ContentPresenter IsVisible="{Binding HasChildren}"
+                                          HorizontalAlignment="Stretch"
                                           Classes="branch-header"
                                           VerticalAlignment="Top"
                                           Content="{TemplateBinding Header}"
                                           ContentTemplate="{TemplateBinding HeaderTemplate}" />
                         <ContentPresenter IsVisible="{Binding NotHasChildren}"
+                                          HorizontalAlignment="Stretch"
                                           Classes="leaf"
                                           VerticalAlignment="Top"
                                           Content="{TemplateBinding Header}"
                                           ContentTemplate="{TemplateBinding HeaderTemplate}" />
                         <Border IsVisible="{Binding HasChildren}"
+                                HorizontalAlignment="Stretch"
                                 Classes="entity-card-expand-section branch-footer">
                             <Button Classes="entity-card-expand-button"
                                     Content="{Binding ExpandArrow, FallbackValue=▼}"
@@ -677,6 +682,7 @@
     </Style>
     <Style Selector="ProgressBar.agent-progress.bottom-gap">
         <Setter Property="Margin" Value="0,0,0,6" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="ItemsControl.agent-content-block">
         <Setter Property="Margin" Value="0,8,0,0" />
@@ -1139,3 +1145,5 @@
     </Style>
 
 </Styles>
+
+
