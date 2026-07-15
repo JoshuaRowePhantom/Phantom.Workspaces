@@ -20,6 +20,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     {
         public required AgentChat AgentChat { get; init; }
         public int RefCount { get; set; }
+        public TaskCompletionSource? DisposalCompletion { get; set; }
     }
 
     private readonly IAgentPersistenceStore _store;
@@ -50,103 +51,137 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         string? descriptionOverride = null,
         CancellationToken ct = default)
     {
-        await _gate.WaitAsync(ct);
-
-        AgentChat? newChat = null;
-        RunningAgentChatLease? existingLease = null;
-
-        try
+        while (true)
         {
-            if (_entries.TryGetValue(sessionId, out var existing))
-            {
-                existing.RefCount++;
-                existingLease = MakeLease(sessionId, existing.AgentChat);
-            }
-            else
-            {
-                var effectiveServices = services ?? _services;
+            Task? drain = null;
+            await _gate.WaitAsync(ct);
 
-                if (definition is not null)
+            AgentChat? newChat = null;
+            RunningAgentChatLease? existingLease = null;
+
+            try
+            {
+                if (_entries.TryGetValue(sessionId, out var existing))
                 {
-                    var definitionJson = MongoDB.Bson.BsonDocument.Parse(definition.ToJson());
-                    await _store.StoreAsync(new StoreRequestAgent
+                    if (existing.DisposalCompletion is not null)
                     {
-                        Agent = new PersistedAgent
-                        {
-                            AgentSessionId = sessionId.Value!,
-                            AgentDefinitionJson = definitionJson,
-                        }
-                    }, ct);
+                        drain = existing.DisposalCompletion.Task;
+                    }
+                    else
+                    {
+                        existing.RefCount++;
+                        existingLease = MakeLease(sessionId, existing.AgentChat);
+                    }
                 }
-
-                var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
+                else
                 {
-                    AgentDefinition = definition,
-                    AgentSessionId = sessionId.Value,
-                    AgentServices = effectiveServices,
-                    ConfiguredStore = _store,
-                    ClientOverride = effectiveServices.ChatClientOverride,
-                    DisplayNameOverride = displayNameOverride,
-                    DescriptionOverride = descriptionOverride,
-                    ForegroundScheduler = _foregroundScheduler,
-                    CancellationToken = ct,
-                }, ct);
-                _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
-                newChat = chat;
+                    var effectiveServices = services ?? _services;
+
+                    if (definition is not null)
+                    {
+                        var definitionJson = MongoDB.Bson.BsonDocument.Parse(definition.ToJson());
+                        await _store.StoreAsync(new StoreRequestAgent
+                        {
+                            Agent = new PersistedAgent
+                            {
+                                AgentSessionId = sessionId.Value!,
+                                AgentDefinitionJson = definitionJson,
+                            }
+                        }, ct);
+                    }
+
+                    var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
+                    {
+                        AgentDefinition = definition,
+                        AgentSessionId = sessionId.Value,
+                        AgentServices = effectiveServices,
+                        ConfiguredStore = _store,
+                        ClientOverride = effectiveServices.ChatClientOverride,
+                        DisplayNameOverride = displayNameOverride,
+                        DescriptionOverride = descriptionOverride,
+                        ForegroundScheduler = _foregroundScheduler,
+                        CancellationToken = ct,
+                    }, ct);
+                    _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
+                    newChat = chat;
+                }
             }
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            finally
+            {
+                _gate.Release();
+            }
 
-        if (existingLease is not null)
-            return existingLease;
+            if (drain is not null)
+            {
+                await drain.WaitAsync(ct).ConfigureAwait(false);
+                continue;
+            }
 
-        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
-        return MakeLease(sessionId, newChat!);
+            if (existingLease is not null)
+                return existingLease;
+
+            await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            return MakeLease(sessionId, newChat!);
+        }
     }
 
     public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
     {
-        await _gate.WaitAsync(ct);
-
-        AgentChat? newChat = null;
-        RunningAgentChatLease? existingLease = null;
-
-        try
+        while (true)
         {
-            if (_entries.TryGetValue(sessionId, out var existing))
+            Task? drain = null;
+            await _gate.WaitAsync(ct);
+
+            AgentChat? newChat = null;
+            RunningAgentChatLease? existingLease = null;
+
+            try
             {
-                existing.RefCount++;
-                existingLease = MakeLease(sessionId, existing.AgentChat);
-            }
-            else
-            {
-                var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
+                if (_entries.TryGetValue(sessionId, out var existing))
                 {
-                    AgentDefinition = null,
-                    AgentSessionId = sessionId.Value,
-                    AgentServices = _services,
-                    ConfiguredStore = _store,
-                    ClientOverride = _services.ChatClientOverride,
-                    ForegroundScheduler = _foregroundScheduler,
-                    CancellationToken = ct,
-                }, ct);
-                _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
-                newChat = chat;
+                    if (existing.DisposalCompletion is not null)
+                    {
+                        drain = existing.DisposalCompletion.Task;
+                    }
+                    else
+                    {
+                        existing.RefCount++;
+                        existingLease = MakeLease(sessionId, existing.AgentChat);
+                    }
+                }
+                else
+                {
+                    var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
+                    {
+                        AgentDefinition = null,
+                        AgentSessionId = sessionId.Value,
+                        AgentServices = _services,
+                        ConfiguredStore = _store,
+                        ClientOverride = _services.ChatClientOverride,
+                        ForegroundScheduler = _foregroundScheduler,
+                        CancellationToken = ct,
+                    }, ct);
+                    _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
+                    newChat = chat;
+                }
             }
-        }
-        finally
-        {
-            _gate.Release();
-        }
+            finally
+            {
+                _gate.Release();
+            }
 
-        if (existingLease is not null)
-            return existingLease;
+            if (drain is not null)
+            {
+                await drain.WaitAsync(ct).ConfigureAwait(false);
+                continue;
+            }
 
-        await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
-        return MakeLease(sessionId, newChat!);
+            if (existingLease is not null)
+                return existingLease;
+
+            await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            return MakeLease(sessionId, newChat!);
+        }
     }
 
     public async Task<RunningAgentChatLease> CreateAsync(
@@ -203,6 +238,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     private async ValueTask ReleaseAsync(AgentSessionId sessionId)
     {
         AgentChat? toDispose = null;
+        TaskCompletionSource? disposalCompletion = null;
 
         await _gate.WaitAsync();
         try
@@ -212,7 +248,9 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 entry.RefCount--;
                 if (entry.RefCount <= 0)
                 {
-                    _entries.Remove(sessionId);
+                    entry.RefCount = 0;
+                    entry.DisposalCompletion ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    disposalCompletion = entry.DisposalCompletion;
                     toDispose = entry.AgentChat;
                 }
             }
@@ -224,14 +262,31 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
         if (toDispose is not null)
         {
-            await PostToForegroundAsync(() =>
+            try
             {
-                var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
-                if (item is not null)
-                    _runningSessions.Remove(item);
-            });
+                await PostToForegroundAsync(() =>
+                {
+                    var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
+                    if (item is not null)
+                        _runningSessions.Remove(item);
+                });
 
-            await toDispose.DisposeAsync();
+                await toDispose.DisposeAsync();
+            }
+            finally
+            {
+                await _gate.WaitAsync();
+                try
+                {
+                    _entries.Remove(sessionId);
+                }
+                finally
+                {
+                    _gate.Release();
+                }
+
+                disposalCompletion?.TrySetResult();
+            }
         }
     }
 

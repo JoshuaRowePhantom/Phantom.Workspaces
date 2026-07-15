@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.Gui.Shared.Utilities;
 /// begins are disposed immediately. <see cref="DisposeAsync"/> completes only after every
 /// registered item has finished disposing.
 /// </summary>
-internal sealed class AsyncDisposableCollection : IAsyncDisposable
+public sealed class AsyncDisposableCollection : IAsyncDisposable
 {
     // Starts at 1 — the "close" token held by DisposeAsync itself.
     private int _pending = 1;

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
@@ -28,6 +29,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
+    private readonly AsyncDisposableCollection leaseDisposables = new();
     private RunningAgentChatLease? lease;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
 
@@ -63,7 +65,11 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public RunningAgentChatLease? Lease => this.lease;
 
-    public void SetLease(RunningAgentChatLease value) => this.lease = value;
+    public void SetLease(RunningAgentChatLease value)
+    {
+        this.lease = value;
+        this.leaseDisposables.Add(value);
+    }
 
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
@@ -284,12 +290,18 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             if (this.lease is not null)
             {
                 await this.agent.DisposeViewResourcesAsync();
-                await this.lease.DisposeAsync();
+                await this.leaseDisposables.DisposeAsync();
+                this.lease = null;
             }
             else
             {
                 await this.agent.DisposeAsync();
             }
+        }
+        else
+        {
+            await this.leaseDisposables.DisposeAsync();
+            this.lease = null;
         }
 
         this.loggerFactory?.Dispose();

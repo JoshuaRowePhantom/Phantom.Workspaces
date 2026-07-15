@@ -1708,7 +1708,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (tab is null) return;
         // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
         pane.Tabs.Remove(tab);
-        DisposeWorkspaceTab(tab);
+        _ = DisposeWorkspaceTabAsync(tab);
     }
 
     private void OnCycleTab(int delta)
@@ -2091,7 +2091,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             // Already exists, just activate it
             if (!ReferenceEquals(existingDocument.TabViewModel, tab))
             {
-                DisposeWorkspaceTab(tab);
+                _ = DisposeWorkspaceTabAsync(tab);
             }
             if (focus)
             {
@@ -2225,7 +2225,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        DisposeWorkspaceTab(oldTab);
+        await DisposeWorkspaceTabAsync(oldTab);
     }
 
     public void CloseTab(WorkspaceTabViewModel tab)
@@ -2263,7 +2263,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
             }
 
-            DisposeWorkspaceTab(tab);
+            _ = DisposeWorkspaceTabAsync(tab);
             return;
         }
     }
@@ -2336,7 +2336,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
             }
 
-            DisposeWorkspaceTab(tab);
+            _ = DisposeWorkspaceTabAsync(tab);
             return true;
         }
 
@@ -2813,10 +2813,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return null;
     }
 
-    private static void DisposeWorkspaceTab(
+    private static async Task DisposeWorkspaceTabAsync(
         WorkspaceTabViewModel workspaceTab)
     {
-        _ = workspaceTab.DisposeAsync();
+        await workspaceTab.DisposeAsync();
     }
 
     public void OnDockableTabClosed(WorkspaceTabViewModel tabVm)
@@ -2856,7 +2856,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 break;
             }
         }
-        DisposeWorkspaceTab(tabVm);
+        _ = DisposeWorkspaceTabAsync(tabVm);
     }
 
     private async Task OpenEntityBrowserTabAsync()
@@ -3044,7 +3044,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
                     {
                         workspaceClosed = true;
-                        DisposeWorkspaceTab(workspaceTab);
+                        _ = DisposeWorkspaceTabAsync(workspaceTab);
                         continue;
                     }
 
@@ -3078,7 +3078,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 if (!this.WorkspacePanes.Contains(workspacePane))
                 {
-                    DisposeWorkspaceTab(defaultTab);
+                    _ = DisposeWorkspaceTabAsync(defaultTab);
                     return;
                 }
 
@@ -3171,7 +3171,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
                 {
                     workspaceClosed = true;
-                    DisposeWorkspaceTab(tabVm);
+                    _ = DisposeWorkspaceTabAsync(tabVm);
                     continue;
                 }
 
@@ -4247,6 +4247,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.webHost.DisposeAsync();
         }
 
+        foreach (var pane in this.WorkspacePanes)
+        {
+            foreach (var tab in pane.Tabs.ToArray())
+            {
+                await DisposeWorkspaceTabAsync(tab);
+            }
+        }
+
         this.ConnectionStatus?.Dispose();
         this.interestCatalog?.Dispose();
         this.entityTypeCatalog?.Dispose();
@@ -4259,4 +4267,5 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await base.DisposeAsync();
     }
 }
+
 
