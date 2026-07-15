@@ -267,6 +267,58 @@ public sealed class MainWindowAxamlTests
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
     }
 
+    [Fact]
+    public void EntityCardTreeTemplate_DoesNotWrapEntityCardControlInSecondCardBorder()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+
+        Assert.DoesNotContain(
+            "Classes=\"entity-card branch-header\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Classes=\"entity-card leaf\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"branch-header\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"leaf\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeTypeBar_IsConstrainedToHeaderArea()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+        var selector = "<Style Selector=\"TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar\">";
+        var styleStart = sharedStylesContent.IndexOf(selector, StringComparison.Ordinal);
+        Assert.True(styleStart >= 0);
+        var styleEnd = sharedStylesContent.IndexOf("</Style>", styleStart, StringComparison.Ordinal);
+        Assert.True(styleEnd > styleStart);
+        var typeBarStyle = sharedStylesContent[styleStart..(styleEnd + "</Style>".Length)];
+
+        Assert.Contains(
+            selector,
+            typeBarStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"VerticalAlignment\" Value=\"Top\" />",
+            typeBarStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"Height\" Value=\"42\" />",
+            typeBarStyle,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<Setter Property=\"VerticalAlignment\" Value=\"Stretch\" />",
+            typeBarStyle,
+            StringComparison.Ordinal);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_CanCollapseAndUncollapseNavigationPane()
     {

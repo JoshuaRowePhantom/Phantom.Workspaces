@@ -171,22 +171,21 @@
     </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar">
         <Setter Property="CornerRadius" Value="2" />
-        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="VerticalAlignment" Value="Top" />
+        <Setter Property="Height" Value="42" />
     </Style>
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
         <Setter Property="Template">
             <ControlTemplate>
                 <StackPanel Classes="entity-card-tree-item">
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card branch-header">
-                        <ContentPresenter Content="{TemplateBinding Header}"
-                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    </Border>
-                    <Border IsVisible="{Binding NotHasChildren}"
-                            Classes="entity-card leaf">
-                        <ContentPresenter Content="{TemplateBinding Header}"
-                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    </Border>
+                    <ContentPresenter IsVisible="{Binding HasChildren}"
+                                      Classes="branch-header"
+                                      Content="{TemplateBinding Header}"
+                                      ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                    <ContentPresenter IsVisible="{Binding NotHasChildren}"
+                                      Classes="leaf"
+                                      Content="{TemplateBinding Header}"
+                                      ContentTemplate="{TemplateBinding HeaderTemplate}" />
                     <Border IsVisible="{Binding HasChildren}"
                             Classes="entity-card-expand-section branch-footer">
                         <Button Classes="entity-card-expand-button"
@@ -211,7 +210,7 @@
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
         <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
     </Style>
-    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky Border.entity-card.branch-header">
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ContentPresenter.branch-header">
         <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
     </Style>
 
