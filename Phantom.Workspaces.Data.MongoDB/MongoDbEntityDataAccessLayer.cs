@@ -157,7 +157,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             {
                 Data = nextDataBson,
                 ParticipantIds = participantIds,
-                NameParentPrefixes = nameParentPrefixes,
+                NameParentPrefixes = new BsonArray(nameParentPrefixes.Select(prefix => (BsonValue)new BsonArray(prefix.Select(component => (BsonValue)new BsonString(component))))),
                 Embedding = embedding,
                 IsDeleted = !hasData,
                 ModifiedTimeUtc = nowUtc,
@@ -227,6 +227,10 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             .Find(new BsonDocumentFilterDefinition<MongoDbEntityDocument>(entityFilterDocument))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
+        foreach (var document in entityDocuments)
+        {
+            EnsureBootstrapVersion(document);
+        }
 
         // If relationships are requested, also load relationship documents not already in the
         // entity result set so that ResolveRelationshipsForEntity can find them.
@@ -246,6 +250,10 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 .Find(relationshipDocFilter)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
+            foreach (var document in relationshipDocs)
+            {
+                EnsureBootstrapVersion(document);
+            }
             var extra = relationshipDocs.Where(d => !loadedIds.Contains(d.Id)).ToList();
             if (extra.Count > 0)
             {
@@ -705,6 +713,23 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 },
             };
 
+            var hasTypedVersions = doc.TryGetValue("Versions", out var versionsValue)
+                && versionsValue.IsBsonArray
+                && versionsValue.AsBsonArray.Count > 0;
+            if (!hasTypedVersions && data is not null)
+            {
+                update["$set"].AsBsonDocument["Versions"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        { "VersionId", ReadVersionId(current) },
+                        { "TimestampUtc", ReadTimestampUtc(current) },
+                        { "data", data.DeepClone() },
+                    },
+                };
+                update["$unset"].AsBsonDocument["versions"] = "";
+            }
+
             writes.Add(new UpdateOneModel<BsonDocument>(
                 new BsonDocumentFilterDefinition<BsonDocument>(new BsonDocument("_id", id)),
                 new BsonDocumentUpdateDefinition<BsonDocument>(update)));
@@ -714,6 +739,42 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             await collection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private static ObjectId ReadVersionId(BsonDocument current)
+    {
+        if (current.TryGetValue("modified-version", out var value))
+        {
+            if (value.IsObjectId)
+            {
+                return value.AsObjectId;
+            }
+
+            if (value.IsString && ObjectId.TryParse(value.AsString, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return ObjectId.GenerateNewId();
+    }
+
+    private static DateTime ReadTimestampUtc(BsonDocument current)
+    {
+        if (current.TryGetValue("modified-time-utc", out var value))
+        {
+            if (value.IsValidDateTime)
+            {
+                return value.ToUniversalTime();
+            }
+
+            if (value.IsString && DateTime.TryParse(value.AsString, out var parsed))
+            {
+                return parsed.ToUniversalTime();
+            }
+        }
+
+        return DateTime.UtcNow;
     }
 
     /// <summary>
@@ -1666,6 +1727,25 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             .LastOrDefault();
     }
 
+    private static void EnsureBootstrapVersion(MongoDbEntityDocument document)
+    {
+        if (document.Versions.Count > 0 || document.Current?.Data is null)
+        {
+            return;
+        }
+
+        document.Versions.Add(new MongoDbEntityVersion
+        {
+            VersionId = ObjectId.TryParse(document.Current.ModifiedVersion, out var parsed)
+                ? parsed
+                : ObjectId.GenerateNewId(),
+            TimestampUtc = document.Current.ModifiedTimeUtc == default
+                ? DateTime.UtcNow
+                : document.Current.ModifiedTimeUtc,
+            Data = document.Current.Data,
+        });
+    }
+
     private static EntityId? ResolveEntityId(
         EntityChange change)
     {
@@ -1983,6 +2063,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         };
     }
 
+    [BsonIgnoreExtraElements]
     private sealed class MongoDbEntityDocument
     {
         [BsonId]
@@ -2020,7 +2101,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         /// multikey index on <c>current.name-parent-prefixes</c>.
         /// </summary>
         [BsonElement("name-parent-prefixes")]
-        public string[][] NameParentPrefixes { get; init; } = [];
+        public BsonArray NameParentPrefixes { get; init; } = [];
 
         [BsonElement("embedding")]
         [BsonIgnoreIfNull]
