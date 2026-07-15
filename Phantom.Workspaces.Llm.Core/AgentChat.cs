@@ -559,7 +559,13 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             [
                 new AgentInputItem
                 {
-                    Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
+                    Messages =
+                    [
+                        new ChatMessage(ChatRole.User, contents.ToList())
+                        {
+                            CreatedAt = DateTimeOffset.UtcNow,
+                        },
+                    ],
                 },
             ]);
     }
