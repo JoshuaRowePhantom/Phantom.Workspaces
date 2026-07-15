@@ -390,7 +390,7 @@ public sealed class ToolVisualizationTests
 
         Assert.NotNull(html);
         Assert.Contains("class=\"tool-json-key\">description</span>: <span class=\"tool-json-plaintext\">read file</span>", html, StringComparison.Ordinal);
-        Assert.Contains("class=\"tool-json-key\">       path</span>: <span class=\"tool-json-plaintext\">README.md</span>", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-json-key\">path       </span>: <span class=\"tool-json-plaintext\">README.md</span>", html, StringComparison.Ordinal);
     }
 
     // --- Helpers ---

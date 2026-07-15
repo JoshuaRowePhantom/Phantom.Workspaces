@@ -513,7 +513,7 @@ internal static class ChatOutputHtmlRenderer
         {
             builder.Append(indent);
             builder.Append("<span class=\"tool-json-key\">")
-                .Append(HtmlEscape(property.Name.PadLeft(maxKeyLength)))
+                .Append(HtmlEscape(property.Name.PadRight(maxKeyLength)))
                 .Append("</span>: ");
 
             var renderedValue = RenderJsonValue(property.Value, indentLevel + 1, valueColumn);

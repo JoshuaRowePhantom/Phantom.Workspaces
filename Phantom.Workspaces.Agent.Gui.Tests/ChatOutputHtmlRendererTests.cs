@@ -417,14 +417,82 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void RenderJsonValue_Object_KeysRightAligned()
+    public void RenderJsonValue_Object_KeysLeftAlignedAndColonsAligned()
     {
         using var document = JsonDocument.Parse("""{"a":1,"longer":2}""");
 
         var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
 
-        Assert.Contains("<span class=\"tool-json-key\">     a</span>: 1", html, StringComparison.Ordinal);
+        // Keys are left-aligned (text starts immediately after the span tag) and
+        // padded on the right so the colons still line up at the same column.
+        Assert.Contains("<span class=\"tool-json-key\">a     </span>: 1", html, StringComparison.Ordinal);
         Assert.Contains("<span class=\"tool-json-key\">longer</span>: 2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_FlatObjectWithVariableLengthKeys_KeyTextLeftEdgesAlignAtSameColumn()
+    {
+        using var document = JsonDocument.Parse("""{"a":1,"longKey":2}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        const string keyTagOpen = "<span class=\"tool-json-key\">";
+        var lines = html.Split('\n').Where(line => line.Contains(keyTagOpen, StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, lines.Count);
+        // The key text begins immediately after the opening span tag on every line,
+        // so all sibling keys share the same left edge (no staircase).
+        var leftEdges = lines
+            .Select(line => line.IndexOf(keyTagOpen, StringComparison.Ordinal) + keyTagOpen.Length)
+            .Distinct()
+            .ToList();
+        Assert.Single(leftEdges);
+    }
+
+    [Fact]
+    public void RenderJsonValue_SiblingKeysAtSameDepth_AllHaveIdenticalColonOffset()
+    {
+        using var document = JsonDocument.Parse(
+            """{"entityId":"x","concurrencyTag":"y","names":"z"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        var colonOffsets = html.Split('\n')
+            .Where(line => line.Contains("</span>: ", StringComparison.Ordinal))
+            .Select(line => line.IndexOf("</span>: ", StringComparison.Ordinal))
+            .Distinct()
+            .ToList();
+        Assert.Single(colonOffsets);
+    }
+
+    [Fact]
+    public void RenderJsonValue_NestedObject_InnerKeysIndentedByExactlyOneLevel()
+    {
+        using var document = JsonDocument.Parse("""{"outer":{"inner":1}}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("\n  <span class=\"tool-json-key\">inner</span>: 1", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_ArrayItems_DashPrefixConsistentlyIndented()
+    {
+        using var document = JsonDocument.Parse("""["alpha","beta","gamma"]""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 1);
+
+        var lines = html.Split('\n');
+        Assert.All(lines, line => Assert.StartsWith("  - ", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RenderJsonValue_NestedObjectInsideArray_KeysIndentedTwoLevelsBelowArray()
+    {
+        using var document = JsonDocument.Parse("""[{"key":"val"}]""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("- \n  <span class=\"tool-json-key\">key</span>: ", html, StringComparison.Ordinal);
     }
 
     [Fact]
