@@ -202,11 +202,19 @@ public sealed class MainWindowAxamlTests
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Margin=\"18,0,0,0\"",
+            "Grid.Row=\"1\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
             "IsVisible=\"{Binding IsExpanded}\" />",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Content=\"{Binding ExpandArrow, FallbackValue=▾}\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Background=\"{Binding ChildRailBrush, FallbackValue=#808080}\"",
             sharedStylesContent,
             StringComparison.Ordinal);
     }

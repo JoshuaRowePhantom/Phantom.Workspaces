@@ -112,7 +112,7 @@
     <Style Selector="Border.entity-card.leaf">
         <Setter Property="CornerRadius" Value="6" />
     </Style>
-    <Style Selector="StackPanel.sticky-pinned > Border.entity-card">
+    <Style Selector="ContentPresenter.sticky-pinned Border.entity-card">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
         <Setter Property="Opacity" Value="0.92" />
@@ -178,29 +178,49 @@
         <Setter Property="Template">
             <ControlTemplate>
                 <StackPanel Classes="entity-card-tree-item">
-                    <ContentPresenter IsVisible="{Binding HasChildren}"
-                                      Classes="branch-header"
-                                      Content="{TemplateBinding Header}"
-                                      ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    <ContentPresenter IsVisible="{Binding NotHasChildren}"
-                                      Classes="leaf"
-                                      Content="{TemplateBinding Header}"
-                                      ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card-expand-section branch-footer">
-                        <Button Classes="entity-card-expand-button"
-                                Content="{Binding ExpandArrow}"
-                                HorizontalAlignment="Stretch"
-                                HorizontalContentAlignment="Center"
-                                Command="{Binding ToggleExpandCommand}" />
-                    </Border>
-                    <Grid ColumnDefinitions="2,*"
-                          IsVisible="{Binding HasChildren}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="20" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Row="0"
+                                    Grid.ColumnSpan="2"
+                                    VerticalAlignment="Top">
+                            <Border IsVisible="{Binding HasChildren}"
+                                    Classes="entity-card branch-header">
+                                <ContentPresenter Classes="branch-header"
+                                                  VerticalAlignment="Top"
+                                                  Content="{TemplateBinding Header}"
+                                                  ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                            </Border>
+                            <Border IsVisible="{Binding NotHasChildren}"
+                                    Classes="entity-card leaf">
+                                <ContentPresenter Classes="leaf"
+                                                  VerticalAlignment="Top"
+                                                  Content="{TemplateBinding Header}"
+                                                  ContentTemplate="{TemplateBinding HeaderTemplate}" />
+                            </Border>
+                            <Border IsVisible="{Binding HasChildren}"
+                                    Classes="entity-card-expand-section branch-footer">
+                                <Button Classes="entity-card-expand-button"
+                                        Content="{Binding ExpandArrow, FallbackValue=▾}"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Command="{Binding ToggleExpandCommand}" />
+                            </Border>
+                        </StackPanel>
                         <Border Grid.Column="0"
-                                Background="{Binding ChildRailBrush}"
+                                Grid.Row="1"
+                                Width="2"
+                                HorizontalAlignment="Center"
+                                Background="{Binding ChildRailBrush, FallbackValue=#808080}"
                                 VerticalAlignment="Stretch" />
                         <ItemsPresenter Grid.Column="1"
-                                        Margin="18,0,0,0"
+                                        Grid.Row="1"
                                         IsVisible="{Binding IsExpanded}" />
                     </Grid>
                 </StackPanel>
