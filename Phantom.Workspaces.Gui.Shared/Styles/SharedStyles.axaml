@@ -171,8 +171,7 @@
     </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar">
         <Setter Property="CornerRadius" Value="2" />
-        <Setter Property="VerticalAlignment" Value="Top" />
-        <Setter Property="Height" Value="42" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
         <Setter Property="Template">

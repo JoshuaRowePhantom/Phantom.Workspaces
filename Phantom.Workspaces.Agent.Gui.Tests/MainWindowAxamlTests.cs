@@ -276,32 +276,34 @@ public sealed class MainWindowAxamlTests
     }
 
     [Fact]
-    public void EntityCardTreeTemplate_DoesNotWrapEntityCardControlInSecondCardBorder()
+    public void EntityCardTreeTemplate_ProvidesSingleOuterCardBorder()
     {
         var sharedStylesContent = ReadSharedStylesFile();
+        var entityCardControlContent = ReadMainAppFile(Path.Combine("Controls", "EntityCardControl.axaml"));
 
-        Assert.DoesNotContain(
+        Assert.Contains(
             "Classes=\"entity-card branch-header\"",
             sharedStylesContent,
             StringComparison.Ordinal);
-        Assert.DoesNotContain(
+        Assert.Contains(
             "Classes=\"entity-card leaf\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Classes=\"branch-header\"",
-            sharedStylesContent,
+            "Tapped=\"OnEntityCardTapped\"",
+            entityCardControlContent,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "Classes=\"leaf\"",
-            sharedStylesContent,
+        Assert.DoesNotContain(
+            "<Border Classes=\"entity-card\"",
+            entityCardControlContent,
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public void EntityCardTreeTypeBar_IsConstrainedToHeaderArea()
+    public void EntityCardTreeTypeBar_IsInsideHeaderCardAndStretches()
     {
         var sharedStylesContent = ReadSharedStylesFile();
+        var templatesContent = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
         var selector = "<Style Selector=\"TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar\">";
         var styleStart = sharedStylesContent.IndexOf(selector, StringComparison.Ordinal);
         Assert.True(styleStart >= 0);
@@ -314,16 +316,51 @@ public sealed class MainWindowAxamlTests
             typeBarStyle,
             StringComparison.Ordinal);
         Assert.Contains(
-            "<Setter Property=\"VerticalAlignment\" Value=\"Top\" />",
+            "<Setter Property=\"VerticalAlignment\" Value=\"Stretch\" />",
             typeBarStyle,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "<Setter Property=\"Height\" Value=\"42\" />",
             typeBarStyle,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
-            "<Setter Property=\"VerticalAlignment\" Value=\"Stretch\" />",
-            typeBarStyle,
+            "ColumnDefinitions=\"Auto,*\"",
+            templatesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Panel IsVisible=\"{Binding !HasParent}\">",
+            templatesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HorizontalAlignment=\"Left\"",
+            templatesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Margin=\"8,0,0,0\"",
+            templatesContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedStyles_EntityCardTreeControlTemplate_CentersChildRailInIndentColumn()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+
+        Assert.Contains(
+            "<ColumnDefinition Width=\"20\" />",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Width=\"2\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HorizontalAlignment=\"Center\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Margin=\"18,0,0,0\"",
+            sharedStylesContent,
             StringComparison.Ordinal);
     }
 

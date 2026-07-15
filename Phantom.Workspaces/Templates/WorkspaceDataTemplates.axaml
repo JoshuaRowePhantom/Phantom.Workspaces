@@ -13,21 +13,25 @@
             <Border Classes="entity-card-tree-parent-bar"
                     BorderBrush="{Binding ParentColorBrush}"
                     IsVisible="{Binding HasParent}">
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                <Panel>
+                    <entityControls:EntityCardControl Margin="8,0,0,0"
+                                                       DataContext="{Binding Card}" />
                     <Border Width="4"
                             Classes="entity-card-tree-type-bar"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Stretch"
                             Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}" />
-                    <entityControls:EntityCardControl Grid.Column="1" DataContext="{Binding Card}" />
-                </Grid>
+                </Panel>
             </Border>
-            <Grid ColumnDefinitions="Auto,*"
-                  ColumnSpacing="6"
-                  IsVisible="{Binding !HasParent}">
+            <Panel IsVisible="{Binding !HasParent}">
+                <entityControls:EntityCardControl Margin="8,0,0,0"
+                                                   DataContext="{Binding Card}" />
                 <Border Width="4"
                         Classes="entity-card-tree-type-bar"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Stretch"
                         Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}" />
-                <entityControls:EntityCardControl Grid.Column="1" DataContext="{Binding Card}" />
-            </Grid>
+            </Panel>
         </Panel>
     </TreeDataTemplate>
 
