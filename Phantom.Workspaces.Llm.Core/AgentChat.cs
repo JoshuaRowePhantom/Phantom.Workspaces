@@ -1499,7 +1499,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             new AgentChatHistoryItem
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                                Contents = [new ErrorContent($"Provider error: {ex.Message}")],
+                                Contents = [new ErrorContent($"Provider error: {ex}")],
                                 Timestamp = DateTimeOffset.UtcNow,
                             },
                         ])
@@ -1916,7 +1916,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
+                Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex}") },
                 Timestamp = DateTimeOffset.UtcNow,
             });
             this.CompleteRunningItem(startupRunningItem, true);
@@ -2145,7 +2145,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
         catch (Exception ex)
         {
-            var errorMessage = $"Failed to open MCP server '{displayName}': {ex.Message}";
+            var errorMessage = $"Failed to open MCP server '{displayName}': {ex}";
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
