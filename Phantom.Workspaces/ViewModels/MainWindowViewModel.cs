@@ -1562,7 +1562,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Phase 1: create skeleton workspace pane and show it immediately
-        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand, this.SaveWorkspacePaneAsync);
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
         this.SubscribeToInnerDockChanges(workspacePane);
 
@@ -2434,23 +2434,94 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         using var doc = JsonDocument.Parse(updatedJson);
         var updatedData = doc.RootElement.Clone();
 
+        var changes = new List<EntityChange>
+        {
+            new()
+            {
+                EntityId = workspacePane.Entity.EntityId,
+                ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
+                Data = updatedData,
+                EntityChangeMode = EntityChangeMode.Replace,
+            },
+        };
+        AppendWorkspaceTabRelationshipChanges(workspacePane, changes);
+
         return this.entityBroker.UpdateAsync(new UpdateRequest
         {
             UpdateMetadata = new UpdateMetadata
             {
                 Comment = new Markdown { Text = "Update workspace tabs" },
             },
-            Changes =
-            [
-                new EntityChange
-                {
-                    EntityId = workspacePane.Entity.EntityId,
-                    ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
-                    Data = updatedData,
-                    EntityChangeMode = EntityChangeMode.Replace,
-                },
-            ],
+            Changes = changes,
         });
+    }
+
+    private Task SaveWorkspacePaneAsync(WorkspacePaneViewModel workspacePane) =>
+        this.WriteBackWorkspaceTabs(workspacePane);
+
+    private static void AppendWorkspaceTabRelationshipChanges(
+        WorkspacePaneViewModel workspacePane,
+        ICollection<EntityChange> changes)
+    {
+        var liveEntityIds = workspacePane.Tabs
+            .Select(static tab => tab.Entity?.EntityId)
+            .OfType<EntityId>()
+            .Distinct()
+            .ToHashSet();
+
+        var existingByTarget = new Dictionary<EntityId, EntitySnapshot>();
+        foreach (var relationship in workspacePane.Entity.Relationships)
+        {
+            if (relationship.Data is not JsonElement data
+                || !EntityPresentation.IsEntityType(relationship, "related")
+                || !data.TryGetProperty("note", out var note)
+                || note.ValueKind != JsonValueKind.String
+                || !string.Equals(note.GetString(), "Workspace save records the live entity tabs associated with this workspace.", StringComparison.Ordinal)
+                || !RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(data, out var participantIds)
+                || !participantIds.Contains(workspacePane.Entity.EntityId))
+            {
+                continue;
+            }
+
+            var targetId = participantIds.FirstOrDefault(id => id != workspacePane.Entity.EntityId);
+            if (targetId != default)
+            {
+                existingByTarget[targetId] = relationship;
+            }
+        }
+
+        foreach (var removed in existingByTarget.Where(pair => !liveEntityIds.Contains(pair.Key)))
+        {
+            changes.Add(new EntityChange
+            {
+                EntityId = removed.Value.EntityId,
+                ConcurrencyTag = removed.Value.ConcurrencyTag,
+                Data = null,
+                EntityChangeMode = EntityChangeMode.Replace,
+            });
+        }
+
+        foreach (var added in liveEntityIds.Where(id => !existingByTarget.ContainsKey(id)))
+        {
+            var relationshipId = Guid.NewGuid();
+            var relationshipData = new JsonObject
+            {
+                ["entity-id"] = relationshipId.ToString(),
+                ["entity-types"] = new JsonArray("entity", "relationship", "related"),
+                ["participants"] = new JsonObject
+                {
+                    ["entities"] = new JsonArray(workspacePane.Entity.EntityId.Value.ToString(), added.Value.ToString()),
+                },
+                ["note"] = "Workspace save records the live entity tabs associated with this workspace.",
+            };
+            using var doc = JsonDocument.Parse(relationshipData.ToJsonString());
+            changes.Add(new EntityChange
+            {
+                EntityId = new EntityId(relationshipId),
+                Data = doc.RootElement.Clone(),
+                EntityChangeMode = EntityChangeMode.Replace,
+            });
+        }
     }
 
     /// <summary>
@@ -3267,7 +3338,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SubscribedEntityViewModel workspaceEntity,
         JsonElement workspaceData)
     {
-        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand, this.SaveWorkspacePaneAsync);
         
         // Create this workspace's own dock layout for its content tabs
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
