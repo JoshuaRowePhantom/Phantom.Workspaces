@@ -40,7 +40,7 @@ public sealed class SubViewRelationshipMergeTests
     }
 
     [Fact]
-    public void WithInterestRelationships_WhenQueryHasNoRelationshipsToReturn_UsesInterestRelationshipsOnly()
+    public void WithInterestRelationships_WhenQueryHasNoRelationshipsToReturn_IncludesRelatedAndInterestRelationships()
     {
         var query = MinimalQuery(null);
         var catalog = CatalogWithInterestA();
@@ -53,16 +53,17 @@ public sealed class SubViewRelationshipMergeTests
             .ToHashSet();
 
         Assert.Contains("interest-a", typeNameSets);
-        Assert.DoesNotContain("related", typeNameSets);
+        Assert.Contains("related", typeNameSets);
     }
 
     [Fact]
-    public void WithInterestRelationships_WhenNoCatalog_PreservesQueryRelationshipsUnchanged()
+    public void WithInterestRelationships_WhenNoCatalog_AddsRelatedRelationships()
     {
-        var query = MinimalQuery([RelatedRequest]);
+        var query = MinimalQuery(null);
 
         var result = MainWindowViewModel.WithInterestRelationships(query, null);
 
-        Assert.Same(query, result);
+        var relationship = Assert.Single(result.RelationshipsToReturn!);
+        Assert.Contains("related", relationship.RelationshipTypeNames?.Values ?? []);
     }
 }

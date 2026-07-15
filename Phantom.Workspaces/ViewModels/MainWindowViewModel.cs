@@ -132,6 +132,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new OpenAssociatedWorkspaceShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
@@ -1214,17 +1215,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     internal static QueryRequest WithInterestRelationships(QueryRequest query, InterestCatalog? catalog)
     {
-        if (catalog is not { InterestTypeNames.Count: > 0 } validCatalog)
-        {
-            return query;
-        }
-
         return query with
         {
             RelationshipsToReturn =
             [
                 ..(query.RelationshipsToReturn ?? []),
-                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) },
+                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["related"]) },
+                ..(catalog is { InterestTypeNames.Count: > 0 } validCatalog
+                    ? [new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) }]
+                    : Array.Empty<GetRelationshipRequest>()),
             ],
         };
     }
