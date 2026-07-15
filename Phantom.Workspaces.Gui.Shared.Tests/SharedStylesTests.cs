@@ -152,6 +152,36 @@ public sealed class SharedStylesTests
             "InnerLeftContent setter must wrap control content in <Template>.");
     }
 
+    [Fact]
+    public void EntityCardTree_HoveredItem_HasBorderThicknessThree()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var stylesContent = File.ReadAllText(stylesPath);
+
+        var hoverRule = ExtractStyle(stylesContent, "Border.entity-card:pointerover");
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"3\" />", hoverRule, StringComparison.Ordinal);
+
+        var selectedHoverRule = ExtractStyle(stylesContent, "Border.entity-card.selected:pointerover");
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"3\" />", selectedHoverRule, StringComparison.Ordinal);
+        Assert.Contains("Theme.Surface.EntityCard.SelectedBorder", selectedHoverRule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTree_SelectedItem_UsesGoldThemeBorder()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var darkTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Dark.axaml"));
+        var lightTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Light.axaml"));
+
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">Gold</SolidColorBrush>", darkTheme, StringComparison.Ordinal);
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#C19C00</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void StatusThemeResources_AreSolidColorBrushes()
     {
@@ -286,6 +316,15 @@ public sealed class SharedStylesTests
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
+
+    private static string ExtractStyle(string stylesContent, string selector)
+    {
+        var start = stylesContent.IndexOf($"<Style Selector=\"{selector}\">", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected style selector '{selector}' to exist.");
+        var end = stylesContent.IndexOf("</Style>", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"Expected style selector '{selector}' to be closed.");
+        return stylesContent[start..(end + "</Style>".Length)];
     }
 
     private static Avalonia.Styling.Styles LoadSharedStyles()

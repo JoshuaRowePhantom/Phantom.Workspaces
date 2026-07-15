@@ -88,10 +88,15 @@
     <Style Selector="Border.entity-card:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+        <Setter Property="BorderThickness" Value="3" />
     </Style>
     <Style Selector="Border.entity-card.selected">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="Border.entity-card.selected:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+        <Setter Property="BorderThickness" Value="3" />
     </Style>
     <Style Selector="StackPanel.entity-card-tree-item">
         <Setter Property="Spacing" Value="4" />
