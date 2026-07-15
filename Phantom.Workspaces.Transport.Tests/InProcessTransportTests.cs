@@ -17,7 +17,7 @@ public class InProcessTransportTests
         var request = JsonDocument.Parse("{}").RootElement;
         var clientChannel = await client.ConnectToMessageChannelAsync(request);
 
-        await Task.Delay(100);
+        await listener.ChannelOpened.WaitAsync(TimeSpan.FromSeconds(5));
 
         var testMessage = JsonDocument.Parse("{\"test\":\"hello\"}").RootElement;
         await clientChannel.Writer.WriteAsync(testMessage);
@@ -42,7 +42,7 @@ public class InProcessTransportTests
         var request = JsonDocument.Parse("{}").RootElement;
         var clientChannel = await client.ConnectToMessageChannelAsync(request);
 
-        await Task.Delay(100);
+        await listener.ChannelOpened.WaitAsync(TimeSpan.FromSeconds(5));
 
         var msg1 = JsonDocument.Parse("{\"n\":1}").RootElement;
         var msg2 = JsonDocument.Parse("{\"n\":2}").RootElement;
@@ -68,6 +68,10 @@ public class InProcessTransportTests
 
     private class EchoListener : ITransportListener
     {
+        private readonly TaskCompletionSource _channelOpened = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task ChannelOpened => _channelOpened.Task;
+
         public async Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
         {
             _ = Task.Run(async () =>
@@ -78,6 +82,7 @@ public class InProcessTransportTests
                 }
             }, ct);
 
+            _channelOpened.TrySetResult();
             return new DummyDisposable();
         }
 
@@ -96,6 +101,10 @@ public class InProcessTransportTests
 
     private class BufferingListener : ITransportListener
     {
+        private readonly TaskCompletionSource _channelOpened = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task ChannelOpened => _channelOpened.Task;
+
         public int ReceivedCount { get; private set; }
 
         public async Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
@@ -109,6 +118,7 @@ public class InProcessTransportTests
                 }
             }, ct);
 
+            _channelOpened.TrySetResult();
             return new DummyDisposable();
         }
 
