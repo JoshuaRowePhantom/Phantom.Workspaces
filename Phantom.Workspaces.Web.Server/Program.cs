@@ -5,6 +5,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
+using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,6 +15,7 @@ builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 var reverseExecutionRegistry = new ReverseExecutionRegistry();
 builder.Services.AddSingleton(reverseExecutionRegistry);
 var transportRegistry = new TransportRegistry();
+transportRegistry.Register(new ReverseHttpServerTransportFactory());
 builder.Services.AddSingleton(transportRegistry);
 builder.Services.AddSingleton<HttpServerTransportFactory>();
 
