@@ -223,6 +223,11 @@ public class WebViewModel : WorkspaceTabViewModel
     {
         this.AddressBarUrl = url;
         this.currentUrl = url;
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            this.sourceUri = uri;
+        }
+
         UpdateTooltip();
     }
     

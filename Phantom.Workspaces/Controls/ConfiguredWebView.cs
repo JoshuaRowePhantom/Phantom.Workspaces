@@ -18,6 +18,7 @@ public class ConfiguredWebView : AcceleratorAwareWebView
 {
     private static string? userDataFolderPath;
     private static bool environmentConfigured;
+    private bool coreSourceChangedSubscribed;
 
     public static readonly StyledProperty<WebViewModel?> ViewModelProperty =
         AvaloniaProperty.Register<ConfiguredWebView, WebViewModel?>(nameof(ViewModel));
@@ -140,11 +141,8 @@ public class ConfiguredWebView : AcceleratorAwareWebView
 
     private void OnWebViewNavigationStarted(object? sender, EventArgs e)
     {
-        // Update the ViewModel with the URL as soon as navigation starts
-        if (this.ViewModel != null && this.Source != null)
-        {
-            this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
-        }
+        this.TrySubscribeCoreSourceChanged();
+        this.UpdateViewModelCurrentUrl(e);
     }
 
     private void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs e)
@@ -157,10 +155,10 @@ public class ConfiguredWebView : AcceleratorAwareWebView
 
     private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
     {
-        // Update the ViewModel with the current URL after navigation completes
-        if (this.ViewModel != null && this.Source != null)
+        this.TrySubscribeCoreSourceChanged();
+        this.UpdateViewModelCurrentUrl(e);
+        if (this.ViewModel != null)
         {
-            this.ViewModel.UpdateCurrentUrl(this.Source.ToString());
             this.ViewModel.CanGoBack = this.CanGoBack;
             this.ViewModel.CanGoForward = this.CanGoForward;
             
@@ -259,6 +257,97 @@ public class ConfiguredWebView : AcceleratorAwareWebView
     {
         // Try to set environment properties if they're available
         TrySetUserDataFolder();
+        this.TrySubscribeCoreSourceChanged();
+    }
+
+    private void OnCoreSourceChanged(object? sender, object? e)
+        => this.UpdateViewModelCurrentUrl(sender, e);
+
+    private void UpdateViewModelCurrentUrl(params object?[] urlSources)
+    {
+        var url = TryGetUrlFromObjects(urlSources)
+            ?? TryGetUrlFromObjects(GetReflectedPropertyValue(this, "CoreWebView2"), GetReflectedPropertyValue(this, "CoreWebView"))
+            ?? this.Source?.ToString();
+
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            this.ViewModel?.UpdateCurrentUrl(url);
+        }
+    }
+
+    internal static string? TryGetUrlFromObjects(params object?[] sources)
+    {
+        foreach (var source in sources)
+        {
+            var url = TryGetUrlFromObject(source);
+            if (!string.IsNullOrWhiteSpace(url))
+            {
+                return url;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? TryGetUrlFromObject(object? source)
+    {
+        if (source is null)
+        {
+            return null;
+        }
+
+        foreach (var propertyName in new[] { "Uri", "Url", "Source", "CurrentSource", "CurrentUri", "Location" })
+        {
+            var value = GetReflectedPropertyValue(source, propertyName);
+            if (value is Uri uri)
+            {
+                return uri.ToString();
+            }
+
+            if (value is string { Length: > 0 } text)
+            {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
+    private void TrySubscribeCoreSourceChanged()
+    {
+        if (this.coreSourceChangedSubscribed)
+        {
+            return;
+        }
+
+        try
+        {
+            var core = GetReflectedPropertyValue(this, "CoreWebView2")
+                ?? GetReflectedPropertyValue(this, "CoreWebView");
+            var sourceChanged = core?.GetType().GetEvent("SourceChanged", BindingFlags.Public | BindingFlags.Instance);
+            var handlerType = sourceChanged?.EventHandlerType;
+            var handlerMethod = this.GetType().GetMethod(nameof(OnCoreSourceChanged), BindingFlags.NonPublic | BindingFlags.Instance);
+            if (core != null && sourceChanged != null && handlerType != null && handlerMethod != null)
+            {
+                sourceChanged.AddEventHandler(core, Delegate.CreateDelegate(handlerType, this, handlerMethod));
+                this.coreSourceChangedSubscribed = true;
+            }
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    private static object? GetReflectedPropertyValue(object source, string propertyName)
+    {
+        try
+        {
+            return source.GetType().GetProperty(propertyName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(source);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     private void TrySetUserDataFolder()

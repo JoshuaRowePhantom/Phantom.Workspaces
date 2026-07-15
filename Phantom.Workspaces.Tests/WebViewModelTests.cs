@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Controls;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -94,6 +95,41 @@ public sealed class WebViewModelTests
         vm.NavigateHomeCommand.Execute(null);
 
         Assert.Equal("https://example.com", vm.AddressBarUrl);
+    }
+
+    [Fact]
+    public void UpdateCurrentUrl_UpdatesSourceUriBackingFieldWithoutRaisingSourceUriChanged()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-6", Title = "T" };
+        var raised = false;
+        vm.PropertyChanged += (_, e) => raised |= e.PropertyName == nameof(WebViewModel.SourceUri);
+
+        vm.UpdateCurrentUrl("https://example.com/page1");
+
+        Assert.Equal(new Uri("https://example.com/page1"), vm.SourceUri);
+        Assert.False(raised);
+    }
+
+    [Fact]
+    public void NavigateHomeCommand_AfterBrowserNavigation_RaisesSourceUriChanged()
+    {
+        var vm = new WebViewModel("https://example.com") { Id = "home-7", Title = "T" };
+        var raised = false;
+        vm.PropertyChanged += (_, e) => raised |= e.PropertyName == nameof(WebViewModel.SourceUri);
+        vm.UpdateCurrentUrl("https://example.com/page1");
+
+        vm.NavigateHomeCommand.Execute(null);
+
+        Assert.True(raised);
+        Assert.Equal(new Uri("https://example.com"), vm.SourceUri);
+    }
+
+    [Fact]
+    public void ConfiguredWebView_TryGetUrlFromObjects_ReadsNavigationStartUrl()
+    {
+        var url = ConfiguredWebView.TryGetUrlFromObjects(new NavigationEventArgsStub { Uri = new Uri("https://example.com/page1") });
+
+        Assert.Equal("https://example.com/page1", url);
     }
 
     [Fact]
@@ -650,5 +686,9 @@ public sealed class WebViewModelTests
         vm.RaiseAltKeyStateChanged(false);
 
         Assert.False(received);
+    }
+    private sealed class NavigationEventArgsStub
+    {
+        public Uri? Uri { get; init; }
     }
 }
