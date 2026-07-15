@@ -535,4 +535,156 @@ public sealed class RunningAgentBrainViewModelTests
 
         vm.Dispose();
     }
+
+    // ── Issue #610: Tab matching tests ─────────────────────────────────────────
+
+    [Fact]
+    public void TabWithMatchingAgentSessionId_ShowsTabRow_NotFallback()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent Session");
+        var tab = CreateReadyTab("tab-1", "Agent Tab", agentSessionId: "session-1");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace Pane", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.True(row.HasOpenTab);
+        Assert.Equal("Workspace Pane", row.WorkspacePaneTitle);
+        Assert.Equal("Agent Tab", row.TabTitle);
+    }
+
+    [Fact]
+    public void TabWithNullAgentSessionId_ShowsFallbackRow()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent Session");
+        var tab = CreateReadyTab("tab-1", "Agent Tab", agentSessionId: null);
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace Pane", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+    }
+
+    [Fact]
+    public void SessionRegisteredBeforeTabReady_UpgradesToTabRow_AfterRefresh()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent Session");
+
+        var currentTabs = new List<AgentTabInfo>();
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        // Initially no tabs - should show fallback row
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+
+        // Add tab and refresh
+        var tab = CreateReadyTab("tab-1", "Agent Tab", agentSessionId: "session-1");
+        currentTabs.Add(new AgentTabInfo("pane-1", "Workspace Pane", tab));
+        vm.Refresh();
+
+        // Row should now show tab
+        row = Assert.Single(vm.Rows);
+        Assert.True(row.HasOpenTab);
+    }
+
+    [Fact]
+    public void TwoSessionsInDifferentPanes_BothShowTabRows()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-A", "Agent A");
+        table.AddSession("session-B", "Agent B");
+
+        var tabA = CreateReadyTab("tab-A", "Agent A Tab", agentSessionId: "session-A");
+        var tabB = CreateReadyTab("tab-B", "Agent B Tab", agentSessionId: "session-B");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () =>
+            [
+                new AgentTabInfo("pane-1", "Workspace One", tabA),
+                new AgentTabInfo("pane-2", "Workspace Two", tabB),
+            ],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        Assert.Equal(2, vm.Rows.Count);
+        var rowA = vm.Rows.FirstOrDefault(r => r.SessionKey == "session-A");
+        var rowB = vm.Rows.FirstOrDefault(r => r.SessionKey == "session-B");
+
+        Assert.NotNull(rowA);
+        Assert.NotNull(rowB);
+        Assert.True(rowA.HasOpenTab);
+        Assert.True(rowB.HasOpenTab);
+        Assert.Equal("Workspace One", rowA.WorkspacePaneTitle);
+        Assert.Equal("Workspace Two", rowB.WorkspacePaneTitle);
+    }
+
+    [Fact]
+    public void TabClosed_WhileSessionRunning_DowngradesToFallback()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent Session");
+        var tab = CreateReadyTab("tab-1", "Agent Tab", agentSessionId: "session-1");
+
+        var currentTabs = new List<AgentTabInfo>
+        {
+            new AgentTabInfo("pane-1", "Workspace Pane", tab),
+        };
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        // Initially has open tab
+        var row = Assert.Single(vm.Rows);
+        Assert.True(row.HasOpenTab);
+
+        // Remove tab and refresh
+        currentTabs.Clear();
+        vm.Refresh();
+
+        // Should downgrade to fallback
+        row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+    }
+
+    [Fact]
+    public void Refresh_WithTabSessionIdMismatch_ShowsFallback()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-abc", "Agent Session ABC");
+        var tab = CreateReadyTab("tab-1", "Agent Tab", agentSessionId: "session-xyz");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace Pane", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+    }
 }
