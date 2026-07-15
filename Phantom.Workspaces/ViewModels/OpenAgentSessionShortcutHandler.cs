@@ -251,7 +251,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
 
         AgentChat agentChat;
-        RunningAgentChatLease? lease;
+        RunningAgentChatLease? lease = null;
 
         // Extract display-name and description from entity data to populate AgentChat properties
         string? entityDisplayName = null;
@@ -270,29 +270,55 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
         var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
-        lease = await this.runningAgentChatTable.AcquireAsync(
-            new AcquireAgentChatRequest
-            {
-                AgentSessionId = new AgentSessionId(agentSessionId!),
-                AgentSessionEntity = agentSessionEntityData,
-                AgentServices = agentServices,
-                ForegroundScheduler = foregroundScheduler,
-                ToolResourceFactory = agentServices.ToolResourceFactory,
-                Parameters = parameterValues,
-                AgentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel),
-                EntityName = agentSessionEntity.DisplayName,
-                EntityId = agentSessionEntity.EntityId.ToString(),
-                EntityDisplayName = entityDisplayName,
-                EntityDescription = entityDescription,
-            });
-        agentChat = lease.AgentChat;
-
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id);
-
-        var trustedExecutorIdentifier = owningProfileEntityId != default
+        var targetClientInstance = owningProfileEntityId != default
             && owningProfileEntityId != localProfileEntityId
             ? owningProfileEntityId.ToString()
             : TrustProfile.LocalClientInstance;
+        var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
+
+        if (!string.Equals(targetClientInstance, TrustProfile.LocalClientInstance, StringComparison.Ordinal))
+        {
+            var resolvedDefinition = await agentDefinitionResolver.ResolveAsync(
+                new AgentDefinitionResolveRequest
+                {
+                    AgentSessionEntity = agentSessionEntityData,
+                    ToolResourceFactory = agentServices.ToolResourceFactory,
+                    Parameters = parameterValues,
+                });
+            if (resolvedDefinition is null)
+            {
+                return null;
+            }
+
+            agentChat = await this.CreateTrustedAgentChatAsync(
+                resolvedDefinition.Definition,
+                agentSessionId!,
+                agentServices,
+                targetClientInstance);
+        }
+        else
+        {
+            lease = await this.runningAgentChatTable.AcquireAsync(
+                new AcquireAgentChatRequest
+                {
+                    AgentSessionId = new AgentSessionId(agentSessionId!),
+                    AgentSessionEntity = agentSessionEntityData,
+                    AgentServices = agentServices,
+                    ForegroundScheduler = foregroundScheduler,
+                    ToolResourceFactory = agentServices.ToolResourceFactory,
+                    Parameters = parameterValues,
+                    AgentDefinitionResolver = agentDefinitionResolver,
+                    EntityName = agentSessionEntity.DisplayName,
+                    EntityId = agentSessionEntity.EntityId.ToString(),
+                    EntityDisplayName = entityDisplayName,
+                    EntityDescription = entityDescription,
+                });
+            agentChat = lease.AgentChat;
+        }
+
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id);
+
+        var trustedExecutorIdentifier = targetClientInstance;
 
         agent.ConfigureSlashCommands(
             () => new SlashCommandContext
@@ -361,6 +387,27 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         return (agent, loggerFactory, lease);
+    }
+
+    private async Task<AgentChat> CreateTrustedAgentChatAsync(
+        AgentDefinition agentDefinition,
+        string agentSessionId,
+        AgentServices agentServices,
+        string targetClientInstance)
+    {
+        var trustProfile = TrustProfileComposer.Finalize(new TrustProfileDefinition
+        {
+            HostingWorkspacesClientInstances = [targetClientInstance],
+        });
+        var executor = this.trustedExecutorSelector.SelectExecutor(trustProfile, targetClientInstance);
+        return await executor.CreateAgentChatAsync(new TrustedExecutionRequest
+        {
+            AgentDefinition = agentDefinition,
+            TrustProfile = trustProfile,
+            TargetClientInstance = targetClientInstance,
+            AgentSessionId = agentSessionId,
+            AgentServices = agentServices,
+        });
     }
 
     private static EntityId ReadOwningProfileEntityId(JsonElement entityData)
