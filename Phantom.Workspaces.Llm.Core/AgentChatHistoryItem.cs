@@ -20,13 +20,6 @@ public sealed record AgentChatHistoryItem
     /// </summary>
     public DateTimeOffset? Timestamp { get; init; }
 
-    /// <summary>
-    /// The tool call ID of the parent tool call that spawned a sub-agent, when this item represents
-    /// the completion of that tool call. <see langword="null"/> when not applicable or when loaded
-    /// from records that predate this property.
-    /// </summary>
-    public string? ParentToolCallId { get; init; }
-
     /// <summary>Structured content blocks for this turn.</summary>
     public IReadOnlyList<AIContent> Contents { get; init; } = [];
 }

@@ -249,9 +249,9 @@ internal static class ChatOutputHtmlRenderer
     }
 
     /// <summary>
-    /// Renders the '→ Open sub-agent' jump link element for a tool-result message whose
-    /// <see cref="Phantom.Workspaces.Llm.AgentChatHistoryItem.ParentToolCallId"/> maps to a running
-    /// sub-agent. Clicking the element posts <c>{ type: "navigateToAgent", agentId }</c> to the host.
+    /// Renders the '→ Open sub-agent' jump link element for a tool-result message whose content
+    /// carries a parent tool-call id that maps to a running sub-agent. Clicking the element posts
+    /// <c>{ type: "navigateToAgent", agentId }</c> to the host.
     /// </summary>
     public static string RenderSubAgentJumpLink(string agentId)
     {

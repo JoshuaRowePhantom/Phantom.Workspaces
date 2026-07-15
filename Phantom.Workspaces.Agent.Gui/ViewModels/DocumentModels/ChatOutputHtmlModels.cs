@@ -122,7 +122,10 @@ internal sealed class ChatMessageHtmlModel
         var roleLabel = this.source.Role.Value;
         this.renderedRoleLabel = roleLabel;
         string? jumpLinkHtml = null;
-        if (this.source.ParentToolCallId is { } parentToolCallId && this.resolveSubAgentId is not null)
+        var parentToolCallId = this.source.Contents
+            .Select(CopilotSdkStreamAdapter.GetParentToolCallId)
+            .FirstOrDefault(id => id is not null);
+        if (parentToolCallId is not null && this.resolveSubAgentId is not null)
         {
             var subAgentId = this.resolveSubAgentId(parentToolCallId);
             if (subAgentId is not null)
