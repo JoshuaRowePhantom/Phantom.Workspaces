@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Threading.Channels;
 using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.Transport.Tests;
@@ -48,6 +49,81 @@ public sealed class ReverseHttpServerTransportFactoryTests
     }
 
     [Fact]
+    public async Task ReverseHttpServerTransportFactory_RelayPump_FramesFromB_ForwardedToC()
+    {
+        var factory = new ReverseHttpServerTransportFactory();
+        var machineC = new RelayTestMessageChannel();
+        var machineB = new RelayTestMessageChannel();
+        using var registerRequest = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+        await using var registration = await factory.OnChannelOpenAsync(registerRequest.RootElement, machineC);
+        using var relayRequest = JsonDocument.Parse("""{"type":"reverse-http","entity-id":"machine-c"}""");
+        await using var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
+        using var frame = JsonDocument.Parse("""{"type":"channel-open","request":{"type":"chat-client"},"opaque":[1,2,3]}""");
+
+        await machineB.DeliverAsync(frame.RootElement);
+        var forwarded = await machineC.Sent.ReadAsync();
+
+        Assert.Equal(frame.RootElement.GetRawText(), forwarded.GetRawText());
+    }
+
+    [Fact]
+    public async Task ReverseHttpServerTransportFactory_RelayPump_FramesFromC_ForwardedToB()
+    {
+        var factory = new ReverseHttpServerTransportFactory();
+        var machineC = new RelayTestMessageChannel();
+        var machineB = new RelayTestMessageChannel();
+        using var registerRequest = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+        await using var registration = await factory.OnChannelOpenAsync(registerRequest.RootElement, machineC);
+        using var relayRequest = JsonDocument.Parse("""{"type":"reverse-http","entity-id":"machine-c"}""");
+        await using var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
+        using var frame = JsonDocument.Parse("""{"type":"channel-message","payload":{"text":"hello"}}""");
+
+        await machineC.DeliverAsync(frame.RootElement);
+        var forwarded = await machineB.Sent.ReadAsync();
+
+        Assert.Equal(frame.RootElement.GetRawText(), forwarded.GetRawText());
+    }
+
+    [Fact]
+    public async Task ReverseHttpServerTransportFactory_RelayPump_OneSideCloses_OtherReceivesChannelClose()
+    {
+        var factory = new ReverseHttpServerTransportFactory();
+        var machineC = new RelayTestMessageChannel();
+        var machineB = new RelayTestMessageChannel();
+        using var registerRequest = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+        await using var registration = await factory.OnChannelOpenAsync(registerRequest.RootElement, machineC);
+        using var relayRequest = JsonDocument.Parse("""{"type":"reverse-http","entity-id":"machine-c"}""");
+        await using var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
+
+        machineC.CompleteInbound();
+        var close = await machineB.Sent.ReadAsync();
+        await machineB.Sent.Completion;
+
+        Assert.Equal("channel-close", close.GetProperty("type").GetString());
+        Assert.True(machineB.Disposed);
+        Assert.True(machineC.Disposed);
+    }
+
+    [Fact]
+    public async Task ReverseHttpServerTransportFactory_RelayPump_Dispose_CancelsAndDisposesBothChannels()
+    {
+        var factory = new ReverseHttpServerTransportFactory();
+        var machineC = new RelayTestMessageChannel();
+        var machineB = new RelayTestMessageChannel();
+        using var registerRequest = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+        await using var registration = await factory.OnChannelOpenAsync(registerRequest.RootElement, machineC);
+        using var relayRequest = JsonDocument.Parse("""{"type":"reverse-http","entity-id":"machine-c"}""");
+        var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
+
+        await relay!.DisposeAsync();
+
+        Assert.True(machineB.Disposed);
+        Assert.True(machineC.Disposed);
+        Assert.Equal("channel-close", (await machineB.Sent.ReadAsync()).GetProperty("type").GetString());
+        Assert.Equal("channel-close", (await machineC.Sent.ReadAsync()).GetProperty("type").GetString());
+    }
+
+    [Fact]
     public async Task ReverseHttpServerTransportFactory_MultipleRegistrations_IndependentSlots()
     {
         var factory = new ReverseHttpServerTransportFactory();
@@ -92,5 +168,31 @@ public sealed class ReverseHttpServerTransportFactoryTests
         await Task.WhenAll(leases.Select(static lease => lease!.DisposeAsync().AsTask()));
 
         Assert.Equal(0, factory.RegistrationCount);
+    }
+
+    private sealed class RelayTestMessageChannel : IMessageChannel
+    {
+        private readonly Channel<JsonElement> inbound = Channel.CreateUnbounded<JsonElement>();
+        private readonly Channel<JsonElement> sent = Channel.CreateUnbounded<JsonElement>();
+
+        public bool Disposed { get; private set; }
+
+        public ChannelWriter<JsonElement> Writer => this.sent.Writer;
+
+        public ChannelReader<JsonElement> Reader => this.inbound.Reader;
+
+        public ChannelReader<JsonElement> Sent => this.sent.Reader;
+
+        public ValueTask DeliverAsync(JsonElement frame) => this.inbound.Writer.WriteAsync(frame.Clone());
+
+        public void CompleteInbound() => this.inbound.Writer.TryComplete();
+
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            this.inbound.Writer.TryComplete();
+            this.sent.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
     }
 }

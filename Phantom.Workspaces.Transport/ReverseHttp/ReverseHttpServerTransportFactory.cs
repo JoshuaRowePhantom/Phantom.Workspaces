@@ -29,9 +29,9 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         if (string.Equals(type, "reverse-http", StringComparison.OrdinalIgnoreCase))
         {
             var entityId = ReadEntityId(request);
-            if (this.registrations.ContainsKey(entityId))
+            if (this.registrations.TryGetValue(entityId, out var registrationChannel))
             {
-                return Task.FromResult<IAsyncDisposable?>(NoopLease.Instance);
+                return Task.FromResult<IAsyncDisposable?>(new RelaySession(channel, registrationChannel, ct));
             }
 
             return Task.FromResult<IAsyncDisposable?>(new ErrorLease(channel, "not-registered", $"No reverse HTTP registration exists for '{entityId}'."));
@@ -82,9 +82,4 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         }
     }
 
-    private sealed class NoopLease : IAsyncDisposable
-    {
-        public static readonly NoopLease Instance = new();
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-    }
 }
