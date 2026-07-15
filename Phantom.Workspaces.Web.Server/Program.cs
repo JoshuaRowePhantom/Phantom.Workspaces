@@ -17,6 +17,10 @@ builder.Services.AddSingleton(reverseExecutionRegistry);
 var transportRegistry = new TransportRegistry();
 transportRegistry.Register(new ReverseHttpServerTransportFactory());
 builder.Services.AddSingleton(transportRegistry);
+var transportFactoryRegistry = new TransportFactoryRegistry();
+transportFactoryRegistry.Register(new HttpClientTransportFactory());
+transportFactoryRegistry.Register(new ReverseHttpForwardingTransportFactory());
+builder.Services.AddSingleton<ITransportFactoryRegistry>(transportFactoryRegistry);
 builder.Services.AddSingleton<HttpServerTransportFactory>();
 
 builder.Services.AddSingleton<AgentChatSessionCache>();
