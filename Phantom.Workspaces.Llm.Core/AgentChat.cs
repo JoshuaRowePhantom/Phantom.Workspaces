@@ -590,6 +590,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             this.foregroundScheduler);
     }
 
+    public void EnqueueHelpNote(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                this.AddHistoryItem(new AgentChatHistoryItem
+                {
+                    Role = AgentChatHistoryItem.HelpChatRole,
+                    Contents = [new TextContent(text)],
+                    Timestamp = DateTimeOffset.UtcNow,
+                });
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
     /// <summary>
     /// Requests an interrupt of the current streaming response.
     /// </summary>

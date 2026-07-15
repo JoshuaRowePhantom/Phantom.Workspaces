@@ -307,7 +307,7 @@ public sealed class ToolVisualizationTests
         var call = new FunctionCallContent("call-1", "my_tool",
             new Dictionary<string, object?> { ["arg"] = "val" });
 
-        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false, isHelp: false);
 
         Assert.NotNull(html);
         Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
@@ -318,7 +318,7 @@ public sealed class ToolVisualizationTests
     {
         var result = new FunctionResultContent("call-1", "result value");
 
-        var html = ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false);
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false, isHelp: false);
 
         Assert.NotNull(html);
         Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
@@ -415,3 +415,4 @@ public sealed class ToolVisualizationTests
             => this.Updates.Add((field, value));
     }
 }
+

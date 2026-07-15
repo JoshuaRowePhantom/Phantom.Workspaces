@@ -9,6 +9,7 @@ namespace Phantom.Workspaces.Llm;
 public sealed record AgentChatHistoryItem
 {
     public static ChatRole DiagnosticChatRole { get; } = new("diagnostic");
+    public static ChatRole HelpChatRole { get; } = new("help");
 
     public ChatRole Role { get; init; }
 

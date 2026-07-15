@@ -294,9 +294,17 @@ internal static class ChatOutputHtmlRenderer
     }
 
     public static string RoleClass(string roleLabel)
-        => string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase)
-            ? "chat-user-message"
-            : "chat-assistant-message";
+    {
+        if (string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase))
+        {
+            return "chat-user-message";
+        }
+        if (string.Equals(roleLabel, "help", StringComparison.OrdinalIgnoreCase))
+        {
+            return "chat-help-message";
+        }
+        return "chat-assistant-message";
+    }
 
     /// <summary>
     /// Renders a single content block to a <c>div.chat-content</c> (or collapsible <c>details</c>)
@@ -308,6 +316,7 @@ internal static class ChatOutputHtmlRenderer
         AIContent content,
         bool includeReasoning,
         bool isDiagnostic,
+        bool isHelp = false,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -320,6 +329,8 @@ internal static class ChatOutputHtmlRenderer
                 }
 
                 return TextBlock(contentId, "chat-reasoning", reasoning.Text, SerializeContentJson(reasoning));
+            case TextContent text when isHelp && !string.IsNullOrWhiteSpace(text.Text):
+                return TextBlock(contentId, "chat-help", text.Text, SerializeContentJson(text));
             case TextContent text when isDiagnostic && !string.IsNullOrWhiteSpace(text.Text):
                 return RenderCollapsible(contentId, "chat-diagnostic", DiagnosticHeader(text.Text), DiagnosticBody(text.Text), SerializeContentJson(text));
             case TextContent text:

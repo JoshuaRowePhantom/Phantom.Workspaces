@@ -422,7 +422,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         // Show the status message as a system note in the chat history so the user
         // gets feedback without the message being forwarded to the LLM.
-        this.agentChat.EnqueueSystemNote(result.StatusMessage);
+        if (result.Role == AgentChatHistoryItem.HelpChatRole)
+        {
+            this.agentChat.EnqueueHelpNote(result.StatusMessage);
+        }
+        else
+        {
+            this.agentChat.EnqueueSystemNote(result.StatusMessage);
+        }
     }
 
     /// <summary>

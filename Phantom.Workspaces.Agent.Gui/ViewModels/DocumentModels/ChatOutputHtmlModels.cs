@@ -163,6 +163,10 @@ internal sealed class ChatMessageHtmlModel
             roleLabel,
             AgentChatHistoryItem.DiagnosticChatRole.Value,
             StringComparison.OrdinalIgnoreCase);
+        var isHelp = string.Equals(
+            roleLabel,
+            AgentChatHistoryItem.HelpChatRole.Value,
+            StringComparison.OrdinalIgnoreCase);
 
         // Pre-scan: build a CallId → result lookup for content-level call+result pairing.
         Dictionary<string, FunctionResultContent>? resultLookup = null;
@@ -248,7 +252,7 @@ internal sealed class ChatMessageHtmlModel
             }
 
             var contentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
-            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
+            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, isHelp, this.toolFactory, this.statusSink);
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
