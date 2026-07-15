@@ -41,6 +41,7 @@ public static class TrustProfileEntityReader
                 HostingWorkspacesClientInstances = ReadStringArray(entity, "hosting-workspaces-client-instances"),
                 NetworkAccessPolicy = ReadNetworkAccessPolicy(entity),
                 MountPoints = ReadMountPoints(entity),
+                DefaultExecutionTarget = ReadOptionalObject(entity, "default-execution-target"),
                 HttpsProxyPolicy = ReadHttpsProxyPolicy(entity),
                 AllowedMcpToolCallSchemas = ReadSchemas(entity, "allowed-mcp-tool-call-schemas"),
                 RestrictedMcpToolCallSchemas = ReadSchemas(entity, "restricted-mcp-tool-call-schemas"),
@@ -178,6 +179,21 @@ public static class TrustProfileEntityReader
         }
 
         return mountPoints;
+    }
+
+    private static JsonElement? ReadOptionalObject(JsonElement entity, string propertyName)
+    {
+        if (!entity.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException($"Trust profile property '{propertyName}' must be an object.");
+        }
+
+        return value.Clone();
     }
 
     private static TrustMountAccessMode ReadAccessMode(JsonElement mount)

@@ -3,7 +3,8 @@
     <!-- Dark theme color palette -->
     
     <!-- Entity pane surfaces -->
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#1E1E1E</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#000000</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.Chat.Background">#000000</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#2A2A2A</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#242424</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#343434</SolidColorBrush>
@@ -17,7 +18,7 @@
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#505050</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#2A2A2A</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#5EA0FF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">Gold</SolidColorBrush>
 
     <!-- Popup surfaces -->
     <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#2C2C2C</SolidColorBrush>

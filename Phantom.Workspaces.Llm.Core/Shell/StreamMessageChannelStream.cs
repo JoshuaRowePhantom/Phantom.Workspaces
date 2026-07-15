@@ -77,6 +77,8 @@ public sealed class StreamMessageChannelStream : Stream
     public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         => this.inboundReader.ReadAsync(buffer, cancellationToken);
 
+    // WARNING: This synchronous override blocks the calling thread while awaiting channel write.
+    // Callers should use WriteAsync when possible.
     public override void Write(byte[] buffer, int offset, int count)
         => this.WriteAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
 
@@ -132,11 +134,13 @@ public sealed class StreamMessageChannelStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        // Drive the async teardown for a synchronous Dispose(); the flag keeps it single-shot so the
-        // base Stream.Dispose path can never re-enter and double-dispose the pump resources.
+        // Best-effort non-blocking disposal. Signal cancellation and mark as disposed without
+        // awaiting the async teardown. Callers in async contexts should use DisposeAsync via
+        // 'await using' for proper resource cleanup.
         if (disposing && !this.disposed)
         {
-            this.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            this.disposed = true;
+            this.pumpCancellation.Cancel();
         }
 
         base.Dispose(disposing);

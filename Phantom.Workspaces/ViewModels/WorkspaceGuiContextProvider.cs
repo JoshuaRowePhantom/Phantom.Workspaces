@@ -314,8 +314,8 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 },
                 "shortcut": {
                   "type": "string",
-                  "enum": ["Open", "Json", "Delete", "Review", "VsCode", "VsCodeWeb", "StartAgentSession", "StartShell"],
-                  "description": "The shortcut to invoke. 'Open' opens the entity as a workspace pane, tab, or agent chat session — use this for all open/navigate operations."
+                  "enum": ["Open", "OpenWorkspace", "Json", "Delete", "Review", "VsCode", "VsCodeWeb", "StartAgentSession", "StartShell"],
+                  "description": "The shortcut to invoke. 'Open' opens the entity as a workspace pane, tab, or agent chat session — use this for all open/navigate operations. 'OpenWorkspace' opens an associated workspace."
                 }
               },
               "required": ["entity_id", "shortcut"],
@@ -335,6 +335,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
         public override string Description =>
             "Invoke a named shortcut on an entity by entity-id. "
             + "Shortcuts: 'Open' opens the entity (workspace pane, tab, agent chat session — use this for all open/navigate operations), "
+            + "'OpenWorkspace' opens the associated workspace for an entity, "
             + "'Json' toggles raw JSON view, 'Delete' deletes the entity, "
             + "'Review' reviews changes for a git-worktree entity, "
             + "'VsCode' opens the entity in VS Code, "
@@ -370,14 +371,22 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             {
                 return Serialize(new
                 {
-                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, Json, Delete, Review, VsCode, VsCodeWeb, StartAgentSession, StartShell.",
+                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, OpenWorkspace, Json, Delete, Review, VsCode, VsCodeWeb, StartAgentSession, StartShell.",
                 });
             }
 
             var entityId = new EntityId(entityIdValue);
             var handled = await Dispatcher.UIThread.InvokeAsync(async () =>
             {
-                var entities = await this.context.MainWindowViewModel.EntityBroker.GetEntitiesAsync([entityId]);
+                var entities = await this.context.MainWindowViewModel.EntityBroker.GetEntitiesAsync(
+                    [new GetEntityRequest
+                    {
+                        EntityId = entityId,
+                        RelationshipsToReturn =
+                        [
+                            new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["related"]) },
+                        ],
+                    }]);
                 var entity = entities.FirstOrDefault();
                 if (entity is null)
                 {
@@ -400,6 +409,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
         private static Shortcut? ResolveShortcut(string name) => name switch
         {
             "Open" => Shortcut.Open,
+            "OpenWorkspace" => Shortcut.OpenWorkspace,
             "Json" => Shortcut.Json,
             "Delete" => Shortcut.Delete,
             "Review" => Shortcut.Review,

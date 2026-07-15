@@ -83,7 +83,7 @@
                         <TreeDataTemplate ItemsSource="{Binding SubRuns}">
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <TextBlock Text="{Binding StatusGlyph}" Opacity="0.9" />
-                                <TextBlock Text="{Binding StartedAt, StringFormat='{}{0:HH:mm:ss}'}" Opacity="0.7" />
+                                <TextBlock Text="{Binding StartedAt, StringFormat='{}{0:yyyy/MM/dd HH:mm:ss}'}" Opacity="0.7" />
                                 <TextBlock Text="{Binding Duration, StringFormat='{}{0:g}'}"
                                            Opacity="0.7"
                                            IsVisible="{Binding Duration, Converter={x:Static ObjectConverters.IsNotNull}}" />

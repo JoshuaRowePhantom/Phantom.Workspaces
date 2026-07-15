@@ -13,6 +13,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
     }
 
     public static Shortcut Open { get; } = new("Open", "↗");
+    public static Shortcut OpenWorkspace { get; } = new("OpenWorkspace", "🗔");
     public static Shortcut Json { get; } = new("Json", "{}");
     public static Shortcut Delete { get; } = new("Delete", "🗑");
     public static Shortcut StartAgentSession { get; } = new("StartAgentSession", "🤖");
@@ -30,6 +31,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public string HoverText => this.Name switch
     {
         "Open" => "Open entity",
+        "OpenWorkspace" => "Open associated workspace",
         "Json" => "Toggle raw JSON view",
         "Delete" => "Delete entity",
         "StartAgentSession" => "Start agent session",

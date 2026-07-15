@@ -25,7 +25,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         var handler = new OpenInVsCodeWebShortcutHandler(
             tabOpener: null);
 
-        Assert.True(handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+        Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -40,7 +40,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         var handler = new OpenInVsCodeWebShortcutHandler(
             tabOpener: null);
 
-        Assert.False(handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+        Assert.False(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
     }
 
     // ---- Handle ------------------------------------------------------------------------------
@@ -499,3 +499,4 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         return Assert.IsType<EntityBroker>(entityBrokerProperty!.GetValue(viewModel));
     }
 }
+

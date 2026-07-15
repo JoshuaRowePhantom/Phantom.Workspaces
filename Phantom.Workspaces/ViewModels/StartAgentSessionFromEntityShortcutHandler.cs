@@ -20,22 +20,22 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
         this.openAgentSessionShortcutHandler = openAgentSessionShortcutHandler;
     }
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
         if (shortcut != Shortcut.StartAgentSession)
         {
-            return false;
+            return ValueTask.FromResult(false);
         }
 
         if (entityViewModel.Data is not JsonElement data)
         {
-            return false;
+            return ValueTask.FromResult(false);
         }
 
-        return data.TryGetProperty("path", out _) || data.TryGetProperty("home-directory", out _);
+        return ValueTask.FromResult(data.TryGetProperty("path", out _) || data.TryGetProperty("home-directory", out _));
     }
 
     public override async Task<bool> Handle(
@@ -244,3 +244,5 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
         return null;
     }
 }
+
+

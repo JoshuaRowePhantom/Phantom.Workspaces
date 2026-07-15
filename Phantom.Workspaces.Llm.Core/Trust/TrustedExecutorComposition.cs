@@ -40,6 +40,40 @@ public static class TrustedExecutorComposition
 
         executors.Add(new LocalTrustedExecutor());
 
-        return new TrustedExecutorSelector(executors);
+        return new ComposedTrustedExecutorSelector(executors);
+    }
+
+    private sealed class ComposedTrustedExecutorSelector : ITrustedExecutorSelector
+    {
+        private readonly IReadOnlyList<ITrustedExecutor> executors;
+
+        public ComposedTrustedExecutorSelector(IEnumerable<ITrustedExecutor> executors)
+        {
+            ArgumentNullException.ThrowIfNull(executors);
+            this.executors = [.. executors];
+        }
+
+        public ITrustedExecutor SelectExecutor(TrustProfile trustProfile, string targetClientInstance)
+        {
+            ArgumentNullException.ThrowIfNull(trustProfile);
+            ArgumentException.ThrowIfNullOrWhiteSpace(targetClientInstance);
+
+            if (!trustProfile.AllowsClientInstance(targetClientInstance))
+            {
+                throw new InvalidOperationException(
+                    $"Trust profile does not permit execution on client instance '{targetClientInstance}'.");
+            }
+
+            foreach (var executor in this.executors)
+            {
+                if (executor.CanExecute(targetClientInstance))
+                {
+                    return executor;
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"No trusted executor is available for client instance '{targetClientInstance}'.");
+        }
     }
 }

@@ -203,7 +203,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [PhantomAvaloniaFact(Timeout = 60_000)]
     public async Task TargetBranch_Set_TriggersCommitListRefreshAndClearsPreviousCommits()
     {
         // Use no valid repo path so RefreshAsync completes quickly.

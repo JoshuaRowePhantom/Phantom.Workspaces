@@ -79,6 +79,22 @@ public partial class AgentChatEditorControl : UserControl
         vm.SelectedEditorItem = selected;
     }
 
+    private void OnNavigationTreePointerEntered(object? sender, Avalonia.Input.PointerEventArgs e)
+    {
+        if (this.DataContext is AgentViewModel vm)
+        {
+            vm.SubAgentsContainer.SuppressSort();
+        }
+    }
+
+    private void OnNavigationTreePointerExited(object? sender, Avalonia.Input.PointerEventArgs e)
+    {
+        if (this.DataContext is AgentViewModel vm)
+        {
+            vm.SubAgentsContainer.ScheduleResumeSort();
+        }
+    }
+
     private void OnTreeCollapseToggleClicked(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (sender is not ToggleButton button)

@@ -32,6 +32,18 @@ public sealed record SlashCommandContext
     /// </summary>
     public Func<IReadOnlyDictionary<string, string>, CancellationToken, Task>? UpdateParameterValuesAsync { get; init; }
 
+    /// <summary>Renames the current session entity and tab title.</summary>
+    public Func<string, CancellationToken, Task>? RenameSessionAsync { get; init; }
+
+    /// <summary>Replaces the current tab with a newly cloned session.</summary>
+    public Func<CancellationToken, Task>? ReplaceWithCloneAsync { get; init; }
+
+    /// <summary>Opens a newly cloned session in a new tab.</summary>
+    public Func<CancellationToken, Task>? OpenCloneInNewTabAsync { get; init; }
+
+    /// <summary>Sets the current tab title only, without persisting the entity display-name.</summary>
+    public Func<string, CancellationToken, Task>? SetTabTitleAsync { get; init; }
+
     /// <summary>
     /// The identifier of the trusted executor for this session context, if available.
     /// Typically <c>"."</c> for the local executor.

@@ -8,11 +8,11 @@ namespace Phantom.Workspaces.Gui.Shared.Controls;
 internal static class CampbellColorScheme
 {
     // Background / Foreground
-    public static readonly Color Background = Color.FromRgb(0x0C, 0x0C, 0x0C);
+    public static readonly Color Background = Color.FromRgb(0x00, 0x00, 0x00);
     public static readonly Color Foreground = Color.FromRgb(0xCC, 0xCC, 0xCC);
 
     // Normal (dim) ANSI 0–7
-    public static readonly Color Black   = Color.FromRgb(0x0C, 0x0C, 0x0C);
+    public static readonly Color Black   = Color.FromRgb(0x00, 0x00, 0x00);
     public static readonly Color Red     = Color.FromRgb(0xC5, 0x0F, 0x1F);
     public static readonly Color Green   = Color.FromRgb(0x13, 0xA1, 0x0E);
     public static readonly Color Yellow  = Color.FromRgb(0xC1, 0x9C, 0x00);

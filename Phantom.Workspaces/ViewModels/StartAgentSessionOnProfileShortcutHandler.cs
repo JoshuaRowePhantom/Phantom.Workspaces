@@ -16,13 +16,13 @@ public sealed class StartAgentSessionOnProfileShortcutHandler : ShortcutHandler
         this.openAgentSessionShortcutHandler = openAgentSessionShortcutHandler;
     }
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.StartAgentSession
-            && entityViewModel.IsEntityType("user-computer-profile");
+        return ValueTask.FromResult(shortcut == Shortcut.StartAgentSession
+            && entityViewModel.IsEntityType("user-computer-profile"));
     }
 
     public override async Task<bool> Handle(
@@ -46,3 +46,5 @@ public sealed class StartAgentSessionOnProfileShortcutHandler : ShortcutHandler
         return true;
     }
 }
+
+

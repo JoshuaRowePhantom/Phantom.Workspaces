@@ -116,4 +116,47 @@ public sealed class SlashCompletionsViewModelTests
         Assert.Equal(-1, vm.SelectedIndex);
         Assert.Null(vm.SelectedItem);
     }
+
+    [Fact]
+    public void SetItems_AlwaysSortsAlphabetically()
+    {
+        var vm = new SlashCompletionsViewModel();
+        vm.SetItems(MakeItems("gamma", "alpha", "beta"));
+        Assert.Equal(3, vm.Items.Count);
+        Assert.Equal("alpha", vm.Items[0].CompletionText);
+        Assert.Equal("beta", vm.Items[1].CompletionText);
+        Assert.Equal("gamma", vm.Items[2].CompletionText);
+    }
+
+    [Fact]
+    public void SelectNext_TraversesDisplayedAlphabeticalOrder()
+    {
+        var vm = new SlashCompletionsViewModel();
+        vm.SetItems(MakeItems("gamma", "alpha", "beta"));
+        
+        vm.SelectNext();
+        Assert.Equal("alpha", vm.SelectedItem!.CompletionText);
+        
+        vm.SelectNext();
+        Assert.Equal("beta", vm.SelectedItem!.CompletionText);
+        
+        vm.SelectNext();
+        Assert.Equal("gamma", vm.SelectedItem!.CompletionText);
+    }
+
+    [Fact]
+    public void SelectPrevious_TraversesReverseDisplayedOrder()
+    {
+        var vm = new SlashCompletionsViewModel();
+        vm.SetItems(MakeItems("gamma", "alpha", "beta"));
+        
+        vm.SelectPrevious();
+        Assert.Equal("gamma", vm.SelectedItem!.CompletionText);
+        
+        vm.SelectPrevious();
+        Assert.Equal("beta", vm.SelectedItem!.CompletionText);
+        
+        vm.SelectPrevious();
+        Assert.Equal("alpha", vm.SelectedItem!.CompletionText);
+    }
 }

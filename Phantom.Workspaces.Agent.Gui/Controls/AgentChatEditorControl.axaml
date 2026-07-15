@@ -18,9 +18,9 @@
              them as "Cancel" or "Ctrl+Shift+Pause" never fires because the real key is Cancel and the
              Ctrl modifier is present. -->
         <KeyBinding Gesture="Ctrl+Cancel" Command="{Binding InterruptCommand}" />
-        <KeyBinding Gesture="Pause" Command="{Binding InputQueue.ToggleHoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Shift+Pause" Command="{Binding InputQueue.HoldAllQueuesCommand}" />
-        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding InputQueue.UnholdAllQueuesCommand}" />
+        <KeyBinding Gesture="Pause" Command="{Binding ToggleHoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Shift+Pause" Command="{Binding HoldAllQueuesCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Cancel" Command="{Binding UnholdAllQueuesCommand}" />
     </UserControl.KeyBindings>
 
     <UserControl.Resources>
@@ -87,7 +87,7 @@
                 </Border>
                 <controls:AgentChatInputQueueControl DockPanel.Dock="Bottom"
                                                      DataContext="{Binding InputQueue}"
-                                                     IsVisible="{Binding Agent.AcceptsUserInput}"/>
+                                                     IsVisible="{Binding InputQueue, Converter={x:Static converters:NotNullConverter.Instance}}"/>
                 <controls:AgentChatOutputControl DataContext="{Binding Agent}"/>
             </DockPanel>
         </DataTemplate>
@@ -195,9 +195,15 @@
                                                Text="⟳"
                                                VerticalAlignment="Center"
                                                IsVisible="{Binding CompletionState, Converter={x:Static converters:CompletionStateConverters.IsRunning}}"/>
-                                    <TextBlock Text="{Binding DisplayName}"
-                                               VerticalAlignment="Center"
-                                               TextTrimming="CharacterEllipsis"/>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontWeight="Bold"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Description}"
+                                                   Classes="muted"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+                                    </StackPanel>
                                 </DockPanel>
                             </Border>
                         </DataTemplate>
@@ -251,6 +257,8 @@
                       ScrollViewer.VerticalScrollBarVisibility="Auto"
                       ScrollViewer.AllowAutoHide="False"
                       SelectionChanged="OnEditorSelectionChanged"
+                      PointerEntered="OnNavigationTreePointerEntered"
+                      PointerExited="OnNavigationTreePointerExited"
                       Grid.Column="0">
                 <TreeView.Styles>
                     <Style Selector="TreeViewItem">

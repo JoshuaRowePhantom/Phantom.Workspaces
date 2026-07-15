@@ -4,6 +4,7 @@
     
     <!-- Entity pane surfaces -->
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.Chat.Background">#FFFFFF</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#E0E0E0</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#F5F5F5</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#D0D0D0</SolidColorBrush>
@@ -17,7 +18,7 @@
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#C0C0C0</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#E8F0FE</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#1976D2</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#C19C00</SolidColorBrush>
 
     <!-- Popup surfaces -->
     <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#FFFFFF</SolidColorBrush>

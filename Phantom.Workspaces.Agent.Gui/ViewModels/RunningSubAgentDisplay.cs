@@ -23,11 +23,13 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     public const int MaxActivityLines = 5;
     private readonly string agentId;
     private readonly string displayName;
+    private readonly string description;
     private readonly Func<AgentChatCompletionState> getCompletionState;
     private readonly AgentChatRunningItemCollection runningItems;
     private readonly INotifyCollectionChanged subAgentsSource;
     private readonly Func<IRunningSubAgent, RunningSubAgentDisplay> childFactory;
     private readonly List<SubAgentActivityLine> recentActivity = [];
+    private readonly List<ActivityKey> recentActivityKeys = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly Dictionary<AgentChatRunningItem, NotifyCollectionChangedEventHandler> runningItemHandlers = new(ReferenceEqualityComparer<AgentChatRunningItem>.Instance);
     private readonly NotifyCollectionChangedEventHandler onRunningItemsChanged;
@@ -39,31 +41,11 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         : this(
             agentChat.AgentId,
             agentChat.DisplayName,
+            agentChat.Description,
             () => agentChat.CompletionState,
             agentChat.RunningItems,
             (INotifyCollectionChanged)agentChat.SubAgents,
-            subAgent =>
-            {
-                // Check if this is an eager SubAgent (AgentChat already available) or lazy.
-                if (subAgent is SubAgent sa && sa.AgentChat is not null)
-                {
-                    // Eager path: AgentChat is already available, use it directly.
-                    // Note: For eager SubAgents, we don't acquire a lease because the factory might be null.
-                    return new RunningSubAgentDisplay(sa.AgentChat);
-                }
-                else if (subAgent is SubAgent subAgentWrapper)
-                {
-                    // Lazy path: AgentChat needs to be materialized.
-                    var lease = subAgentWrapper.AcquireLeaseAsync().Result;
-                    var chat = lease.AgentChat;
-                    lease.DisposeAsync().AsTask().Wait();
-                    return new RunningSubAgentDisplay(chat);
-                }
-                else
-                {
-                    return new RunningSubAgentDisplay((AgentChat)subAgent);
-                }
-            },
+            subAgent => new RunningSubAgentDisplay((AgentChat)subAgent),
             agentChat)
     {
     }
@@ -75,10 +57,12 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     internal RunningSubAgentDisplay(
         AgentChatRunningItemCollection runningItems,
         string agentId = "",
-        string displayName = "")
+        string displayName = "",
+        string description = "")
         : this(
             agentId,
             displayName,
+            description,
             () => AgentChatCompletionState.Running,
             runningItems,
             new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>(),
@@ -90,6 +74,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     private RunningSubAgentDisplay(
         string agentId,
         string displayName,
+        string description,
         Func<AgentChatCompletionState> getCompletionState,
         AgentChatRunningItemCollection runningItems,
         INotifyCollectionChanged subAgentsSource,
@@ -98,6 +83,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     {
         this.agentId = agentId;
         this.displayName = displayName;
+        this.description = description;
         this.getCompletionState = getCompletionState;
         this.runningItems = runningItems;
         this.subAgentsSource = subAgentsSource;
@@ -129,6 +115,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
     public string AgentId => this.agentId;
     public string DisplayName => this.displayName;
+    public string Description => this.description;
     public AgentChatCompletionState CompletionState => this.getCompletionState();
     public IReadOnlyList<SubAgentActivityLine> RecentActivity => this.recentActivity;
     public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgents { get; }
@@ -140,16 +127,22 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
     private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.NewItems is not null)
-        {
-            foreach (AgentChatRunningItem item in e.NewItems)
-                this.SubscribeToRunningItem(item);
-        }
-
         if (e.OldItems is not null)
         {
             foreach (AgentChatRunningItem item in e.OldItems)
-                this.UnsubscribeFromRunningItem(item);
+            {
+                if (!ContainsReference(e.NewItems, item))
+                    this.UnsubscribeFromRunningItem(item);
+            }
+        }
+
+        if (e.NewItems is not null)
+        {
+            foreach (AgentChatRunningItem item in e.NewItems)
+            {
+                if (!ContainsReference(e.OldItems, item))
+                    this.SubscribeToRunningItem(item);
+            }
         }
     }
 
@@ -164,7 +157,12 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
 
     private void SubscribeToRunningItem(AgentChatRunningItem item)
     {
-        NotifyCollectionChangedEventHandler handler = (_, e) => this.OnRunningItemItemsChanged(e);
+        if (this.runningItemHandlers.TryGetValue(item, out var oldHandler))
+        {
+            item.Items.CollectionChanged -= oldHandler;
+        }
+
+        NotifyCollectionChangedEventHandler handler = (_, e) => this.OnRunningItemItemsChanged(item, e);
         this.runningItemHandlers[item] = handler;
         item.Items.CollectionChanged += handler;
     }
@@ -178,43 +176,97 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         }
     }
 
-    private void OnRunningItemItemsChanged(NotifyCollectionChangedEventArgs e)
+    private void OnRunningItemItemsChanged(AgentChatRunningItem item, NotifyCollectionChangedEventArgs e)
     {
         if (e.NewItems is null)
             return;
 
-        var added = false;
+        var changed = false;
+        var itemIndex = Math.Max(e.NewStartingIndex, 0);
         foreach (AgentChatHistoryItem historyItem in e.NewItems)
         {
-            SubAgentActivityLine? line = null;
-
-            var toolCall = historyItem.Contents.OfType<FunctionCallContent>().FirstOrDefault();
-            if (toolCall is not null)
-            {
-                line = new SubAgentActivityLine(SubAgentActivityKind.ToolCall, toolCall.Name ?? string.Empty);
-            }
-            else
-            {
-                var text = historyItem.Contents.OfType<TextContent>()
-                    .Select(t => t.Text)
-                    .FirstOrDefault(t => !string.IsNullOrEmpty(t));
-                if (text is not null)
-                    line = new SubAgentActivityLine(SubAgentActivityKind.AgentText, text);
-            }
-
+            var line = CreateActivityLine(historyItem);
             if (line is null)
+            {
+                itemIndex++;
                 continue;
+            }
 
-            if (this.recentActivity.Count == MaxActivityLines)
-                this.recentActivity.RemoveAt(0);
+            var key = new ActivityKey(item, itemIndex);
+            if (e.Action == NotifyCollectionChangedAction.Replace)
+            {
+                var existingIndex = this.recentActivityKeys.FindIndex(existing => existing.Equals(key));
+                if (existingIndex >= 0)
+                {
+                    this.recentActivity[existingIndex] = line;
+                    changed = true;
+                }
+                else
+                {
+                    this.AddRecentActivity(key, line);
+                    changed = true;
+                }
+            }
+            else if (e.Action == NotifyCollectionChangedAction.Add)
+            {
+                this.AddRecentActivity(key, line);
+                changed = true;
+            }
 
-            this.recentActivity.Add(line);
-            added = true;
+            itemIndex++;
         }
 
-        if (added)
+        if (changed)
             this.ActivityChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    private void AddRecentActivity(ActivityKey key, SubAgentActivityLine line)
+    {
+        if (this.recentActivity.Count == MaxActivityLines)
+        {
+            this.recentActivity.RemoveAt(0);
+            this.recentActivityKeys.RemoveAt(0);
+        }
+
+        this.recentActivity.Add(line);
+        this.recentActivityKeys.Add(key);
+    }
+
+    private static SubAgentActivityLine? CreateActivityLine(AgentChatHistoryItem historyItem)
+    {
+        var toolCall = historyItem.Contents.OfType<FunctionCallContent>().FirstOrDefault();
+        if (toolCall is not null)
+        {
+            return new SubAgentActivityLine(SubAgentActivityKind.ToolCall, toolCall.Name ?? string.Empty);
+        }
+
+        var text = historyItem.Contents.OfType<TextContent>()
+            .Select(t => t.Text)
+            .FirstOrDefault(t => !string.IsNullOrEmpty(t));
+        return text is not null
+            ? new SubAgentActivityLine(SubAgentActivityKind.AgentText, text)
+            : null;
+    }
+
+    private static bool ContainsReference(System.Collections.IList? items, AgentChatRunningItem item)
+    {
+        if (items is null)
+        {
+            return false;
+        }
+
+        foreach (var candidate in items)
+        {
+            if (ReferenceEquals(candidate, item))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private readonly record struct ActivityKey(AgentChatRunningItem Item, int ItemIndex);
 
     public void Dispose()
     {
@@ -230,6 +282,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             item.Items.CollectionChanged -= handler;
 
         this.runningItemHandlers.Clear();
+        this.recentActivityKeys.Clear();
 
         foreach (var display in this.subAgentDisplayItems)
             if (display is IDisposable d)

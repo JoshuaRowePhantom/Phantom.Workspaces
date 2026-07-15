@@ -11,6 +11,7 @@ using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
+[Collection("Avalonia")]
 public sealed class SharedStylesTests
 {
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -151,6 +152,36 @@ public sealed class SharedStylesTests
             "InnerLeftContent setter must wrap control content in <Template>.");
     }
 
+    [Fact]
+    public void EntityCardTree_HoveredItem_HasBorderThicknessThree()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml");
+        var stylesContent = File.ReadAllText(stylesPath);
+
+        var hoverRule = ExtractStyle(stylesContent, "Border.entity-card:pointerover");
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"3\" />", hoverRule, StringComparison.Ordinal);
+
+        var selectedHoverRule = ExtractStyle(stylesContent, "Border.entity-card.selected:pointerover");
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"3\" />", selectedHoverRule, StringComparison.Ordinal);
+        Assert.Contains("Theme.Surface.EntityCard.SelectedBorder", selectedHoverRule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTree_SelectedItem_UsesGoldThemeBorder()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var darkTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Dark.axaml"));
+        var lightTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Light.axaml"));
+
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">Gold</SolidColorBrush>", darkTheme, StringComparison.Ordinal);
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#C19C00</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void StatusThemeResources_AreSolidColorBrushes()
     {
@@ -200,9 +231,9 @@ public sealed class SharedStylesTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void AltIndexBadge_DefaultOpacity_Is0Point5()
+    public void AltIndexBadge_DefaultOpacity_Is0()
     {
-        // Issue #349: badges must appear instantly at 0.50 base opacity, not fade in from 0.
+        // Issue #505: badges must be invisible (opacity 0) when Alt is not held.
         var sharedStyles = LoadSharedStyles();
 
         var border = new Border();
@@ -215,7 +246,7 @@ public sealed class SharedStylesTests
         host.Measure(new Size(1000, 1000));
         host.Arrange(new Rect(0, 0, 1000, 1000));
 
-        Assert.Equal(0.50, border.Opacity);
+        Assert.Equal(0.0, border.Opacity);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -256,10 +287,8 @@ public sealed class SharedStylesTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void SharedStyles_QueueImmediacyOptionPill_UsesThemeResourceForBackground()
+    public void SharedStyles_QueueImmediacyOptionPill_UsesOptionBrushBindings()
     {
-        // Issue #253: queue-immediacy-option-pill must use DynamicResource for Background
-        // and BorderBrush, not ReflectionBinding to per-state color properties.
         var repositoryRoot = FindRepositoryRoot();
         var stylesPath = Path.Combine(
             repositoryRoot.FullName,
@@ -268,18 +297,9 @@ public sealed class SharedStylesTests
             "SharedStyles.axaml");
         var content = File.ReadAllText(stylesPath);
 
-        var pillStyleStart = content.IndexOf(
-            "queue-immediacy-option-pill",
-            StringComparison.Ordinal);
-        Assert.True(pillStyleStart >= 0, "queue-immediacy-option-pill selector must exist.");
-
-        var pillStyleEnd = content.IndexOf("</Style>", pillStyleStart, StringComparison.Ordinal);
-        Assert.True(pillStyleEnd > pillStyleStart, "queue-immediacy-option-pill style must be closed.");
-
-        var pillBlock = content[pillStyleStart..pillStyleEnd];
-        Assert.DoesNotContain("ReflectionBinding Background", pillBlock, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReflectionBinding BorderBrush", pillBlock, StringComparison.Ordinal);
-        Assert.Contains("DynamicResource", pillBlock, StringComparison.Ordinal);
+        Assert.Contains("Background=\"{ReflectionBinding Background}\"", content, StringComparison.Ordinal);
+        Assert.Contains("BorderBrush=\"{ReflectionBinding BorderBrush}\"", content, StringComparison.Ordinal);
+        Assert.Contains("Text=\"{ReflectionBinding GlyphText}\"", content, StringComparison.Ordinal);
     }
 
     private static DirectoryInfo FindRepositoryRoot()
@@ -296,6 +316,15 @@ public sealed class SharedStylesTests
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
+
+    private static string ExtractStyle(string stylesContent, string selector)
+    {
+        var start = stylesContent.IndexOf($"<Style Selector=\"{selector}\">", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected style selector '{selector}' to exist.");
+        var end = stylesContent.IndexOf("</Style>", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"Expected style selector '{selector}' to be closed.");
+        return stylesContent[start..(end + "</Style>".Length)];
     }
 
     private static Avalonia.Styling.Styles LoadSharedStyles()

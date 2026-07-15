@@ -33,6 +33,21 @@ public static class GitHubAuthTokenResolver
             Timeout: GitHubCliTimeout);
 
     /// <summary>
+    /// Asynchronously resolves the GitHub token from <c>GITHUB_TOKEN</c>, falling back to <c>gh auth token</c>.
+    /// Returns <see langword="null"/> when neither source yields a token.
+    /// </summary>
+    public static async Task<string?> ResolveAsync(ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        var environmentValue = Environment.GetEnvironmentVariable(GitHubTokenEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(environmentValue))
+        {
+            return environmentValue;
+        }
+
+        return await ResolveFromCliAsync(logger, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Resolves the GitHub token from <c>GITHUB_TOKEN</c>, falling back to <c>gh auth token</c>.
     /// Returns <see langword="null"/> when neither source yields a token.
     /// </summary>
@@ -48,6 +63,17 @@ public static class GitHubAuthTokenResolver
     }
 
     /// <summary>
+    /// Asynchronously resolves the GitHub token from the GitHub CLI (<c>gh auth token</c>). Returns
+    /// <see langword="null"/> when the CLI is unavailable or returns no token.
+    /// When <paramref name="logger"/> is supplied, a Warning-level entry is emitted if
+    /// <c>gh auth token</c> exits with a non-zero code.
+    /// </summary>
+    public static async Task<string?> ResolveFromCliAsync(ILogger? logger = null, CancellationToken cancellationToken = default)
+    {
+        return await ResolveFromCliCoreAsync(logger ?? NullLogger.Instance, GitHubCliParameters, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Resolves the GitHub token from the GitHub CLI (<c>gh auth token</c>). Returns
     /// <see langword="null"/> when the CLI is unavailable or returns no token.
     /// When <paramref name="logger"/> is supplied, a Warning-level entry is emitted if
@@ -56,6 +82,30 @@ public static class GitHubAuthTokenResolver
     public static string? ResolveFromCli(ILogger? logger = null)
     {
         return ResolveFromCliCore(logger ?? NullLogger.Instance, GitHubCliParameters);
+    }
+
+    internal static async Task<string?> ResolveFromCliCoreAsync(
+        ILogger logger, RunProcessParameters parameters, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await ProcessRunner.RunAndLogAsync(
+                parameters,
+                logger,
+                operationDescription: "resolve GitHub auth token via CLI",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            if (result.ExitCode != 0)
+            {
+                return null;
+            }
+
+            return result.StandardOut.Trim();
+        }
+        catch (Win32Exception)
+        {
+            return null;
+        }
     }
 
     internal static string? ResolveFromCliCore(ILogger logger, RunProcessParameters parameters)

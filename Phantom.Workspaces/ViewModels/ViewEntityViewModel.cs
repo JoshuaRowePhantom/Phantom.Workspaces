@@ -3,7 +3,9 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading.Tasks;
 using Avalonia;
+using Avalonia.Media;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -11,8 +13,12 @@ public sealed class ViewEntityViewModel : ViewModelBase
 {
     private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
     private readonly EntityListNodeViewModel entityCardNode;
+    private readonly MainWindowViewModel mainWindowViewModel;
+    private readonly ShortcutManager shortcutManager;
     private bool hasTraversedChildren;
     private bool isExpanded = true;
+    private IBrush? childRailBrush;
+    private IBrush? parentColorBrush;
 
     public ViewEntityViewModel(
         SubscribedEntityViewModel entity,
@@ -24,6 +30,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
         FieldEditorFactory? fieldEditorFactory = null)
     {
         this.Entity = entity;
+        this.mainWindowViewModel = mainWindowViewModel;
+        this.shortcutManager = shortcutManager;
         this.Badges = new BadgesViewModel(entity.Badges);
         this.StatusBadges = new StatusBadgesViewModel(entity.StatusBadges);
         this.IndentLevel = indentLevel;
@@ -36,8 +44,6 @@ public sealed class ViewEntityViewModel : ViewModelBase
             cardViewName: EntityCardViewResolver.RawViewName,
             fieldEditorFactory: fieldEditorFactory);
         mainWindowViewModel.RegisterCardNode(entity, this.entityCardNode);
-        EntityShortcutViewModel.PopulateShortcuts(this.Shortcuts, mainWindowViewModel, entity, shortcutManager);
-        this.entityCardNode.Card.SetShortcuts(this.Shortcuts, mainWindowViewModel.ActivateShortcutCommand);
         this.entityCardNode.Card.SetBadges(this.Badges);
         this.entityCardNode.Card.SetStatusBadges(this.StatusBadges);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
@@ -45,6 +51,17 @@ public sealed class ViewEntityViewModel : ViewModelBase
             execute: _ => this.IsExpanded = !this.IsExpanded,
             canExecute: _ => this.HasTraversedChildren);
         this.RefreshCollections();
+    }
+
+    public async Task InitializeAsync()
+    {
+        await EntityShortcutViewModel.PopulateShortcutsAsync(
+            this.Shortcuts,
+            this.mainWindowViewModel,
+            this.Entity,
+            this.shortcutManager);
+        this.entityCardNode.Card.SetShortcuts(this.Shortcuts, this.mainWindowViewModel.ActivateShortcutCommand);
+        this.RaisePropertyChanged(nameof(this.HasShortcuts));
     }
 
     public SubscribedEntityViewModel Entity { get; }
@@ -67,9 +84,15 @@ public sealed class ViewEntityViewModel : ViewModelBase
             if (this.SetProperty(ref this.hasTraversedChildren, value))
             {
                 this.ToggleExpandCommand.RaiseCanExecuteChanged();
+                this.RaisePropertyChanged(nameof(this.HasChildren));
+                this.RaisePropertyChanged(nameof(this.NotHasChildren));
             }
         }
     }
+
+    public bool HasChildren => this.hasTraversedChildren;
+
+    public bool NotHasChildren => !this.hasTraversedChildren;
 
     public bool IsExpanded
     {
@@ -95,11 +118,44 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
 
+    public ObservableCollection<ViewEntityViewModel> Children { get; } = [];
+
     public EntityListNodeViewModel EntityCardNode => this.entityCardNode;
 
     public bool HasShortcuts => this.Shortcuts.Count > 0;
 
-    public Thickness IndentMargin => new(this.IndentLevel * 20, 0, 0, 0);
+    public IBrush? ParentColorBrush
+    {
+        get => this.parentColorBrush;
+        private set
+        {
+            if (this.SetProperty(ref this.parentColorBrush, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasParent));
+            }
+        }
+    }
+
+    public bool HasParent => this.ParentColorBrush is not null;
+
+    public IBrush? ChildRailBrush
+    {
+        get => this.childRailBrush;
+        private set => this.SetProperty(ref this.childRailBrush, value);
+    }
+
+    public void AddChild(ViewEntityViewModel child)
+    {
+        var brush = Converters.EntityTypeColorConverter.Instance.Convert(
+            this.Entity.NonAbstractEntityTypeNames,
+            typeof(IBrush),
+            null,
+            System.Globalization.CultureInfo.InvariantCulture) as IBrush;
+        child.ParentColorBrush = brush;
+        this.ChildRailBrush ??= brush;
+        this.Children.Add(child);
+        this.HasTraversedChildren = true;
+    }
 
     private void OnEntityPropertyChanged(
         object? sender,

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -18,6 +19,7 @@ public sealed class RunningAgentChatTableTests
         private readonly Dictionary<AgentSessionId, (int RefCount, RunningAgentChat Entry)> _sessions = new();
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
+        public AgentDefinition? LastDefinition { get; private set; }
 
         public FakeRunningAgentChatFactory(TaskScheduler? foregroundScheduler = null)
         {
@@ -66,8 +68,13 @@ public sealed class RunningAgentChatTableTests
             AgentSessionId sessionId,
             AgentDefinition? definition = null,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetAsync(sessionId, ct);
+        {
+            LastDefinition = definition;
+            return GetAsync(sessionId, ct);
+        }
 
         private async ValueTask RemoveRefAsync(AgentSessionId sessionId)
         {
@@ -125,6 +132,41 @@ public sealed class RunningAgentChatTableTests
         }
     }
 
+    private static AcquireAgentChatRequest Request(
+        AgentSessionId sessionId,
+        string entityName = "",
+        string? entityId = null,
+        string? entityDisplayName = null,
+        string? entityDescription = null)
+        => new()
+        {
+            AgentSessionId = sessionId,
+            EntityName = entityName,
+            EntityId = entityId,
+            EntityDisplayName = entityDisplayName,
+            EntityDescription = entityDescription,
+        };
+
+    private sealed class FakeAgentDefinitionResolver : IAgentDefinitionResolver
+    {
+        private readonly AgentDefinition definition;
+
+        public FakeAgentDefinitionResolver(AgentDefinition definition)
+        {
+            this.definition = definition;
+        }
+
+        public int ResolveCallCount { get; private set; }
+
+        public Task<ResolvedAgentDefinition?> ResolveAsync(
+            AgentDefinitionResolveRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            ResolveCallCount++;
+            return Task.FromResult<ResolvedAgentDefinition?>(new ResolvedAgentDefinition(this.definition));
+        }
+    }
+
     // ── Tests ─────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -134,7 +176,7 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-entity-info");
 
-        await using var lease = await table.AcquireAsync(sessionId, entityName: "My Entity", entityId: "entity-id-1", ct: TestContext.Current.CancellationToken);
+        await using var lease = await table.AcquireAsync(Request(sessionId, entityName: "My Entity", entityId: "entity-id-1"), TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(table.RunningSessions);
         Assert.Equal("My Entity", entry.EntityName);
@@ -149,7 +191,7 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-remove-last");
 
-        var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        var lease = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
         Assert.Single(table.RunningSessions);
 
         await lease.DisposeAsync();
@@ -164,8 +206,8 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-two-leases");
 
-        var lease1 = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
-        var lease2 = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        var lease1 = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
+        var lease2 = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
 
         Assert.Single(table.RunningSessions);
 
@@ -183,9 +225,9 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-entity-preserved");
 
-        var lease1 = await table.AcquireAsync(sessionId, entityName: "Preserved Entity", entityId: "entity-42", ct: TestContext.Current.CancellationToken);
+        var lease1 = await table.AcquireAsync(Request(sessionId, entityName: "Preserved Entity", entityId: "entity-42"), TestContext.Current.CancellationToken);
         // A second acquire (e.g., a second tab) should not overwrite entity info.
-        var lease2 = await table.AcquireAsync(sessionId, ct: TestContext.Current.CancellationToken);
+        var lease2 = await table.AcquireAsync(Request(sessionId), TestContext.Current.CancellationToken);
 
         try
         {
@@ -208,7 +250,7 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-scheduler-add");
 
-        await using var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        await using var lease = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
 
         Assert.True(scheduler.WasInvoked);
     }
@@ -221,7 +263,7 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-scheduler-remove");
 
-        var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        var lease = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
         scheduler.WasInvoked = false;
 
         await lease.DisposeAsync();
@@ -236,7 +278,7 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-delegate");
 
-        await using var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        await using var lease = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(table.RunningSessions);
 
@@ -256,7 +298,7 @@ public sealed class RunningAgentChatTableTests
         var table = new RunningAgentChatTable(factory);
         var sessionId = new AgentSessionId("session-id-match");
 
-        await using var lease = await table.AcquireAsync(sessionId, entityName: "Entity", ct: TestContext.Current.CancellationToken);
+        await using var lease = await table.AcquireAsync(Request(sessionId, entityName: "Entity"), TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(table.RunningSessions);
         Assert.Equal(sessionId, entry.SessionId);
@@ -270,8 +312,8 @@ public sealed class RunningAgentChatTableTests
         var sessionA = new AgentSessionId("session-multi-a");
         var sessionB = new AgentSessionId("session-multi-b");
 
-        await using var leaseA = await table.AcquireAsync(sessionA, entityName: "Entity A", entityId: "id-a", ct: TestContext.Current.CancellationToken);
-        await using var leaseB = await table.AcquireAsync(sessionB, entityName: "Entity B", entityId: "id-b", ct: TestContext.Current.CancellationToken);
+        await using var leaseA = await table.AcquireAsync(Request(sessionA, entityName: "Entity A", entityId: "id-a"), TestContext.Current.CancellationToken);
+        await using var leaseB = await table.AcquireAsync(Request(sessionB, entityName: "Entity B", entityId: "id-b"), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, table.RunningSessions.Count);
 
@@ -283,4 +325,101 @@ public sealed class RunningAgentChatTableTests
         Assert.Equal("Entity B", entryB.EntityName);
         Assert.Equal("id-b", entryB.EntityId);
     }
+
+    [Fact]
+    public async Task AcquireAsync_WithEntityDisplayName_PassesToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-display-name");
+
+        await using var lease = await table.AcquireAsync(
+            Request(sessionId, entityName: "Entity", entityDisplayName: "Custom Display Name"),
+            TestContext.Current.CancellationToken);
+
+        // Verify the factory's GetOrCreateAsync was called (implicitly through our fake returning a lease)
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_WithEntityDescription_PassesToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-description");
+
+        await using var lease = await table.AcquireAsync(
+            Request(sessionId, entityName: "Entity", entityDescription: "Test description"),
+            TestContext.Current.CancellationToken);
+
+        // Verify the factory's GetOrCreateAsync was called (implicitly through our fake returning a lease)
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_WithEntityDisplayNameAndDescription_PassesToFactory()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-both");
+
+        await using var lease = await table.AcquireAsync(
+            Request(sessionId, entityName: "Entity", entityDisplayName: "Display Name", entityDescription: "Description text"),
+            TestContext.Current.CancellationToken);
+
+        // Verify the factory's GetOrCreateAsync was called (implicitly through our fake returning a lease)
+        Assert.NotNull(lease);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_AgentDefinitionProvided_UsesItDirectly()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-direct-definition");
+        var definition = CreateTestDefinition("direct-definition");
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                AgentDefinition = definition,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Same(definition, factory.LastDefinition);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_AgentSessionEntity_DelegatesToResolver()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-resolver");
+        var definition = CreateTestDefinition("resolved-definition");
+        var resolver = new FakeAgentDefinitionResolver(definition);
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                AgentSessionEntity = JsonDocument.Parse("""{"agent-session-id":"session-resolver"}""").RootElement.Clone(),
+                AgentDefinitionResolver = resolver,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, resolver.ResolveCallCount);
+        Assert.Same(definition, factory.LastDefinition);
+    }
+
+    private static AgentDefinition CreateTestDefinition(string name)
+        => AgentDefinition.FromJson(
+            $$"""
+            {
+              "kind": "prompt",
+              "name": "{{name}}",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """);
 }

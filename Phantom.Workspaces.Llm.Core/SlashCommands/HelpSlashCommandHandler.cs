@@ -72,7 +72,11 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
         var lines = this.registry.Commands
             .OrderBy(static c => c.Name, StringComparer.Ordinal)
             .Select(static c => $"/{c.Name,-24} {c.Description}");
-        return new SlashCommandResult { StatusMessage = string.Join('\n', lines) };
+        return new SlashCommandResult 
+        { 
+            StatusMessage = string.Join('\n', lines),
+            Role = AgentChatHistoryItem.HelpChatRole
+        };
     }
 
     private async Task<SlashCommandResult> ShowCommandHelpAsync(
@@ -90,6 +94,10 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
 
         var body = await handler.GetHelpAsync(context, string.Empty, cancellationToken);
         var usage = handler.Usage is not null ? $"Usage: {handler.Usage}\n\n" : string.Empty;
-        return new SlashCommandResult { StatusMessage = $"{usage}{body}" };
+        return new SlashCommandResult 
+        { 
+            StatusMessage = $"{usage}{body}",
+            Role = AgentChatHistoryItem.HelpChatRole
+        };
     }
 }

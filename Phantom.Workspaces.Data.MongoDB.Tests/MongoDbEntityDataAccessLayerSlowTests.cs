@@ -183,7 +183,7 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
         var collection = _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities");
         var document = new BsonDocument
         {
-            { "_id", new ObjectId() },
+            { "_id", entityId.ToString() },
             { "entity-id", entityId.ToString() },
             { "concurrency-tag", "initial-tag" },
             { "current", new BsonDocument
@@ -234,7 +234,7 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
         var collection = _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities");
         var document = new BsonDocument
         {
-            { "_id", new ObjectId() },
+            { "_id", entityId.ToString() },
             { "entity-id", entityId.ToString() },
             { "concurrency-tag", "tag-1" },
             { "current", new BsonDocument
@@ -378,7 +378,7 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
         var collection = _fixture.Database.GetCollection<BsonDocument>($"{MongoDbTestDatabaseFixture.EntityCollectionName}_entities");
         var document = new BsonDocument
         {
-            { "_id", new ObjectId() },
+            { "_id", entityId.ToString() },
             { "entity-id", entityId.ToString() },
             { "concurrency-tag", "legacy-tag" },
             { "current", new BsonDocument
@@ -450,7 +450,7 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
             $$"""
               {
                 "entity-id": "{{entityId}}",
-                "type-names": ["entity", "{{type}}"],
+                "entity-types": ["entity", "{{type}}"],
                 "names": ["{{name}}"]
               }
               """);

@@ -198,7 +198,11 @@ public sealed class MainWindowAxamlTests
         // ItemsPresenter visibility to IsExpanded; otherwise collapsing a tool node has no
         // effect and the children stay visible.
         Assert.Contains(
-            "<ItemsPresenter Margin=\"20,0,0,0\"",
+            "<ItemsPresenter Grid.Column=\"1\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Margin=\"18,0,0,0\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -261,6 +265,115 @@ public sealed class MainWindowAxamlTests
         Assert.True(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
+    }
+
+    [Fact]
+    public void EntityCardTreeTemplate_DoesNotWrapEntityCardControlInSecondCardBorder()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+
+        Assert.DoesNotContain(
+            "Classes=\"entity-card branch-header\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Classes=\"entity-card leaf\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"branch-header\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Classes=\"leaf\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeTypeBar_IsConstrainedToCardHeaderAndCardsDoNotStretch()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+        var selector = "<Style Selector=\"TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar\">";
+        var styleStart = sharedStylesContent.IndexOf(selector, StringComparison.Ordinal);
+        Assert.True(styleStart >= 0);
+        var styleEnd = sharedStylesContent.IndexOf("</Style>", styleStart, StringComparison.Ordinal);
+        Assert.True(styleEnd > styleStart);
+        var typeBarStyle = sharedStylesContent[styleStart..(styleEnd + "</Style>".Length)];
+
+        Assert.Contains(
+            selector,
+            typeBarStyle,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<Setter Property=\"Height\" Value=\"42\" />",
+            typeBarStyle,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<Setter Property=\"VerticalAlignment\" Value=\"Top\" />",
+            typeBarStyle,
+            StringComparison.Ordinal);
+
+        // Type bar must live inside EntityCardControl's header grid, not in a sibling
+        // overlay that stretches down the whole card.
+        var dataTemplatesContent = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
+        Assert.DoesNotContain("entity-card-tree-type-bar", dataTemplatesContent, StringComparison.Ordinal);
+
+        var entityCardContent = ReadMainAppFile(Path.Combine("Controls", "EntityCardControl.axaml"));
+        Assert.Contains("ColumnDefinitions=\"Auto,*,Auto\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("Classes=\"entity-card-tree-type-bar\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("Grid.Column=\"1\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("Grid.Column=\"2\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
+
+        Assert.Contains(
+            "<Setter Property=\"HorizontalAlignment\" Value=\"Left\" />",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"MaxWidth\" Value=\"760\" />",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SharedStyles_EntityCardTreeControlTemplate_CentersChildRailInIndentColumn()
+    {
+        var sharedStylesContent = ReadSharedStylesFile();
+
+        Assert.Contains(
+            "ColumnDefinitions=\"21,*\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Width=\"3\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HorizontalAlignment=\"Center\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FallbackValue=▼",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "FallbackValue=#808080",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ColumnDefinitions=\"2,*\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ColumnDefinitions=\"20,*\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Margin=\"18,0,0,0\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -344,15 +457,15 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Pause\" Command=\"{Binding InputQueue.ToggleHoldAllQueuesCommand}\"",
+            "Gesture=\"Pause\" Command=\"{Binding ToggleHoldAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Shift+Pause\" Command=\"{Binding InputQueue.HoldAllQueuesCommand}\"",
+            "Gesture=\"Shift+Pause\" Command=\"{Binding HoldAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Gesture=\"Ctrl+Shift+Cancel\" Command=\"{Binding InputQueue.UnholdAllQueuesCommand}\"",
+            "Gesture=\"Ctrl+Shift+Cancel\" Command=\"{Binding UnholdAllQueuesCommand}\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -605,7 +718,7 @@ public sealed class MainWindowAxamlTests
         var darkContent = ReadThemeFile("Dark.axaml");
 
         Assert.Contains(
-            "Theme.Surface.EntityPane.Background\">#1E1E1E",
+            "Theme.Surface.EntityPane.Background\">#000000",
             darkContent,
             StringComparison.Ordinal);
     }

@@ -28,7 +28,6 @@ internal sealed class ChatMessageHtmlModel
 
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
-    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
@@ -37,7 +36,6 @@ internal sealed class ChatMessageHtmlModel
     private string? renderedRoleLabel;
     private bool hasRendered;
     private bool lastReasoningVisible;
-    private bool lastDiagnosticsVisible;
     private Dictionary<string, FunctionResultContent>? supplementalResults;
 
     public ChatMessageHtmlModel(
@@ -46,7 +44,6 @@ internal sealed class ChatMessageHtmlModel
         AgentChatHistoryItem source,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
-        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null)
@@ -58,7 +55,6 @@ internal sealed class ChatMessageHtmlModel
         this.ElementId = elementId;
         this.source = source;
         this.isReasoningVisible = isReasoningVisible;
-        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.sink = sink;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
@@ -126,7 +122,10 @@ internal sealed class ChatMessageHtmlModel
         var roleLabel = this.source.Role.Value;
         this.renderedRoleLabel = roleLabel;
         string? jumpLinkHtml = null;
-        if (this.source.ParentToolCallId is { } parentToolCallId && this.resolveSubAgentId is not null)
+        var parentToolCallId = this.source.Contents
+            .Select(CopilotSdkStreamAdapter.GetParentToolCallId)
+            .FirstOrDefault(id => id is not null);
+        if (parentToolCallId is not null && this.resolveSubAgentId is not null)
         {
             var subAgentId = this.resolveSubAgentId(parentToolCallId);
             if (subAgentId is not null)
@@ -159,32 +158,18 @@ internal sealed class ChatMessageHtmlModel
     internal void Render(bool emit)
     {
         var includeReasoning = this.isReasoningVisible();
-        var includeDiagnostics = this.isDiagnosticsVisible?.Invoke() ?? true;
         var reasoningChanged = !this.hasRendered || includeReasoning != this.lastReasoningVisible;
-        var diagnosticsChanged = !this.hasRendered || includeDiagnostics != this.lastDiagnosticsVisible;
-        var visibilityChanged = reasoningChanged || diagnosticsChanged;
+        var visibilityChanged = reasoningChanged;
 
         var roleLabel = this.source.Role.Value;
         var isDiagnostic = string.Equals(
             roleLabel,
             AgentChatHistoryItem.DiagnosticChatRole.Value,
             StringComparison.OrdinalIgnoreCase);
-
-        // Completely suppress diagnostic messages when diagnostics are disabled.
-        if (isDiagnostic && !includeDiagnostics)
-        {
-            if (emit && this.hasRendered)
-            {
-                this.EmitDiff([], roleLabel, visibilityChanged);
-            }
-
-            this.bindings.Clear();
-            this.hasRendered = true;
-            this.lastReasoningVisible = includeReasoning;
-            this.lastDiagnosticsVisible = includeDiagnostics;
-            this.renderedRoleLabel = roleLabel;
-            return;
-        }
+        var isHelp = string.Equals(
+            roleLabel,
+            AgentChatHistoryItem.HelpChatRole.Value,
+            StringComparison.OrdinalIgnoreCase);
 
         // Pre-scan: build a CallId → result lookup for content-level call+result pairing.
         Dictionary<string, FunctionResultContent>? resultLookup = null;
@@ -269,14 +254,8 @@ internal sealed class ChatMessageHtmlModel
                 continue;
             }
 
-            if (isDiagnostic && !includeDiagnostics && content is TextContent)
-            {
-                contentIndex++;
-                continue;
-            }
-
             var contentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
-            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, this.toolFactory, this.statusSink);
+            var html = ChatOutputHtmlRenderer.RenderContent(contentId, content, includeReasoning, isDiagnostic, isHelp, this.toolFactory, this.statusSink);
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
@@ -295,7 +274,6 @@ internal sealed class ChatMessageHtmlModel
         this.bindings.AddRange(newBindings);
         this.hasRendered = true;
         this.lastReasoningVisible = includeReasoning;
-        this.lastDiagnosticsVisible = includeDiagnostics;
         this.renderedRoleLabel = roleLabel;
     }
 
@@ -443,7 +421,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 {
     private enum StructuralCategory
     {
-        SuppressedDiagnostic,
         ToolCallOnly,
         ResultOnly,
         Normal,
@@ -451,7 +428,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
-    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly string containerPath;
     private readonly Func<int, string> elementIdForSourceIndex;
     private readonly Func<int, string> groupIdForSourceIndex;
@@ -470,7 +446,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         Func<int, string> elementIdForSourceIndex,
         Func<int, string> groupIdForSourceIndex,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
-        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
@@ -483,7 +458,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
-        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.containerPath = containerPath;
         this.elementIdForSourceIndex = elementIdForSourceIndex;
         this.groupIdForSourceIndex = groupIdForSourceIndex;
@@ -525,7 +499,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             sourceItem,
             this.isReasoningVisible,
             this.sink,
-            this.isDiagnosticsVisible,
             this.toolFactory,
             this.statusSink,
             this.resolveSubAgentId));
@@ -639,18 +612,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     private void ClassifyAndInsert(int index, RenderSlot slot)
     {
         var sourceItem = slot.Model.Source;
-
-        // Completely suppress diagnostic messages when diagnostics are disabled.
-        var isDiagnostic = string.Equals(
-            sourceItem.Role.Value,
-            AgentChatHistoryItem.DiagnosticChatRole.Value,
-            StringComparison.OrdinalIgnoreCase);
-        var includeDiagnostics = this.isDiagnosticsVisible?.Invoke() ?? true;
-        if (isDiagnostic && !includeDiagnostics)
-        {
-            slot.HasDomElement = false;
-            return;
-        }
 
         // A message containing only FunctionResultContent items produces no DOM element of its own
         // when every result matches a known call: each result is injected into the matched call
@@ -795,7 +756,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             newItem,
             this.isReasoningVisible,
             this.sink,
-            this.isDiagnosticsVisible,
             this.toolFactory,
             this.statusSink,
             this.resolveSubAgentId));
@@ -882,15 +842,6 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
     private StructuralCategory Categorize(AgentChatHistoryItem item)
     {
-        var isDiagnostic = string.Equals(
-            item.Role.Value,
-            AgentChatHistoryItem.DiagnosticChatRole.Value,
-            StringComparison.OrdinalIgnoreCase);
-        if (isDiagnostic && !(this.isDiagnosticsVisible?.Invoke() ?? true))
-        {
-            return StructuralCategory.SuppressedDiagnostic;
-        }
-
         if (IsToolCallOnlyItem(item))
         {
             return StructuralCategory.ToolCallOnly;
@@ -1103,7 +1054,6 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
-    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
@@ -1116,7 +1066,6 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
-        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
     {
@@ -1126,7 +1075,6 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         this.ElementId = elementId;
         this.Source = source;
         this.isReasoningVisible = isReasoningVisible;
-        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.sink = sink;
         this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
@@ -1157,7 +1105,6 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             elementIdForSourceIndex: localIndex => ChatOutputHtmlRenderer.RunningMessageId(this.ElementId, localIndex),
             groupIdForSourceIndex: localIndex => $"{this.ElementId}-group-{localIndex}",
             sharedSlotByCallId: this.sharedSlotByCallId,
-            isDiagnosticsVisible: this.isDiagnosticsVisible,
             toolFactory: this.toolFactory,
             statusSink: this.statusSink,
             preloadedCount: 0);
@@ -1216,7 +1163,6 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
 {
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
-    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly Func<int> nextId;
     private readonly Dictionary<string, RenderSlot> sharedSlotByCallId;
     private readonly IToolVisualizerFactory? toolFactory;
@@ -1229,7 +1175,6 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
         Func<bool> isReasoningVisible,
         Func<int> nextId,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
-        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null)
         : base(source, target)
@@ -1237,7 +1182,6 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
         ArgumentNullException.ThrowIfNull(sharedSlotByCallId);
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
-        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.nextId = nextId;
         this.sharedSlotByCallId = sharedSlotByCallId;
         this.toolFactory = toolFactory;
@@ -1254,7 +1198,6 @@ internal sealed class RunningChatItemsHtmlTransformer : CollectionTransformer<Ag
             this.isReasoningVisible,
             this.sink,
             this.sharedSlotByCallId,
-            this.isDiagnosticsVisible,
             this.toolFactory,
             this.statusSink);
 
@@ -1300,10 +1243,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly IReadOnlyList<AgentChatHistoryItem> historyItems;
     private readonly IReadOnlyList<AgentChatRunningItem> runningItems;
     private readonly Func<bool> isReasoningVisible;
-    private readonly Func<bool>? isDiagnosticsVisible;
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
+    private readonly Action? beforeDispatchHistoryChunk;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
     private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
     private readonly List<RenderSlot> historySlots = [];
@@ -1333,12 +1276,12 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IReadOnlyList<AgentChatRunningItem> runningItems,
         Func<bool> isReasoningVisible,
         IChatOutputHtmlSink sink,
-        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
         IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null,
-        IReadOnlyList<IRunningSubAgent>? ancestors = null)
+        IReadOnlyList<IRunningSubAgent>? ancestors = null,
+        Action? beforeDispatchHistoryChunk = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
@@ -1349,10 +1292,10 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.runningItems = runningItems;
         this.sink = sink;
         this.isReasoningVisible = isReasoningVisible;
-        this.isDiagnosticsVisible = isDiagnosticsVisible;
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
         this.resolveSubAgentId = resolveSubAgentId;
+        this.beforeDispatchHistoryChunk = beforeDispatchHistoryChunk;
 
         // Phase A: take a snapshot of history for off-thread processing.
         var snapshot = new List<AgentChatHistoryItem>(historyItems);
@@ -1372,7 +1315,6 @@ public sealed class ChatOutputHtmlModel : IDisposable
             isReasoningVisible,
             this.NextId,
             this.sharedSlotByCallId,
-            isDiagnosticsVisible,
             toolFactory,
             statusSink);
 
@@ -1423,14 +1365,12 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IReadOnlyList<AgentChatHistoryItem> snapshot,
         IChatOutputHtmlSink sink,
         Func<bool> isReasoningVisible,
-        Func<bool>? isDiagnosticsVisible = null,
         IToolVisualizerFactory? toolFactory = null,
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null)
     {
         var slots = new RenderSlot[snapshot.Count];
         var slotByCallId = new Dictionary<string, RenderSlot>(StringComparer.Ordinal);
-        var includeDiagnostics = isDiagnosticsVisible?.Invoke() ?? true;
 
         // Pass 1: create slots and register call ids across the whole snapshot.
         for (var i = 0; i < snapshot.Count; i++)
@@ -1441,7 +1381,6 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 snapshot[i],
                 isReasoningVisible,
                 sink,
-                isDiagnosticsVisible,
                 toolFactory,
                 statusSink,
                 resolveSubAgentId));
@@ -1460,15 +1399,6 @@ public sealed class ChatOutputHtmlModel : IDisposable
         for (var i = 0; i < snapshot.Count; i++)
         {
             var item = snapshot[i];
-            var isDiagnostic = string.Equals(
-                item.Role.Value,
-                AgentChatHistoryItem.DiagnosticChatRole.Value,
-                StringComparison.OrdinalIgnoreCase);
-            if (isDiagnostic && !includeDiagnostics)
-            {
-                slots[i].HasDomElement = false;
-                continue;
-            }
 
             if (!ChatMessageHtmlTransformer.IsToolResultOnlyItem(item))
             {
@@ -1625,7 +1555,6 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 snapshot,
                 this.sink,
                 this.isReasoningVisible,
-                this.isDiagnosticsVisible,
                 this.toolFactory,
                 this.statusSink,
                 this.resolveSubAgentId);
@@ -1640,6 +1569,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var chunkHtml = GenerateHistoryChunk(plan, start, end);
+                this.beforeDispatchHistoryChunk?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
                 if (chunkHtml.Length == 0)
                 {
                     continue;
@@ -1648,76 +1579,85 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 var scrollAfterThisChunk = !scrolled;
                 scrolled = true;
 
-                await Dispatcher.UIThread.InvokeAsync(() =>
+                await Dispatcher.UIThread.InvokeAsync(
+                    () =>
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
+                        this.sink.BeginBatch();
+                        this.sink.UpdateContent(
+                            ChatOutputHtmlRenderer.HistoryContainerId,
+                            ChatOutputUpdateLocation.Prepend,
+                            chunkHtml);
+
+                        // Scroll to bottom immediately after the first (newest) chunk, making the most
+                        // recent content visible while older chunks fill in above.
+                        if (scrollAfterThisChunk)
+                        {
+                            this.sink.ScrollToBottom();
+                        }
+
+                        this.sink.EndBatch();
+                    },
+                    DispatcherPriority.Normal,
+                    cancellationToken);
+            }
+
+            // Phase C: publish the plan, then construct the live transformer, replaying the
+            // buffered collection-changed events captured during loading so every mutation
+            // (adds, replaces, removes, moves) is applied to the DOM exactly once.
+            await Dispatcher.UIThread.InvokeAsync(
+                () =>
                 {
                     if (cancellationToken.IsCancellationRequested)
                     {
                         return;
                     }
 
-                    this.sink.BeginBatch();
-                    this.sink.UpdateContent(
-                        ChatOutputHtmlRenderer.HistoryContainerId,
-                        ChatOutputUpdateLocation.Prepend,
-                        chunkHtml);
+                    this.historySlots.AddRange(plan.Slots);
+                    foreach (var (callId, slot) in plan.SlotByCallId)
+                    {
+                        this.sharedSlotByCallId[callId] = slot;
+                    }
 
-                    // Scroll to bottom immediately after the first (newest) chunk, making the most
-                    // recent content visible while older chunks fill in above.
-                    if (scrollAfterThisChunk)
+                    this.historyTransformer = new ChatMessageHtmlTransformer(
+                        this.historyItems,
+                        this.historySlots,
+                        this.sink,
+                        this.isReasoningVisible,
+                        containerPath: ChatOutputHtmlRenderer.HistoryContainerId,
+                        elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
+                        groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
+                        sharedSlotByCallId: this.sharedSlotByCallId,
+                        toolFactory: this.toolFactory,
+                        statusSink: this.statusSink,
+                        resolveSubAgentId: this.resolveSubAgentId,
+                        preloadedCount: snapshot.Count,
+                        bufferedEvents: this.bufferedHistoryEvents);
+
+                    this.historyLoading = false;
+
+                    if (this.bufferedHistoryEvents is { Count: > 0 })
                     {
                         this.sink.ScrollToBottom();
                     }
 
-                    this.sink.EndBatch();
-                });
-            }
-
-            // Phase C: publish the plan, then construct the live transformer, replaying the
-            // buffered collection-changed events captured during loading so every mutation
-            // (adds, replaces, removes, moves) is applied to the DOM exactly once.
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                this.historySlots.AddRange(plan.Slots);
-                foreach (var (callId, slot) in plan.SlotByCallId)
-                {
-                    this.sharedSlotByCallId[callId] = slot;
-                }
-
-                this.historyTransformer = new ChatMessageHtmlTransformer(
-                    this.historyItems,
-                    this.historySlots,
-                    this.sink,
-                    this.isReasoningVisible,
-                    containerPath: ChatOutputHtmlRenderer.HistoryContainerId,
-                    elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
-                    groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
-                    sharedSlotByCallId: this.sharedSlotByCallId,
-                    isDiagnosticsVisible: this.isDiagnosticsVisible,
-                    toolFactory: this.toolFactory,
-                    statusSink: this.statusSink,
-                    resolveSubAgentId: this.resolveSubAgentId,
-                    preloadedCount: snapshot.Count,
-                    bufferedEvents: this.bufferedHistoryEvents);
-
-                this.historyLoading = false;
-
-                if (this.bufferedHistoryEvents is { Count: > 0 })
-                {
-                    this.sink.ScrollToBottom();
-                }
-
-                this.bufferedHistoryEvents = null;
-            });
+                    this.bufferedHistoryEvents = null;
+                },
+                DispatcherPriority.Normal,
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
             // Disposed before loading completed; the plan is discarded without publishing partial
             // slots or call-map entries.
+        }
+        finally
+        {
+            this.loadCts.Dispose();
         }
     }
 
@@ -1821,8 +1761,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
     public void Dispose()
     {
-        this.loadCts.Cancel();
-        this.loadCts.Dispose();
+        try
+        {
+            this.loadCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
 
         if (this.historyItems is INotifyCollectionChanged historyChanged)
         {

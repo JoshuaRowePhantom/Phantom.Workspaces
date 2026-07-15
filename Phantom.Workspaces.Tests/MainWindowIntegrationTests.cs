@@ -538,9 +538,12 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(workspaceVm);
         Assert.False(workspaceVm!.IsExpanded);
 
-        // Traversed child must NOT appear in the flat population when disposition is "collapsed".
-        Assert.DoesNotContain(
+        // Collapsed traversals keep children populated so expand/collapse only toggles visibility.
+        Assert.Contains(
             viewModel.CurrentViewPopulation.Entities,
+            e => e.Entity.EntityId == relatedId);
+        Assert.Contains(
+            workspaceVm.Children,
             e => e.Entity.EntityId == relatedId);
     }
 
@@ -635,7 +638,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
@@ -679,7 +688,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -725,7 +740,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -777,7 +798,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -879,7 +906,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
@@ -1811,8 +1844,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+
             agentSessionShortcutContext,
-            CreateLocalTrustedExecutorSelector());
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
@@ -1856,8 +1896,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+
             agentSessionShortcutContext,
-            CreateLocalTrustedExecutorSelector());
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
@@ -1906,7 +1953,8 @@ public sealed class MainWindowIntegrationTests
         var selectorWithNoRemote = TrustedExecutorComposition.CreateSelector(emptyRegistry);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
-            selectorWithNoRemote);
+            selectorWithNoRemote,
+            CreateTestRunningAgentChatTable());
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
@@ -1946,7 +1994,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         var paneId = viewModel.SelectedWorkspacePane.Id;
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
@@ -1987,7 +2043,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
@@ -2152,7 +2216,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -2249,7 +2321,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -2304,7 +2384,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -2338,7 +2426,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
-        => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+        => TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry());
 
     // ── Float-tab disposal guard (issue #635) ─────────────────────────────────
 
@@ -2372,7 +2460,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var workspacePane = viewModel.SelectedWorkspacePane;
@@ -2427,7 +2523,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var workspacePane = viewModel.SelectedWorkspacePane;
@@ -2485,7 +2589,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var workspacePane = viewModel.SelectedWorkspacePane;
@@ -4130,6 +4242,7 @@ public sealed class MainWindowIntegrationTests
 
         // NavigateBack once — lands back on pane A's tab.
         viewModel.NavigateBackCommand.Execute(null);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
         var documentDockAfterBack = GetDocumentDock(viewModel);
         Assert.Equal("adc-nav-guard-tab-a", documentDockAfterBack?.ActiveDockable?.Id);
@@ -4140,6 +4253,7 @@ public sealed class MainWindowIntegrationTests
         // ActiveDockableChanged for the outer pane during the first NavigateBack, an
         // extra entry would have been inserted — corrupting history traversal here.
         viewModel.NavigateBackCommand.Execute(null);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
         Assert.Equal("adc-nav-guard-tab-b", GetDocumentDock(viewModel)?.ActiveDockable?.Id);
     }
@@ -5885,7 +5999,7 @@ public sealed class MainWindowIntegrationTests
 
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-toggle", Title = "Agent" };
         agentTab.SetReady(agentViewModel, loggerFactory);
@@ -5915,7 +6029,7 @@ public sealed class MainWindowIntegrationTests
 
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-twice", Title = "Agent" };
         agentTab.SetReady(agentViewModel, loggerFactory);
@@ -5944,7 +6058,7 @@ public sealed class MainWindowIntegrationTests
 
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
 
         var agentTab = new AgentSessionWorkspaceTabViewModel { Id = "scroll-lock-handled", Title = "Agent" };
         agentTab.SetReady(agentViewModel, loggerFactory);
@@ -6342,7 +6456,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowViewModel_ToggleExpand_HidesAndShowsChildren()
+    public async Task MainWindowViewModel_ToggleExpand_DoesNotRebuildPopulation()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -6421,29 +6535,31 @@ public sealed class MainWindowIntegrationTests
         viewModel.SelectedTopLevelView = workspacesView;
         await (Task)applyMethod!.Invoke(viewModel, [])!;
 
-        // Initially both workspace and child are visible.
+        // Initially both workspace and child are populated.
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
 
-        // Collapse the workspace: child should disappear.
         var workspaceVm = Assert.Single(
             viewModel.CurrentViewPopulation.Entities,
             vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        var originalPopulation = viewModel.CurrentViewPopulation;
+        var originalChild = Assert.Single(workspaceVm.Children);
+
         workspaceVm.ToggleExpandCommand.Execute(null);
-        await (Task)applyMethod!.Invoke(viewModel, [])!;
 
-        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
-        Assert.DoesNotContain(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
-
-        // Re-expand the workspace: child should reappear.
-        var collapsedWorkspaceVm = Assert.Single(
-            viewModel.CurrentViewPopulation.Entities,
-            vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
-        collapsedWorkspaceVm.ToggleExpandCommand.Execute(null);
-        await (Task)applyMethod!.Invoke(viewModel, [])!;
-
+        Assert.Same(originalPopulation, viewModel.CurrentViewPopulation);
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
+        Assert.Same(originalChild, Assert.Single(workspaceVm.Children));
+        Assert.False(workspaceVm.IsExpanded);
+
+        workspaceVm.ToggleExpandCommand.Execute(null);
+
+        Assert.Same(originalPopulation, viewModel.CurrentViewPopulation);
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
+        Assert.Same(originalChild, Assert.Single(workspaceVm.Children));
+        Assert.True(workspaceVm.IsExpanded);
     }
 
     private static async Task<AgentChat> CreateEchoAgentChatAsync()
@@ -6645,14 +6761,14 @@ public sealed class MainWindowIntegrationTests
         // After disposing first tab, acquire on same key should return cached chat (second tab still holds lease)
         await tabA.DisposeAsync();
 
-        var probe1 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
+        var probe1 = await table.AcquireAsync(new AcquireAgentChatRequest { AgentSessionId = new AgentSessionId(agentSessionId) });
         Assert.Same(sharedChat, probe1.AgentChat); // cached — same instance, second tab still holds lease
         await probe1.DisposeAsync();
 
         // After disposing second tab, the chat should be gone and a new one created from persistence
         await tabB.DisposeAsync();
 
-        var probe2 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
+        var probe2 = await table.AcquireAsync(new AcquireAgentChatRequest { AgentSessionId = new AgentSessionId(agentSessionId) });
         Assert.NotSame(sharedChat, probe2.AgentChat); // new instance — old was disposed
         await probe2.DisposeAsync();
     }
@@ -7447,7 +7563,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -7456,7 +7580,7 @@ public sealed class MainWindowIntegrationTests
 
         // Execute /auto-resume — if TrustedExecutorIdentifier and UpdateAutoResumeAsync are wired,
         // the entity is updated with auto-resume.trusted-executor = "."
-        var interceptor = agentTab.Agent!.InputQueue.DefaultComposer.SlashCommandInterceptorAsync;
+        var interceptor = agentTab.Agent!.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync;
         Assert.NotNull(interceptor);
         await interceptor!("/auto-resume");
 
@@ -7500,14 +7624,22 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
             viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab);
 
-        var interceptor = agentTab.Agent!.InputQueue.DefaultComposer.SlashCommandInterceptorAsync;
+        var interceptor = agentTab.Agent!.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync;
         Assert.NotNull(interceptor);
 
         // Enable auto-resume first

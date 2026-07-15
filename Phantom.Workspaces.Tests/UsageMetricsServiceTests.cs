@@ -429,17 +429,28 @@ public sealed class UsageMetricsServiceTests
         var usageMetrics = new UsageMetrics();
         var timeProvider = new FakeTimeProvider();
 
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var service = new UsageMetricsService(
             dal,
             usageMetrics,
             new[] { provider },
             timeProvider,
-            NullLogger<UsageMetricsService>.Instance);
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
 
         await service.StartAsync(TestContext.Current.CancellationToken);
         await firstCallCompleted.Task;
 
         Assert.Equal(1, provider.CallCount);
+
+        // Wait for the service loop to register its timer before advancing fake time
+        await delayScheduled.Task;
 
         timeProvider.Advance(TimeSpan.FromSeconds(60));
         await secondCallCompleted.Task;
@@ -623,6 +634,159 @@ public sealed class UsageMetricsServiceTests
         // No accounts discovered, so provider never called
         Assert.Equal(0, provider.CallCount);
         Assert.Empty(usageMetrics.Accounts);
+    }
+
+    [Fact]
+    public async Task UsageMetricsService_LoopDelay_RegistersTimerOnFakeTimeProvider()
+    {
+        var providerUri = new Uri("https://example.com");
+        var firstCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeUsageProvider(
+            providerUri,
+            (_, _) =>
+            {
+                firstCallCompleted.TrySetResult();
+                return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
+            });
+
+        var dal = new FakeDataAccessLayer([
+            CreateUserAccountEntity("https://example.com", "user1"),
+        ]);
+
+        var usageMetrics = new UsageMetrics();
+        var timeProvider = new FakeTimeProvider();
+
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { provider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await firstCallCompleted.Task;
+
+        // Wait for the loop to schedule the timer
+        await Task.WhenAny(delayScheduled.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+
+        // DelayScheduled hook should have been called, confirming timer registration
+        Assert.True(delayScheduled.Task.IsCompleted, "DelayScheduled hook should have been called");
+    }
+
+    [Fact]
+    public async Task UsageMetricsService_AdvanceBeforeTimerRegistered_DoesNotSilentlyStall()
+    {
+        var providerUri = new Uri("https://example.com");
+        var firstCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callCount = 0;
+        var provider = new FakeUsageProvider(
+            providerUri,
+            (_, _) =>
+            {
+                if (Interlocked.Increment(ref callCount) == 1)
+                {
+                    firstCallCompleted.TrySetResult();
+                }
+                else
+                {
+                    secondCallCompleted.TrySetResult();
+                }
+                return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
+            });
+
+        var dal = new FakeDataAccessLayer([
+            CreateUserAccountEntity("https://example.com", "user1"),
+        ]);
+
+        var usageMetrics = new UsageMetrics();
+        var timeProvider = new FakeTimeProvider();
+
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { provider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await firstCallCompleted.Task;
+
+        // Wait for timer registration
+        await delayScheduled.Task;
+
+        // Advance time should trigger second call
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+
+        // Use bounded wait to detect silent stall
+        var completed = await Task.WhenAny(secondCallCompleted.Task, Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.Same(secondCallCompleted.Task, completed);
+        Assert.Equal(2, provider.CallCount);
+    }
+
+    [Fact]
+    public async Task UsageMetricsService_DisposeAsync_CancelsLoop_WhenBlockedOnDelay()
+    {
+        var providerUri = new Uri("https://example.com");
+        var firstCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeUsageProvider(
+            providerUri,
+            (_, _) =>
+            {
+                firstCallCompleted.TrySetResult();
+                return Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>());
+            });
+
+        var dal = new FakeDataAccessLayer([
+            CreateUserAccountEntity("https://example.com", "user1"),
+        ]);
+
+        var usageMetrics = new UsageMetrics();
+        var timeProvider = new FakeTimeProvider();
+
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { provider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await firstCallCompleted.Task;
+
+        // Wait for the loop to be blocked on delay
+        await delayScheduled.Task;
+
+        // DisposeAsync should unblock the loop that is parked on Task.Delay
+        var disposeTask = service.DisposeAsync();
+        var completed = await Task.WhenAny(disposeTask.AsTask(), Task.Delay(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.Same(disposeTask.AsTask(), completed);
+
+        Assert.Equal(1, provider.CallCount); // Only first call, no new calls after disposal
     }
 
     /// <summary>

@@ -543,4 +543,35 @@ public sealed class NotificationsViewModelTests
 
         Assert.Equal("tab-1", navigatedTabKey);
     }
+
+    [Fact]
+    public void NotificationRowNavigateCommand_InvokesFocusWindowCallback()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        bool focusWindowCalled = false;
+        viewModel.FocusWindowCallback = () => focusWindowCalled = true;
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        row.NavigateCommand.Execute(null);
+
+        Assert.True(focusWindowCalled);
+    }
+
+    [Fact]
+    public void NotificationRowNavigateCommand_NullCallback_DoesNotThrow()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, _ => { });
+        viewModel.FocusWindowCallback = null;
+        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        var exception = Record.Exception(() => row.NavigateCommand.Execute(null));
+
+        Assert.Null(exception);
+    }
 }

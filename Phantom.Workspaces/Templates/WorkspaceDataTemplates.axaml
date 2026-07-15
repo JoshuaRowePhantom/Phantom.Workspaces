@@ -7,21 +7,10 @@
                xmlns:entityControls="using:Phantom.Workspaces.Controls"
                xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
-    <DataTemplate DataType="vm:EntityListNodeViewModel">
-        <StackPanel Classes="workspace-entity-node-root">
-            <entityControls:EntityCardControl DataContext="{Binding Card}" />
-            <Border IsVisible="{Binding HasChildren}"
-                    Classes="entity-card-expand-section"
-                    CornerRadius="{Binding ExpandSectionCornerRadius}">
-                <Button Classes="entity-card-expand-button"
-                        Content="{Binding ExpandArrow}"
-                        HorizontalAlignment="Stretch"
-                        HorizontalContentAlignment="Center"
-                        Command="{Binding ToggleExpandCommand}" />
-            </Border>
-            <ItemsControl ItemsSource="{Binding VisibleChildren}" Classes="workspace-visible-children" />
-        </StackPanel>
-    </DataTemplate>
+    <TreeDataTemplate DataType="vm:EntityListNodeViewModel"
+                      ItemsSource="{Binding Children}">
+        <entityControls:EntityCardControl DataContext="{Binding Card}" />
+    </TreeDataTemplate>
 
     <DataTemplate DataType="vm:EntityListItemViewModel">
         <StackPanel Margin="{Binding IndentMargin}" Classes="workspace-entity-node-root"

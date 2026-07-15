@@ -28,7 +28,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private static readonly IReadOnlyDictionary<string, string> ThemeVariableResourceKeys =
         new Dictionary<string, string>
         {
-            ["--chat-background"] = "Theme.Surface.EntityPane.Background",
+            ["--chat-background"] = "Theme.Surface.Chat.Background",
             ["--chat-foreground"] = "Theme.Class.normal.Foreground",
             ["--chat-role"] = "Theme.Class.accent.Foreground",
             ["--chat-user"] = "Theme.Class.accent.Foreground",
@@ -92,6 +92,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         {
             acceleratorWebView.AltKeyStateChanged += this.OnBrowserAltKeyStateChanged;
             acceleratorWebView.GoToTabAtIndexRequested += this.OnBrowserGoToTabAtIndexRequested;
+            acceleratorWebView.GoToWorkspacePaneAtIndexRequested += this.OnBrowserGoToWorkspacePaneAtIndexRequested;
         }
     }
 
@@ -103,6 +104,11 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private void OnBrowserGoToTabAtIndexRequested(object? sender, int index)
     {
         this.subscribedViewModel?.RaiseGoToTabAtIndex(index);
+    }
+
+    private void OnBrowserGoToWorkspacePaneAtIndexRequested(object? sender, int index)
+    {
+        this.subscribedViewModel?.RaiseGoToWorkspacePaneAtIndex(index);
     }
 
     public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
@@ -226,8 +232,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible) ||
-            e.PropertyName == nameof(AgentViewModel.IsDiagnosticsVisible))
+        if (e.PropertyName == nameof(AgentViewModel.IsReasoningVisible))
         {
             this.outputModel?.Refresh();
         }
@@ -261,7 +266,6 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
                 vm.RunningItems,
                 isReasoningVisible: () => vm.IsReasoningVisible,
                 sink: this,
-                isDiagnosticsVisible: () => vm.IsDiagnosticsVisible,
                 toolFactory: DefaultToolFactory,
                 statusSink: this,
                 resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,

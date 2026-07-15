@@ -276,7 +276,7 @@ public sealed class AgentChatEditorControlTests
             StringComparison.Ordinal);
 
         Assert.Contains(
-            "IsVisible=\"{Binding Agent.AcceptsUserInput}\"",
+            "IsVisible=\"{Binding InputQueue, Converter={x:Static converters:NotNullConverter.Instance}}\"",
             conversationDetailXaml,
             StringComparison.Ordinal);
     }

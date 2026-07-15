@@ -242,6 +242,41 @@ public class StreamingPersistenceMiddlewareTests
         await ConsumeAsync(middleware, session);
     }
 
+    [Fact]
+    public async Task PersistMessage_WhenCreatedAtIsNull_SetsCreatedAtBeforeStoring()
+    {
+        var spyStore = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(spyStore, [
+            MakeUpdate("hello", finishReason: "stop"),
+        ]);
+
+        await ConsumeAsync(middleware, session);
+
+        var message = Assert.Single(spyStore.StoredMessages);
+        Assert.NotNull(message.CreatedAt);
+    }
+
+    [Fact]
+    public async Task PersistMessage_WhenCreatedAtIsSet_PreservesOriginalValue()
+    {
+        var expected = new DateTimeOffset(2026, 7, 1, 12, 30, 0, TimeSpan.Zero);
+        var spyStore = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(spyStore, [
+            new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("hello")],
+                CreatedAt = expected,
+                FinishReason = ChatFinishReason.Stop,
+            },
+        ]);
+
+        await ConsumeAsync(middleware, session);
+
+        var message = Assert.Single(spyStore.StoredMessages);
+        Assert.Equal(expected, message.CreatedAt);
+    }
+
     // ---- helpers ----
 
     private static (StreamingPersistenceMiddleware Middleware, AgentSession Session) CreateMiddleware(

@@ -219,6 +219,35 @@ public sealed class WorkspacePaneViewModelTests
         Assert.Equal(pane.Title, doc.EffectiveTabHeader.Title);
     }
 
+    [Fact]
+    public async Task SaveCommand_WhenWorkspaceIsWritable_InvokesSaveDelegate()
+    {
+        var calls = 0;
+        var pane = new WorkspacePaneViewModel(
+            CreateWorkspaceEntity(),
+            saveAsync: _ =>
+            {
+                calls++;
+                return Task.CompletedTask;
+            });
+
+        pane.SaveCommand.Execute(null);
+        await pane.SaveCommand.LastExecutionTask!;
+
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void SaveCommand_WhenWorkspaceIsReadOnly_CannotExecute()
+    {
+        var pane = new WorkspacePaneViewModel(
+            CreateWorkspaceEntity(),
+            saveAsync: _ => Task.CompletedTask,
+            isReadOnly: true);
+
+        Assert.False(pane.SaveCommand.CanExecute(null));
+    }
+
     private static SubscribedEntityViewModel CreateWorkspaceEntity(
         Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {

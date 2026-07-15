@@ -25,8 +25,8 @@ public sealed class SubAgentsContainerViewModelTests
         var chat1 = (AgentChat)subAgent1;
         var chat2 = (AgentChat)subAgent2;
 
-        await using var viewModel1 = new AgentViewModel(chat1, "Agent One", loggerFactory);
-        await using var viewModel2 = new AgentViewModel(chat2, "Agent Two", loggerFactory);
+        await using var viewModel1 = new AgentViewModel(chat1, "Agent One", "", loggerFactory);
+        await using var viewModel2 = new AgentViewModel(chat2, "Agent Two", "", loggerFactory);
 
         container.AddSlot("agent-1", viewModel1);
         container.AddSlot("agent-2", viewModel2);

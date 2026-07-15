@@ -16,7 +16,9 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     private IRootDock? contentLayout;
     private bool anyTabIsRunning;
     private bool anyTabHasUnreadNotification;
+    private bool isSaving;
     private WorkspaceTabViewModel? selectedTab;
+    private readonly Func<WorkspacePaneViewModel, Task>? saveAsync;
 
     private readonly List<(WorkspaceTabViewModel tab, System.ComponentModel.PropertyChangedEventHandler tabHandler)> subscribedTabs = [];
     private readonly List<(IStatusItem tabStatus, System.ComponentModel.PropertyChangedEventHandler handler)> subscribedTabStatuses = [];
@@ -25,12 +27,19 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     public WorkspacePaneViewModel(
         SubscribedEntityViewModel entity,
         string? id = null,
-        RelayCommand? closeCommand = null)
+        RelayCommand? closeCommand = null,
+        Func<WorkspacePaneViewModel, Task>? saveAsync = null,
+        bool isReadOnly = false)
     {
         this.Entity = entity;
+        this.saveAsync = saveAsync;
+        this.IsReadOnly = isReadOnly;
         this.title = entity.DisplayName;
         this.Id = id ?? entity.EntityId.ToString();
         this.CloseCommand = closeCommand;
+        this.SaveCommand = new AsyncRelayCommand(
+            async _ => await this.SaveAsync(),
+            _ => !this.IsReadOnly && !this.isSaving && this.saveAsync is not null);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.Tabs.CollectionChanged += this.OnTabsCollectionChanged;
     }
@@ -46,6 +55,22 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
     public SubscribedEntityViewModel Entity { get; }
 
     public RelayCommand? CloseCommand { get; }
+
+    public AsyncRelayCommand SaveCommand { get; }
+
+    public bool IsReadOnly { get; }
+
+    public bool IsSaving
+    {
+        get => this.isSaving;
+        private set
+        {
+            if (this.SetProperty(ref this.isSaving, value))
+            {
+                this.SaveCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
 
     /// <summary>
     /// Task that completes when <see cref="MainWindowViewModel.PopulateWorkspacePaneTabsAsync"/> finishes.
@@ -182,6 +207,24 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         else
         {
             this.populatedTcs.TrySetResult();
+        }
+    }
+
+    private async Task SaveAsync()
+    {
+        if (this.saveAsync is null || this.IsReadOnly || this.isSaving)
+        {
+            return;
+        }
+
+        this.IsSaving = true;
+        try
+        {
+            await this.saveAsync(this);
+        }
+        finally
+        {
+            this.IsSaving = false;
         }
     }
 }

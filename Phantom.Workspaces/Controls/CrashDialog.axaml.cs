@@ -44,7 +44,20 @@ public sealed partial class CrashDialog : Window
         var exText = _exception?.ToString() ?? "Unknown exception";
         var title = Uri.EscapeDataString(
             $"Crash: {_exception?.GetType().Name ?? "Exception"}: {(_exception?.Message ?? "unknown error").Split('\n')[0]}");
-        var body = Uri.EscapeDataString(exText);
+        
+        // Truncate exception text to ensure URL fits within ShellExecute's ~2048 character limit
+        const int MaxBodyChars = 1400;
+        string bodyText;
+        if (exText.Length > MaxBodyChars)
+        {
+            bodyText = exText.Substring(0, MaxBodyChars) + "\n\n... (truncated — full stack trace available via Copy button)";
+        }
+        else
+        {
+            bodyText = exText;
+        }
+        
+        var body = Uri.EscapeDataString(bodyText);
         var url = $"https://github.com/JoshuaRowePhantom/Phantom.Workspaces/issues/new?title={title}&body={body}";
         _ = TopLevel.GetTopLevel(this)?.Launcher.LaunchUriAsync(new Uri(url));
     }

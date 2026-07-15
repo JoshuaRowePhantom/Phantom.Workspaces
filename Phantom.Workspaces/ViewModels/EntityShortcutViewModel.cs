@@ -25,14 +25,14 @@ public sealed class EntityShortcutViewModel : ViewModelBase
         return this.ShortcutManager.HandleShortcutAsync(mainWindowViewModel, this.Shortcut, this.Entity);
     }
 
-    public static void PopulateShortcuts(
+    public static async Task PopulateShortcutsAsync(
         ObservableCollection<EntityShortcutViewModel> shortcuts,
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel entity,
         ShortcutManager shortcutManager)
     {
         shortcuts.Clear();
-        foreach (var shortcut in shortcutManager.GetShortcutsFor(mainWindowViewModel, entity))
+        await foreach (var shortcut in shortcutManager.GetShortcutsForAsync(mainWindowViewModel, entity))
         {
             shortcuts.Add(
                 new EntityShortcutViewModel

@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -9,14 +8,23 @@ public sealed class ShortcutManager
     private readonly List<ShortcutHandler> shortcutHandlers = [];
     // When adding a new Shortcut, also update ResolveShortcut and the entity_invoke_shortcut
     // tool description in WorkspaceGuiContextProvider.EntityInvokeShortcutTool.
-    private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.Edit, Shortcut.Clone, Shortcut.Review, Shortcut.VsCode, Shortcut.VsCodeWeb, Shortcut.Delete, Shortcut.StartAgentSession, Shortcut.StartShell];
+    private readonly Shortcut[] shortcuts = [Shortcut.Open, Shortcut.OpenWorkspace, Shortcut.Edit, Shortcut.Clone, Shortcut.Review, Shortcut.VsCode, Shortcut.VsCodeWeb, Shortcut.Delete, Shortcut.StartAgentSession, Shortcut.StartShell];
 
-    public IEnumerable<Shortcut> GetShortcutsFor(
+    public async IAsyncEnumerable<Shortcut> GetShortcutsForAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel entityViewModel)
     {
-        return this.shortcuts.Where(shortcut =>
-            this.shortcutHandlers.Any(handler => handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel)));
+        foreach (var shortcut in this.shortcuts)
+        {
+            foreach (var handler in this.shortcutHandlers)
+            {
+                if (await handler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
+                {
+                    yield return shortcut;
+                    break;
+                }
+            }
+        }
     }
 
     public void AddShortcutHandler(
@@ -32,7 +40,7 @@ public sealed class ShortcutManager
     {
         foreach (var shortcutHandler in this.shortcutHandlers)
         {
-            if (!shortcutHandler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
+            if (!await shortcutHandler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
             {
                 continue;
             }
@@ -46,3 +54,5 @@ public sealed class ShortcutManager
         return false;
     }
 }
+
+

@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Reflection;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -257,7 +257,7 @@ public sealed class ToolVisualizationTests
     public async Task AgentChatStatusLineViewModel_UpdateStatus_SetsIntentDisplay()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agent = new AgentViewModel(CreateChat(), "test", loggerFactory);
+        await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
         statusLine.UpdateStatus(AgentStatusField.Intent, "doing a thing");
@@ -269,7 +269,7 @@ public sealed class ToolVisualizationTests
     public async Task AgentChatStatusLineViewModel_IntentDisplay_ClearedWhenThinkingStops()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agent = new AgentViewModel(CreateChat(), "test", loggerFactory);
+        await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
         var runningItem = agent.AgentChat.CreateRunningItem(new AgentChatHistoryItem
@@ -290,7 +290,7 @@ public sealed class ToolVisualizationTests
     public async Task AgentChatStatusLineViewModel_UpdateStatus_EmptyValue_ClearsDisplay()
     {
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var agent = new AgentViewModel(CreateChat(), "test", loggerFactory);
+        await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
         statusLine.UpdateStatus(AgentStatusField.Intent, "something");
@@ -307,7 +307,7 @@ public sealed class ToolVisualizationTests
         var call = new FunctionCallContent("call-1", "my_tool",
             new Dictionary<string, object?> { ["arg"] = "val" });
 
-        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false, isHelp: false);
 
         Assert.NotNull(html);
         Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
@@ -318,7 +318,7 @@ public sealed class ToolVisualizationTests
     {
         var result = new FunctionResultContent("call-1", "result value");
 
-        var html = ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false);
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false, isHelp: false);
 
         Assert.NotNull(html);
         Assert.DoesNotContain("chat-inspect", html, StringComparison.Ordinal);
@@ -380,6 +380,19 @@ public sealed class ToolVisualizationTests
         Assert.Contains("<details", html, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ChatOutputHtmlRenderer_FunctionCallContent_PrettyPrintsArgumentsAsKeyValue()
+    {
+        var call = new FunctionCallContent("call-1", "my_tool",
+            new Dictionary<string, object?> { ["description"] = "read file", ["path"] = "README.md" });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("class=\"tool-json-key\">description</span>: <span class=\"tool-json-plaintext\">read file</span>", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-json-key\">       path</span>: <span class=\"tool-json-plaintext\">README.md</span>", html, StringComparison.Ordinal);
+    }
+
     // --- Helpers ---
 
     private static AgentChat CreateChat()
@@ -415,3 +428,4 @@ public sealed class ToolVisualizationTests
             => this.Updates.Add((field, value));
     }
 }
+

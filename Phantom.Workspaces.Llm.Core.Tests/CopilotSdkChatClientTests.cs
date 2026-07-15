@@ -238,6 +238,7 @@ public sealed class CopilotSdkChatClientTests
 
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var subscription = new FlagDisposable();
+        var sentOptions = new List<MessageOptions>();
 
         // Signals the test thread once BeginTurnAsync has subscribed to QueueStateChanged.
         var beginTurnCompletedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -256,9 +257,8 @@ public sealed class CopilotSdkChatClientTests
                 {
                     foreach (var message in item.Messages ?? [])
                     {
-                        var text = string.Concat(
-                            message.Contents.OfType<TextContent>().Select(c => c.Text));
-                        if (!string.IsNullOrWhiteSpace(text))
+                        var immediateOptions = CopilotSdkChatClient.BuildImmediateMessageOptions(message);
+                        if (immediateOptions is not null)
                         {
                             // SteeringMessageForwarded can only be raised from the declaring class;
                             // invoke it via its backing field (consistent with other reflection use in this file).
@@ -266,6 +266,7 @@ public sealed class CopilotSdkChatClientTests
                                 .GetField("SteeringMessageForwarded", BindingFlags.Instance | BindingFlags.NonPublic)!
                                 .GetValue(client);
                             handler?.Invoke(message);
+                            sentOptions.Add(immediateOptions);
                         }
                     }
                 }
@@ -292,7 +293,10 @@ public sealed class CopilotSdkChatClientTests
         // Wait for BeginTurnAsync to subscribe before enqueuing (30 s is a deadlock failsafe).
         await beginTurnCompletedTcs.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
-        var steeringMessage = new ChatMessage(ChatRole.User, "steer the agent");
+        var imageBytes = new byte[] { 0xFF, 0xD8, 0xFF };
+        var steeringMessage = new ChatMessage(
+            ChatRole.User,
+            [new TextContent("steer the agent"), new DataContent(imageBytes, "image/jpeg")]);
         queueManager.Enqueue(
             queueManager.ImmediateQueue,
             [new AgentInputItem { Messages = [steeringMessage] }]);
@@ -303,14 +307,25 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.NotNull(forwarded);
         Assert.Equal("steer the agent", forwarded.Text);
+        Assert.Single(forwarded.Contents.OfType<DataContent>());
+        var sent = Assert.Single(sentOptions);
+        Assert.Equal("immediate", sent.Mode);
+        Assert.Equal("steer the agent", sent.Prompt);
+        var blob = Assert.IsType<UserMessageAttachmentBlob>(Assert.Single(sent.Attachments!));
+        Assert.Equal("image/jpeg", blob.MimeType);
+        Assert.Equal(Convert.ToBase64String(imageBytes), blob.Data);
         Assert.True(subscription.Disposed);
     }
 
-    private sealed class FlagDisposable : IDisposable
+    private sealed class FlagDisposable : IAsyncDisposable
     {
         public bool Disposed { get; private set; }
 
-        public void Dispose() => this.Disposed = true;
+        public ValueTask DisposeAsync()
+        {
+            this.Disposed = true;
+            return ValueTask.CompletedTask;
+        }
     }
 
     [Fact]
@@ -746,6 +761,50 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public void BuildImmediateMessageOptions_WithImageAttachment_PreservesPromptAndAttachment()
+    {
+        var imageBytes = new byte[] { 0xFF, 0xD8, 0xFF };
+        var message = new ChatMessage(
+            ChatRole.User,
+            [new TextContent("look"), new DataContent(imageBytes, "image/jpeg")]);
+
+        var result = CopilotSdkChatClient.BuildImmediateMessageOptions(message);
+
+        Assert.NotNull(result);
+        Assert.Equal("immediate", result!.Mode);
+        Assert.Equal("look", result.Prompt);
+        var blob = Assert.IsType<UserMessageAttachmentBlob>(Assert.Single(result.Attachments!));
+        Assert.Equal("image/jpeg", blob.MimeType);
+        Assert.Equal(Convert.ToBase64String(imageBytes), blob.Data);
+    }
+
+    [Fact]
+    public void BuildImmediateMessageOptions_WithImageOnly_KeepsMessageWithEmptyPrompt()
+    {
+        var message = new ChatMessage(
+            ChatRole.User,
+            [new DataContent(new byte[] { 0x89, 0x50, 0x4E, 0x47 }, "image/png")]);
+
+        var result = CopilotSdkChatClient.BuildImmediateMessageOptions(message);
+
+        Assert.NotNull(result);
+        Assert.Equal("immediate", result!.Mode);
+        Assert.Equal(string.Empty, result.Prompt);
+        var blob = Assert.IsType<UserMessageAttachmentBlob>(Assert.Single(result.Attachments!));
+        Assert.Equal("image/png", blob.MimeType);
+    }
+
+    [Fact]
+    public void BuildImmediateMessageOptions_WithNoTextOrAttachment_DropsMessage()
+    {
+        var message = new ChatMessage(ChatRole.User, [new TextContent("   ")]);
+
+        var result = CopilotSdkChatClient.BuildImmediateMessageOptions(message);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
     public void BuildMessageOptions_PicksLastUserMessage_IgnoresEarlierTurns()
     {
         var pngBytes = new byte[] { 9 };
@@ -860,5 +919,48 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.Equal("new message", result.Prompt);
         Assert.Null(result.Attachments);
+    }
+
+    [Fact]
+    public async Task RunStreamingTurnAsync_Dispose_DoesNotBlockThreadPoolThread()
+    {
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        channel.Writer.TryWrite(new ChatResponseUpdate(ChatRole.Assistant, "test"));
+        channel.Writer.Complete();
+
+        var subscription = new FlagDisposable();
+
+        Task<StreamingTurnContext> BeginTurnAsync(CancellationToken _) =>
+            Task.FromResult(new StreamingTurnContext(
+                channel.Reader,
+                subscription,
+                _ => Task.CompletedTask,
+                () => Task.CompletedTask,
+                () => Task.CompletedTask));
+
+        var enumerator = client.RunStreamingTurnAsync(BeginTurnAsync, CancellationToken.None)
+            .GetAsyncEnumerator();
+
+        Assert.True(await enumerator.MoveNextAsync());
+
+        bool wasOnThreadPoolThread = false;
+        var disposalCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            wasOnThreadPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+            enumerator.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            disposalCompleted.SetResult();
+        });
+
+        var completed = await Task.WhenAny(
+            disposalCompleted.Task,
+            Task.Delay(TimeSpan.FromSeconds(2)));
+
+        Assert.Same(disposalCompleted.Task, completed);
+        Assert.True(wasOnThreadPoolThread);
+        Assert.True(subscription.Disposed);
     }
 }

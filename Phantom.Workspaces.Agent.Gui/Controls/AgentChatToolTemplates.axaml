@@ -69,8 +69,18 @@
                             ContentTemplate="{StaticResource AgentToolHeaderTemplate}"/>
             <StackPanel IsVisible="{Binding NotHasTool}"
                         Spacing="2">
-                <TextBlock Text="{Binding Name}"
-                           Classes="agent-tool-node-title"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <ProgressBar Classes="glyph-indicator pulsating-brain"
+                                 IsVisible="{Binding IsBrainVisible}"
+                                 IsIndeterminate="{Binding IsRunning}"
+                                 Opacity="{Binding StatusIconOpacity}"/>
+                    <ProgressBar Classes="running-indicator succeeded"
+                                 IsVisible="{Binding IsSucceeded}"/>
+                    <ProgressBar Classes="running-indicator failed"
+                                 IsVisible="{Binding IsFailed}"/>
+                    <TextBlock Text="{Binding Name}"
+                               Classes="agent-tool-node-title"/>
+                </StackPanel>
                 <TextBlock Text="{Binding Summary}"
                            Classes="muted"/>
             </StackPanel>

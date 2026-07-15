@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -7,6 +8,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -41,44 +43,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         this.urlLauncher = urlLauncher;
     }
 
-    public override bool ShouldApplyTo(
-        MainWindowViewModel mainWindowViewModel,
-        Shortcut shortcut,
-        SubscribedEntityViewModel entityViewModel)
-    {
-        if (shortcut != Shortcut.VsCode)
-        {
-            return false;
-        }
-
-        var path = TryGetPath(entityViewModel);
-        if (path is null)
-        {
-            return false;
-        }
-
-        // For synchronous ShouldApplyTo, we need async logic. Call the async version.
-        // Since this is called during shortcut enumeration (synchronous), we'll use
-        // a synchronous wrapper. However, the pattern in this codebase is to check
-        // only basic conditions here. For remote tunnel lookup, we'll do it async.
-        // Let's return true if path exists, and check tunnel in HandleAsync.
-        // Actually, looking at the pattern, ShouldApplyTo should be synchronous.
-        // The issue spec says shortcut should not be visible if no tunnel exists.
-        // So we need async ShouldApplyTo... but that doesn't exist.
-        
-        // Let me check if there's a pattern for async ShouldApplyTo...
-        // Looking at other handlers, they're all synchronous.
-        // For now, let's make it always visible if path exists, and fail gracefully in Handle.
-        // Actually no - the spec says "not visible/enabled" if no tunnel. Let me add an async version.
-        
-        return true; // Basic check - has path. Full check in ShouldApplyToAsync.
-    }
-
-    /// <summary>
-    /// Async version of ShouldApplyTo that performs the full availability check including
-    /// remote tunnel lookup. Call this explicitly when async checking is possible.
-    /// </summary>
-    internal async Task<bool> ShouldApplyToAsync(
+    public override async ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
@@ -104,7 +69,6 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return true;
         }
 
-        // Remote entity - check for tunnel (owningProfile is guaranteed non-null here)
         if (owningProfile is null)
         {
             return false;
@@ -133,7 +97,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
 
         if (isLocal)
         {
-            return await HandleLocalEntityAsync(path);
+            return await HandleLocalEntityAsync(mainWindowViewModel, path);
         }
         else
         {
@@ -146,21 +110,41 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         }
     }
 
-    private async Task<bool> HandleLocalEntityAsync(string path)
+    private async Task<bool> HandleLocalEntityAsync(MainWindowViewModel mainWindowViewModel, string path)
     {
-        var cliPath = this.cliLocator();
-
-        if (this.processRunner is not null)
+        string cliPath;
+        try
         {
-            await this.processRunner(cliPath, [path], CancellationToken.None);
-        }
-        else
-        {
-            var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, path);
-            await ProcessRunner.RunProcessAsync(parameters, CancellationToken.None);
-        }
+            cliPath = this.cliLocator();
 
-        return true;
+            if (this.processRunner is not null)
+            {
+                await this.processRunner(cliPath, [path], CancellationToken.None);
+            }
+            else
+            {
+                var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, path);
+                await ProcessRunner.RunProcessAsync(parameters, CancellationToken.None);
+            }
+
+            return true;
+        }
+        catch (Win32Exception)
+        {
+            mainWindowViewModel.NotificationService.Notify(
+                new Notification(
+                    new TabDescriptor
+                    {
+                        TabId = $"vscode-cli:{path}",
+                        TabTitle = "VS Code",
+                    },
+                    "VS Code CLI not found",
+                    "VS Code CLI ('code') was not found on PATH. Install VS Code and ensure 'code' is on your PATH.",
+                    DateTime.UtcNow,
+                    RunningState.Idle,
+                    NotificationState.Interesting));
+            return false;
+        }
     }
 
     private async Task<bool> HandleRemoteEntityAsync(

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -25,7 +26,7 @@ public sealed class ShortcutManagerTests
     }
 
     [PhantomAvaloniaFact]
-    public async Task GetShortcutsFor_ReturnsOpen_WhenAHandlerApplies()
+    public async Task GetShortcutsForAsync_ReturnsOpen_WhenAHandlerApplies()
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new TestShortcutHandler(shouldApply: true, handleResult: true));
@@ -33,7 +34,7 @@ public sealed class ShortcutManagerTests
         await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity");
 
-        var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, entity);
 
         var openShortcut = Assert.Single(shortcuts);
         Assert.Equal("Open", openShortcut.Name);
@@ -60,7 +61,7 @@ public sealed class ShortcutManagerTests
     }
 
     [PhantomAvaloniaFact]
-    public async Task ViewEntityViewModel_PopulatesShortcuts_FromShortcutManager()
+    public async Task ViewEntityViewModel_PopulatesShortcuts_AfterInitializeAsync()
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new TestShortcutHandler(shouldApply: true, handleResult: true));
@@ -73,10 +74,32 @@ public sealed class ShortcutManagerTests
             shortcutManager,
             indentLevel: 0);
 
+        Assert.Empty(viewEntity.Shortcuts);
+
+        await viewEntity.InitializeAsync();
+
         var shortcutViewModel = Assert.Single(viewEntity.Shortcuts);
         Assert.Equal("Open", shortcutViewModel.Shortcut.Name);
         Assert.Same(entity, shortcutViewModel.Entity);
         Assert.Same(shortcutManager, shortcutViewModel.ShortcutManager);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ViewEntityViewModel_InitializeAsync_WithAsyncHandler_DoesNotDeadlock()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new YieldingShortcutHandler());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
+        var entity = CreateEntity("entity");
+        var viewEntity = new ViewEntityViewModel(
+            entity,
+            mainWindowViewModel,
+            shortcutManager,
+            indentLevel: 0);
+
+        await viewEntity.InitializeAsync();
+
+        Assert.Contains(viewEntity.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
     }
 
     [PhantomAvaloniaFact]
@@ -91,6 +114,8 @@ public sealed class ShortcutManagerTests
             mainWindowViewModel,
             shortcutManager,
             indentLevel: 0);
+
+        await viewEntity.InitializeAsync();
 
         var cardNode = viewEntity.EntityCardNode;
         Assert.True(cardNode.Card.ShowJsonButton);
@@ -114,6 +139,7 @@ public sealed class ShortcutManagerTests
             mainWindowViewModel,
             shortcutManager,
             indentLevel: 0);
+        await viewEntity.InitializeAsync();
 
         var cardNode = viewEntity.EntityCardNode;
         Assert.True(cardNode.Card.HasShortcuts);
@@ -146,14 +172,14 @@ public sealed class ShortcutManagerTests
     }
 
     [PhantomAvaloniaFact]
-    public async Task GetShortcutsFor_ReturnsDelete_WhenDeleteHandlerApplies()
+    public async Task GetShortcutsForAsync_ReturnsDelete_WhenDeleteHandlerApplies()
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("entity", _ => Task.CompletedTask);
 
-        var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, entity);
 
         var deleteShortcut = Assert.Single(shortcuts);
         Assert.Equal(Shortcut.Delete, deleteShortcut);
@@ -175,7 +201,7 @@ public sealed class ShortcutManagerTests
     }
 
     [PhantomAvaloniaFact]
-    public async Task GetShortcutsFor_GitWorktreeEntity_IncludesReviewShortcut()
+    public async Task GetShortcutsForAsync_GitWorktreeEntity_IncludesReviewShortcut()
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
@@ -183,13 +209,13 @@ public sealed class ShortcutManagerTests
         await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("git-worktree");
 
-        var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, entity);
 
         Assert.Contains(shortcuts, s => s == Shortcut.Review);
     }
 
     [PhantomAvaloniaFact]
-    public async Task GetShortcutsFor_NonGitWorktreeEntity_DoesNotIncludeReviewShortcut()
+    public async Task GetShortcutsForAsync_NonGitWorktreeEntity_DoesNotIncludeReviewShortcut()
     {
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
@@ -197,9 +223,64 @@ public sealed class ShortcutManagerTests
         await using var mainWindowViewModel = CreateTestMainWindowViewModel();
         var entity = CreateEntity("task");
 
-        var shortcuts = shortcutManager.GetShortcutsFor(mainWindowViewModel, entity).ToArray();
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, entity);
 
         Assert.DoesNotContain(shortcuts, s => s == Shortcut.Review);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task GetShortcutsForAsync_WithAsyncHandler_DoesNotBlockCallingThread()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new YieldingShortcutHandler());
+
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
+        var entity = CreateEntity("entity");
+
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, entity);
+
+        Assert.Contains(Shortcut.Open, shortcuts);
+    }
+
+    [PhantomAvaloniaFact]
+    public async Task PopulateShortcutsAsync_ClearsAndRepopulates_WhenCalledTwice()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(
+            new TestShortcutHandler(
+                shouldApply: true,
+                handleResult: true,
+                supportedShortcutNames: [Shortcut.Open.Name, Shortcut.Delete.Name]));
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
+        var entity = CreateEntity("entity");
+        var shortcuts = new ObservableCollection<EntityShortcutViewModel>
+        {
+            new()
+            {
+                Shortcut = Shortcut.Edit,
+                Entity = entity,
+                ShortcutManager = shortcutManager,
+            },
+        };
+
+        await EntityShortcutViewModel.PopulateShortcutsAsync(shortcuts, mainWindowViewModel, entity, shortcutManager);
+        await EntityShortcutViewModel.PopulateShortcutsAsync(shortcuts, mainWindowViewModel, entity, shortcutManager);
+
+        Assert.Equal([Shortcut.Open, Shortcut.Delete], shortcuts.Select(shortcut => shortcut.Shortcut).ToArray());
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PopulateShortcutsAsync_WithAsyncHandler_DoesNotBlockCallingThread()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new YieldingShortcutHandler());
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
+        var entity = CreateEntity("entity");
+        var shortcuts = new ObservableCollection<EntityShortcutViewModel>();
+
+        await EntityShortcutViewModel.PopulateShortcutsAsync(shortcuts, mainWindowViewModel, entity, shortcutManager);
+
+        Assert.Contains(shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -262,6 +343,20 @@ public sealed class ShortcutManagerTests
             deleteEntityAsync);
     }
 
+    private static async Task<Shortcut[]> GetShortcutsAsync(
+        ShortcutManager shortcutManager,
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entity)
+    {
+        var shortcuts = new List<Shortcut>();
+        await foreach (var shortcut in shortcutManager.GetShortcutsForAsync(mainWindowViewModel, entity))
+        {
+            shortcuts.Add(shortcut);
+        }
+
+        return shortcuts.ToArray();
+    }
+
     private sealed class TestShortcutHandler : ShortcutHandler
     {
         private readonly bool shouldApply;
@@ -280,12 +375,12 @@ public sealed class ShortcutManagerTests
 
         public int HandleCallCount { get; private set; }
 
-        public override bool ShouldApplyTo(
+        public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
             SubscribedEntityViewModel entityViewModel)
-            => this.shouldApply
-                && this.supportedShortcutNames.Contains(shortcut.Name, StringComparer.Ordinal);
+            => ValueTask.FromResult(this.shouldApply
+                && this.supportedShortcutNames.Contains(shortcut.Name, StringComparer.Ordinal));
 
         public override Task<bool> Handle(
             MainWindowViewModel mainWindowViewModel,
@@ -295,5 +390,23 @@ public sealed class ShortcutManagerTests
             this.HandleCallCount++;
             return Task.FromResult(this.handleResult);
         }
+    }
+
+    private sealed class YieldingShortcutHandler : ShortcutHandler
+    {
+        public override async ValueTask<bool> ShouldApplyTo(
+            MainWindowViewModel mainWindowViewModel,
+            Shortcut shortcut,
+            SubscribedEntityViewModel entityViewModel)
+        {
+            await Task.Yield();
+            return shortcut == Shortcut.Open;
+        }
+
+        public override Task<bool> Handle(
+            MainWindowViewModel mainWindowViewModel,
+            Shortcut shortcut,
+            SubscribedEntityViewModel entityViewModel)
+            => Task.FromResult(true);
     }
 }

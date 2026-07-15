@@ -4,13 +4,13 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class CloneEntityShortcutHandler : ShortcutHandler
 {
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.Clone
-            && entityViewModel.CanEditEntity;
+        return ValueTask.FromResult(shortcut == Shortcut.Clone
+            && entityViewModel.CanEditEntity);
     }
 
     public override async Task<bool> Handle(
@@ -23,3 +23,5 @@ public sealed class CloneEntityShortcutHandler : ShortcutHandler
         return true;
     }
 }
+
+

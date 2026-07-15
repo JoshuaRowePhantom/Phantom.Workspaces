@@ -9,8 +9,8 @@
                   HorizontalScrollBarVisibility="Disabled"
                   VerticalScrollBarVisibility="Auto"
                   controls:StickyScroll.IsEnabled="True">
-        <ItemsControl x:Name="BrowserItemsControl"
-                      Classes="browser-entity-items"
-                      ItemsSource="{Binding EntityList.Items}" />
+        <TreeView x:Name="BrowserTreeView"
+                  Classes="entity-card-tree entity-card-tree-entity"
+                  ItemsSource="{Binding EntityList.Items}" />
     </ScrollViewer>
 </UserControl>

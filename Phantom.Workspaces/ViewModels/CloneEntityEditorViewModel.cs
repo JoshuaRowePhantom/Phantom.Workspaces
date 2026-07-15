@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Utilities;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -46,7 +47,7 @@ public sealed class CloneEntityEditorViewModel : ViewModelBase
 
         var changes = new List<EntityChange>();
 
-        var cloneData = RewriteEntityId(entityData, this.CloneEntityId);
+        var cloneData = EntityCloneHelper.RewriteEntityId(entityData, this.CloneEntityId);
         changes.Add(new EntityChange
         {
             EntityId = this.CloneEntityId,
@@ -61,7 +62,7 @@ public sealed class CloneEntityEditorViewModel : ViewModelBase
                 continue;
             }
 
-            var rewrittenRelData = RewriteRelationshipParticipantIds(relData, this.sourceEntity.EntityId, this.CloneEntityId);
+            var rewrittenRelData = EntityCloneHelper.RewriteRelationshipParticipantIds(relData, this.sourceEntity.EntityId, this.CloneEntityId);
             changes.Add(new EntityChange
             {
                 EntityChangeMode = EntityChangeMode.Replace,
@@ -82,22 +83,8 @@ public sealed class CloneEntityEditorViewModel : ViewModelBase
         this.mainWindowViewModel.CloseTab(this.ownerTab);
     }
 
-    private static JsonElement RewriteEntityId(JsonElement entityData, EntityId newEntityId)
-    {
-        if (entityData.ValueKind != JsonValueKind.Object)
-        {
-            return entityData;
-        }
-
-        var node = JsonNode.Parse(entityData.GetRawText());
-        if (node is JsonObject obj)
-        {
-            obj["entity-id"] = JsonValue.Create(newEntityId.ToString());
-        }
-
-        using var doc = JsonDocument.Parse(node!.ToJsonString());
-        return doc.RootElement.Clone();
-    }
+    internal static JsonElement RewriteEntityId(JsonElement entityData, EntityId newEntityId)
+        => EntityCloneHelper.RewriteEntityId(entityData, newEntityId);
 
     /// <summary>
     /// Rewrites all occurrences of <paramref name="sourceId"/> in the <c>participants</c>
@@ -108,53 +95,5 @@ public sealed class CloneEntityEditorViewModel : ViewModelBase
         JsonElement relationshipData,
         EntityId sourceId,
         EntityId cloneId)
-    {
-        if (relationshipData.ValueKind != JsonValueKind.Object)
-        {
-            return relationshipData;
-        }
-
-        var node = JsonNode.Parse(relationshipData.GetRawText());
-        if (node is JsonObject obj && obj["participants"] is JsonNode participantsNode)
-        {
-            RewriteIdsInNode(participantsNode, sourceId.ToString(), cloneId.ToString());
-        }
-
-        using var doc = JsonDocument.Parse(node!.ToJsonString());
-        return doc.RootElement.Clone();
-    }
-
-    private static void RewriteIdsInNode(JsonNode node, string sourceId, string cloneId)
-    {
-        if (node is JsonObject obj)
-        {
-            foreach (var key in obj.Select(p => p.Key).ToArray())
-            {
-                var child = obj[key];
-                if (child is JsonValue val && val.TryGetValue<string>(out var str) && str == sourceId)
-                {
-                    obj[key] = JsonValue.Create(cloneId);
-                }
-                else if (child is not null)
-                {
-                    RewriteIdsInNode(child, sourceId, cloneId);
-                }
-            }
-        }
-        else if (node is JsonArray arr)
-        {
-            for (var i = 0; i < arr.Count; i++)
-            {
-                var child = arr[i];
-                if (child is JsonValue val && val.TryGetValue<string>(out var str) && str == sourceId)
-                {
-                    arr[i] = JsonValue.Create(cloneId);
-                }
-                else if (child is not null)
-                {
-                    RewriteIdsInNode(child, sourceId, cloneId);
-                }
-            }
-        }
-    }
+        => EntityCloneHelper.RewriteRelationshipParticipantIds(relationshipData, sourceId, cloneId);
 }

@@ -55,25 +55,25 @@ public sealed class EntityClickShortcutHandlerTests
         var clickHandler = new EntityClickShortcutHandler(["workspace"], shortcutManager);
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
 
-        Assert.True(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("workspace")));
-        Assert.False(clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
+        Assert.True(await clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("workspace")));
+        Assert.False(await clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
     }
 
     [PhantomAvaloniaFact]
     public async Task UnregisteredClickHandler_ContributesNoShortcutButton()
     {
         // The production wiring keeps the click handler out of the manager, so it never affects the
-        // buttons returned by GetShortcutsFor.
+        // buttons returned by GetShortcutsForAsync.
         var shortcutManager = new ShortcutManager();
         shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         await using var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var workspace = CreateEntity("workspace");
 
-        var before = shortcutManager.GetShortcutsFor(mainWindowViewModel, workspace).ToArray();
+        var before = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, workspace);
 
         // Constructing the click handler (without registering it) must not change the buttons.
         _ = new EntityClickShortcutHandler(["workspace"], shortcutManager);
-        var after = shortcutManager.GetShortcutsFor(mainWindowViewModel, workspace).ToArray();
+        var after = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, workspace);
 
         Assert.Equal(before, after);
         Assert.Contains(Shortcut.Open, after);
@@ -102,6 +102,20 @@ public sealed class EntityClickShortcutHandlerTests
             deleteEntityAsync: null);
     }
 
+    private static async Task<Shortcut[]> GetShortcutsAsync(
+        ShortcutManager shortcutManager,
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entity)
+    {
+        var shortcuts = new List<Shortcut>();
+        await foreach (var shortcut in shortcutManager.GetShortcutsForAsync(mainWindowViewModel, entity))
+        {
+            shortcuts.Add(shortcut);
+        }
+
+        return shortcuts.ToArray();
+    }
+
     private sealed class RecordingOpenHandler : ShortcutHandler
     {
         public int HandleCallCount { get; private set; }
@@ -110,11 +124,11 @@ public sealed class EntityClickShortcutHandlerTests
 
         public SubscribedEntityViewModel? LastEntity { get; private set; }
 
-        public override bool ShouldApplyTo(
+        public override ValueTask<bool> ShouldApplyTo(
             MainWindowViewModel mainWindowViewModel,
             Shortcut shortcut,
             SubscribedEntityViewModel entityViewModel)
-            => shortcut == Shortcut.Open;
+            => ValueTask.FromResult(shortcut == Shortcut.Open);
 
         public override Task<bool> Handle(
             MainWindowViewModel mainWindowViewModel,
@@ -128,3 +142,4 @@ public sealed class EntityClickShortcutHandlerTests
         }
     }
 }
+

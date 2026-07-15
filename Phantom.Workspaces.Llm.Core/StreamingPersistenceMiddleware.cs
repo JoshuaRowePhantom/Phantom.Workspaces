@@ -106,6 +106,11 @@ internal sealed class StreamingPersistenceMiddleware : IChatClient
             return;
         }
 
+        if (message.CreatedAt is null)
+        {
+            message.CreatedAt = DateTimeOffset.UtcNow;
+        }
+
         var agent = this.provider.BuildPersistedAgent(session);
         await this.store.StoreAsync(
             new StoreRequestAgent

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
@@ -28,6 +29,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
+    private readonly AsyncDisposableCollection leaseDisposables = new();
     private RunningAgentChatLease? lease;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
 
@@ -59,12 +61,19 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public string? AgentSessionId { get; init; }
 
+    public string? WorkspacePaneId { get; init; }
+
     public RunningAgentChatLease? Lease => this.lease;
 
-    public void SetLease(RunningAgentChatLease value) => this.lease = value;
+    public void SetLease(RunningAgentChatLease value)
+    {
+        this.lease = value;
+        this.leaseDisposables.Add(value);
+    }
 
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
+    public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
 
     public override IStatusItem TabStatus => this.tabStatus;
 
@@ -78,10 +87,15 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.GoToTabAtIndexRequested?.Invoke(this, index);
     }
 
+    public void RaiseGoToWorkspacePaneAtIndex(int index)
+    {
+        this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, index);
+    }
+
     public override void RequestFocusPrimaryControl()
     {
         base.RequestFocusPrimaryControl();
-        this.agent?.InputQueue.DefaultComposer.RequestFocusPrimaryControl();
+        this.agent?.InputQueue?.DefaultComposer.RequestFocusPrimaryControl();
     }
 
     public void SetReady(AgentViewModel agentViewModel, ObservableLoggerFactory factory)
@@ -91,6 +105,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
         agentViewModel.AltKeyStateChanged += this.OnAgentAltKeyStateChanged;
         agentViewModel.GoToTabAtIndexRequested += this.OnAgentGoToTabAtIndexRequested;
+        agentViewModel.GoToWorkspacePaneAtIndexRequested += this.OnAgentGoToWorkspacePaneAtIndexRequested;
         this.tabStatus.RunningStatus = agentViewModel.IsChatRunning ? RunningStatus.Running : RunningStatus.Idle;
         this.wasRunning = agentViewModel.IsChatRunning;
 
@@ -118,6 +133,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
             this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
+            this.agent.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
             if (this.lease is not null)
             {
                 await this.agent.DisposeViewResourcesAsync();
@@ -163,7 +179,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.lastStreamingNotifyTicks = Environment.TickCount64;
             var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(vm.History, vm.RunningItems);
             this.NotificationService?.Notify(new Notification(
-                new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                this.CreateTabDescriptor(),
                 "Running",
                 textSummary ?? string.Empty,
                 DateTime.UtcNow,
@@ -176,7 +192,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             var heading = interrupted ? "Interrupted" : "Completed";
             var reason = interrupted ? "Interrupted" : BuildIdleReason(vm);
             this.NotificationService?.Notify(new Notification(
-                new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                this.CreateTabDescriptor(),
                 heading,
                 reason,
                 DateTime.UtcNow,
@@ -192,7 +208,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.lastStreamingNotifyTicks = now;
                 var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(vm.History, vm.RunningItems);
                 this.NotificationService?.Notify(new Notification(
-                    new TabDescriptor { TabId = this.Id, TabTitle = this.Title },
+                    this.CreateTabDescriptor(),
                     "Running",
                     textSummary ?? string.Empty,
                     DateTime.UtcNow,
@@ -209,9 +225,22 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.RaiseAltKeyStateChanged(isAltHeld);
     }
 
+    private TabDescriptor CreateTabDescriptor()
+        => new()
+        {
+            TabId = this.Id,
+            TabTitle = this.Title,
+            WorkspaceId = this.WorkspacePaneId,
+        };
+
     private void OnAgentGoToTabAtIndexRequested(object? sender, int index)
     {
         this.RaiseGoToTabAtIndex(index);
+    }
+
+    private void OnAgentGoToWorkspacePaneAtIndexRequested(object? sender, int index)
+    {
+        this.RaiseGoToWorkspacePaneAtIndex(index);
     }
 
     private static bool IsInterrupted(AgentViewModel vm)
@@ -256,16 +285,23 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
             this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
+            this.agent.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
             this.NotificationService?.Remove(this.Id);
             if (this.lease is not null)
             {
                 await this.agent.DisposeViewResourcesAsync();
-                await this.lease.DisposeAsync();
+                await this.leaseDisposables.DisposeAsync();
+                this.lease = null;
             }
             else
             {
                 await this.agent.DisposeAsync();
             }
+        }
+        else
+        {
+            await this.leaseDisposables.DisposeAsync();
+            this.lease = null;
         }
 
         this.loggerFactory?.Dispose();

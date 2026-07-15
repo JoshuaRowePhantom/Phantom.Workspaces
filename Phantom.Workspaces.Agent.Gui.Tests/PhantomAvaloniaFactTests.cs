@@ -49,9 +49,9 @@ public sealed class PhantomAvaloniaFactTests
     [Fact]
     public void HeadlessUnitTestSession_ChatOutputHtmlModelBatch_AllTestsSucceed()
     {
-        // This meta-test runs the full ChatOutputHtmlModelTests suite to verify that
-        // the removal of PerTest isolation fixed the _dispatchTask crash issue.
-        // If the session's dispatch loop crashes, the watchdog will surface a diagnostic.
+        // This meta-test verifies that the ChatOutputHtmlModelTests suite can run without
+        // _dispatchTask crashes by checking that the test class exists and that the
+        // HeadlessUnitTestSession for this assembly is in a healthy state.
         
         var testClass = typeof(ChatOutputHtmlModelTests);
         var testMethods = testClass.GetMethods(BindingFlags.Public | BindingFlags.Instance)
@@ -61,11 +61,27 @@ public sealed class PhantomAvaloniaFactTests
         // Assert: there are test methods to run
         Assert.NotEmpty(testMethods);
         
-        // We can't easily run xUnit tests programmatically in-process, but we can verify
-        // that the test class exists and has PhantomAvaloniaFact methods, which is sufficient
-        // to ensure the meta-test infrastructure is in place. The actual batch run verification
-        // happens during normal test execution when all ChatOutputHtmlModelTests run together.
+        // Verify that the HeadlessUnitTestSession for this assembly is healthy
+        // by checking that _dispatchTask (if accessible) is not in a faulted state.
+        var session = Avalonia.Headless.HeadlessUnitTestSession.GetOrStartForAssembly(
+            typeof(PhantomAvaloniaFactTests).Assembly);
         
-        // The real verification is that this assembly's tests pass without _dispatchTask crashes.
+        var dispatchTaskField = typeof(Avalonia.Headless.HeadlessUnitTestSession).GetField(
+            "_dispatchTask", BindingFlags.NonPublic | BindingFlags.Instance);
+        
+        if (dispatchTaskField?.GetValue(session) is Task dispatchTask)
+        {
+            // If we can access the _dispatchTask, verify it's not faulted
+            Assert.False(dispatchTask.IsFaulted,
+                "_dispatchTask is faulted, indicating the HeadlessUnitTestSession crashed. " +
+                "This suggests PerTest isolation was enabled, causing the #815 crash.");
+            
+            // Also verify it's not completed (it should be running)
+            Assert.False(dispatchTask.IsCompleted,
+                "_dispatchTask is completed, which should not happen during test execution.");
+        }
+        
+        // The actual batch run verification happens during normal test execution when
+        // all ChatOutputHtmlModelTests run together. This meta-test verifies the session is healthy.
     }
 }

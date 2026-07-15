@@ -65,6 +65,7 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
 
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
+            this.RaisePropertyChanged(nameof(this.NonAbstractEntityTypeNames));
             this.RaisePropertyChanged(nameof(this.ModifiedTime));
             this.RaisePropertyChanged(nameof(this.ConcurrencyTag));
             this.RaisePropertyChanged(nameof(this.Data));
@@ -83,6 +84,9 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     public string DisplayName => EntityPresentation.GetDisplayName(this.snapshot);
 
     public string EntityType => EntityPresentation.GetEntityType(this.snapshot);
+
+    public IReadOnlyList<string> NonAbstractEntityTypeNames =>
+        EntityPresentation.GetNonAbstractEntityTypeNames(this.snapshot);
 
     public bool IsEntityType(
         string entityType)

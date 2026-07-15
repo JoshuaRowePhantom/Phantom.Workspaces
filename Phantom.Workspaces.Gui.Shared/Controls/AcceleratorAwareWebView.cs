@@ -10,8 +10,7 @@ namespace Phantom.Workspaces.Gui.Shared.Controls;
 /// Abstract base class that sits between <see cref="NativeWebView"/> and concrete web-view
 /// controls. Subscribes to <see cref="NativeWebView.AdapterCreated"/> once the WebView2
 /// platform adapter is ready, wires up the COM-level <c>AcceleratorKeyPressed</c> hook, and
-/// exposes two events that subclasses (and their owners) can subscribe to:
-/// <see cref="AltKeyStateChanged"/> and <see cref="GoToTabAtIndexRequested"/>.
+/// exposes events that subclasses (and their owners) can subscribe to.
 /// </summary>
 public abstract class AcceleratorAwareWebView : NativeWebView
 {
@@ -28,6 +27,12 @@ public abstract class AcceleratorAwareWebView : NativeWebView
 
     /// <summary>Raised on the UI thread when Alt+N is pressed inside this WebView. Argument is 0-based tab index.</summary>
     public event EventHandler<int>? GoToTabAtIndexRequested;
+
+    /// <summary>Raised on the UI thread when Alt+Shift+N is pressed inside this WebView. Argument is 0-based workspace pane index.</summary>
+    public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
+
+    /// <summary>Raised on the UI thread when Ctrl+W is pressed inside this WebView.</summary>
+    public event EventHandler? CloseTabRequested;
 
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs e)
     {
@@ -51,7 +56,11 @@ public abstract class AcceleratorAwareWebView : NativeWebView
                 onAltKeyState: held => Dispatcher.UIThread.Post(
                     () => this.AltKeyStateChanged?.Invoke(this, held)),
                 onGoToTab: idx => Dispatcher.UIThread.Post(
-                    () => this.GoToTabAtIndexRequested?.Invoke(this, idx)));
+                    () => this.GoToTabAtIndexRequested?.Invoke(this, idx)),
+                onCloseTab: () => Dispatcher.UIThread.Post(
+                    () => this.CloseTabRequested?.Invoke(this, EventArgs.Empty)),
+                onGoToWorkspacePane: idx => Dispatcher.UIThread.Post(
+                    () => this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, idx)));
         }
         catch (Exception)
         {

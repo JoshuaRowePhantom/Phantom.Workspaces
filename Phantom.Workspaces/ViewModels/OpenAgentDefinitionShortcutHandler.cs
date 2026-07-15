@@ -16,13 +16,13 @@ public sealed class OpenAgentDefinitionShortcutHandler : ShortcutHandler
         this.openAgentSessionShortcutHandler = openAgentSessionShortcutHandler;
     }
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.Open
-            && entityViewModel.IsEntityType("agent-definition");
+        return ValueTask.FromResult(shortcut == Shortcut.Open
+            && entityViewModel.IsEntityType("agent-definition"));
     }
 
     public override Task<bool> Handle(
@@ -52,4 +52,6 @@ public sealed class OpenAgentDefinitionShortcutHandler : ShortcutHandler
         return Task.FromResult(true);
     }
 }
+
+
 

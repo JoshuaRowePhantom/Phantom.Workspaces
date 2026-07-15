@@ -870,6 +870,8 @@ public sealed class ChatOutputBrowserIntegrationTests
 
         public string DisplayName { get; }
 
+        public string Description { get; } = string.Empty;
+
         public AgentChatCompletionState CompletionState => this.completionState;
 
         public IReadOnlyList<SubAgentActivityLine> RecentActivity => [];

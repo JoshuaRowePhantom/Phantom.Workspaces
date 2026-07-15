@@ -15,21 +15,20 @@ public interface IRunningAgentChatTable
     ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions { get; }
 
     /// <summary>
-    /// Acquires (or joins) a running agent-chat session identified by <paramref name="sessionId"/>.
-    /// When <paramref name="definition"/> is non-null and the session is not yet running, the
+    /// Acquires (or joins) a running agent-chat session identified by <see cref="AcquireAgentChatRequest.AgentSessionId"/>.
+    /// When the request resolves a definition and the session is not yet running, the
     /// definition is persisted and a new <see cref="AgentChat"/> is created. When the session is
     /// already running, the existing <see cref="AgentChat"/> is returned.
-    /// Registers <paramref name="entityName"/> / <paramref name="entityId"/> for display in
+    /// Registers request entity metadata for display in
     /// <see cref="RunningSessions"/> if this is the first caller for the session.
+    /// <see cref="AcquireAgentChatRequest.EntityDisplayName"/> and <see cref="AcquireAgentChatRequest.EntityDescription"/> are used to
+    /// populate the <see cref="AgentChat.DisplayName"/> and <see cref="AgentChat.Description"/>
+    /// properties when creating a new session.
     /// Dispose the returned lease when done; the underlying <see cref="AgentChat"/> is disposed when
     /// the last lease is released.
     /// </summary>
     Task<RunningAgentChatLease> AcquireAsync(
-        AgentSessionId sessionId,
-        AgentDefinition? definition = null,
-        AgentServices? agentServices = null,
-        string entityName = "",
-        string? entityId = null,
+        AcquireAgentChatRequest request,
         CancellationToken ct = default);
 }
 

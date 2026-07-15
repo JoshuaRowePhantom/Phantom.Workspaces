@@ -66,15 +66,23 @@ public sealed class AgentChatOutputJumpLinkTests
     // ── ChatOutputHtmlModel (jump-link via resolveSubAgentId) ───────────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task JumpLink_Present_WhenHistoryItemHasParentToolCallId()
+    public async Task JumpLink_Present_WhenContentHasParentToolCallId()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
             new()
             {
                 Role = new("tool"),
-                Contents = [new FunctionResultContent("call-1", "ok")],
-                ParentToolCallId = "call-1",
+                Contents =
+                [
+                    new FunctionResultContent("call-1", "ok")
+                    {
+                        AdditionalProperties = new()
+                        {
+                            [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = "call-1",
+                        },
+                    },
+                ],
             },
         };
         var sink = new RecordingSink();
@@ -92,7 +100,7 @@ public sealed class AgentChatOutputJumpLinkTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task JumpLink_Absent_WhenParentToolCallIdIsNull()
+    public async Task JumpLink_Absent_WhenContentHasNoParentToolCallId()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -100,7 +108,6 @@ public sealed class AgentChatOutputJumpLinkTests
             {
                 Role = new("tool"),
                 Contents = [new FunctionResultContent("call-1", "ok")],
-                ParentToolCallId = null,
             },
         };
         var sink = new RecordingSink();
@@ -124,8 +131,16 @@ public sealed class AgentChatOutputJumpLinkTests
             new()
             {
                 Role = new("tool"),
-                Contents = [new FunctionResultContent("call-1", "ok")],
-                ParentToolCallId = "call-1",
+                Contents =
+                [
+                    new FunctionResultContent("call-1", "ok")
+                    {
+                        AdditionalProperties = new()
+                        {
+                            [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = "call-1",
+                        },
+                    },
+                ],
             },
         };
         var sink = new RecordingSink();

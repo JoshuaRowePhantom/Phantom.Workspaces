@@ -251,19 +251,39 @@ public sealed class PhantomAvaloniaFactTests
         // the PhantomAvaloniaTestCase watchdog detects it and provides a diagnostic
         // message referencing issue #643.
         
-        // Arrange: create a test case that will never complete normally
-        var neverCompletingCase = new FakeNeverCompletingXunitTestCase();
-        var testCase = new PhantomAvaloniaTestCase(neverCompletingCase);
-        
-        // We can't easily fake a faulted _dispatchTask in a unit test without
-        // complex mocking, but we can verify the watchdog code paths exist by
-        // checking that the reflection fields are accessible.
+        // Verify the watchdog field exists
         var dispatchTaskField = typeof(Avalonia.Headless.HeadlessUnitTestSession).GetField(
             "_dispatchTask", BindingFlags.NonPublic | BindingFlags.Instance);
-        
-        // Assert: the watchdog field exists (if Avalonia changes, this will fail)
-        // The actual watchdog behavior is integration-tested by the meta-tests below.
         Assert.NotNull(dispatchTaskField);
+        
+        // Verify the diagnostic message in PhantomAvaloniaTestCase source code references #643
+        // by inspecting the compiled code that would be generated during a dispatch task fault.
+        // We can't easily fake a faulted _dispatchTask without complex reflection manipulation,
+        // but we can verify that the watchdog code path exists and contains the correct diagnostic.
+        
+        var testCaseType = typeof(PhantomAvaloniaTestCase);
+        var runMethod = testCaseType.GetMethod(
+            "Run",
+            BindingFlags.Public | BindingFlags.Instance,
+            null,
+            [typeof(ExplicitOption), typeof(IMessageBus), typeof(object[]), typeof(ExceptionAggregator), typeof(CancellationTokenSource)],
+            null);
+        
+        Assert.NotNull(runMethod);
+        
+        // The diagnostic message should reference issue #643 and mention the queue processor crash.
+        // Since we can't easily inject a fault, we verify the implementation exists by reading
+        // the source file to confirm the message is present.
+        var sourceFilePath = System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(testCaseType.Assembly.Location)!,
+            "..", "..", "..", "..", "..", "Phantom.Workspaces.Testing.Gui", "PhantomAvaloniaFact.cs");
+        
+        if (System.IO.File.Exists(sourceFilePath))
+        {
+            var sourceContent = System.IO.File.ReadAllText(sourceFilePath);
+            Assert.Contains("#643", sourceContent);
+            Assert.Contains("HeadlessUnitTestSession queue processor crashed", sourceContent);
+        }
     }
 
     // Regression test for issue #815: verify PhantomAvaloniaTestCase watchdog for session cancellation
@@ -274,12 +294,26 @@ public sealed class PhantomAvaloniaFactTests
         // is cancelled, the PhantomAvaloniaTestCase watchdog detects it and provides
         // a diagnostic message referencing issue #660.
         
-        // Similar to the dispatch task test, we verify the watchdog infrastructure exists.
+        // Verify the watchdog field exists
         var cancellationTokenSourceField = typeof(Avalonia.Headless.HeadlessUnitTestSession).GetField(
             "_cancellationTokenSource", BindingFlags.NonPublic | BindingFlags.Instance);
-        
-        // Assert: the watchdog field exists
         Assert.NotNull(cancellationTokenSourceField);
+        
+        // Verify the diagnostic message references #660 and mentions the dispatch task
+        // being alive-but-stuck. Similar to the dispatch task fault test, we verify
+        // the implementation by checking the source file.
+        var testCaseType = typeof(PhantomAvaloniaTestCase);
+        var sourceFilePath = System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(testCaseType.Assembly.Location)!,
+            "..", "..", "..", "..", "..", "Phantom.Workspaces.Testing.Gui", "PhantomAvaloniaFact.cs");
+        
+        if (System.IO.File.Exists(sourceFilePath))
+        {
+            var sourceContent = System.IO.File.ReadAllText(sourceFilePath);
+            Assert.Contains("#660", sourceContent);
+            Assert.Contains("HeadlessUnitTestSession was cancelled", sourceContent);
+            Assert.Contains("alive-but-stuck", sourceContent);
+        }
     }
 
     private sealed class FakeNeverCompletingXunitTestCase : ISelfExecutingXunitTestCase

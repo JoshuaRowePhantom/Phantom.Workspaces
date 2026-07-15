@@ -7,6 +7,7 @@ namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 internal static class CoreWebView2KeyEventKind
 {
+    public const int KeyDown = 0;
     public const int SystemKeyDown = 2;
     public const int SystemKeyUp   = 3;
 }
@@ -42,6 +43,9 @@ internal interface ICoreWebView2AcceleratorKeyPressedEventArgs
 internal static class WebView2AcceleratorInterop
 {
     private const int VkMenu = 0x12; // VK_MENU (Alt)
+    private const int VkControl = 0x11;
+    private const int VkShift = 0x10;
+    private const int VkW = 0x57;
     private const int VkDigit0 = 0x30;
     private const int VkDigit9 = 0x39;
 
@@ -53,8 +57,13 @@ internal static class WebView2AcceleratorInterop
         int kind,
         int vk,
         Action<bool> onAltKeyState,
-        Action<int> onGoToTab)
+        Action<int> onGoToTab,
+        Action? onCloseTab = null,
+        Action<int>? onGoToWorkspacePane = null,
+        Func<int, bool>? isKeyDown = null)
     {
+        isKeyDown ??= IsKeyDown;
+
         if (vk == VkMenu)
         {
             if (kind == CoreWebView2KeyEventKind.SystemKeyDown)
@@ -67,7 +76,16 @@ internal static class WebView2AcceleratorInterop
         if (kind == CoreWebView2KeyEventKind.SystemKeyDown && vk >= VkDigit0 && vk <= VkDigit9)
         {
             int index = vk == VkDigit0 ? 9 : vk - (VkDigit0 + 1);
-            onGoToTab(index);
+            if (isKeyDown(VkShift) && onGoToWorkspacePane is not null)
+                onGoToWorkspacePane(index);
+            else
+                onGoToTab(index);
+            return;
+        }
+
+        if (kind == CoreWebView2KeyEventKind.KeyDown && vk == VkW && isKeyDown(VkControl))
+        {
+            onCloseTab?.Invoke();
         }
     }
 
@@ -80,7 +98,9 @@ internal static class WebView2AcceleratorInterop
     internal static AcceleratorKeyPressedHandler? Subscribe(
         object? adapter,
         Action<bool> onAltKeyState,
-        Action<int> onGoToTab)
+        Action<int> onGoToTab,
+        Action? onCloseTab = null,
+        Action<int>? onGoToWorkspacePane = null)
     {
         if (adapter is null)
             return null;
@@ -116,7 +136,7 @@ internal static class WebView2AcceleratorInterop
             if (addMethod is null)
                 return null;
 
-            var handler = new AcceleratorKeyPressedHandler(onAltKeyState, onGoToTab);
+            var handler = new AcceleratorKeyPressedHandler(onAltKeyState, onGoToTab, onCloseTab, onGoToWorkspacePane);
             var handlerPtr = Marshal.GetComInterfaceForObject(
                 handler,
                 typeof(ICoreWebView2AcceleratorKeyPressedEventHandler));
@@ -142,6 +162,11 @@ internal static class WebView2AcceleratorInterop
             return null;
         }
     }
+
+    private static bool IsKeyDown(int virtualKey) => (GetKeyState(virtualKey) & unchecked((short)0x8000)) != 0;
+
+    [DllImport("user32.dll")]
+    private static extern short GetKeyState(int nVirtKey);
 }
 
 /// <summary>
@@ -154,7 +179,9 @@ internal static class WebView2AcceleratorInterop
 [ClassInterface(ClassInterfaceType.None)]
 internal sealed class AcceleratorKeyPressedHandler(
     Action<bool> onAltKeyState,
-    Action<int> onGoToTab)
+    Action<int> onGoToTab,
+    Action? onCloseTab,
+    Action<int>? onGoToWorkspacePane)
     : ICoreWebView2AcceleratorKeyPressedEventHandler
 {
     [PreserveSig]
@@ -171,7 +198,7 @@ internal sealed class AcceleratorKeyPressedHandler(
                 if (ShouldHandle(kind, (int)vk))
                 {
                     args.set_Handled(1);
-                    WebView2AcceleratorInterop.Dispatch(kind, (int)vk, onAltKeyState, onGoToTab);
+                    WebView2AcceleratorInterop.Dispatch(kind, (int)vk, onAltKeyState, onGoToTab, onCloseTab, onGoToWorkspacePane);
                 }
             }
         }
@@ -191,6 +218,9 @@ internal sealed class AcceleratorKeyPressedHandler(
             if (kind == CoreWebView2KeyEventKind.SystemKeyDown && vk >= 0x30 && vk <= 0x39)
                 return true;
         }
+
+        if (kind == CoreWebView2KeyEventKind.KeyDown && vk == 0x57)
+            return true;
 
         return false;
     }

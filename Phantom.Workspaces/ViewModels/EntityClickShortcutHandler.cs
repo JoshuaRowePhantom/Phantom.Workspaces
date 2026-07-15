@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 /// <remarks>
 /// This handler is deliberately <b>not</b> registered with the <see cref="ShortcutManager"/>: because
-/// <see cref="ShortcutManager.GetShortcutsFor"/> only consults registered handlers, leaving it
+/// <see cref="ShortcutManager.GetShortcutsForAsync"/> only consults registered handlers, leaving it
 /// unregistered guarantees it contributes no shortcut button. It is invoked directly from the entity
 /// card click wiring instead. See <c>docs/design/entity-click-shortcut-handler.md</c>.
 /// </remarks>
@@ -36,7 +36,7 @@ public sealed class EntityClickShortcutHandler : ShortcutHandler
     }
 
     /// <inheritdoc />
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
@@ -45,7 +45,7 @@ public sealed class EntityClickShortcutHandler : ShortcutHandler
 
         // Invoked directly on click, so the incoming shortcut is ignored; only the entity type
         // determines whether a click opens the entity.
-        return this.clickOpenableEntityTypes.Any(entityViewModel.IsEntityType);
+        return ValueTask.FromResult(this.clickOpenableEntityTypes.Any(entityViewModel.IsEntityType));
     }
 
     /// <inheritdoc />
@@ -57,7 +57,7 @@ public sealed class EntityClickShortcutHandler : ShortcutHandler
         ArgumentNullException.ThrowIfNull(mainWindowViewModel);
         ArgumentNullException.ThrowIfNull(entityViewModel);
 
-        if (!this.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
+        if (!await this.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
         {
             return false;
         }
@@ -67,3 +67,6 @@ public sealed class EntityClickShortcutHandler : ShortcutHandler
             .ConfigureAwait(true);
     }
 }
+
+
+

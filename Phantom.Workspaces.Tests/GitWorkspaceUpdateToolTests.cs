@@ -16,6 +16,15 @@ public sealed class GitWorkspaceUpdateToolTests
             dataAccessLayer,
             """{ "entity-id": "00000000-0000-0000-0001-000000000001", "entity-types": ["entity", "tool"], "tool-type": "git-workspace-update" }""");
 
+    private static async Task<IDataAccessLayer> CreateProductionStyleDataAccessLayerAsync()
+    {
+        var underlying = new InMemoryDataAccessLayer();
+        var dal = new SchemaValidatingDataAccessLayer(new ReferentialIntegrityDataAccessLayer(underlying));
+        var errors = await new SchemaPopulator(dal).Populate();
+        Assert.Empty(errors);
+        return dal;
+    }
+
     private static async Task<EntityId> SeedGitEntityAsync(IDataAccessLayer dal, string path, string? existingGitJson = null)
     {
         // Use deterministic ID based on path (matching the new implementation)
@@ -179,6 +188,21 @@ public sealed class GitWorkspaceUpdateToolTests
         }, TestContext.Current.CancellationToken);
         Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
             new GitMetadata { BranchName = "main", HeadCommitHash = "abc123" };
+        var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
+
+        var result = await tool.ExecuteAsync(Context(dataAccessLayer));
+
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("changed: 1", result.ResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_AgainstFullDalStack_CompletesSuccessfully()
+    {
+        var dataAccessLayer = await CreateProductionStyleDataAccessLayerAsync();
+        await SeedGitEntityAsync(dataAccessLayer, "/repo/test-path");
+        Func<string, ILogger, GitMetadata?> fakeReader = (_, _) =>
+            new GitMetadata { BranchName = "develop", HeadCommitHash = "def456" };
         var tool = new GitWorkspaceUpdateTool(metadataReader: fakeReader);
 
         var result = await tool.ExecuteAsync(Context(dataAccessLayer));

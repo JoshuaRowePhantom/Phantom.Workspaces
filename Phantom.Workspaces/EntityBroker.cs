@@ -41,6 +41,21 @@ public sealed class EntityBroker
 
     public event EventHandler<EntityBrokerChangedEventArgs>? Changed;
 
+    public bool TryGetEntity(EntityId entityId, out SubscribedEntityViewModel? entity)
+    {
+        lock (this.gate)
+        {
+            if (this.subscribedEntitiesById.TryGetValue(entityId, out var reference)
+                && reference.TryGetTarget(out entity))
+            {
+                return true;
+            }
+        }
+
+        entity = null;
+        return false;
+    }
+
     public Task InitializeAsync(
         CancellationToken cancellationToken = default)
     {

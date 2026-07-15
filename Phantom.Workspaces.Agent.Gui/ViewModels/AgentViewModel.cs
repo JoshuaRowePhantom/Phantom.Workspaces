@@ -7,6 +7,7 @@ using System.Threading;
 using System.Windows.Input;
 using Avalonia.Threading;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Collections;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Llm;
@@ -18,6 +19,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 {
     private readonly AgentChat agentChat;
     private readonly ObservableLoggerFactory loggerFactory;
+    private readonly ILogger logger;
     private readonly AgentChatConversationDetailViewModel conversationDetail;
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
@@ -25,6 +27,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
+    private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
@@ -33,19 +36,22 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
+    private readonly TaskScheduler foregroundScheduler;
     private bool isReasoningVisible;
-    private bool isDiagnosticsVisible;
     private bool autoScrollEnabled = true;
     private bool showChatInputHelpText = true;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName, ObservableLoggerFactory loggerFactory)
+    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
+        this.logger = loggerFactory.CreateLogger<AgentViewModel>();
+        this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
         this.agentSessionId = agentChat.AgentSessionId;
         this.DisplayName = displayName;
+        this.Description = description;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
         this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
         this.toolsDetail = new AgentChatToolsDetailViewModel();
@@ -58,10 +64,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
-        this.InputQueue = new InputQueueViewModel(
-            this.agentChat,
-            this.agentChat.DefaultInputQueue,
-            this.agentChat.InputQueueManager);
+        this.InputQueue = agentChat.AcceptsUserInput
+            ? new InputQueueViewModel(
+                this.agentChat,
+                this.agentChat.DefaultInputQueue,
+                this.agentChat.InputQueueManager)
+            : null;
+        this.ToggleHoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.ToggleHoldAllQueuesCommand.Execute(null));
+        this.HoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.HoldAllQueuesCommand.Execute(null));
+        this.UnholdAllQueuesCommand = new RelayCommand(() => this.InputQueue?.UnholdAllQueuesCommand.Execute(null));
         this.EditorItems = [];
 
         this.NavigateToAgentHandler = this.NavigateToSubAgent;
@@ -154,12 +165,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public string DisplayName { get; }
 
+    public string Description { get; }
+
     public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
 
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
+    public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
 
     public void RaiseAltKeyStateChanged(bool isAltHeld)
     {
@@ -169,6 +183,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void RaiseGoToTabAtIndex(int index)
     {
         this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
+    public void RaiseGoToWorkspacePaneAtIndex(int index)
+    {
+        this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, index);
     }
 
     public string AgentSessionId
@@ -218,7 +237,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public ICommand RequestOpenLogWindowCommand { get; }
 
-    public InputQueueViewModel InputQueue { get; }
+    public ICommand ToggleHoldAllQueuesCommand { get; }
+
+    public ICommand HoldAllQueuesCommand { get; }
+
+    public ICommand UnholdAllQueuesCommand { get; }
+
+    public InputQueueViewModel? InputQueue { get; }
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
@@ -280,12 +305,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         private set => this.SetProperty(ref this.isReasoningVisible, value);
     }
 
-    public bool IsDiagnosticsVisible
-    {
-        get => this.isDiagnosticsVisible;
-        private set => this.SetProperty(ref this.isDiagnosticsVisible, value);
-    }
-
     public bool AutoScrollEnabled
     {
         get => this.autoScrollEnabled;
@@ -307,7 +326,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             if (this.SetProperty(ref this.showChatInputHelpText, value))
             {
-                this.InputQueue.DefaultComposer.ShowChatInputHelpText = value;
+                if (this.InputQueue is not null)
+                {
+                    this.InputQueue.DefaultComposer.ShowChatInputHelpText = value;
+                }
             }
         }
     }
@@ -315,8 +337,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public IAgentStatusSink StatusSink => this.conversationDetail.StatusLine;
 
     public void ToggleReasoningVisibility() => this.SetReasoningVisibility(!this.IsReasoningVisible);
-
-    public void ToggleDiagnosticsVisibility() => this.SetDiagnosticsVisibility(!this.IsDiagnosticsVisible);
 
     public event EventHandler? OpenLogWindowRequested;
 
@@ -328,6 +348,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void ConfigureSlashCommands(Func<SlashCommandContext> contextFactory)
     {
         ArgumentNullException.ThrowIfNull(contextFactory);
+
+        if (this.InputQueue is null)
+        {
+            return;
+        }
 
         this.InputQueue.DefaultComposer.SlashCommandInterceptorAsync = text =>
             this.RunSlashCommandAsync(contextFactory, text);
@@ -361,12 +386,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
             getValue: () => this.ShowChatInputHelpText,
             setValue: v => this.ShowChatInputHelpText = v));
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new DiagnosticsSlashCommandHandler(
-            getValue: () => this.IsDiagnosticsVisible,
-            setValue: v => this.SetDiagnosticsVisibility(v)));
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new ReasoningSlashCommandHandler(
             getValue: () => this.IsReasoningVisible,
             setValue: v => this.SetReasoningVisibility(v)));
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RestartSlashCommandHandler());
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new CloneSlashCommandHandler());
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RenameSlashCommandHandler());
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new TitleSlashCommandHandler());
     }
 
     private async Task RunSlashCommandAsync(
@@ -406,7 +432,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         // Show the status message as a system note in the chat history so the user
         // gets feedback without the message being forwarded to the LLM.
-        this.agentChat.EnqueueSystemNote(result.StatusMessage);
+        if (result.Role == AgentChatHistoryItem.HelpChatRole)
+        {
+            this.agentChat.EnqueueHelpNote(result.StatusMessage);
+        }
+        else
+        {
+            this.agentChat.EnqueueSystemNote(result.StatusMessage);
+        }
     }
 
     /// <summary>
@@ -428,9 +461,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public void SetReasoningVisibility(bool visible)
         => this.IsReasoningVisible = visible;
-
-    public void SetDiagnosticsVisibility(bool visible)
-        => this.IsDiagnosticsVisible = visible;
 
     private void OnAgentSessionIdChanged(object? sender, string sessionId)
     {
@@ -471,7 +501,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.toolsTransformer.Dispose();
         this.subAgentsTransformer.Dispose();
-        this.InputQueue.Dispose();
+        this.InputQueue?.Dispose();
         this.conversationDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
         ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
@@ -491,6 +521,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             if (display is IDisposable d)
                 d.Dispose();
+        }
+
+        // Dispose sub-agent leases
+        foreach (var lease in this.subAgentLeases)
+        {
+            await lease.DisposeAsync();
         }
 
         await Task.CompletedTask;
@@ -523,25 +559,66 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
     {
-        // Extract the underlying AgentChat from both AgentChat instances and SubAgent wrappers.
-        AgentChat? subAgentChat = subAgent switch
+        // Handle both AgentChat (eager path from GetOrCreateAsync) and SubAgent (lazy path from RestoreSubAgentsAsync)
+        if (subAgent is AgentChat agentChat)
         {
-            AgentChat directChat => directChat,
-            SubAgent wrapper => wrapper.AgentChat,
-            _ => null
-        };
-
-        if (subAgentChat is null)
-        {
-            // Skip lazily-restored SubAgent wrappers that haven't been loaded yet.
+            // Eager path: AgentChat added directly by GetOrCreateAsync
+            this.AddSubAgentSlotEager(subAgent, agentChat);
             return;
         }
 
+        if (subAgent is SubAgent sub)
+        {
+            var subAgentChat = sub.AgentChat;
+            if (subAgentChat is null)
+            {
+                // Lazy/restored path — materialise asynchronously
+                this.AddSubAgentSlotLazy(sub);
+                return;
+            }
+            // Eager path with SubAgent wrapper
+            this.AddSubAgentSlotEager(sub, subAgentChat);
+            return;
+        }
+
+        this.logger.LogWarning("Unknown IRunningSubAgent type: {Type}", subAgent.GetType().Name);
+    }
+
+    private void AddSubAgentSlotEager(IRunningSubAgent subAgent, AgentChat subAgentChat)
+    {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, this.loggerFactory);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler);
         this.subAgentViewModels.Add(subAgentViewModel);
-        this.subAgentsContainerDetail.AddSlot(subAgent.AgentId, subAgentViewModel);
+        // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
+        this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
+    }
+
+    private void AddSubAgentSlotLazy(SubAgent stub)
+    {
+        // Start async lease acquisition and schedule UI update when complete
+        var acquisitionTask = stub.AcquireLeaseAsync();
+        acquisitionTask.ContinueWith(
+            task =>
+            {
+                if (task.IsCompletedSuccessfully)
+                {
+                    var lease = task.Result;
+                    // Hold the lease for the lifetime of the slot
+                    lock (this.subAgentLeases)
+                    {
+                        this.subAgentLeases.Add(lease);
+                    }
+                    this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                }
+                else if (task.IsFaulted)
+                {
+                    this.logger.LogError(task.Exception, "Failed to acquire lease for restored sub-agent {AgentId}", stub.SessionId.Value);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.None,
+            this.foregroundScheduler);
     }
 
     private void NavigateToSubAgent(string agentId)
@@ -621,6 +698,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private sealed class SubAgentsCollectionTransformer : CollectionTransformer<SubAgentSlotViewModel, AgentEditorNavigationItemViewModel>
     {
         private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
+        private readonly SubAgentsContainerViewModel container;
 
         public SubAgentsCollectionTransformer(
             IReadOnlyList<SubAgentSlotViewModel> source,
@@ -629,6 +707,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             : base(source, target)
         {
             this.subAgentsNavItem = subAgentsNavItem;
+            this.container = (SubAgentsContainerViewModel)subAgentsNavItem.DetailContent;
             this.ApplyInitialTransform();
             this.UpdateSubAgentsLabel();
         }
@@ -640,14 +719,24 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 $"sub-agent-{slot.AgentId}",
                 slot.SubAgentViewModel.DisplayName,
                 null,
-                null,
+                slot.SubAgentViewModel.Description,
                 null,
                 this.subAgentsNavItem.DetailContent,
-                subRoot?.Children.ToArray() ?? []);
+                subRoot?.Children.ToArray() ?? [],
+                runningSubAgent: slot.RunningSubAgent);
         }
 
         protected override void OnInsert(int index, AgentEditorNavigationItemViewModel target)
         {
+            if (target.RunningSubAgent is AgentChat chat)
+            {
+                chat.CompletionStateChanged += (_, _) =>
+                {
+                    target.RefreshStatus();
+                    this.container.NotifySubAgentUpdated();
+                };
+            }
+
             this.UpdateSubAgentsLabel();
             if (this.Target.Count == 1)
             {

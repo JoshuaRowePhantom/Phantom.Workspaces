@@ -431,4 +431,74 @@ public sealed class ConPtyPseudoTerminalTests
 
         Assert.True(outputBytes > 0, "Expected output bytes from child process");
     }
+
+    [Fact]
+    public async Task WaitForExitAsync_CompletesWhenProcessExits_WithoutBlockingThreadPool()
+    {
+        using var _ = new ConsoleScope();
+        var payload = new ShellOpenPayload
+        {
+            Command = "cmd.exe",
+            CommandArguments = ["/c", "exit", "0"],
+            Columns = 80,
+            Rows = 24,
+        };
+
+        await using var pty = new ConPtyPseudoTerminal(payload);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var drain = DrainOutputAsync(pty, cts.Token);
+
+        bool wasOnThreadPoolThread = false;
+        var waitCompleted = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            wasOnThreadPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+            try
+            {
+                var exitCode = pty.WaitForExitAsync(cts.Token).GetAwaiter().GetResult();
+                waitCompleted.SetResult(exitCode);
+            }
+            catch (Exception ex)
+            {
+                waitCompleted.SetException(ex);
+            }
+        });
+
+        var completed = await Task.WhenAny(
+            waitCompleted.Task,
+            Task.Delay(TimeSpan.FromSeconds(10)));
+
+        Assert.Same(waitCompleted.Task, completed);
+        Assert.True(wasOnThreadPoolThread);
+        Assert.Equal(0, await waitCompleted.Task);
+
+        cts.Cancel();
+        await drain;
+    }
+
+    [Fact]
+    public async Task WaitForExitAsync_RespectsCancellation()
+    {
+        using var _ = new ConsoleScope();
+        var payload = new ShellOpenPayload
+        {
+            Command = "cmd.exe",
+            CommandArguments = [],
+            Columns = 80,
+            Rows = 24,
+        };
+
+        await using var pty = new ConPtyPseudoTerminal(payload);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var drain = DrainOutputAsync(pty, cts.Token);
+
+        using var waitCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pty.WaitForExitAsync(waitCts.Token));
+
+        cts.Cancel();
+        await drain;
+    }
 }

@@ -39,13 +39,13 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
         this.sessionOpener = sessionOpener;
     }
 
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.StartShell
-            && TryGetWorkingDirectory(entityViewModel) is not null;
+        return ValueTask.FromResult(shortcut == Shortcut.StartShell
+            && TryGetWorkingDirectory(entityViewModel) is not null);
     }
 
     public override async Task<bool> Handle(
@@ -280,3 +280,5 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
         public ValueTask DisposeAsync() => this.channelStream.DisposeAsync();
     }
 }
+
+

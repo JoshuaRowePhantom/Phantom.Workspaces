@@ -24,6 +24,7 @@
         <KeyBinding Gesture="F8" Command="{Binding NavigateNextNotificationCommand}" />
         <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding NavigateBackCommand}" />
         <KeyBinding Gesture="Ctrl+Shift+OemMinus" Command="{Binding NavigateForwardCommand}" />
+        <KeyBinding Gesture="Ctrl+S" Command="{Binding SelectedWorkspacePane.SaveCommand}" />
     </Window.KeyBindings>
     <Grid RowDefinitions="Auto,*">
         <Border Grid.Row="0" Classes="window-header">
@@ -167,20 +168,19 @@
                     </StackPanel>
                 </Border>
 
-                <ScrollViewer Grid.Row="1">
-                    <ItemsControl ItemsSource="{Binding CurrentViewPopulation.Entities}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:ViewEntityViewModel">
-                                <StackPanel Margin="{Binding IndentMargin}"
-                                            Spacing="6">
-                                    <ContentControl Content="{Binding EntityCardNode}" />
-                                    <Border IsVisible="{Binding HasTraversedChildren}" Classes="entity-card-expand-section">
-                                        <Button Classes="entity-card-expand-button" Content="{Binding ExpandArrow}" Command="{Binding ToggleExpandCommand}" />
-                                    </Border>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Visible"
+                              AllowAutoHide="False">
+                    <TreeView Classes="entity-card-tree entity-card-tree-entity"
+                              ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
+                                              ItemsSource="{Binding Children}">
+                                <ContentControl Content="{Binding EntityCardNode}" />
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
                 </ScrollViewer>
             </Grid>
 

@@ -4,7 +4,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public abstract class ShortcutHandler
 {
-    public abstract bool ShouldApplyTo(
+    public abstract ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel);
@@ -14,3 +14,4 @@ public abstract class ShortcutHandler
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel);
 }
+

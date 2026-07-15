@@ -764,4 +764,94 @@ public sealed class AgentSessionToolsetTests
 
         return new ExternalSetup(parentChat, toolset, tools);
     }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // TryResolveAgentChatAsync thread pool blocking tests (#961)
+    // ──────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AgentSessionGet_ConcurrentAccess_DoesNotDeadlock()
+    {
+        const int concurrentCalls = 10;
+        await using var setup = await CreateTestSetupAsync();
+        var childId = await setup.CreateChildSessionAsync();
+
+        var tasks = Enumerable.Range(0, concurrentCalls)
+            .Select(_ => Task.Run(async () =>
+            {
+                var result = await setup.InvokeAsync("agent_session_get", new()
+                {
+                    ["session_id"] = childId,
+                });
+                Assert.False(result.TryGetProperty("error", out var _));
+                return result;
+            }))
+            .ToArray();
+
+        var allTasks = Task.WhenAll(tasks);
+        var allCompleted = await Task.WhenAny(
+            allTasks,
+            Task.Delay(TimeSpan.FromSeconds(5)));
+
+        Assert.Same(allTasks, allCompleted);
+
+        var results = await allTasks;
+        Assert.All(results, r => Assert.Equal(childId, r.GetProperty("session_id").GetString()));
+    }
+
+    [Fact]
+    public async Task AgentSessionGet_AfterDispose_CompletesWithoutBlocking()
+    {
+        await using var setup = await CreateTestSetupAsync();
+        var childId = await setup.CreateChildSessionAsync();
+
+        bool wasOnThreadPoolThread = false;
+        var getCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            wasOnThreadPoolThread = Thread.CurrentThread.IsThreadPoolThread;
+            try
+            {
+                var result = setup.InvokeAsync("agent_session_get", new()
+                {
+                    ["session_id"] = childId,
+                }).GetAwaiter().GetResult();
+                getCompleted.SetResult();
+            }
+            catch (Exception ex)
+            {
+                getCompleted.SetException(ex);
+            }
+        });
+
+        var completed = await Task.WhenAny(
+            getCompleted.Task,
+            Task.Delay(TimeSpan.FromSeconds(2)));
+
+        Assert.Same(getCompleted.Task, completed);
+        Assert.True(wasOnThreadPoolThread);
+    }
+
+    [Fact]
+    public async Task AgentSessionAcquire_DuplicateFromSubAgent_ReturnsExistingSession()
+    {
+        await using var setup = await CreateTestSetupAsync();
+        var childId = await setup.CreateChildSessionAsync();
+
+        var first = await setup.InvokeAsync("agent_session_get", new()
+        {
+            ["session_id"] = childId,
+        });
+        Assert.False(first.TryGetProperty("error", out _));
+
+        var second = await setup.InvokeAsync("agent_session_get", new()
+        {
+            ["session_id"] = childId,
+        });
+        Assert.False(second.TryGetProperty("error", out _));
+
+        Assert.Equal(childId, first.GetProperty("session_id").GetString());
+        Assert.Equal(childId, second.GetProperty("session_id").GetString());
+    }
 }

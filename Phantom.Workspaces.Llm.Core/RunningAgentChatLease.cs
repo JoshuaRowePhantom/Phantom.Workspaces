@@ -18,6 +18,14 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
         _onDispose = onDispose;
     }
 
+    ~RunningAgentChatLease()
+    {
+        if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
+        {
+            _ = _onDispose();
+        }
+    }
+
     public ValueTask DisposeAsync()
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) != 0)
@@ -25,6 +33,7 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
             return ValueTask.CompletedTask;
         }
 
+        GC.SuppressFinalize(this);
         return _onDispose();
     }
 }

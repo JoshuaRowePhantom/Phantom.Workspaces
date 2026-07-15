@@ -1,4 +1,5 @@
 using AgentSchema;
+using System.Text.Json;
 
 namespace Phantom.Workspaces.Llm.Trust;
 
@@ -28,16 +29,28 @@ public static class AgentTrustProfileResolver
         ArgumentNullException.ThrowIfNull(agentDefinition);
         ArgumentNullException.ThrowIfNull(trustProfileProvider);
 
-        var profileName = ReadProfileReference(agentDefinition);
-        if (string.IsNullOrWhiteSpace(profileName))
+        var metadata = ReadTrustProfileMetadata(agentDefinition);
+        if (metadata is null)
         {
             return null;
         }
 
-        return await trustProfileProvider.ResolveAsync(profileName, cancellationToken).ConfigureAwait(false);
+        var profileName = ReadProfileReference(metadata.Value);
+        if (!string.IsNullOrWhiteSpace(profileName))
+        {
+            return await trustProfileProvider.ResolveAsync(profileName, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (metadata.Value.ValueKind == JsonValueKind.Object)
+        {
+            var profileEntity = TrustProfileEntityReader.Read(metadata.Value);
+            return TrustProfileComposer.Compose([profileEntity.Definition]);
+        }
+
+        return null;
     }
 
-    private static string? ReadProfileReference(AgentDefinition agentDefinition)
+    private static JsonElement? ReadTrustProfileMetadata(AgentDefinition agentDefinition)
     {
         if (agentDefinition.Metadata is null
             || !agentDefinition.Metadata.TryGetValue(MetadataKey, out var value)
@@ -48,9 +61,40 @@ public static class AgentTrustProfileResolver
 
         return value switch
         {
-            string text => text,
-            System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } element => element.GetString(),
-            _ => value.ToString(),
+            JsonElement element => element.Clone(),
+            string text => JsonSerializer.SerializeToElement(text),
+            _ => JsonSerializer.SerializeToElement(value),
         };
+    }
+
+    private static string? ReadProfileReference(JsonElement metadata)
+    {
+        if (metadata.ValueKind == JsonValueKind.String)
+        {
+            return metadata.GetString();
+        }
+
+        if (metadata.ValueKind != JsonValueKind.Object
+            || !metadata.TryGetProperty("$ref", out var reference)
+            || reference.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (reference.TryGetProperty("entity-name", out var entityName) && entityName.ValueKind == JsonValueKind.Array)
+        {
+            string? lastComponent = null;
+            foreach (var component in entityName.EnumerateArray())
+            {
+                if (component.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(component.GetString()))
+                {
+                    lastComponent = component.GetString();
+                }
+            }
+
+            return lastComponent;
+        }
+
+        return null;
     }
 }

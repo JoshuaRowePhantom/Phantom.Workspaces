@@ -30,7 +30,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         var entityViewModel = new SubscribedEntityViewModel(snapshot);
         var handler = new StartShellFromEntityShortcutHandler((_, _, _) => throw new InvalidOperationException());
 
-        Assert.True(handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
+        Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -43,7 +43,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         var entityViewModel = new SubscribedEntityViewModel(snapshot);
         var handler = new StartShellFromEntityShortcutHandler((_, _, _) => throw new InvalidOperationException());
 
-        Assert.True(handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
+        Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -56,7 +56,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         var entityViewModel = new SubscribedEntityViewModel(snapshot);
         var handler = new StartShellFromEntityShortcutHandler((_, _, _) => throw new InvalidOperationException());
 
-        Assert.False(handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
+        Assert.False(await handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
     // ---- Handle: working directory -----------------------------------------------------------
@@ -357,3 +357,4 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         }
     }
 }
+

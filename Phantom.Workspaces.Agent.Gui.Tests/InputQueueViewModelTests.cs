@@ -1,4 +1,5 @@
 ﻿using AgentSchema;
+using Avalonia.Media;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -452,14 +453,22 @@ public sealed class InputQueueViewModelTests
     }
 
     [Fact]
-    public void QueueImmediacyOption_HasNoColorProperties()
+    public void QueueImmediacyOption_AllOptions_HaveGlyphAndBrushProperties()
     {
-        // Issue #253: QueueImmediacyOption must not expose per-state color properties.
-        // Colors are now applied via theme resources in SharedStyles.axaml.
-        var type = typeof(QueueImmediacyOption);
-        Assert.Null(type.GetProperty("Background"));
-        Assert.Null(type.GetProperty("BorderBrush"));
-        Assert.Null(type.GetProperty("Foreground"));
+        Assert.Equal("⏩", QueueImmediacyOption.All.Single(option => option.Value == AgentInputQueueImmediacy.Immediate).GlyphText);
+        Assert.Equal("▶", QueueImmediacyOption.All.Single(option => option.Value == AgentInputQueueImmediacy.Queue).GlyphText);
+        Assert.Equal("⏸", QueueImmediacyOption.All.Single(option => option.Value == AgentInputQueueImmediacy.Held).GlyphText);
+
+        var backgrounds = QueueImmediacyOption.All
+            .Select(option => Assert.IsType<SolidColorBrush>(option.Background).Color)
+            .ToArray();
+        var borders = QueueImmediacyOption.All
+            .Select(option => Assert.IsType<SolidColorBrush>(option.BorderBrush).Color)
+            .ToArray();
+
+        Assert.Equal(3, backgrounds.Distinct().Count());
+        Assert.Equal(3, borders.Distinct().Count());
+        Assert.All(QueueImmediacyOption.All, option => Assert.Same(Brushes.White, option.Foreground));
     }
 
     [Fact]

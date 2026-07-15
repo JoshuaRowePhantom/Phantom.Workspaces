@@ -74,6 +74,7 @@
 
     <Style Selector="Grid.entity-pane">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+        <Setter Property="ClipToBounds" Value="True" />
     </Style>
     <Style Selector="Grid.entity-pane:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
@@ -84,14 +85,22 @@
         <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="MaxWidth" Value="760" />
+        <Setter Property="ClipToBounds" Value="True" />
     </Style>
     <Style Selector="Border.entity-card:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+        <Setter Property="BorderThickness" Value="3" />
     </Style>
     <Style Selector="Border.entity-card.selected">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBackground}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="Border.entity-card.selected:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+        <Setter Property="BorderThickness" Value="3" />
     </Style>
     <Style Selector="StackPanel.entity-card-tree-item">
         <Setter Property="Spacing" Value="4" />
@@ -156,41 +165,59 @@
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
     </Style>
+    <Style Selector="Button.workspace-save-button">
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="24" />
+        <Setter Property="Padding" Value="6,2" />
+        <Setter Property="Margin" Value="4,0,4,0" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar">
+        <Setter Property="CornerRadius" Value="2" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="Margin" Value="0,0,8,0" />
+    </Style>
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
         <Setter Property="Template">
             <ControlTemplate>
-                <StackPanel Classes="entity-card-tree-item">
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card branch-header">
-                        <ContentPresenter Content="{TemplateBinding Header}"
+                <Grid RowDefinitions="Auto,Auto"
+                      ColumnDefinitions="21,*">
+                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2"
+                                Classes="entity-card-tree-item">
+                        <ContentPresenter IsVisible="{Binding HasChildren}"
+                                          Classes="branch-header"
+                                          VerticalAlignment="Top"
+                                          Content="{TemplateBinding Header}"
                                           ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    </Border>
-                    <Border IsVisible="{Binding NotHasChildren}"
-                            Classes="entity-card leaf">
-                        <ContentPresenter Content="{TemplateBinding Header}"
+                        <ContentPresenter IsVisible="{Binding NotHasChildren}"
+                                          Classes="leaf"
+                                          VerticalAlignment="Top"
+                                          Content="{TemplateBinding Header}"
                                           ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                    </Border>
-                    <Border IsVisible="{Binding HasChildren}"
-                            Classes="entity-card-expand-section branch-footer">
-                        <Button Classes="entity-card-expand-button"
-                                Content="▾"
-                                HorizontalAlignment="Stretch"
-                                HorizontalContentAlignment="Center"
-                                Command="{Binding ToggleExpandCommand}" />
-                    </Border>
-                    <ItemsPresenter Margin="20,0,0,0"
+                        <Border IsVisible="{Binding HasChildren}"
+                                Classes="entity-card-expand-section branch-footer">
+                            <Button Classes="entity-card-expand-button"
+                                    Content="{Binding ExpandArrow, FallbackValue=▼}"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Command="{Binding ToggleExpandCommand}" />
+                        </Border>
+                    </StackPanel>
+                    <Border Grid.Column="0" Grid.Row="1"
+                            Background="{Binding ChildRailBrush, FallbackValue=#808080}"
+                            Width="3"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Stretch" />
+                    <ItemsPresenter Grid.Column="1" Grid.Row="1"
                                     IsVisible="{Binding IsExpanded}" />
-                </StackPanel>
+                </Grid>
             </ControlTemplate>
         </Setter>
-    </Style>
-    <Style Selector="TreeView.entity-card-tree TreeViewItem:expanded Button.entity-card-expand-button">
-        <Setter Property="Content" Value="▴" />
     </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
         <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
     </Style>
-    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky Border.entity-card.branch-header">
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ContentPresenter.branch-header">
         <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
     </Style>
 
@@ -357,8 +384,6 @@
         <Setter Property="VerticalAlignment" Value="Bottom" />
     </Style>
     <Style Selector="Border.queue-status-pill.dynamic">
-        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="0" />
     </Style>
@@ -367,10 +392,7 @@
         <Setter Property="CornerRadius" Value="999" />
         <Setter Property="Padding" Value="10,4" />
     </Style>
-    <Style Selector="Border.queue-immediacy-option-pill">
-        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
-    </Style>
+    <Style Selector="Border.queue-immediacy-option-pill" />
     <Style Selector="Border.queue-item-card">
         <Setter Property="Margin" Value="0,0,0,4" />
         <Setter Property="Padding" Value="8,6" />
@@ -382,6 +404,10 @@
     </Style>
     <Style Selector="TextBlock.queue-immediacy-caret">
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.queue-immediacy-glyph">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
     <Style Selector="UserControl.agent-chat-output-root">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
@@ -668,9 +694,17 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="HeaderTemplate">
             <DataTemplate>
-                <Border Classes="queue-immediacy-pill queue-immediacy-option-pill">
-                    <TextBlock Classes="queue-immediacy-label queue-immediacy-option-label"
-                               Text="{ReflectionBinding Label}" />
+                <Border Classes="queue-immediacy-pill queue-immediacy-option-pill"
+                        Background="{ReflectionBinding Background}"
+                        BorderBrush="{ReflectionBinding BorderBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Classes="queue-immediacy-glyph"
+                                   Foreground="{ReflectionBinding Foreground}"
+                                   Text="{ReflectionBinding GlyphText}" />
+                        <TextBlock Classes="queue-immediacy-label queue-immediacy-option-label"
+                                   Foreground="{ReflectionBinding Foreground}"
+                                   Text="{ReflectionBinding Label}" />
+                    </StackPanel>
                 </Border>
             </DataTemplate>
         </Setter>
@@ -1081,7 +1115,7 @@
         <Setter Property="CornerRadius" Value="4" />
         <Setter Property="Padding" Value="3,1" />
         <Setter Property="Margin" Value="0,-2,-2,0" />
-        <Setter Property="Opacity" Value="0.50" />
+        <Setter Property="Opacity" Value="0" />
         <Setter Property="ZIndex" Value="10" />
         <Setter Property="Transitions">
             <Transitions>

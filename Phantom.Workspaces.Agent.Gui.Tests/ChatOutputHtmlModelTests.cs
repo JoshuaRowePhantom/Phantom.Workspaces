@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -189,36 +190,6 @@ public sealed class ChatOutputHtmlModelTests
         model.Refresh();
 
         Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("thinking"));
-    }
-
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task DiagnosticsHidden_DoesNotRenderDiagnosticContent_UntilToggledOn()
-    {
-        var history = new ObservableCollection<AgentChatHistoryItem>
-        {
-            new()
-            {
-                Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = [new TextContent("diagnostic detail")],
-            },
-        };
-        var sink = new RecordingSink();
-        var diagnosticsVisible = false;
-        using var model = new ChatOutputHtmlModel(
-            history,
-            new ObservableCollection<AgentChatRunningItem>(),
-            () => true,
-            sink,
-            isDiagnosticsVisible: () => diagnosticsVisible);
-        await model.HistoryLoaded;
-
-        Assert.Empty(sink.ContentOperations);
-
-        sink.Clear();
-        diagnosticsVisible = true;
-        model.Refresh();
-
-        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("diagnostic detail"));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -1079,9 +1050,8 @@ public sealed class ChatOutputHtmlModelTests
 
     private static ChatOutputHtmlModel.HistoryRenderPlan BuildPlan(
         IReadOnlyList<AgentChatHistoryItem> snapshot,
-        RecordingSink sink,
-        Func<bool>? isDiagnosticsVisible = null)
-        => ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, sink, () => true, isDiagnosticsVisible);
+        RecordingSink sink)
+        => ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, sink, () => true);
 
     [Fact]
     public void BuildHistoryRenderPlan_EmptyHistory_ReturnsNoSlotsAndNoChunks()
@@ -1391,8 +1361,7 @@ public sealed class ChatOutputHtmlModelTests
         List<RenderSlot> slots,
         RecordingSink sink,
         Dictionary<string, RenderSlot> sharedSlotByCallId,
-        int preloadedCount = 0,
-        Func<bool>? isDiagnosticsVisible = null)
+        int preloadedCount = 0)
         => new(
             source,
             slots,
@@ -1402,7 +1371,6 @@ public sealed class ChatOutputHtmlModelTests
             elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
             groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
             sharedSlotByCallId: sharedSlotByCallId,
-            isDiagnosticsVisible: isDiagnosticsVisible,
             preloadedCount: preloadedCount);
 
     /// <summary>
@@ -1412,10 +1380,9 @@ public sealed class ChatOutputHtmlModelTests
     /// </summary>
     private static (List<RenderSlot> Slots, Dictionary<string, RenderSlot> SharedMap) PreloadPlan(
         ObservableCollection<AgentChatHistoryItem> source,
-        RecordingSink sink,
-        Func<bool>? isDiagnosticsVisible = null)
+        RecordingSink sink)
     {
-        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan([.. source], sink, () => true, isDiagnosticsVisible);
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan([.. source], sink, () => true);
         ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, plan.Slots.Length);
         return ([.. plan.Slots], plan.SlotByCallId);
     }
@@ -1878,7 +1845,7 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task AgentChatOutput_DiagnosticDisabled_DiagnosticContentNotRendered()
+    public async Task AgentChatOutput_Diagnostic_DiagnosticContentRendered()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -1889,79 +1856,15 @@ public sealed class ChatOutputHtmlModelTests
             },
         };
         var sink = new RecordingSink();
-        var diagnosticsVisible = false;
         using var model = new ChatOutputHtmlModel(
             history,
             new ObservableCollection<AgentChatRunningItem>(),
             () => true,
-            sink,
-            isDiagnosticsVisible: () => diagnosticsVisible);
-        await model.HistoryLoaded;
-
-        Assert.Empty(sink.ContentOperations);
-        Assert.DoesNotContain(sink.Operations, op => op.Content.Contains("diagnostic"));
-    }
-
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task AgentChatOutput_DiagnosticEnabled_DiagnosticContentRendered()
-    {
-        var history = new ObservableCollection<AgentChatHistoryItem>
-        {
-            new()
-            {
-                Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = [new TextContent("diagnostic detail")],
-            },
-        };
-        var sink = new RecordingSink();
-        var diagnosticsVisible = true;
-        using var model = new ChatOutputHtmlModel(
-            history,
-            new ObservableCollection<AgentChatRunningItem>(),
-            () => true,
-            sink,
-            isDiagnosticsVisible: () => diagnosticsVisible);
+            sink);
         await model.HistoryLoaded;
 
         Assert.NotEmpty(sink.ContentOperations);
         Assert.Contains(sink.ContentOperations, op => op.Content.Contains("diagnostic"));
-    }
-
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task AgentChatOutput_DiagnosticDisabled_NonDiagnosticContentUnaffected()
-    {
-        var history = new ObservableCollection<AgentChatHistoryItem>
-        {
-            new()
-            {
-                Role = ChatRole.User,
-                Contents = [new TextContent("regular user message")],
-            },
-            new()
-            {
-                Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = [new TextContent("diagnostic detail")],
-            },
-            new()
-            {
-                Role = ChatRole.Assistant,
-                Contents = [new TextContent("assistant response")],
-            },
-        };
-        var sink = new RecordingSink();
-        var diagnosticsVisible = false;
-        using var model = new ChatOutputHtmlModel(
-            history,
-            new ObservableCollection<AgentChatRunningItem>(),
-            () => true,
-            sink,
-            isDiagnosticsVisible: () => diagnosticsVisible);
-        await model.HistoryLoaded;
-
-        var op = Assert.Single(sink.ContentOperations);
-        Assert.Contains("regular user message", op.Content);
-        Assert.Contains("assistant response", op.Content);
-        Assert.DoesNotContain("diagnostic", op.Content);
     }
 
     // ── HistoryLoad tests (issue #893) ──────────────────────────────────────────
@@ -2064,6 +1967,34 @@ public sealed class ChatOutputHtmlModelTests
         // so cancellation is observed before anything is published.
         var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         model.Dispose();
+        await model.HistoryLoaded;
+
+        Assert.Empty(model.HistorySlots);
+        Assert.Empty(model.SharedSlotByCallId);
+        Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_CancellationAfterChunkGeneration_DoesNotWaitForUiDispatch()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 500).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        var sink = new RecordingSink();
+        using var modelAssigned = new ManualResetEventSlim();
+        ChatOutputHtmlModel? model = null;
+
+        model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            beforeDispatchHistoryChunk: () =>
+            {
+                modelAssigned.Wait();
+                model!.Dispose();
+            });
+
+        modelAssigned.Set();
         await model.HistoryLoaded;
 
         Assert.Empty(model.HistorySlots);
@@ -2446,80 +2377,6 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("first live message", op.Content);
     }
 
-    [Fact]
-    public void LiveTransformer_LastPreloadedItemIsSuppressedDiagnostic_FirstLiveItemAnchorsToNearestDomSlot()
-    {
-        var source = new ObservableCollection<AgentChatHistoryItem>
-        {
-            TextMessage(ChatRole.Assistant, "visible answer"),
-            DiagnosticMessage("hidden diagnostic"),
-        };
-        var sink = new RecordingSink();
-        var (slots, sharedMap) = PreloadPlan(source, sink, isDiagnosticsVisible: () => false);
-        Assert.False(slots[1].HasDomElement);
-        using var transformer = MakeLiveTransformer(
-            source, slots, sink, sharedMap, preloadedCount: 2, isDiagnosticsVisible: () => false);
-        sink.Clear();
-
-        source.Add(TextMessage(ChatRole.User, "first live message"));
-
-        var op = Assert.Single(sink.ContentOperations);
-        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
-        Assert.Contains("first live message", op.Content);
-    }
-
-    [Fact]
-    public void LiveTransformer_AllPreloadedItemsLackDomElements_FirstLiveItemAppendsIntoHistoryContainer()
-    {
-        var source = new ObservableCollection<AgentChatHistoryItem>
-        {
-            DiagnosticMessage("hidden diagnostic one"),
-            DiagnosticMessage("hidden diagnostic two"),
-        };
-        var sink = new RecordingSink();
-        var (slots, sharedMap) = PreloadPlan(source, sink, isDiagnosticsVisible: () => false);
-        Assert.All(slots, slot => Assert.False(slot.HasDomElement));
-        using var transformer = MakeLiveTransformer(
-            source, slots, sink, sharedMap, preloadedCount: 2, isDiagnosticsVisible: () => false);
-        sink.Clear();
-
-        source.Add(TextMessage(ChatRole.User, "first live message"));
-
-        var op = Assert.Single(sink.ContentOperations);
-        Assert.Equal(ChatOutputUpdateLocation.Append, op.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
-        Assert.Contains("first live message", op.Content);
-    }
-
-    [Fact]
-    public void LiveTransformer_LiveInsert_AnchorAlwaysTargetsSlotWithDomElement()
-    {
-        var source = new ObservableCollection<AgentChatHistoryItem>();
-        var slots = new List<RenderSlot>();
-        var sink = new RecordingSink();
-        using var transformer = MakeLiveTransformer(
-            source, slots, sink, new(StringComparer.Ordinal), isDiagnosticsVisible: () => false);
-
-        source.Add(TextMessage(ChatRole.User, "text zero"));
-        source.Add(ToolCallMessage("my_tool", "c1"));
-        source.Add(ToolResultMessage("c1"));
-        source.Add(DiagnosticMessage("hidden diagnostic"));
-        sink.Clear();
-
-        source.Add(TextMessage(ChatRole.User, "text four"));
-
-        // The new item skips the injected result (index 2) and suppressed diagnostic (index 3)
-        // and anchors on the tool-call element at index 1 — the nearest slot with a DOM element.
-        var op = Assert.Single(sink.ContentOperations);
-        Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
-        Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), op.Path);
-        Assert.Contains("text four", op.Content);
-        Assert.True(slots[1].HasDomElement);
-        Assert.False(slots[2].HasDomElement);
-        Assert.False(slots[3].HasDomElement);
-    }
-
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Reload_HistoryWithToolResultOnlyTail_RendersAllMessagesIncludingUserMessage()
     {
@@ -2787,5 +2644,69 @@ public sealed class ChatOutputHtmlModelTests
         var payloadOp = Assert.Single(sink.ContentOperations, op => op.Content.Contains("new tail item"));
         Assert.Equal(ChatOutputUpdateLocation.After, payloadOp.Location);
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), payloadOp.Path);
+    }
+
+    // ── Tests for issue #957: diagnostics always visible ────────────────────────
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ChatMessageHtmlModel_Constructor_DoesNotAcceptIsDiagnosticsVisibleParameter()
+    {
+        // This test verifies that ChatMessageHtmlModel constructor signature no longer accepts
+        // isDiagnosticsVisible parameter. The test will fail to compile if the parameter exists.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+        };
+        var sink = new RecordingSink();
+        
+        // This constructor call must not have isDiagnosticsVisible parameter
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+
+        Assert.NotEmpty(sink.ContentOperations);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutputHtmlModel_DiagnosticMessages_AlwaysRendered()
+    {
+        // Verifies that diagnostic messages are always rendered unconditionally
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new()
+            {
+                Role = ChatRole.User,
+                Contents = [new TextContent("user message")],
+            },
+            new()
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = [new TextContent("diagnostic detail")],
+            },
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("assistant response")],
+            },
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink);
+        await model.HistoryLoaded;
+
+        var op = Assert.Single(sink.ContentOperations);
+        Assert.Contains("user message", op.Content);
+        Assert.Contains("diagnostic detail", op.Content);
+        Assert.Contains("assistant response", op.Content);
     }
 }

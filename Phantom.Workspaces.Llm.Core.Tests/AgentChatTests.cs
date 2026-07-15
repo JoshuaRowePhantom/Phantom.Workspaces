@@ -93,6 +93,13 @@ public sealed class AgentChatTests
         Func<bool> condition,
         string description,
         CancellationToken cancellationToken = default)
+        => await WaitForConditionAsync([collection], condition, description, cancellationToken);
+
+    private static async Task WaitForConditionAsync(
+        IReadOnlyList<System.Collections.Specialized.INotifyCollectionChanged> collections,
+        Func<bool> condition,
+        string description,
+        CancellationToken cancellationToken = default)
     {
         // The agent mutates its observable collections on its foreground scheduler and raises
         // CollectionChanged on that thread, so evaluating the predicate from within the handler is
@@ -110,7 +117,11 @@ public sealed class AgentChatTests
             }
         }
 
-        collection.CollectionChanged += OnCollectionChanged;
+        foreach (var collection in collections)
+        {
+            collection.CollectionChanged += OnCollectionChanged;
+        }
+
         try
         {
             if (ConditionMet(condition))
@@ -122,7 +133,10 @@ public sealed class AgentChatTests
         }
         finally
         {
-            collection.CollectionChanged -= OnCollectionChanged;
+            foreach (var collection in collections)
+            {
+                collection.CollectionChanged -= OnCollectionChanged;
+            }
         }
     }
 
@@ -502,7 +516,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
 
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat.RunningItems, () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
+        await WaitForConditionAsync([chat.RunningItems, chat.History], () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
 
         Assert.Single(chat.History);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
@@ -522,7 +536,7 @@ public sealed class AgentChatTests
                 FinishReason = ChatFinishReason.Stop,
             });
         chat.EnqueueUserMessage("hi");
-        await WaitForConditionAsync(chat.RunningItems, () =>
+        await WaitForConditionAsync([chat.RunningItems, chat.History], () =>
             chat.History.Count == 2
             && chat.RunningItems.Count == 0,
             "assistant running item to complete and move into history");
@@ -591,7 +605,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
         chat.EnqueueUserMessage("What is 2+2?");
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.History.Count == 1
                 && chat.RunningItems.Count == 1,
             "running item to appear after first streamed token");
@@ -734,7 +748,7 @@ public sealed class AgentChatTests
             chat.EnqueueUserMessage("search please");
 
             await WaitForConditionAsync(
-                chat.RunningItems,
+                [chat.RunningItems, chat.History],
                 () => chat.RunningItems.Count == 0
                     && chat.History.Any(item => item.Role == ChatRole.Assistant
                         && GetText(item.Contents).Contains("Done.", StringComparison.Ordinal)),
@@ -789,14 +803,17 @@ public sealed class AgentChatTests
 
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count == 1
-                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("thinking", StringComparison.Ordinal)),
-            "run to start and stream initial content");
+            () => chat.RunningItems.Count == 1,
+            "run to start");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("thinking", StringComparison.Ordinal)),
+            "run to stream initial content");
 
         chat.Interrupt();
 
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.RunningItems.Count == 0
                 && chat.History.Any(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole
                     && GetText(item.Contents).Contains("Interrupted", StringComparison.Ordinal)),
@@ -830,16 +847,19 @@ public sealed class AgentChatTests
 
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count == 1
-                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("alpha", StringComparison.Ordinal)),
-            "running item to appear after the first streamed fragment");
+            () => chat.RunningItems.Count == 1,
+            "running item to appear");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("alpha", StringComparison.Ordinal)),
+            "first streamed fragment to appear");
 
         blockedSecond.MarkReady();
         blockedThird.MarkReady();
         blockedComplete.MarkReady();
 
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.RunningItems.Count == 0 && chat.History.Count == 2,
             "run to complete and commit the assistant response to history");
 
@@ -872,16 +892,20 @@ public sealed class AgentChatTests
 
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count == 1
-                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("partial answer", StringComparison.Ordinal)),
-            "run to start and stream initial content");
+            () => chat.RunningItems.Count == 1,
+            "run to start");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("partial answer", StringComparison.Ordinal)),
+            "run to stream initial content");
 
         chat.Interrupt();
 
         await WaitForConditionAsync(
-            chat.History,
+            [chat.History, chat.RunningItems],
             () => chat.History.Count == 3
-                && chat.History[^1].Role == AgentChatHistoryItem.DiagnosticChatRole,
+                && chat.History[^1].Role == AgentChatHistoryItem.DiagnosticChatRole
+                && chat.RunningItems.Count == 0,
             "interrupt to commit streamed content followed by the interrupted diagnostic");
 
         Assert.Equal(3, chat.History.Count);
@@ -1131,7 +1155,7 @@ public sealed class AgentChatTests
 
         chat.EnqueueUserMessage("hi");
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.History.Count == 2 && chat.RunningItems.Count == 0,
             "user message to complete and move the assistant response into history");
 
@@ -1179,10 +1203,17 @@ public sealed class AgentChatTests
         // Act: start the run, wait for "first " to land in the running item, then inject steering
         // at that boundary before releasing the rest of the stream.
         chat.EnqueueUserMessage("user turn");
+        
+        // Phase 1: wait for the running item to be created (outer collection notification)
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count > 0
-                  && chat.RunningItems[0].Items.Count > 0
+            () => chat.RunningItems.Count > 0,
+            "running item to be created");
+        
+        // Phase 2: wait on the inner collection for the "first" token (inner collection notification)
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => chat.RunningItems[0].Items.Count > 0
                   && GetText(chat.RunningItems[0].Items[0].Contents).Contains("first"),
             "first streaming update to appear in running item");
 
@@ -1403,7 +1434,7 @@ public sealed class AgentChatTests
         {
             chat.EnqueueUserMessage("ping");
             await WaitForConditionAsync(
-                chat.RunningItems,
+                [chat.RunningItems, chat.History],
                 () => chat.RunningItems.Count == 0
                     && chat.History.Count == 2
                     && chat.History[^1].Role == ChatRole.Assistant,
@@ -1799,6 +1830,192 @@ public sealed class AgentChatTests
         var result = chat.TryGetSubAgentIdByToolCallId("nonexistent-tool-call-id");
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task Description_DefaultsToEmpty()
+    {
+        // When no DescriptionOverride is provided, AgentChat.Description should be an empty string.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+        });
+
+        Assert.Equal(string.Empty, chat.Description);
+    }
+
+    [Fact]
+    public async Task Description_UsesDescriptionOverride()
+    {
+        // When DescriptionOverride is set, AgentChat.Description should return that value.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var expectedDescription = "This is a test agent description";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DescriptionOverride = expectedDescription,
+        });
+
+        Assert.Equal(expectedDescription, chat.Description);
+    }
+
+    [Fact]
+    public async Task AgentChatFromEntity_DisplayName_ReadsFromEntityDisplayName()
+    {
+        // When creating an AgentChat from entity data with display-name.default,
+        // the AgentChat.DisplayName should match the entity display-name value.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var entityDisplayName = "My Custom Entity Name";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = entityDisplayName,
+        });
+
+        Assert.Equal(entityDisplayName, chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task AgentChatFromEntity_Description_ReadsFromEntityDescription()
+    {
+        // When creating an AgentChat from entity data with description,
+        // the AgentChat.Description should match the entity description value.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var entityDescription = "Repository for handling user authentication";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DescriptionOverride = entityDescription,
+        });
+
+        Assert.Equal(entityDescription, chat.Description);
+    }
+
+    [Fact]
+    public async Task AgentChatFromEntity_DisplayNameAndDescription_BothReadFromEntity()
+    {
+        // When creating an AgentChat from entity data with both display-name and description,
+        // both AgentChat properties should reflect the entity values.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var entityDisplayName = "Authentication Service";
+        var entityDescription = "Handles user login and token management";
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = entityDisplayName,
+            DescriptionOverride = entityDescription,
+        });
+
+        Assert.Equal(entityDisplayName, chat.DisplayName);
+        Assert.Equal(entityDescription, chat.Description);
+    }
+
+    // ── Issue #332: EnqueueHelpNote tests ─────────────────────────────────────
+
+    [Fact]
+    public async Task EnqueueHelpNote_AddsItemWithHelpRole()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        });
+
+        chat.EnqueueHelpNote("Help text goes here");
+
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count > 0,
+            "EnqueueHelpNote should add item to history",
+            CancellationToken.None);
+
+        var item = Assert.Single(chat.History);
+        Assert.Equal(AgentChatHistoryItem.HelpChatRole, item.Role);
+    }
+
+    [Fact]
+    public async Task EnqueueHelpNote_EmptyText_DoesNotAddItem()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        });
+
+        chat.EnqueueHelpNote("");
+        chat.EnqueueHelpNote("   ");
+        chat.EnqueueHelpNote(null!);
+
+        // Give a brief moment for any tasks to run
+        await Task.Delay(50);
+
+        Assert.Empty(chat.History);
+    }
+
+    // ── Issue #487: Exception format tests ────────────────────────────────────
+
+    [Fact]
+    public async Task ProviderError_IncludesExceptionTypeAndStackTrace()
+    {
+        // Arrange — create a chat client that throws an exception with a stack trace
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new DeterministicTestChatClient();
+        var stream = chatClient.EnqueueStreamingResponse();
+        
+        // Simulate a provider exception with a specific type and stack trace
+        var exception = new InvalidOperationException("Provider communication failed");
+        stream.EnqueueException(exception);
+        
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "test-chat",
+        });
+
+        // Act — send a message that triggers the exception
+        chat.EnqueueUserMessage("trigger error");
+        
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "Provider error should add diagnostic item",
+            CancellationToken.None);
+
+        // Assert — the diagnostic message should include the full exception (type and stack trace)
+        var diagnosticItem = chat.History.FirstOrDefault(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.NotNull(diagnosticItem);
+        var errorContent = diagnosticItem.Contents.OfType<ErrorContent>().FirstOrDefault();
+        Assert.NotNull(errorContent);
+        Assert.Contains("InvalidOperationException", errorContent.Message);
+        Assert.Contains("Provider error:", errorContent.Message);
+        Assert.Contains("Provider communication failed", errorContent.Message);
     }
 
 }

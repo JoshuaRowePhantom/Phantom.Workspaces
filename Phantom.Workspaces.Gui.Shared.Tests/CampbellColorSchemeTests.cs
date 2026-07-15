@@ -10,8 +10,8 @@ public sealed class CampbellColorSchemeTests
     // ── Normal (dim) ANSI colors ─────────────────────────────────────────────────────────────
 
     [Fact]
-    public void CampbellColorScheme_Black_IsCorrect() =>
-        AssertRgb(12, 12, 12, CampbellColorScheme.Black);
+    public void CampbellColorScheme_Black_IsPureBlack() =>
+        AssertRgb(0, 0, 0, CampbellColorScheme.Black);
 
     [Fact]
     public void CampbellColorScheme_Red_IsCorrect() =>
@@ -78,8 +78,8 @@ public sealed class CampbellColorSchemeTests
     // ── Background / Foreground defaults ────────────────────────────────────────────────────
 
     [Fact]
-    public void CampbellColorScheme_Background_IsCorrect() =>
-        AssertRgb(12, 12, 12, CampbellColorScheme.Background);
+    public void CampbellColorScheme_Background_IsPureBlack() =>
+        AssertRgb(0, 0, 0, CampbellColorScheme.Background);
 
     [Fact]
     public void CampbellColorScheme_Foreground_IsCorrect() =>

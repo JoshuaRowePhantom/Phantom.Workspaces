@@ -91,6 +91,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ProfileStore? profileStore = null,
         ApplicationServices? applicationServices = null)
     {
+        var services = applicationServices ?? CreateDefaultApplicationServices();
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
@@ -119,10 +120,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
-            persistenceStoreCache: applicationServices?.AgentPersistenceStoreCache);
+            persistenceStoreCache: services.AgentPersistenceStoreCache);
         var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, trustedExecutorSelector, applicationServices?.RunningAgentChats);
+            agentSessionShortcutContext, trustedExecutorSelector, services.RunningAgentChats);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
@@ -132,6 +133,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new OpenAssociatedWorkspaceShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new EditAgentManifestShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new CloneEntityShortcutHandler());
@@ -156,24 +158,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.dockFactory.ActiveDockableChanged += this.OnActiveDockableChanged;
 
-        if (applicationServices?.RunningAgentChats is { } runningAgentChats)
-        {
-            this.runningAgentBrain = new RunningAgentBrainViewModel(
-                runningAgentChats,
-                this.GetAllAgentTabs,
-                this.ActivateTabById,
-                sessionKey =>
+        var runningAgentChats = services.RunningAgentChats;
+        this.runningAgentBrain = new RunningAgentBrainViewModel(
+            runningAgentChats,
+            this.GetAllAgentTabs,
+            this.ActivateTabById,
+            sessionKey =>
+            {
+                var entityId = runningAgentChats.RunningSessions
+                    .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
+                    ?.EntityId;
+                if (entityId is not null)
                 {
-                    var entityId = runningAgentChats.RunningSessions
-                        .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
-                        ?.EntityId;
-                    if (entityId is not null)
-                    {
-                        _ = this.OpenEntityByIdAsync(entityId);
-                    }
-                },
-                action => Dispatcher.UIThread.Post(action));
-        }
+                    _ = this.OpenEntityByIdAsync(entityId);
+                }
+            },
+            action => Dispatcher.UIThread.Post(action));
+    }
+
+    private static ApplicationServices CreateDefaultApplicationServices()
+    {
+        var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
+        var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
+        var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), TaskScheduler.Current);
+        return new ApplicationServices(
+            new RunningAgentChatTable(agentChatFactory),
+            agentPersistenceStoreCache);
     }
 
     public RepositorySource RepositorySource { get; }
@@ -477,7 +487,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     /// <summary>
     /// The brain-button popup view model for running agent sessions.
-    /// Null when <see cref="ApplicationServices"/> was not supplied with a running-agent table.
     /// </summary>
     internal RunningAgentBrainViewModel? RunningAgentBrain
     {
@@ -1102,7 +1111,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (associatedNoteEntity is not null)
         {
-            next.Entities.Add(this.CreateViewEntityViewModel(associatedNoteEntity, indentLevel: 0, isParentContext: true));
+            var viewEntity = await this.CreateViewEntityViewModelAsync(associatedNoteEntity, indentLevel: 0, isParentContext: true);
+            next.Entities.Add(viewEntity);
+            next.RootEntities.Add(viewEntity);
         }
 
         await this.LoadSubViewEntitiesAsync(selectedViewData);
@@ -1119,7 +1130,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (this.EntityBroker.TryGetReferencedEntity(subView, "view-entity-id", out var subViewEntity)
                     && subViewEntity is not null)
                 {
-                    next.Entities.Add(this.CreateViewEntityViewModel(subViewEntity, indentLevel: 0));
+                    var viewEntity = await this.CreateViewEntityViewModelAsync(subViewEntity, indentLevel: 0);
+                    next.Entities.Add(viewEntity);
+                    next.RootEntities.Add(viewEntity);
                     continue;
                 }
 
@@ -1214,17 +1227,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     internal static QueryRequest WithInterestRelationships(QueryRequest query, InterestCatalog? catalog)
     {
-        if (catalog is not { InterestTypeNames.Count: > 0 } validCatalog)
-        {
-            return query;
-        }
-
         return query with
         {
             RelationshipsToReturn =
             [
                 ..(query.RelationshipsToReturn ?? []),
-                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) },
+                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["related"]) },
+                ..(catalog is { InterestTypeNames.Count: > 0 } validCatalog
+                    ? [new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) }]
+                    : Array.Empty<GetRelationshipRequest>()),
             ],
         };
     }
@@ -1364,7 +1375,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// existing interest relationship of that type targeting the entity, or creates one (targeting the
     /// entity, by the current user) when none exists.
     /// </summary>
-    private ViewEntityViewModel CreateViewEntityViewModel(
+    private async Task<ViewEntityViewModel> CreateViewEntityViewModelAsync(
         SubscribedEntityViewModel entity,
         int indentLevel,
         bool isExpanded = true,
@@ -1389,8 +1400,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             isExpanded: this.expandedEntityIds.TryGetValue(entity.EntityId.ToString(), out var storedExpanded) ? storedExpanded : isExpanded,
             isParentContext: isParentContext,
             fieldEditorFactory: this.fieldEditorFactory);
+        await vm.InitializeAsync();
 
-        // Persist expansion state changes and trigger a view rebuild on toggle.
+        // Persist expansion state changes; the tree template shows/hides cached children locally.
         var entityIdStr = entity.EntityId.ToString();
         vm.PropertyChanged += (sender, e) =>
         {
@@ -1398,7 +1410,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 && sender is ViewEntityViewModel toggled)
             {
                 this.expandedEntityIds[entityIdStr] = toggled.IsExpanded;
-                _ = this.ApplySelectedViewAsync();
             }
         };
 
@@ -1440,32 +1451,42 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var hierarchy = await new ViewHierarchyAssembler(this.EntityBroker).AssembleAsync(rootEntities);
         foreach (var node in hierarchy)
         {
-            this.AddHierarchyNode(population, node, indentLevel: 0);
+            await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
         }
     }
 
-    private void AddHierarchyNode(
+    private async Task AddHierarchyNodeAsync(
         ViewPopulationViewModel population,
         ViewHierarchyNode node,
-        int indentLevel)
+        int indentLevel,
+        ViewEntityViewModel? parent = null)
     {
         ViewEntityViewModel? vm = null;
         if (!node.IsAncestorGroup)
         {
-            vm = this.CreateViewEntityViewModel(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
+            vm = await this.CreateViewEntityViewModelAsync(node.Entity!, indentLevel, isExpanded: node.IsExpanded);
             if (node.Children.Count > 0)
             {
                 vm.HasTraversedChildren = true;
             }
 
-            population.Entities.Add(vm);
+            if (parent is null)
+            {
+                population.Entities.Add(vm);
+                population.RootEntities.Add(vm);
+            }
+            else
+            {
+                population.Entities.Add(vm);
+                parent.AddChild(vm);
+            }
         }
 
-        if (vm is null || vm.IsExpanded)
+        if (vm is null || node.Children.Count > 0)
         {
             foreach (var child in node.Children)
             {
-                this.AddHierarchyNode(population, child, indentLevel + 1);
+                await this.AddHierarchyNodeAsync(population, child, indentLevel + 1, vm ?? parent);
             }
         }
     }
@@ -1563,7 +1584,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Phase 1: create skeleton workspace pane and show it immediately
-        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand, this.SaveWorkspacePaneAsync);
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
         this.SubscribeToInnerDockChanges(workspacePane);
 
@@ -1695,7 +1716,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (tab is null) return;
         // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
         pane.Tabs.Remove(tab);
-        DisposeWorkspaceTab(tab);
+        _ = DisposeWorkspaceTabAsync(tab);
     }
 
     private void OnCycleTab(int delta)
@@ -2057,6 +2078,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (!held) this.IsShiftHeld = false;
             };
             webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+            webVm.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.GoToWorkspacePaneAtIndexCommand.Execute(idx.ToString());
         }
         else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
         {
@@ -2066,6 +2088,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (!held) this.IsShiftHeld = false;
             };
             agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+            agentTab.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.GoToWorkspacePaneAtIndexCommand.Execute(idx.ToString());
         }
 
         // Check if tab already exists
@@ -2076,7 +2099,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             // Already exists, just activate it
             if (!ReferenceEquals(existingDocument.TabViewModel, tab))
             {
-                DisposeWorkspaceTab(tab);
+                _ = DisposeWorkspaceTabAsync(tab);
             }
             if (focus)
             {
@@ -2210,7 +2233,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        DisposeWorkspaceTab(oldTab);
+        await DisposeWorkspaceTabAsync(oldTab);
     }
 
     public void CloseTab(WorkspaceTabViewModel tab)
@@ -2248,7 +2271,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
             }
 
-            DisposeWorkspaceTab(tab);
+            _ = DisposeWorkspaceTabAsync(tab);
             return;
         }
     }
@@ -2321,7 +2344,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
             }
 
-            DisposeWorkspaceTab(tab);
+            _ = DisposeWorkspaceTabAsync(tab);
             return true;
         }
 
@@ -2433,23 +2456,94 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         using var doc = JsonDocument.Parse(updatedJson);
         var updatedData = doc.RootElement.Clone();
 
+        var changes = new List<EntityChange>
+        {
+            new()
+            {
+                EntityId = workspacePane.Entity.EntityId,
+                ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
+                Data = updatedData,
+                EntityChangeMode = EntityChangeMode.Replace,
+            },
+        };
+        AppendWorkspaceTabRelationshipChanges(workspacePane, changes);
+
         return this.entityBroker.UpdateAsync(new UpdateRequest
         {
             UpdateMetadata = new UpdateMetadata
             {
                 Comment = new Markdown { Text = "Update workspace tabs" },
             },
-            Changes =
-            [
-                new EntityChange
-                {
-                    EntityId = workspacePane.Entity.EntityId,
-                    ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
-                    Data = updatedData,
-                    EntityChangeMode = EntityChangeMode.Replace,
-                },
-            ],
+            Changes = changes,
         });
+    }
+
+    private Task SaveWorkspacePaneAsync(WorkspacePaneViewModel workspacePane) =>
+        this.WriteBackWorkspaceTabs(workspacePane);
+
+    private static void AppendWorkspaceTabRelationshipChanges(
+        WorkspacePaneViewModel workspacePane,
+        ICollection<EntityChange> changes)
+    {
+        var liveEntityIds = workspacePane.Tabs
+            .Select(static tab => tab.Entity?.EntityId)
+            .OfType<EntityId>()
+            .Distinct()
+            .ToHashSet();
+
+        var existingByTarget = new Dictionary<EntityId, EntitySnapshot>();
+        foreach (var relationship in workspacePane.Entity.Relationships)
+        {
+            if (relationship.Data is not JsonElement data
+                || !EntityPresentation.IsEntityType(relationship, "related")
+                || !data.TryGetProperty("note", out var note)
+                || note.ValueKind != JsonValueKind.String
+                || !string.Equals(note.GetString(), "Workspace save records the live entity tabs associated with this workspace.", StringComparison.Ordinal)
+                || !RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(data, out var participantIds)
+                || !participantIds.Contains(workspacePane.Entity.EntityId))
+            {
+                continue;
+            }
+
+            var targetId = participantIds.FirstOrDefault(id => id != workspacePane.Entity.EntityId);
+            if (targetId != default)
+            {
+                existingByTarget[targetId] = relationship;
+            }
+        }
+
+        foreach (var removed in existingByTarget.Where(pair => !liveEntityIds.Contains(pair.Key)))
+        {
+            changes.Add(new EntityChange
+            {
+                EntityId = removed.Value.EntityId,
+                ConcurrencyTag = removed.Value.ConcurrencyTag,
+                Data = null,
+                EntityChangeMode = EntityChangeMode.Replace,
+            });
+        }
+
+        foreach (var added in liveEntityIds.Where(id => !existingByTarget.ContainsKey(id)))
+        {
+            var relationshipId = Guid.NewGuid();
+            var relationshipData = new JsonObject
+            {
+                ["entity-id"] = relationshipId.ToString(),
+                ["entity-types"] = new JsonArray("entity", "relationship", "related"),
+                ["participants"] = new JsonObject
+                {
+                    ["entities"] = new JsonArray(workspacePane.Entity.EntityId.Value.ToString(), added.Value.ToString()),
+                },
+                ["note"] = "Workspace save records the live entity tabs associated with this workspace.",
+            };
+            using var doc = JsonDocument.Parse(relationshipData.ToJsonString());
+            changes.Add(new EntityChange
+            {
+                EntityId = new EntityId(relationshipId),
+                Data = doc.RootElement.Clone(),
+                EntityChangeMode = EntityChangeMode.Replace,
+            });
+        }
     }
 
     /// <summary>
@@ -2727,10 +2821,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return null;
     }
 
-    private static void DisposeWorkspaceTab(
+    private static async Task DisposeWorkspaceTabAsync(
         WorkspaceTabViewModel workspaceTab)
     {
-        _ = workspaceTab.DisposeAsync();
+        await workspaceTab.DisposeAsync();
     }
 
     public void OnDockableTabClosed(WorkspaceTabViewModel tabVm)
@@ -2770,7 +2864,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 break;
             }
         }
-        DisposeWorkspaceTab(tabVm);
+        _ = DisposeWorkspaceTabAsync(tabVm);
     }
 
     private async Task OpenEntityBrowserTabAsync()
@@ -2958,7 +3052,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
                     {
                         workspaceClosed = true;
-                        DisposeWorkspaceTab(workspaceTab);
+                        _ = DisposeWorkspaceTabAsync(workspaceTab);
                         continue;
                     }
 
@@ -2992,7 +3086,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 if (!this.WorkspacePanes.Contains(workspacePane))
                 {
-                    DisposeWorkspaceTab(defaultTab);
+                    _ = DisposeWorkspaceTabAsync(defaultTab);
                     return;
                 }
 
@@ -3085,7 +3179,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
                 {
                     workspaceClosed = true;
-                    DisposeWorkspaceTab(tabVm);
+                    _ = DisposeWorkspaceTabAsync(tabVm);
                     continue;
                 }
 
@@ -3266,7 +3360,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         SubscribedEntityViewModel workspaceEntity,
         JsonElement workspaceData)
     {
-        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand);
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand, this.SaveWorkspacePaneAsync);
         
         // Create this workspace's own dock layout for its content tabs
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
@@ -4119,6 +4213,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    public void WireWindowFocus(Action focusWindow)
+    {
+        if (this.notificationsViewModel is not null)
+        {
+            this.notificationsViewModel.FocusWindowCallback = focusWindow;
+        }
+    }
+
     public override async ValueTask DisposeAsync()
     {
         this.refreshTimer.Stop();
@@ -4153,6 +4255,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             await this.webHost.DisposeAsync();
         }
 
+        foreach (var pane in this.WorkspacePanes)
+        {
+            foreach (var tab in pane.Tabs.ToArray())
+            {
+                await DisposeWorkspaceTabAsync(tab);
+            }
+        }
+
         this.ConnectionStatus?.Dispose();
         this.interestCatalog?.Dispose();
         this.entityTypeCatalog?.Dispose();
@@ -4165,4 +4275,5 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await base.DisposeAsync();
     }
 }
+
 

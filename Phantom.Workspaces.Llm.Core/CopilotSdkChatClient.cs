@@ -514,18 +514,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     foreach (var message in item.Messages ?? [])
                     {
-                        var text = string.Concat(
-                            message.Contents.OfType<TextContent>().Select(content => content.Text));
-                        if (!string.IsNullOrWhiteSpace(text))
+                        var immediateOptions = BuildImmediateMessageOptions(message);
+                        if (immediateOptions is not null)
                         {
                             // Record the forwarded steering message in history before sending it.
                             this.SteeringMessageForwarded?.Invoke(message);
 
                             // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
                             // returns promptly. Errors are non-fatal for steering.
-                            _ = session.SendAsync(
-                                new MessageOptions { Prompt = text, Mode = "immediate" },
-                                CancellationToken.None);
+                            _ = session.SendAsync(immediateOptions, CancellationToken.None);
                         }
                     }
                 }
@@ -536,17 +533,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 this.queueManager.QueueStateChanged += OnQueueChanged;
             }
 
-            var subscription = new DelegateDisposable(() =>
+            var subscription = new AsyncDelegateDisposable(async () =>
             {
                 eventSubscription.Dispose();
                 eventChannel.Writer.Complete();
-                dispatchLoop.GetAwaiter().GetResult();
+                await dispatchLoop;
                 if (this.queueManager is not null)
                 {
                     this.queueManager.QueueStateChanged -= OnQueueChanged;
                 }
 
-                _ = Task.Run(router.DisposeRemainingLeasesAsync);
+                await router.DisposeRemainingLeasesAsync();
             });
 
             return new StreamingTurnContext(
@@ -581,7 +578,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // session. This is kept in a separate (non-iterator) method because async iterators
             // do not permit yield inside a try block that has catch clauses.
             var turn = await this.GetReadyTurnAsync(beginTurnAsync, cancellationToken).ConfigureAwait(false);
-            using (turn.Subscription)
+            await using (turn.Subscription)
             {
                 try
                 {
@@ -623,7 +620,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             // The resumed session's pipe is broken. Dispose its subscription, invalidate the session
             // without re-arming the resume id, then retry once with a brand-new session.
-            turn.Subscription.Dispose();
+            await turn.Subscription.DisposeAsync();
             await turn.OnPipeBrokenAsync().ConfigureAwait(false);
 
             turn = await beginTurnAsync(cancellationToken).ConfigureAwait(false);
@@ -633,7 +630,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
             catch
             {
-                turn.Subscription.Dispose();
+                await turn.Subscription.DisposeAsync();
                 throw;
             }
         }
@@ -812,23 +809,46 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 .SelectMany(m => m.Contents.OfType<DataContent>())
                 .ToList();
 
-            if (dataItems.Count > 0)
-            {
-                options.Attachments = dataItems
-                    .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
-                    {
-                        Data = Convert.ToBase64String(d.Data.ToArray()),
-                        MimeType = d.MediaType ?? string.Empty,
-                        DisplayName = d.MediaType ?? "attachment",
-                    })
-                    .ToList();
-            }
+            AddDataContentAttachments(options, dataItems);
 
             return options;
         }
 
         var lastWithText = materialized.LastOrDefault(message => !string.IsNullOrEmpty(message.Text));
         return new MessageOptions { Prompt = lastWithText?.Text ?? string.Empty };
+    }
+
+    internal static MessageOptions? BuildImmediateMessageOptions(ChatMessage message)
+    {
+        var text = string.Concat(
+            message.Contents.OfType<TextContent>().Select(content => content.Text));
+        var dataItems = message.Contents.OfType<DataContent>().ToList();
+
+        if (string.IsNullOrWhiteSpace(text) && dataItems.Count == 0)
+        {
+            return null;
+        }
+
+        var options = new MessageOptions { Prompt = text, Mode = "immediate" };
+        AddDataContentAttachments(options, dataItems);
+        return options;
+    }
+
+    private static void AddDataContentAttachments(MessageOptions options, IReadOnlyCollection<DataContent> dataItems)
+    {
+        if (dataItems.Count == 0)
+        {
+            return;
+        }
+
+        options.Attachments = dataItems
+            .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+            {
+                Data = Convert.ToBase64String(d.Data.ToArray()),
+                MimeType = d.MediaType ?? string.Empty,
+                DisplayName = d.MediaType ?? "attachment",
+            })
+            .ToList();
     }
 
     private static ChatResponse BuildResponse(
@@ -909,7 +929,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     // Resolve the token that the SDK is actually using. When this.gitHubToken is null
                     // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
-                    var tokenForUpsert = this.gitHubToken ?? GitHubAuthTokenResolver.Resolve();
+                    var tokenForUpsert = this.gitHubToken ?? await GitHubAuthTokenResolver.ResolveAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
                     if (!string.IsNullOrWhiteSpace(tokenForUpsert))
                     {
                         await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
@@ -1093,7 +1113,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 /// </param>
 internal sealed record StreamingTurnContext(
     System.Threading.Channels.ChannelReader<ChatResponseUpdate> Reader,
-    IDisposable Subscription,
+    IAsyncDisposable Subscription,
     Func<CancellationToken, Task> SendAsync,
     Func<Task> OnCancelledAsync,
     Func<Task> OnPipeBrokenAsync);

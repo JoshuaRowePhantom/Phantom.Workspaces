@@ -1,6 +1,9 @@
 using System;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ViewModels;
 
@@ -17,7 +20,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","git"],"path":"/home/user/repo"}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.True(result);
     }
@@ -29,7 +32,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","user-computer-profile"],"home-directory":"C:\\Users\\tester"}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.True(result);
     }
@@ -41,7 +44,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","workspace"],"display-name":{"default":"My Workspace"}}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.False(result);
     }
@@ -53,7 +56,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         var entity = CreateEntityWithData("""{"entity-types":["entity","git"],"path":"/home/user/repo"}""");
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.Open, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.Open, entity);
 
         Assert.False(result);
     }
@@ -71,7 +74,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
             Relationships = Array.Empty<EntitySnapshot>(),
         });
 
-        var result = handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
+        var result = await handler.ShouldApplyTo(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.False(result);
     }
@@ -105,13 +108,22 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     private static StartAgentSessionFromEntityShortcutHandler CreateHandler()
     {
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var trustedExecutorSelector = new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+        var trustedExecutorSelector = TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry());
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
-            trustedExecutorSelector);
+            trustedExecutorSelector,
+            CreateTestRunningAgentChatTable());
         return new StartAgentSessionFromEntityShortcutHandler(
             agentSessionShortcutContext,
             openAgentSessionShortcutHandler);
+    }
+
+    private static RunningAgentChatTable CreateTestRunningAgentChatTable()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+        var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
+        return new RunningAgentChatTable(factory);
     }
 
     private static SubscribedEntityViewModel CreateEntityWithData(string json)
@@ -127,3 +139,4 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
             });
     }
 }
+

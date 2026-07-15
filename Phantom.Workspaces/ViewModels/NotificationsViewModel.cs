@@ -36,6 +36,8 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
 
     public bool HasActiveRun => this.notificationService.HasActiveRun;
 
+    internal Action? FocusWindowCallback { get; set; }
+
     public void ToggleOpen()
     {
         this.IsOpen = !this.IsOpen;
@@ -149,6 +151,7 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
         {
             this.TriggerFadeClose();
             this.notificationService.MarkRead(tabKey);
+            this.FocusWindowCallback?.Invoke();
             this.navigateToTab(tabKey);
         });
         var snoozeCmd = new RelayCommand(_ =>

@@ -4,13 +4,13 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class ReviewWorktreeShortcutHandler : ShortcutHandler
 {
-    public override bool ShouldApplyTo(
+    public override ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        return shortcut == Shortcut.Review
-            && entityViewModel.IsEntityType("git-worktree");
+        return ValueTask.FromResult(shortcut == Shortcut.Review
+            && entityViewModel.IsEntityType("git-worktree"));
     }
 
     public override async Task<bool> Handle(
@@ -30,3 +30,5 @@ public sealed class ReviewWorktreeShortcutHandler : ShortcutHandler
         return true;
     }
 }
+
+

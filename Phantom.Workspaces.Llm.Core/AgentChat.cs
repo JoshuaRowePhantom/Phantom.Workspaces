@@ -183,11 +183,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.agentDefinition = resolvedAgentDefinition;
        var clientInfo = this.request.ClientOverride is not null
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : AgentFactory.CreateChatClient(
+           : await AgentFactory.CreateChatClientAsync(
                resolvedAgentDefinition,
                this.request.AgentServices,
                queueManager: this.queueManager,
-               subAgentChatRegistry: this);
+               subAgentChatRegistry: this,
+               cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
        var resolvedClient = clientInfo.ChatClient;
        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
        if (resolvedClient is SubAgentChatClient sac)
@@ -217,6 +218,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
+       this.Description = this.request.DescriptionOverride ?? resolvedAgentDefinition.Description ?? string.Empty;
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -395,6 +397,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     public string DisplayName { get; private set; } = string.Empty;
 
+    public string Description { get; private set; } = string.Empty;
+
     public string AgentSessionId => this.agentSessionId;
 
     public AgentDefinition? AgentDefinition => this.agentDefinition;
@@ -555,7 +559,13 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             [
                 new AgentInputItem
                 {
-                    Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
+                    Messages =
+                    [
+                        new ChatMessage(ChatRole.User, contents.ToList())
+                        {
+                            CreatedAt = DateTimeOffset.UtcNow,
+                        },
+                    ],
                 },
             ]);
     }
@@ -577,6 +587,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 this.AddHistoryItem(new AgentChatHistoryItem
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
+                    Contents = [new TextContent(text)],
+                    Timestamp = DateTimeOffset.UtcNow,
+                });
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
+    public void EnqueueHelpNote(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                this.AddHistoryItem(new AgentChatHistoryItem
+                {
+                    Role = AgentChatHistoryItem.HelpChatRole,
                     Contents = [new TextContent(text)],
                     Timestamp = DateTimeOffset.UtcNow,
                 });
@@ -806,7 +838,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             }
         }
 
-        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId);
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty);
 
         // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
         // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
@@ -823,6 +855,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 ConfiguredStore = this.request.ConfiguredStore,
                 ClientOverride = chatClient,
                 DisplayNameOverride = subAgentDefinition.Name ?? agentId,
+                DescriptionOverride = subAgentDefinition.Description ?? string.Empty,
                 ForegroundScheduler = this.foregroundScheduler,
                 CancellationToken = cancellationToken,
             }),
@@ -1494,7 +1527,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             new AgentChatHistoryItem
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                                Contents = [new ErrorContent($"Provider error: {ex.Message}")],
+                                Contents = [new ErrorContent($"Provider error: {ex}")],
                                 Timestamp = DateTimeOffset.UtcNow,
                             },
                         ])
@@ -1911,7 +1944,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex.Message}") },
+                Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex}") },
                 Timestamp = DateTimeOffset.UtcNow,
             });
             this.CompleteRunningItem(startupRunningItem, true);
@@ -2140,7 +2173,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
         catch (Exception ex)
         {
-            var errorMessage = $"Failed to open MCP server '{displayName}': {ex.Message}";
+            var errorMessage = $"Failed to open MCP server '{displayName}': {ex}";
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,

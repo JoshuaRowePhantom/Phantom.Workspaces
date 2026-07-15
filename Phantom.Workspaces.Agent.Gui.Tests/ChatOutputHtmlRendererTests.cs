@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Xunit;
@@ -392,6 +393,102 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
+    public void DetectStringType_JsonObject_ReturnsJson()
+    {
+        Assert.Equal(StringContentType.Json, ChatOutputHtmlRenderer.DetectStringType("""{"a":1}"""));
+    }
+
+    [Fact]
+    public void DetectStringType_MarkdownWithHeading_ReturnsMarkdown()
+    {
+        Assert.Equal(StringContentType.Markdown, ChatOutputHtmlRenderer.DetectStringType("## Heading\nBody"));
+    }
+
+    [Fact]
+    public void DetectStringType_MultilineIndentedCode_ReturnsCode()
+    {
+        Assert.Equal(StringContentType.Code, ChatOutputHtmlRenderer.DetectStringType("if (true) {\n    return value;\n}"));
+    }
+
+    [Fact]
+    public void DetectStringType_SimpleSentence_ReturnsPlaintext()
+    {
+        Assert.Equal(StringContentType.Plaintext, ChatOutputHtmlRenderer.DetectStringType("simple sentence"));
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_KeysRightAligned()
+    {
+        using var document = JsonDocument.Parse("""{"a":1,"longer":2}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("<span class=\"tool-json-key\">     a</span>: 1", html, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"tool-json-key\">longer</span>: 2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_MarkdownStringValue_RenderedAsMarkdown()
+    {
+        using var document = JsonDocument.Parse("""{"prompt":"## Heading\nBody"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("tool-json-markdown", html, StringComparison.Ordinal);
+        Assert.Contains("<h2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_JsonStringValue_RenderedRecursively()
+    {
+        using var document = JsonDocument.Parse("""{"payload":"{\"child\":1}"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("child</span>: 1", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_PlaintextMultiline_ContinuationLinesIndented()
+    {
+        using var document = JsonDocument.Parse("""{"prompt":"first\nsecond"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("first\n        second", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Array_EachElementOnOwnLine()
+    {
+        using var document = JsonDocument.Parse("""["one","two"]""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("- <span class=\"tool-json-plaintext\">one</span>", html, StringComparison.Ordinal);
+        Assert.Contains("\n- <span class=\"tool-json-plaintext\">two</span>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_UnicodeEscapedString_DecodedBeforeRender()
+    {
+        using var document = JsonDocument.Parse("""{"text":"\u0060code\u0060"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("`code`", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithJsonArguments_OutputContainsToolJsonKeyClass()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", """{"arg":"val"}""", null);
+
+        Assert.Contains("class=\"tool-json-key\"", html, StringComparison.Ordinal);
+        Assert.Contains("arg</span>: <span class=\"tool-json-plaintext\">val</span>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RenderToolCallPair_CallSummary_HasStickyLevel4()
     {
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
@@ -485,5 +582,57 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.DoesNotContain("id=\"history-before\"", shell);
         Assert.DoesNotContain("id=\"running-items-inside\"", shell);
         Assert.DoesNotContain("id=\"subagent-items-inside\"", shell);
+    }
+
+    // ── Issue #332: Help role rendering tests ──────────────────────────────────
+
+    [Fact]
+    public void RenderContent_HelpRole_RendersNonCollapsibleBlock()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("Help message text"),
+            includeReasoning: false,
+            isDiagnostic: false,
+            isHelp: true);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-help", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<details", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_DiagnosticRole_RendersCollapsible()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new TextContent("Diagnostic message"),
+            includeReasoning: false,
+            isDiagnostic: true,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+        Assert.Contains("<details", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RoleClass_HelpRole_ReturnsChatHelpMessage()
+    {
+        var roleClass = ChatOutputHtmlRenderer.RoleClass("help");
+
+        Assert.Equal("chat-help-message", roleClass);
+    }
+
+    [Fact]
+    public void RenderMessage_HelpRole_ShowsHelpLabel()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "help",
+            [("msg-0-c0", "<div>help content</div>")]);
+
+        Assert.Contains("[help]", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("[diagnostic]", html, StringComparison.Ordinal);
     }
 }

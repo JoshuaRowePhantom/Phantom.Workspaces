@@ -4,7 +4,10 @@
 
     <DataTemplate x:Key="QueueImmediacyPickerTemplate"
                   DataType="vm:IQueueImmediacyViewModel">
-        <Border Classes="queue-status-pill dynamic">
+        <Border Classes="queue-status-pill dynamic"
+                Background="{Binding SelectedImmediacyOption.Background}"
+                BorderBrush="{Binding SelectedImmediacyOption.BorderBrush}"
+                BorderThickness="1">
             <Button Classes="queue-action-button queue-status-picker-button">
                 <Button.Flyout>
                     <MenuFlyout Placement="BottomEdgeAlignedLeft">
@@ -25,9 +28,14 @@
                 <StackPanel Orientation="Horizontal"
                             Spacing="6"
                             VerticalAlignment="Center">
+                    <TextBlock Text="{Binding SelectedImmediacyOption.GlyphText}"
+                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
+                               Classes="queue-immediacy-glyph"/>
                     <TextBlock Text="{Binding SelectedImmediacyOption.Label}"
+                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
                                Classes="queue-immediacy-label queue-status-label"/>
                     <TextBlock Text="▾"
+                               Foreground="{Binding SelectedImmediacyOption.Foreground}"
                                Classes="queue-immediacy-caret queue-status-caret"/>
                 </StackPanel>
             </Button>

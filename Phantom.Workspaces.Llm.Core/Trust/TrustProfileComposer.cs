@@ -62,6 +62,7 @@ public static class TrustProfileComposer
             MountPoints = mode == TrustInheritanceMode.Restrictive
                 ? IntersectMounts(primary.MountPoints, other.MountPoints)
                 : UnionMounts(primary.MountPoints, other.MountPoints),
+            DefaultExecutionTarget = primary.DefaultExecutionTarget?.Clone() ?? other.DefaultExecutionTarget?.Clone(),
             HttpsProxyPolicy = mode == TrustInheritanceMode.Restrictive
                 ? StrongerProxy(primary.HttpsProxyPolicy, other.HttpsProxyPolicy)
                 : WeakerProxy(primary.HttpsProxyPolicy, other.HttpsProxyPolicy),
@@ -80,6 +81,7 @@ public static class TrustProfileComposer
             HostingWorkspacesClientInstances = definition.HostingWorkspacesClientInstances,
             NetworkAccessPolicy = definition.NetworkAccessPolicy,
             MountPoints = definition.MountPoints,
+            DefaultExecutionTarget = definition.DefaultExecutionTarget?.Clone(),
             HttpsProxyPolicy = definition.HttpsProxyPolicy,
             AllowedMcpToolCallSchema = BuildMcpToolCallSchema(
                 definition.AllowedMcpToolCallSchemas,

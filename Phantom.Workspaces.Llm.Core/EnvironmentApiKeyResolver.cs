@@ -13,4 +13,8 @@ public sealed class EnvironmentApiKeyResolver : IApiKeyResolver
     /// <inheritdoc />
     public string ResolveApiKey(string? apiKeyValue, string? serverName)
         => AgentFactory.ResolveApiKey(apiKeyValue, serverName);
+
+    /// <inheritdoc />
+    public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default)
+        => AgentFactory.ResolveApiKeyAsync(apiKeyValue, serverName, cancellationToken);
 }
