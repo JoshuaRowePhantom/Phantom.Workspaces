@@ -638,7 +638,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
@@ -682,7 +688,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -728,7 +740,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -780,7 +798,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentManifestShortcutHandler = new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentManifestShortcutHandler.Handle(viewModel, Shortcut.Open, agentManifestEntity);
@@ -882,7 +906,13 @@ public sealed class MainWindowIntegrationTests
             """);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+            agentSessionShortcutContext,
+
+            CreateLocalTrustedExecutorSelector(),
+
+            CreateTestRunningAgentChatTable());
         var openAgentDefinitionShortcutHandler = new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, openAgentSessionShortcutHandler);
 
         var handled = await openAgentDefinitionShortcutHandler.Handle(viewModel, Shortcut.Open, agentDefinitionEntity);
@@ -1814,8 +1844,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+
             agentSessionShortcutContext,
-            CreateLocalTrustedExecutorSelector());
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
@@ -1859,8 +1896,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+
+
             agentSessionShortcutContext,
-            CreateLocalTrustedExecutorSelector());
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
@@ -1909,7 +1953,8 @@ public sealed class MainWindowIntegrationTests
         var selectorWithNoRemote = TrustedExecutorComposition.CreateSelector(emptyRegistry);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
-            selectorWithNoRemote);
+            selectorWithNoRemote,
+            CreateTestRunningAgentChatTable());
 
         await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
@@ -1949,7 +1994,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         var paneId = viewModel.SelectedWorkspacePane.Id;
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
@@ -1990,7 +2043,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
 
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
@@ -2155,7 +2216,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -2252,7 +2321,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -2307,7 +2384,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -2375,7 +2460,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var workspacePane = viewModel.SelectedWorkspacePane;
@@ -2430,7 +2523,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var workspacePane = viewModel.SelectedWorkspacePane;
@@ -2488,7 +2589,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var workspacePane = viewModel.SelectedWorkspacePane;
@@ -7454,7 +7563,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
@@ -7507,7 +7624,15 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector());
+
+
+            agentSessionShortcutContext,
+
+
+            CreateLocalTrustedExecutorSelector(),
+
+
+            CreateTestRunningAgentChatTable());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
 
         var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(

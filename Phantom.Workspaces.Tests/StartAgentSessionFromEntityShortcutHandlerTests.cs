@@ -1,6 +1,9 @@
 using System;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.ViewModels;
 
@@ -108,10 +111,19 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         var trustedExecutorSelector = new TrustedExecutorSelector([new LocalTrustedExecutor()]);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
-            trustedExecutorSelector);
+            trustedExecutorSelector,
+            CreateTestRunningAgentChatTable());
         return new StartAgentSessionFromEntityShortcutHandler(
             agentSessionShortcutContext,
             openAgentSessionShortcutHandler);
+    }
+
+    private static RunningAgentChatTable CreateTestRunningAgentChatTable()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+        var factory = new AgentChatFactory(store, new AgentServices(), foregroundScheduler);
+        return new RunningAgentChatTable(factory);
     }
 
     private static SubscribedEntityViewModel CreateEntityWithData(string json)

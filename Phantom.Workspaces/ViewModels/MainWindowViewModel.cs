@@ -91,6 +91,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ProfileStore? profileStore = null,
         ApplicationServices? applicationServices = null)
     {
+        var services = applicationServices ?? CreateDefaultApplicationServices();
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
@@ -119,10 +120,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
-            persistenceStoreCache: applicationServices?.AgentPersistenceStoreCache);
+            persistenceStoreCache: services.AgentPersistenceStoreCache);
         var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
-            agentSessionShortcutContext, trustedExecutorSelector, applicationServices?.RunningAgentChats);
+            agentSessionShortcutContext, trustedExecutorSelector, services.RunningAgentChats);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new OpenAgentManifestShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
@@ -157,24 +158,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.dockFactory.ActiveDockableChanged += this.OnActiveDockableChanged;
 
-        if (applicationServices?.RunningAgentChats is { } runningAgentChats)
-        {
-            this.runningAgentBrain = new RunningAgentBrainViewModel(
-                runningAgentChats,
-                this.GetAllAgentTabs,
-                this.ActivateTabById,
-                sessionKey =>
+        var runningAgentChats = services.RunningAgentChats;
+        this.runningAgentBrain = new RunningAgentBrainViewModel(
+            runningAgentChats,
+            this.GetAllAgentTabs,
+            this.ActivateTabById,
+            sessionKey =>
+            {
+                var entityId = runningAgentChats.RunningSessions
+                    .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
+                    ?.EntityId;
+                if (entityId is not null)
                 {
-                    var entityId = runningAgentChats.RunningSessions
-                        .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
-                        ?.EntityId;
-                    if (entityId is not null)
-                    {
-                        _ = this.OpenEntityByIdAsync(entityId);
-                    }
-                },
-                action => Dispatcher.UIThread.Post(action));
-        }
+                    _ = this.OpenEntityByIdAsync(entityId);
+                }
+            },
+            action => Dispatcher.UIThread.Post(action));
+    }
+
+    private static ApplicationServices CreateDefaultApplicationServices()
+    {
+        var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
+        var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
+        var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), TaskScheduler.Current);
+        return new ApplicationServices(
+            new RunningAgentChatTable(agentChatFactory),
+            agentPersistenceStoreCache);
     }
 
     public RepositorySource RepositorySource { get; }
@@ -478,7 +487,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     /// <summary>
     /// The brain-button popup view model for running agent sessions.
-    /// Null when <see cref="ApplicationServices"/> was not supplied with a running-agent table.
     /// </summary>
     internal RunningAgentBrainViewModel? RunningAgentBrain
     {

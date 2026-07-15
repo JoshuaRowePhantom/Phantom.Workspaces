@@ -28,17 +28,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable runningAgentChatTable;
-    private readonly bool hasProvidedRunningAgentChatTable;
 
     public OpenAgentSessionShortcutHandler(
         AgentSessionShortcutContext agentSessionShortcutContext,
         ITrustedExecutorSelector trustedExecutorSelector,
-        IRunningAgentChatTable? runningAgentChatTable = null)
+        IRunningAgentChatTable runningAgentChatTable)
     {
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.trustedExecutorSelector = trustedExecutorSelector;
-        this.hasProvidedRunningAgentChatTable = runningAgentChatTable is not null;
-        this.runningAgentChatTable = runningAgentChatTable ?? new MissingRunningAgentChatTable();
+        this.runningAgentChatTable = runningAgentChatTable ?? throw new ArgumentNullException(nameof(runningAgentChatTable));
     }
 
     public ValueTask DisposeAsync() => lifetime.DisposeAsync();
@@ -272,14 +270,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
 
         var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
         var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
-        if (!this.hasProvidedRunningAgentChatTable
-            && owningProfileEntityId != default
-            && owningProfileEntityId != localProfileEntityId)
-        {
-            _ = this.trustedExecutorSelector;
-            throw new InvalidOperationException("No trusted executor is available for the owning profile.");
-        }
-
         lease = await this.runningAgentChatTable.AcquireAsync(
             new AcquireAgentChatRequest
             {
@@ -655,47 +645,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             });
     }
 
-    private sealed class MissingRunningAgentChatTable : IRunningAgentChatTable
-    {
-        private readonly object gate = new();
-        private RunningAgentChatTable? inner;
-
-        public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions
-        {
-            get
-            {
-                lock (this.gate)
-                {
-                    return this.inner?.RunningSessions ?? [];
-                }
-            }
-        }
-
-        public async Task<RunningAgentChatLease> AcquireAsync(
-            AcquireAgentChatRequest request,
-            CancellationToken ct = default)
-        {
-            var table = this.GetOrCreateInner(request);
-            return await table.AcquireAsync(request, ct);
-        }
-
-        private RunningAgentChatTable GetOrCreateInner(AcquireAgentChatRequest request)
-        {
-            lock (this.gate)
-            {
-                if (this.inner is not null)
-                {
-                    return this.inner;
-                }
-
-                var services = request.AgentServices ?? new AgentServices();
-                var store = services.AgentPersistenceStoreOverride ?? AgentPersistenceStoreFactory.CreateInMemory();
-                var scheduler = request.ForegroundScheduler ?? TaskScheduler.Current;
-                this.inner = new RunningAgentChatTable(new AgentChatFactory(store, services, scheduler));
-                return this.inner;
-            }
-        }
-    }
 }
 
 
