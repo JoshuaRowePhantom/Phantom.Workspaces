@@ -1179,10 +1179,17 @@ public sealed class AgentChatTests
         // Act: start the run, wait for "first " to land in the running item, then inject steering
         // at that boundary before releasing the rest of the stream.
         chat.EnqueueUserMessage("user turn");
+        
+        // Phase 1: wait for the running item to be created (outer collection notification)
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count > 0
-                  && chat.RunningItems[0].Items.Count > 0
+            () => chat.RunningItems.Count > 0,
+            "running item to be created");
+        
+        // Phase 2: wait on the inner collection for the "first" token (inner collection notification)
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => chat.RunningItems[0].Items.Count > 0
                   && GetText(chat.RunningItems[0].Items[0].Contents).Contains("first"),
             "first streaming update to appear in running item");
 
