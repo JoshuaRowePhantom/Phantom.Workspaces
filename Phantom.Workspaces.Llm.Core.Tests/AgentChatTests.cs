@@ -93,6 +93,13 @@ public sealed class AgentChatTests
         Func<bool> condition,
         string description,
         CancellationToken cancellationToken = default)
+        => await WaitForConditionAsync([collection], condition, description, cancellationToken);
+
+    private static async Task WaitForConditionAsync(
+        IReadOnlyList<System.Collections.Specialized.INotifyCollectionChanged> collections,
+        Func<bool> condition,
+        string description,
+        CancellationToken cancellationToken = default)
     {
         // The agent mutates its observable collections on its foreground scheduler and raises
         // CollectionChanged on that thread, so evaluating the predicate from within the handler is
@@ -110,7 +117,11 @@ public sealed class AgentChatTests
             }
         }
 
-        collection.CollectionChanged += OnCollectionChanged;
+        foreach (var collection in collections)
+        {
+            collection.CollectionChanged += OnCollectionChanged;
+        }
+
         try
         {
             if (ConditionMet(condition))
@@ -122,7 +133,10 @@ public sealed class AgentChatTests
         }
         finally
         {
-            collection.CollectionChanged -= OnCollectionChanged;
+            foreach (var collection in collections)
+            {
+                collection.CollectionChanged -= OnCollectionChanged;
+            }
         }
     }
 
@@ -502,7 +516,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
 
         chat.EnqueueUserMessage("hello");
-        await WaitForConditionAsync(chat.RunningItems, () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
+        await WaitForConditionAsync([chat.RunningItems, chat.History], () => chat.History.Count == 1 && chat.RunningItems.Count == 1, "history to contain user and running assistant items");
 
         Assert.Single(chat.History);
         Assert.Equal(ChatRole.User, chat.History[0].Role);
@@ -522,7 +536,7 @@ public sealed class AgentChatTests
                 FinishReason = ChatFinishReason.Stop,
             });
         chat.EnqueueUserMessage("hi");
-        await WaitForConditionAsync(chat.RunningItems, () =>
+        await WaitForConditionAsync([chat.RunningItems, chat.History], () =>
             chat.History.Count == 2
             && chat.RunningItems.Count == 0,
             "assistant running item to complete and move into history");
@@ -591,7 +605,7 @@ public sealed class AgentChatTests
         await using var chat = CreateChat(client);
         chat.EnqueueUserMessage("What is 2+2?");
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.History.Count == 1
                 && chat.RunningItems.Count == 1,
             "running item to appear after first streamed token");
@@ -734,7 +748,7 @@ public sealed class AgentChatTests
             chat.EnqueueUserMessage("search please");
 
             await WaitForConditionAsync(
-                chat.RunningItems,
+                [chat.RunningItems, chat.History],
                 () => chat.RunningItems.Count == 0
                     && chat.History.Any(item => item.Role == ChatRole.Assistant
                         && GetText(item.Contents).Contains("Done.", StringComparison.Ordinal)),
@@ -789,14 +803,17 @@ public sealed class AgentChatTests
 
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count == 1
-                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("thinking", StringComparison.Ordinal)),
-            "run to start and stream initial content");
+            () => chat.RunningItems.Count == 1,
+            "run to start");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("thinking", StringComparison.Ordinal)),
+            "run to stream initial content");
 
         chat.Interrupt();
 
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.RunningItems.Count == 0
                 && chat.History.Any(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole
                     && GetText(item.Contents).Contains("Interrupted", StringComparison.Ordinal)),
@@ -830,16 +847,19 @@ public sealed class AgentChatTests
 
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count == 1
-                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("alpha", StringComparison.Ordinal)),
-            "running item to appear after the first streamed fragment");
+            () => chat.RunningItems.Count == 1,
+            "running item to appear");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("alpha", StringComparison.Ordinal)),
+            "first streamed fragment to appear");
 
         blockedSecond.MarkReady();
         blockedThird.MarkReady();
         blockedComplete.MarkReady();
 
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.RunningItems.Count == 0 && chat.History.Count == 2,
             "run to complete and commit the assistant response to history");
 
@@ -872,16 +892,20 @@ public sealed class AgentChatTests
 
         await WaitForConditionAsync(
             chat.RunningItems,
-            () => chat.RunningItems.Count == 1
-                && RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("partial answer", StringComparison.Ordinal)),
-            "run to start and stream initial content");
+            () => chat.RunningItems.Count == 1,
+            "run to start");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(content => content.Text.Contains("partial answer", StringComparison.Ordinal)),
+            "run to stream initial content");
 
         chat.Interrupt();
 
         await WaitForConditionAsync(
-            chat.History,
+            [chat.History, chat.RunningItems],
             () => chat.History.Count == 3
-                && chat.History[^1].Role == AgentChatHistoryItem.DiagnosticChatRole,
+                && chat.History[^1].Role == AgentChatHistoryItem.DiagnosticChatRole
+                && chat.RunningItems.Count == 0,
             "interrupt to commit streamed content followed by the interrupted diagnostic");
 
         Assert.Equal(3, chat.History.Count);
@@ -1131,7 +1155,7 @@ public sealed class AgentChatTests
 
         chat.EnqueueUserMessage("hi");
         await WaitForConditionAsync(
-            chat.RunningItems,
+            [chat.RunningItems, chat.History],
             () => chat.History.Count == 2 && chat.RunningItems.Count == 0,
             "user message to complete and move the assistant response into history");
 
@@ -1410,7 +1434,7 @@ public sealed class AgentChatTests
         {
             chat.EnqueueUserMessage("ping");
             await WaitForConditionAsync(
-                chat.RunningItems,
+                [chat.RunningItems, chat.History],
                 () => chat.RunningItems.Count == 0
                     && chat.History.Count == 2
                     && chat.History[^1].Role == ChatRole.Assistant,
