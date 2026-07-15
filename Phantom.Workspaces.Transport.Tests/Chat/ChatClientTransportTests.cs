@@ -55,8 +55,62 @@ public sealed class ChatClientTransportTests
         Assert.Single(updates);
     }
 
+    [Fact]
+    public async Task ChatClientTransportListener_Interrupt_CancelsTurn()
+    {
+        var chatClient = new InterruptibleChatClient();
+        var registry = new TransportRegistry();
+        registry.Register(new ChatClientTransportListener(chatClient));
+        await using var transport = new LocalTransport(registry);
+        var channel = await transport.ConnectToMessageChannelAsync(Json("""{"type":"chat-client"}"""), TestCancellationToken());
+
+        await channel.Writer.WriteAsync(Json("""{"type":"process-streaming","content":{"role":"user","text":"hello"}}"""), TestCancellationToken());
+
+        // Reading the first update guarantees the turn is in progress and awaiting cancellation.
+        var first = await channel.Reader.ReadAsync(TestCancellationToken());
+        Assert.Equal("streaming-update", first.GetProperty("type").GetString());
+
+        await channel.Writer.WriteAsync(Json("""{"type":"interrupt"}"""), TestCancellationToken());
+
+        var complete = await channel.Reader.ReadAsync(TestCancellationToken());
+        Assert.Equal("streaming-update-complete", complete.GetProperty("type").GetString());
+        Assert.True(await chatClient.Cancelled.WaitAsync(TimeSpan.FromSeconds(10)));
+    }
+
+    [Fact]
+    public async Task ChatClientTransportListener_Steering_InjectsMessage()
+    {
+        var chatClient = new SteerableChatClient();
+        var registry = new TransportRegistry();
+        registry.Register(new ChatClientTransportListener(chatClient));
+        await using var transport = new LocalTransport(registry);
+        var channel = await transport.ConnectToMessageChannelAsync(Json("""{"type":"chat-client"}"""), TestCancellationToken());
+
+        await channel.Writer.WriteAsync(Json("""{"type":"process-streaming","content":{"role":"user","text":"start"}}"""), TestCancellationToken());
+        await channel.Writer.WriteAsync(SteeringFrame("steer now"), TestCancellationToken());
+
+        var update = await channel.Reader.ReadAsync(TestCancellationToken());
+        var complete = await channel.Reader.ReadAsync(TestCancellationToken());
+
+        Assert.Equal("streaming-update", update.GetProperty("type").GetString());
+        var injected = await chatClient.Injected.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("steer now", injected);
+        Assert.Contains("steer now", update.GetProperty("content").GetRawText());
+        Assert.Equal("streaming-update-complete", complete.GetProperty("type").GetString());
+    }
+
     private static CancellationToken TestCancellationToken() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    // Serializes a real ChatMessage into a steering frame so ChatMessage.Contents (and therefore
+    // ChatMessage.Text) round-trips; the "text" JSON shorthand does not populate Contents.
+    private static JsonElement SteeringFrame(string text)
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        return JsonSerializer.SerializeToElement(
+            new { type = "steering", content = new ChatMessage(ChatRole.User, text) },
+            options);
+    }
 
     private sealed class EchoChatClient : IChatClient
     {
@@ -86,6 +140,52 @@ public sealed class ChatClientTransportTests
             }
 
             throw new InvalidOperationException("boom");
+        }
+    }
+
+    private sealed class InterruptibleChatClient : IChatClient
+    {
+        private readonly TaskCompletionSource<bool> cancelledTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<bool> Cancelled => this.cancelledTcs.Task;
+
+        public void Dispose() { }
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            _ = messages.ToArray();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, "started");
+
+            var waiter = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            using (cancellationToken.Register(() => waiter.TrySetResult(true)))
+            {
+                await waiter.Task.ConfigureAwait(false);
+            }
+
+            this.cancelledTcs.TrySetResult(true);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+    }
+
+    private sealed class SteerableChatClient : IChatClient, IChatSteeringTarget
+    {
+        private readonly TaskCompletionSource<string> injectedTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<string> Injected => this.injectedTcs.Task;
+
+        public void InjectSteeringMessage(ChatMessage message) => this.injectedTcs.TrySetResult(message.Text ?? string.Empty);
+
+        public void Dispose() { }
+        public object? GetService(Type serviceType, object? serviceKey = null) => serviceType == typeof(IChatSteeringTarget) ? this : null;
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            _ = messages.ToArray();
+            var steered = await this.injectedTcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            yield return new ChatResponseUpdate(ChatRole.Assistant, steered);
         }
     }
 }

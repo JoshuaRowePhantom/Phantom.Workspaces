@@ -55,6 +55,10 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
                 {
                     _ = Task.Run(() => this.ProcessStreamingAsync(frame.Clone(), ct), CancellationToken.None);
                 }
+                else if (string.Equals(type, "steering", StringComparison.OrdinalIgnoreCase))
+                {
+                    this.InjectSteering(frame.Clone());
+                }
                 else if (string.Equals(type, "interrupt", StringComparison.OrdinalIgnoreCase))
                 {
                     if (this.turnCts is not null)
@@ -66,6 +70,28 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private void InjectSteering(JsonElement frame)
+    {
+        // Steering forwards a mid-turn message to the in-progress turn's chat client when that
+        // client exposes the IChatSteeringTarget capability (mirrors CopilotSdkChatClient's
+        // immediate steering). Clients without the capability silently ignore steering frames.
+        if (this.chatClient.GetService(typeof(IChatSteeringTarget)) is not IChatSteeringTarget target)
+        {
+            return;
+        }
+
+        if (!frame.TryGetProperty("content", out var contentElement))
+        {
+            return;
+        }
+
+        var message = ChatClientTransportListener.FromJsonElement<ChatMessage>(contentElement);
+        if (message is not null)
+        {
+            target.InjectSteeringMessage(message);
         }
     }
 
