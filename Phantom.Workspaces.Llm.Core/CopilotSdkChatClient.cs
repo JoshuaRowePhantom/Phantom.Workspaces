@@ -514,18 +514,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     foreach (var message in item.Messages ?? [])
                     {
-                        var text = string.Concat(
-                            message.Contents.OfType<TextContent>().Select(content => content.Text));
-                        if (!string.IsNullOrWhiteSpace(text))
+                        var immediateOptions = BuildImmediateMessageOptions(message);
+                        if (immediateOptions is not null)
                         {
                             // Record the forwarded steering message in history before sending it.
                             this.SteeringMessageForwarded?.Invoke(message);
 
                             // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
                             // returns promptly. Errors are non-fatal for steering.
-                            _ = session.SendAsync(
-                                new MessageOptions { Prompt = text, Mode = "immediate" },
-                                CancellationToken.None);
+                            _ = session.SendAsync(immediateOptions, CancellationToken.None);
                         }
                     }
                 }
@@ -812,23 +809,46 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 .SelectMany(m => m.Contents.OfType<DataContent>())
                 .ToList();
 
-            if (dataItems.Count > 0)
-            {
-                options.Attachments = dataItems
-                    .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
-                    {
-                        Data = Convert.ToBase64String(d.Data.ToArray()),
-                        MimeType = d.MediaType ?? string.Empty,
-                        DisplayName = d.MediaType ?? "attachment",
-                    })
-                    .ToList();
-            }
+            AddDataContentAttachments(options, dataItems);
 
             return options;
         }
 
         var lastWithText = materialized.LastOrDefault(message => !string.IsNullOrEmpty(message.Text));
         return new MessageOptions { Prompt = lastWithText?.Text ?? string.Empty };
+    }
+
+    internal static MessageOptions? BuildImmediateMessageOptions(ChatMessage message)
+    {
+        var text = string.Concat(
+            message.Contents.OfType<TextContent>().Select(content => content.Text));
+        var dataItems = message.Contents.OfType<DataContent>().ToList();
+
+        if (string.IsNullOrWhiteSpace(text) && dataItems.Count == 0)
+        {
+            return null;
+        }
+
+        var options = new MessageOptions { Prompt = text, Mode = "immediate" };
+        AddDataContentAttachments(options, dataItems);
+        return options;
+    }
+
+    private static void AddDataContentAttachments(MessageOptions options, IReadOnlyCollection<DataContent> dataItems)
+    {
+        if (dataItems.Count == 0)
+        {
+            return;
+        }
+
+        options.Attachments = dataItems
+            .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+            {
+                Data = Convert.ToBase64String(d.Data.ToArray()),
+                MimeType = d.MediaType ?? string.Empty,
+                DisplayName = d.MediaType ?? "attachment",
+            })
+            .ToList();
     }
 
     private static ChatResponse BuildResponse(

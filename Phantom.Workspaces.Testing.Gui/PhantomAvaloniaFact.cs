@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Xunit;
@@ -105,9 +106,8 @@ public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXuni
                 {
                     try
                     {
-                        var task = ((ISelfExecutingXunitTestCase)_inner).Run(
-                            explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
-                        tcs.SetResult(task.AsTask().GetAwaiter().GetResult());
+                        tcs.SetResult(this.RunInnerWithCleanup(
+                            explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource));
                     }
                     catch (Exception ex)
                     {
@@ -125,9 +125,8 @@ public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXuni
             {
                 try
                 {
-                    var task = ((ISelfExecutingXunitTestCase)_inner).Run(
-                        explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
-                    tcs.SetResult(task.AsTask().GetAwaiter().GetResult());
+                    tcs.SetResult(this.RunInnerWithCleanup(
+                        explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource));
                 }
                 catch (Exception ex)
                 {
@@ -203,15 +202,57 @@ public sealed class PhantomAvaloniaTestCase : ISelfExecutingXunitTestCase, IXuni
             }
         }
 
-        var summary = await tcs.Task;
+        return await tcs.Task;
+    }
 
-        // Force Gen2 GC after application.Dispose() has released the visual tree,
-        // preventing catastrophic allocations from cascading into the next test.
+    private RunSummary RunInnerWithCleanup(
+        ExplicitOption explicitOption,
+        IMessageBus messageBus,
+        object?[] constructorArguments,
+        ExceptionAggregator aggregator,
+        CancellationTokenSource cancellationTokenSource)
+    {
+        var app = Application.Current;
+        var canRestoreThemeVariant = false;
+        Avalonia.Styling.ThemeVariant? requestedThemeVariant = null;
+        if (app is not null)
+        {
+            try
+            {
+                requestedThemeVariant = app.RequestedThemeVariant;
+                canRestoreThemeVariant = true;
+            }
+            catch (InvalidOperationException)
+            {
+                app = null;
+            }
+        }
+
+        try
+        {
+            var task = ((ISelfExecutingXunitTestCase)_inner).Run(
+                explicitOption, messageBus, constructorArguments, aggregator, cancellationTokenSource);
+            return task.AsTask().GetAwaiter().GetResult();
+        }
+        finally
+        {
+            if (canRestoreThemeVariant && app is not null)
+            {
+                app.RequestedThemeVariant = requestedThemeVariant;
+            }
+
+            // Force Gen2 GC after application.Dispose() has released the visual tree,
+            // preventing catastrophic allocations from cascading into the next test.
+            // This must run on the scheduled STA before the next Avalonia test starts.
+            ForceGen2Collection();
+        }
+    }
+
+    private static void ForceGen2Collection()
+    {
         GC.Collect(2, GCCollectionMode.Forced, blocking: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true);
-
-        return summary;
     }
 
     // IXunitTestCase — all members delegated to inner
