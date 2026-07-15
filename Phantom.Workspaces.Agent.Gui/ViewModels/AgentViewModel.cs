@@ -389,6 +389,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new ReasoningSlashCommandHandler(
             getValue: () => this.IsReasoningVisible,
             setValue: v => this.SetReasoningVisibility(v)));
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RestartSlashCommandHandler());
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new CloneSlashCommandHandler());
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RenameSlashCommandHandler());
+        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new TitleSlashCommandHandler());
     }
 
     private async Task RunSlashCommandAsync(
@@ -587,7 +591,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler);
         this.subAgentViewModels.Add(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
-        this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel);
+        this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
     }
 
     private void AddSubAgentSlotLazy(SubAgent stub)
@@ -694,6 +698,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private sealed class SubAgentsCollectionTransformer : CollectionTransformer<SubAgentSlotViewModel, AgentEditorNavigationItemViewModel>
     {
         private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
+        private readonly SubAgentsContainerViewModel container;
 
         public SubAgentsCollectionTransformer(
             IReadOnlyList<SubAgentSlotViewModel> source,
@@ -702,6 +707,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             : base(source, target)
         {
             this.subAgentsNavItem = subAgentsNavItem;
+            this.container = (SubAgentsContainerViewModel)subAgentsNavItem.DetailContent;
             this.ApplyInitialTransform();
             this.UpdateSubAgentsLabel();
         }
@@ -716,11 +722,21 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 slot.SubAgentViewModel.Description,
                 null,
                 this.subAgentsNavItem.DetailContent,
-                subRoot?.Children.ToArray() ?? []);
+                subRoot?.Children.ToArray() ?? [],
+                runningSubAgent: slot.RunningSubAgent);
         }
 
         protected override void OnInsert(int index, AgentEditorNavigationItemViewModel target)
         {
+            if (target.RunningSubAgent is AgentChat chat)
+            {
+                chat.CompletionStateChanged += (_, _) =>
+                {
+                    target.RefreshStatus();
+                    this.container.NotifySubAgentUpdated();
+                };
+            }
+
             this.UpdateSubAgentsLabel();
             if (this.Target.Count == 1)
             {

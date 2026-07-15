@@ -17,6 +17,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Utilities;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -94,7 +95,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     {
         try
         {
-            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, tab.Id, foregroundScheduler);
+            var result = await this.TryBuildAgentAsync(mainWindowViewModel, agentSessionEntity, tab, foregroundScheduler);
             await Dispatcher.UIThread.InvokeAsync(() =>
             {
                 if (result is var (agent, loggerFactory, lease))
@@ -268,7 +269,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private async Task<(AgentViewModel agent, ObservableLoggerFactory loggerFactory, RunningAgentChatLease? lease)?> TryBuildAgentAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel agentSessionEntity,
-        string agentSessionTabId,
+        AgentSessionWorkspaceTabViewModel tab,
         TaskScheduler foregroundScheduler)
     {
         if (agentSessionEntity.Data is not JsonElement agentSessionEntityData
@@ -362,7 +363,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             agentChat = await this.CreateAgentChatAsync(createAgentChatRequest, agentSessionEntityData, mainWindowViewModel);
         }
 
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionTabId);
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id);
 
         var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
         var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
@@ -390,6 +391,26 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 {
                     agentChat.UpdateParameterValues(newValues);
                     return UpdateParameterValuesInEntityAsync(mainWindowViewModel, agentSessionEntity, newValues);
+                },
+                RenameSessionAsync = async (newName, ct) =>
+                {
+                    await agentSessionEntity.SaveDisplayNameAsync(newName);
+                    tab.Title = newName;
+                },
+                SetTabTitleAsync = (newTitle, ct) =>
+                {
+                    tab.Title = newTitle;
+                    return Task.CompletedTask;
+                },
+                ReplaceWithCloneAsync = async ct =>
+                {
+                    var cloneTab = await this.CreateCloneTabAsync(mainWindowViewModel, agentSessionEntity, tab, ct).ConfigureAwait(false);
+                    await Dispatcher.UIThread.InvokeAsync(async () => await mainWindowViewModel.ReplaceTabAsync(tab, cloneTab));
+                },
+                OpenCloneInNewTabAsync = async ct =>
+                {
+                    var cloneTab = await this.CreateCloneTabAsync(mainWindowViewModel, agentSessionEntity, tab, ct).ConfigureAwait(false);
+                    await Dispatcher.UIThread.InvokeAsync(async () => await mainWindowViewModel.OpenTabAsync(cloneTab));
                 },
             });
 
@@ -495,6 +516,63 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 insertAfterTabId: agentSessionTabId,
                 workspacePaneId: mainWindowViewModel.FindWorkspacePaneIdForTab(agentSessionTabId)),
         };
+    }
+
+    private async Task<AgentSessionWorkspaceTabViewModel> CreateCloneTabAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel sourceEntity,
+        AgentSessionWorkspaceTabViewModel currentTab,
+        CancellationToken cancellationToken)
+    {
+        if (sourceEntity.Data is not JsonElement sourceData)
+        {
+            throw new InvalidOperationException("Cannot clone an agent session without entity data.");
+        }
+
+        var cloneEntityId = new EntityId();
+        var cloneName = DisplayNameSuffixHelper.GetNextAvailableName(sourceEntity.DisplayName, [sourceEntity.DisplayName]);
+        var cloneData = EntityCloneHelper.RewriteEntityId(sourceData, cloneEntityId);
+        var cloneNode = JsonNode.Parse(cloneData.GetRawText())!.AsObject();
+        cloneNode["agent-session-id"] = Guid.NewGuid().ToString("D");
+        if (cloneNode["display-name"] is not JsonObject displayName)
+        {
+            displayName = [];
+            cloneNode["display-name"] = displayName;
+        }
+        displayName["default"] = cloneName;
+
+        using var document = JsonDocument.Parse(cloneNode.ToJsonString());
+        await mainWindowViewModel.EntityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = $"Clone agent session {sourceEntity.DisplayName}." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = cloneEntityId,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            });
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var cloneEntity = (await mainWindowViewModel.EntityBroker.GetEntitiesAsync([cloneEntityId]))
+            .FirstOrDefault()
+            ?? throw new InvalidOperationException("Cloned agent session could not be loaded.");
+        return await this.TryCreateAgentSessionTabForRestoreAsync(
+                mainWindowViewModel,
+                cloneEntity,
+                tabId: $"{mainWindowViewModel.SelectedWorkspacePane?.Id}-{cloneEntityId}",
+                title: cloneName,
+                dockRegion: currentTab.DockRegion)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Cloned agent session tab could not be created.");
     }
 
     private static async Task UpdateParameterValuesInEntityAsync(
