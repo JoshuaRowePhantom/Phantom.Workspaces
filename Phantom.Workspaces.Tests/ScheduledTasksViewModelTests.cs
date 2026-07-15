@@ -11,6 +11,16 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ScheduledTasksViewModelTests
 {
+    [Fact]
+    public void RunSummaryViewModel_StartedAt_FormatsAsYyyySlashMmSlashDdHhMmSs()
+    {
+        var root = FindRepositoryRoot();
+        var viewText = File.ReadAllText(Path.Combine(root, "Phantom.Workspaces", "ScheduledTasksWindow.axaml"));
+
+        Assert.Contains("StringFormat='{}{0:yyyy/MM/dd HH:mm:ss}'", viewText, StringComparison.Ordinal);
+        Assert.DoesNotContain("StringFormat='{}{0:HH:mm:ss}'", viewText, StringComparison.Ordinal);
+    }
+
     [PhantomAvaloniaFact]
     public async Task RefreshAsync_LoadsScheduledTasks_WithResolvedParticipantNames()
     {
@@ -415,5 +425,21 @@ public sealed class ScheduledTasksViewModelTests
                 ],
             },
             TestContext.Current.CancellationToken);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Repository root was not found.");
     }
 }
