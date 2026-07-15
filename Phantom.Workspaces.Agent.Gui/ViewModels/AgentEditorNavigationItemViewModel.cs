@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
@@ -15,7 +16,8 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         AgentChatToolViewModel? tool,
         object detailContent,
         IReadOnlyList<AgentEditorNavigationItemViewModel> children,
-        bool isExpanded = false)
+        bool isExpanded = false,
+        IRunningSubAgent? runningSubAgent = null)
     {
         this.Id = id;
         this.name = name;
@@ -23,6 +25,7 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         this.Summary = summary;
         this.Tool = tool;
         this.DetailContent = detailContent;
+        this.RunningSubAgent = runningSubAgent;
         this.Children = [.. children];
         this.IsExpanded = isExpanded;
         this.ToggleExpandCommand = new RelayCommand(() => this.IsExpanded = !this.IsExpanded, () => this.HasChildren);
@@ -47,6 +50,40 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
     public string? Summary { get; }
 
     public AgentChatToolViewModel? Tool { get; }
+
+    public IRunningSubAgent? RunningSubAgent { get; }
+
+    public AgentChatCompletionState? CompletionState => this.RunningSubAgent?.CompletionState;
+
+    public DateTime? LastUpdatedAt => this.RunningSubAgent?.LastUpdatedAt;
+
+    public bool HasCompletionState => this.RunningSubAgent is not null;
+
+    public bool NotHasCompletionState => !this.HasCompletionState;
+
+    public bool IsRunning => this.CompletionState == AgentChatCompletionState.Running;
+
+    public bool IsSucceeded => this.CompletionState == AgentChatCompletionState.Succeeded;
+
+    public bool IsFailed => this.CompletionState == AgentChatCompletionState.Failed;
+
+    public bool IsIdle => this.CompletionState is null or AgentChatCompletionState.Unknown;
+
+    public bool IsBrainVisible => this.HasCompletionState && !this.IsSucceeded && !this.IsFailed;
+
+    public double StatusIconOpacity => this.IsIdle ? 0.25 : 1.0;
+
+    internal void RefreshStatus()
+    {
+        this.RaisePropertyChanged(nameof(this.CompletionState));
+        this.RaisePropertyChanged(nameof(this.LastUpdatedAt));
+        this.RaisePropertyChanged(nameof(this.IsRunning));
+        this.RaisePropertyChanged(nameof(this.IsSucceeded));
+        this.RaisePropertyChanged(nameof(this.IsFailed));
+        this.RaisePropertyChanged(nameof(this.IsIdle));
+        this.RaisePropertyChanged(nameof(this.IsBrainVisible));
+        this.RaisePropertyChanged(nameof(this.StatusIconOpacity));
+    }
 
     public bool HasTool => this.Tool is not null;
 

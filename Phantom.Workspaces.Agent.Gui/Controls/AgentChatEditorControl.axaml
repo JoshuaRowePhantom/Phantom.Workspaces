@@ -257,6 +257,8 @@
                       ScrollViewer.VerticalScrollBarVisibility="Auto"
                       ScrollViewer.AllowAutoHide="False"
                       SelectionChanged="OnEditorSelectionChanged"
+                      PointerEntered="OnNavigationTreePointerEntered"
+                      PointerExited="OnNavigationTreePointerExited"
                       Grid.Column="0">
                 <TreeView.Styles>
                     <Style Selector="TreeViewItem">

@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Llm;
+
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 /// <summary>
@@ -9,15 +11,18 @@ public sealed class SubAgentSlotViewModel : ViewModelBase
 {
     private bool isSelected;
 
-    public SubAgentSlotViewModel(string agentId, AgentViewModel subAgentViewModel)
+    public SubAgentSlotViewModel(string agentId, AgentViewModel subAgentViewModel, IRunningSubAgent runningSubAgent)
     {
         this.AgentId = agentId;
         this.SubAgentViewModel = subAgentViewModel;
+        this.RunningSubAgent = runningSubAgent;
     }
 
     public string AgentId { get; }
 
     public AgentViewModel SubAgentViewModel { get; }
+
+    public IRunningSubAgent RunningSubAgent { get; }
 
     public string DisplayName => this.SubAgentViewModel.DisplayName;
 
