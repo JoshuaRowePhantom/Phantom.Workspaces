@@ -1243,6 +1243,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
     private readonly IToolVisualizerFactory? toolFactory;
     private readonly IAgentStatusSink? statusSink;
     private readonly Func<string, string?>? resolveSubAgentId;
+    private readonly Action? beforeDispatchHistoryChunk;
     private readonly RunningChatItemsHtmlTransformer runningTransformer;
     private readonly RunningSubAgentsHtmlTransformer? subAgentsTransformer;
     private readonly List<RenderSlot> historySlots = [];
@@ -1276,7 +1277,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         IAgentStatusSink? statusSink = null,
         Func<string, string?>? resolveSubAgentId = null,
         IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null,
-        IReadOnlyList<IRunningSubAgent>? ancestors = null)
+        IReadOnlyList<IRunningSubAgent>? ancestors = null,
+        Action? beforeDispatchHistoryChunk = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
@@ -1290,6 +1292,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
         this.toolFactory = toolFactory;
         this.statusSink = statusSink;
         this.resolveSubAgentId = resolveSubAgentId;
+        this.beforeDispatchHistoryChunk = beforeDispatchHistoryChunk;
 
         // Phase A: take a snapshot of history for off-thread processing.
         var snapshot = new List<AgentChatHistoryItem>(historyItems);
@@ -1563,6 +1566,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var chunkHtml = GenerateHistoryChunk(plan, start, end);
+                this.beforeDispatchHistoryChunk?.Invoke();
+                cancellationToken.ThrowIfCancellationRequested();
                 if (chunkHtml.Length == 0)
                 {
                     continue;
@@ -1571,75 +1576,85 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 var scrollAfterThisChunk = !scrolled;
                 scrolled = true;
 
-                await Dispatcher.UIThread.InvokeAsync(() =>
+                await Dispatcher.UIThread.InvokeAsync(
+                    () =>
+                    {
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
+                        this.sink.BeginBatch();
+                        this.sink.UpdateContent(
+                            ChatOutputHtmlRenderer.HistoryContainerId,
+                            ChatOutputUpdateLocation.Prepend,
+                            chunkHtml);
+
+                        // Scroll to bottom immediately after the first (newest) chunk, making the most
+                        // recent content visible while older chunks fill in above.
+                        if (scrollAfterThisChunk)
+                        {
+                            this.sink.ScrollToBottom();
+                        }
+
+                        this.sink.EndBatch();
+                    },
+                    DispatcherPriority.Normal,
+                    cancellationToken);
+            }
+
+            // Phase C: publish the plan, then construct the live transformer, replaying the
+            // buffered collection-changed events captured during loading so every mutation
+            // (adds, replaces, removes, moves) is applied to the DOM exactly once.
+            await Dispatcher.UIThread.InvokeAsync(
+                () =>
                 {
                     if (cancellationToken.IsCancellationRequested)
                     {
                         return;
                     }
 
-                    this.sink.BeginBatch();
-                    this.sink.UpdateContent(
-                        ChatOutputHtmlRenderer.HistoryContainerId,
-                        ChatOutputUpdateLocation.Prepend,
-                        chunkHtml);
+                    this.historySlots.AddRange(plan.Slots);
+                    foreach (var (callId, slot) in plan.SlotByCallId)
+                    {
+                        this.sharedSlotByCallId[callId] = slot;
+                    }
 
-                    // Scroll to bottom immediately after the first (newest) chunk, making the most
-                    // recent content visible while older chunks fill in above.
-                    if (scrollAfterThisChunk)
+                    this.historyTransformer = new ChatMessageHtmlTransformer(
+                        this.historyItems,
+                        this.historySlots,
+                        this.sink,
+                        this.isReasoningVisible,
+                        containerPath: ChatOutputHtmlRenderer.HistoryContainerId,
+                        elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
+                        groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
+                        sharedSlotByCallId: this.sharedSlotByCallId,
+                        toolFactory: this.toolFactory,
+                        statusSink: this.statusSink,
+                        resolveSubAgentId: this.resolveSubAgentId,
+                        preloadedCount: snapshot.Count,
+                        bufferedEvents: this.bufferedHistoryEvents);
+
+                    this.historyLoading = false;
+
+                    if (this.bufferedHistoryEvents is { Count: > 0 })
                     {
                         this.sink.ScrollToBottom();
                     }
 
-                    this.sink.EndBatch();
-                });
-            }
-
-            // Phase C: publish the plan, then construct the live transformer, replaying the
-            // buffered collection-changed events captured during loading so every mutation
-            // (adds, replaces, removes, moves) is applied to the DOM exactly once.
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                this.historySlots.AddRange(plan.Slots);
-                foreach (var (callId, slot) in plan.SlotByCallId)
-                {
-                    this.sharedSlotByCallId[callId] = slot;
-                }
-
-                this.historyTransformer = new ChatMessageHtmlTransformer(
-                    this.historyItems,
-                    this.historySlots,
-                    this.sink,
-                    this.isReasoningVisible,
-                    containerPath: ChatOutputHtmlRenderer.HistoryContainerId,
-                    elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
-                    groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
-                    sharedSlotByCallId: this.sharedSlotByCallId,
-                    toolFactory: this.toolFactory,
-                    statusSink: this.statusSink,
-                    resolveSubAgentId: this.resolveSubAgentId,
-                    preloadedCount: snapshot.Count,
-                    bufferedEvents: this.bufferedHistoryEvents);
-
-                this.historyLoading = false;
-
-                if (this.bufferedHistoryEvents is { Count: > 0 })
-                {
-                    this.sink.ScrollToBottom();
-                }
-
-                this.bufferedHistoryEvents = null;
-            });
+                    this.bufferedHistoryEvents = null;
+                },
+                DispatcherPriority.Normal,
+                cancellationToken);
         }
         catch (OperationCanceledException)
         {
             // Disposed before loading completed; the plan is discarded without publishing partial
             // slots or call-map entries.
+        }
+        finally
+        {
+            this.loadCts.Dispose();
         }
     }
 
@@ -1743,8 +1758,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
     public void Dispose()
     {
-        this.loadCts.Cancel();
-        this.loadCts.Dispose();
+        try
+        {
+            this.loadCts.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
 
         if (this.historyItems is INotifyCollectionChanged historyChanged)
         {

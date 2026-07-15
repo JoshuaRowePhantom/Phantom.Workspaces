@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -1966,6 +1967,34 @@ public sealed class ChatOutputHtmlModelTests
         // so cancellation is observed before anything is published.
         var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         model.Dispose();
+        await model.HistoryLoaded;
+
+        Assert.Empty(model.HistorySlots);
+        Assert.Empty(model.SharedSlotByCallId);
+        Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_CancellationAfterChunkGeneration_DoesNotWaitForUiDispatch()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>(
+            Enumerable.Range(0, 500).Select(i => TextMessage(ChatRole.User, $"item {i}")));
+        var sink = new RecordingSink();
+        using var modelAssigned = new ManualResetEventSlim();
+        ChatOutputHtmlModel? model = null;
+
+        model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink,
+            beforeDispatchHistoryChunk: () =>
+            {
+                modelAssigned.Wait();
+                model!.Dispose();
+            });
+
+        modelAssigned.Set();
         await model.HistoryLoaded;
 
         Assert.Empty(model.HistorySlots);
