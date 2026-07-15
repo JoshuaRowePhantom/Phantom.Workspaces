@@ -34,13 +34,7 @@ public sealed class RunningAgentBrainViewModelTests
         }
 
         public Task<RunningAgentChatLease> AcquireAsync(
-            AgentSessionId sessionId,
-            AgentDefinition? definition = null,
-            AgentServices? agentServices = null,
-            string entityName = "",
-            string? entityId = null,
-            string? entityDisplayName = null,
-            string? entityDescription = null,
+            AcquireAgentChatRequest request,
             CancellationToken ct = default)
             => throw new NotSupportedException("Not used in unit tests.");
     }

@@ -6652,14 +6652,14 @@ public sealed class MainWindowIntegrationTests
         // After disposing first tab, acquire on same key should return cached chat (second tab still holds lease)
         await tabA.DisposeAsync();
 
-        var probe1 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
+        var probe1 = await table.AcquireAsync(new AcquireAgentChatRequest { AgentSessionId = new AgentSessionId(agentSessionId) });
         Assert.Same(sharedChat, probe1.AgentChat); // cached — same instance, second tab still holds lease
         await probe1.DisposeAsync();
 
         // After disposing second tab, the chat should be gone and a new one created from persistence
         await tabB.DisposeAsync();
 
-        var probe2 = await table.AcquireAsync(new AgentSessionId(agentSessionId));
+        var probe2 = await table.AcquireAsync(new AcquireAgentChatRequest { AgentSessionId = new AgentSessionId(agentSessionId) });
         Assert.NotSame(sharedChat, probe2.AgentChat); // new instance — old was disposed
         await probe2.DisposeAsync();
     }

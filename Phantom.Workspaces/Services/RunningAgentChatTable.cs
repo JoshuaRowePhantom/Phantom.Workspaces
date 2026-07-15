@@ -37,23 +37,72 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
     /// <inheritdoc/>
     public async Task<RunningAgentChatLease> AcquireAsync(
-        AgentSessionId sessionId,
-        AgentDefinition? definition = null,
-        AgentServices? agentServices = null,
-        string entityName = "",
-        string? entityId = null,
-        string? entityDisplayName = null,
-        string? entityDescription = null,
+        AcquireAgentChatRequest request,
         CancellationToken ct = default)
     {
+        var sessionId = request.AgentSessionId;
         // Store entity info before calling the factory so the CollectionChanged handler can read it
         // when the factory posts the Add mutation on the foreground scheduler.
         lock (_entityInfoLock)
         {
-            _entityInfo.TryAdd(sessionId, (entityName, entityId));
+            _entityInfo.TryAdd(sessionId, (request.EntityName, request.EntityId));
         }
 
-        return await _factory.GetOrCreateAsync(sessionId, definition, agentServices, entityDisplayName, entityDescription, ct);
+        var definition = await ResolveDefinitionIfNeededAsync(request, ct).ConfigureAwait(false);
+        return await _factory.GetOrCreateAsync(
+            sessionId,
+            definition,
+            request.AgentServices,
+            request.EntityDisplayName,
+            request.EntityDescription,
+            ct);
+    }
+
+    private async Task<AgentDefinition?> ResolveDefinitionIfNeededAsync(
+        AcquireAgentChatRequest request,
+        CancellationToken ct)
+    {
+        lock (_entityInfoLock)
+        {
+            if (_runningSessions.Any(session => session.SessionId == request.AgentSessionId))
+            {
+                return null;
+            }
+        }
+
+        if (request.AgentDefinitionResolver is not null)
+        {
+            var resolved = await request.AgentDefinitionResolver.ResolveAsync(
+                new AgentDefinitionResolveRequest
+                {
+                    AgentDefinition = request.AgentDefinition,
+                    AgentManifest = request.AgentManifest,
+                    AgentSessionEntity = request.AgentSessionEntity,
+                    ToolResourceFactory = request.ToolResourceFactory ?? request.AgentServices?.ToolResourceFactory,
+                    Parameters = request.Parameters,
+                },
+                ct).ConfigureAwait(false);
+            return resolved?.Definition;
+        }
+
+        if (request.AgentDefinition is not null)
+        {
+            return request.AgentDefinition;
+        }
+
+        if (request.AgentManifest is not null)
+        {
+            return await AgentFactory.CreateAgentDefinitionAsync(
+                new CreateAgentDefinitionRequest
+                {
+                    AgentManifest = request.AgentManifest,
+                    ToolResourceFactory = request.ToolResourceFactory ?? request.AgentServices?.ToolResourceFactory,
+                    Parameters = request.Parameters,
+                },
+                ct).ConfigureAwait(false);
+        }
+
+        return null;
     }
 
     private void OnFactorySessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)
