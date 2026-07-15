@@ -703,4 +703,39 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.Contains("[help]", html, StringComparison.Ordinal);
         Assert.DoesNotContain("[diagnostic]", html, StringComparison.Ordinal);
     }
+
+    private sealed class CyclicPayload
+    {
+        // A self-referencing property makes JsonSerializer.SerializeToElement throw JsonException
+        // (object-cycle), reproducing the non-serializable tool-argument fault from #1008.
+        public CyclicPayload Self => this;
+    }
+
+    [Fact]
+    public void RenderContent_FunctionCallWithNonSerializableArguments_DoesNotThrowAndFallsBackToText()
+    {
+        var call = new FunctionCallContent(
+            "call-1",
+            "myTool",
+            new Dictionary<string, object?> { ["x"] = new CyclicPayload() });
+
+        var exception = Record.Exception(() =>
+        {
+            var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+            Assert.NotNull(html);
+        });
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void RenderContent_FunctionResultWithNonSerializableResult_DoesNotThrow()
+    {
+        var result = new FunctionResultContent("call-1", new CyclicPayload());
+
+        var exception = Record.Exception(() =>
+            ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false));
+
+        Assert.Null(exception);
+    }
 }

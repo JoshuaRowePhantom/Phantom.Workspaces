@@ -2709,4 +2709,52 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("diagnostic detail", op.Content);
         Assert.Contains("assistant response", op.Content);
     }
+
+    private sealed class CyclicPayload
+    {
+        // Self-reference makes JsonSerializer.SerializeToElement throw JsonException (object cycle),
+        // reproducing the non-serializable tool argument that regressed history loading in #1008.
+        public CyclicPayload Self => this;
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task HistoryLoad_WithToolCallContainingNonSerializableArguments_CompletesAndRendersOtherMessages()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.User, Contents = [new TextContent("before-tool")] },
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents =
+                [
+                    new FunctionCallContent(
+                        "call-1",
+                        "myTool",
+                        new Dictionary<string, object?> { ["x"] = new CyclicPayload() }),
+                ],
+            },
+            new() { Role = ChatRole.User, Contents = [new TextContent("after-tool")] },
+        };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            history,
+            new ObservableCollection<AgentChatRunningItem>(),
+            () => true,
+            sink);
+
+        // Must complete (Phase C runs) rather than faulting and leaving history empty.
+        await model.HistoryLoaded;
+
+        var prependOps = sink.ContentOperations
+            .Where(operation => operation.Location == ChatOutputUpdateLocation.Prepend
+                             && operation.Path == ChatOutputHtmlRenderer.HistoryContainerId)
+            .ToList();
+        Assert.NotEmpty(prependOps);
+
+        var allRenderedHtml = string.Concat(prependOps.Select(operation => operation.Content));
+        Assert.Contains("before-tool", allRenderedHtml, StringComparison.Ordinal);
+        Assert.Contains("after-tool", allRenderedHtml, StringComparison.Ordinal);
+    }
 }

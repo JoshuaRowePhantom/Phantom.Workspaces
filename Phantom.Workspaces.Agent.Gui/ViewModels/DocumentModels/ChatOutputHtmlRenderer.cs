@@ -697,7 +697,7 @@ internal static class ChatOutputHtmlRenderer
                 {
                     return JsonSerializer.Serialize(value, PrettyJsonOptions);
                 }
-                catch (NotSupportedException)
+                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
                 {
                     return value.ToString() ?? string.Empty;
                 }
@@ -706,32 +706,38 @@ internal static class ChatOutputHtmlRenderer
 
     private static string RenderToolPayload(object? value)
     {
-        switch (value)
+        if (value is null)
         {
-            case null:
-                return string.Empty;
-            case string text:
-                if (TryParseJson(text, out var document))
-                {
-                    using (document)
-                    {
-                        return RenderJsonValue(document!.RootElement, 0);
-                    }
-                }
+            return string.Empty;
+        }
 
-                return RenderStringValue(text, 0, 0);
-            case JsonElement element:
-                return RenderJsonValue(element, 0);
-            default:
-                try
-                {
-                    var element = JsonSerializer.SerializeToElement(value, PrettyJsonOptions);
+        // Fallback renderer: a pathological tool payload (non-serializable / cyclic arguments,
+        // malformed markdown, etc.) must never abort chat rendering. Any non-fatal failure falls
+        // back to escaped text so history and live output always render.
+        try
+        {
+            switch (value)
+            {
+                case string text:
+                    if (TryParseJson(text, out var document))
+                    {
+                        using (document)
+                        {
+                            return RenderJsonValue(document!.RootElement, 0);
+                        }
+                    }
+
+                    return RenderStringValue(text, 0, 0);
+                case JsonElement element:
                     return RenderJsonValue(element, 0);
-                }
-                catch (NotSupportedException)
-                {
-                    return HtmlEscape(value.ToString() ?? string.Empty);
-                }
+                default:
+                    var serialized = JsonSerializer.SerializeToElement(value, PrettyJsonOptions);
+                    return RenderJsonValue(serialized, 0);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            return HtmlEscape(value.ToString() ?? string.Empty);
         }
     }
 
