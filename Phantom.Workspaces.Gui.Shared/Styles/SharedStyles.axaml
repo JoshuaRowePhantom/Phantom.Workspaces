@@ -357,8 +357,6 @@
         <Setter Property="VerticalAlignment" Value="Bottom" />
     </Style>
     <Style Selector="Border.queue-status-pill.dynamic">
-        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
         <Setter Property="BorderThickness" Value="1" />
         <Setter Property="Padding" Value="0" />
     </Style>
@@ -367,10 +365,7 @@
         <Setter Property="CornerRadius" Value="999" />
         <Setter Property="Padding" Value="10,4" />
     </Style>
-    <Style Selector="Border.queue-immediacy-option-pill">
-        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.HoverBorder}" />
-    </Style>
+    <Style Selector="Border.queue-immediacy-option-pill" />
     <Style Selector="Border.queue-item-card">
         <Setter Property="Margin" Value="0,0,0,4" />
         <Setter Property="Padding" Value="8,6" />
@@ -382,6 +377,10 @@
     </Style>
     <Style Selector="TextBlock.queue-immediacy-caret">
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+    </Style>
+    <Style Selector="TextBlock.queue-immediacy-glyph">
+        <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
     <Style Selector="UserControl.agent-chat-output-root">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
@@ -668,9 +667,17 @@
         <Setter Property="Padding" Value="0" />
         <Setter Property="HeaderTemplate">
             <DataTemplate>
-                <Border Classes="queue-immediacy-pill queue-immediacy-option-pill">
-                    <TextBlock Classes="queue-immediacy-label queue-immediacy-option-label"
-                               Text="{ReflectionBinding Label}" />
+                <Border Classes="queue-immediacy-pill queue-immediacy-option-pill"
+                        Background="{ReflectionBinding Background}"
+                        BorderBrush="{ReflectionBinding BorderBrush}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <TextBlock Classes="queue-immediacy-glyph"
+                                   Foreground="{ReflectionBinding Foreground}"
+                                   Text="{ReflectionBinding GlyphText}" />
+                        <TextBlock Classes="queue-immediacy-label queue-immediacy-option-label"
+                                   Foreground="{ReflectionBinding Foreground}"
+                                   Text="{ReflectionBinding Label}" />
+                    </StackPanel>
                 </Border>
             </DataTemplate>
         </Setter>

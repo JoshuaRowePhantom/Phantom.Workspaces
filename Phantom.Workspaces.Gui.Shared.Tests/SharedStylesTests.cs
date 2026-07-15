@@ -257,10 +257,8 @@ public sealed class SharedStylesTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void SharedStyles_QueueImmediacyOptionPill_UsesThemeResourceForBackground()
+    public void SharedStyles_QueueImmediacyOptionPill_UsesOptionBrushBindings()
     {
-        // Issue #253: queue-immediacy-option-pill must use DynamicResource for Background
-        // and BorderBrush, not ReflectionBinding to per-state color properties.
         var repositoryRoot = FindRepositoryRoot();
         var stylesPath = Path.Combine(
             repositoryRoot.FullName,
@@ -269,18 +267,9 @@ public sealed class SharedStylesTests
             "SharedStyles.axaml");
         var content = File.ReadAllText(stylesPath);
 
-        var pillStyleStart = content.IndexOf(
-            "queue-immediacy-option-pill",
-            StringComparison.Ordinal);
-        Assert.True(pillStyleStart >= 0, "queue-immediacy-option-pill selector must exist.");
-
-        var pillStyleEnd = content.IndexOf("</Style>", pillStyleStart, StringComparison.Ordinal);
-        Assert.True(pillStyleEnd > pillStyleStart, "queue-immediacy-option-pill style must be closed.");
-
-        var pillBlock = content[pillStyleStart..pillStyleEnd];
-        Assert.DoesNotContain("ReflectionBinding Background", pillBlock, StringComparison.Ordinal);
-        Assert.DoesNotContain("ReflectionBinding BorderBrush", pillBlock, StringComparison.Ordinal);
-        Assert.Contains("DynamicResource", pillBlock, StringComparison.Ordinal);
+        Assert.Contains("Background=\"{ReflectionBinding Background}\"", content, StringComparison.Ordinal);
+        Assert.Contains("BorderBrush=\"{ReflectionBinding BorderBrush}\"", content, StringComparison.Ordinal);
+        Assert.Contains("Text=\"{ReflectionBinding GlyphText}\"", content, StringComparison.Ordinal);
     }
 
     private static DirectoryInfo FindRepositoryRoot()
