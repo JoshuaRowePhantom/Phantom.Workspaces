@@ -261,7 +261,17 @@ public partial class App : Application
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             loadingViewModel.StatusText = "Loading repository data and profile.";
-            await viewModel.InitializeAsync();
+            try
+            {
+                await viewModel.InitializeAsync();
+            }
+            catch (Exception ex)
+            {
+                loadingViewModel.StatusText = $"Failed to connect: {ex.Message}";
+                await Task.Delay(5000); // Give user time to read the error
+                desktop.Shutdown();
+                return;
+            }
 
             loadingViewModel.StatusText = "Opening main window.";
             var mainWindow = new MainWindow(viewModel);
