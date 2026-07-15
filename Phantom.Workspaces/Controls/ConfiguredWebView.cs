@@ -92,6 +92,8 @@ public class ConfiguredWebView : AcceleratorAwareWebView
         // Forward accelerator events (from AcceleratorAwareWebView) to the bound ViewModel.
         this.AltKeyStateChanged += (_, held) => this.ViewModel?.RaiseAltKeyStateChanged(held);
         this.GoToTabAtIndexRequested += (_, idx) => this.ViewModel?.RaiseGoToTabAtIndex(idx);
+        this.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.ViewModel?.RaiseGoToWorkspacePaneAtIndex(idx);
+        this.CloseTabRequested += (_, _) => this.ViewModel?.RaiseCloseTab();
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
@@ -153,30 +155,6 @@ public class ConfiguredWebView : AcceleratorAwareWebView
         }
     }
 
-    private async Task InjectCloseTabShortcutAsync()
-    {
-        const string script = """
-            (function() {
-                if (window.__phantomCloseTabListenerInstalled) return;
-                window.__phantomCloseTabListenerInstalled = true;
-                document.addEventListener('keydown', function(e) {
-                    if (e.ctrlKey && e.key === 'w') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        invokeCSharpAction('close-tab');
-                    }
-                }, true);
-            })();
-            """;
-        try
-        {
-            await this.InvokeScript(script);
-        }
-        catch (Exception)
-        {
-        }
-    }
-
     private void OnWebViewNavigationCompleted(object? sender, EventArgs e)
     {
         // Update the ViewModel with the current URL after navigation completes
@@ -189,8 +167,6 @@ public class ConfiguredWebView : AcceleratorAwareWebView
             // Update title by executing JavaScript to get document.title
             _ = UpdateTitleAsync();
         }
-
-        _ = InjectCloseTabShortcutAsync();
     }
 
     private async Task UpdateTitleAsync()

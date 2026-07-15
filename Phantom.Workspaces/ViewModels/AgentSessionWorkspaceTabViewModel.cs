@@ -65,6 +65,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
+    public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
 
     public override IStatusItem TabStatus => this.tabStatus;
 
@@ -76,6 +77,11 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     public void RaiseGoToTabAtIndex(int index)
     {
         this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
+    public void RaiseGoToWorkspacePaneAtIndex(int index)
+    {
+        this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, index);
     }
 
     public override void RequestFocusPrimaryControl()
@@ -91,6 +97,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
         agentViewModel.AltKeyStateChanged += this.OnAgentAltKeyStateChanged;
         agentViewModel.GoToTabAtIndexRequested += this.OnAgentGoToTabAtIndexRequested;
+        agentViewModel.GoToWorkspacePaneAtIndexRequested += this.OnAgentGoToWorkspacePaneAtIndexRequested;
         this.tabStatus.RunningStatus = agentViewModel.IsChatRunning ? RunningStatus.Running : RunningStatus.Idle;
         this.wasRunning = agentViewModel.IsChatRunning;
 
@@ -118,6 +125,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
             this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
+            this.agent.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
             if (this.lease is not null)
             {
                 await this.agent.DisposeViewResourcesAsync();
@@ -214,6 +222,11 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.RaiseGoToTabAtIndex(index);
     }
 
+    private void OnAgentGoToWorkspacePaneAtIndexRequested(object? sender, int index)
+    {
+        this.RaiseGoToWorkspacePaneAtIndex(index);
+    }
+
     private static bool IsInterrupted(AgentViewModel vm)
     {
         var lastItem = vm.History.LastOrDefault();
@@ -256,6 +269,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
             this.agent.PropertyChanged -= this.OnAgentPropertyChanged;
             this.agent.AltKeyStateChanged -= this.OnAgentAltKeyStateChanged;
             this.agent.GoToTabAtIndexRequested -= this.OnAgentGoToTabAtIndexRequested;
+            this.agent.GoToWorkspacePaneAtIndexRequested -= this.OnAgentGoToWorkspacePaneAtIndexRequested;
             this.NotificationService?.Remove(this.Id);
             if (this.lease is not null)
             {

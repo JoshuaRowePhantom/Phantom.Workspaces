@@ -92,6 +92,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         {
             acceleratorWebView.AltKeyStateChanged += this.OnBrowserAltKeyStateChanged;
             acceleratorWebView.GoToTabAtIndexRequested += this.OnBrowserGoToTabAtIndexRequested;
+            acceleratorWebView.GoToWorkspacePaneAtIndexRequested += this.OnBrowserGoToWorkspacePaneAtIndexRequested;
         }
     }
 
@@ -103,6 +104,11 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private void OnBrowserGoToTabAtIndexRequested(object? sender, int index)
     {
         this.subscribedViewModel?.RaiseGoToTabAtIndex(index);
+    }
+
+    private void OnBrowserGoToWorkspacePaneAtIndexRequested(object? sender, int index)
+    {
+        this.subscribedViewModel?.RaiseGoToWorkspacePaneAtIndex(index);
     }
 
     public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)

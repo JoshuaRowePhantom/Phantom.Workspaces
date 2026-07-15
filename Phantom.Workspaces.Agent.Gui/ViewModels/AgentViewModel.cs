@@ -173,6 +173,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler<int>? GoToTabAtIndexRequested;
+    public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
 
     public void RaiseAltKeyStateChanged(bool isAltHeld)
     {
@@ -182,6 +183,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void RaiseGoToTabAtIndex(int index)
     {
         this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
+    public void RaiseGoToWorkspacePaneAtIndex(int index)
+    {
+        this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, index);
     }
 
     public string AgentSessionId

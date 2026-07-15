@@ -167,6 +167,7 @@ public class WebViewModel : WorkspaceTabViewModel
 
     public event EventHandler<NavigationDirection>? NavigationRequested;
     public event EventHandler<int>? GoToTabAtIndexRequested;
+    public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
     public event EventHandler<bool>? AltKeyStateChanged;
     public event EventHandler? FocusUrlBarRequested;
 
@@ -183,6 +184,11 @@ public class WebViewModel : WorkspaceTabViewModel
     public void RaiseGoToTabAtIndex(int index)
     {
         this.GoToTabAtIndexRequested?.Invoke(this, index);
+    }
+
+    public void RaiseGoToWorkspacePaneAtIndex(int index)
+    {
+        this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, index);
     }
 
     public void RaiseAltKeyStateChanged(bool isAltHeld)

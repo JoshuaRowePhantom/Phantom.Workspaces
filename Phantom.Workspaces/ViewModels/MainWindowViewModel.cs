@@ -2057,6 +2057,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (!held) this.IsShiftHeld = false;
             };
             webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+            webVm.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.GoToWorkspacePaneAtIndexCommand.Execute(idx.ToString());
         }
         else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
         {
@@ -2066,6 +2067,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 if (!held) this.IsShiftHeld = false;
             };
             agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
+            agentTab.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.GoToWorkspacePaneAtIndexCommand.Execute(idx.ToString());
         }
 
         // Check if tab already exists
