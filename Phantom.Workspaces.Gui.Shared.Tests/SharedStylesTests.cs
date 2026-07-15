@@ -201,9 +201,9 @@ public sealed class SharedStylesTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void AltIndexBadge_DefaultOpacity_Is0Point5()
+    public void AltIndexBadge_DefaultOpacity_Is0()
     {
-        // Issue #349: badges must appear instantly at 0.50 base opacity, not fade in from 0.
+        // Issue #505: badges must be invisible (opacity 0) when Alt is not held.
         var sharedStyles = LoadSharedStyles();
 
         var border = new Border();
@@ -216,7 +216,7 @@ public sealed class SharedStylesTests
         host.Measure(new Size(1000, 1000));
         host.Arrange(new Rect(0, 0, 1000, 1000));
 
-        Assert.Equal(0.50, border.Opacity);
+        Assert.Equal(0.0, border.Opacity);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
