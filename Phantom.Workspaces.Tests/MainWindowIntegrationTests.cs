@@ -4130,6 +4130,7 @@ public sealed class MainWindowIntegrationTests
 
         // NavigateBack once — lands back on pane A's tab.
         viewModel.NavigateBackCommand.Execute(null);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
         var documentDockAfterBack = GetDocumentDock(viewModel);
         Assert.Equal("adc-nav-guard-tab-a", documentDockAfterBack?.ActiveDockable?.Id);
@@ -4140,6 +4141,7 @@ public sealed class MainWindowIntegrationTests
         // ActiveDockableChanged for the outer pane during the first NavigateBack, an
         // extra entry would have been inserted — corrupting history traversal here.
         viewModel.NavigateBackCommand.Execute(null);
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
         Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
         Assert.Equal("adc-nav-guard-tab-b", GetDocumentDock(viewModel)?.ActiveDockable?.Id);
     }
