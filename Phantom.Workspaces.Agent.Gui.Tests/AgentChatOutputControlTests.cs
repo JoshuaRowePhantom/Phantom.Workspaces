@@ -260,6 +260,23 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Fact]
+    public void ThemeVariableResourceKeys_ChatBackground_MapsToThemeSurfaceChatBackground()
+    {
+        var keys = GetThemeVariableResourceKeys();
+
+        Assert.Equal("Theme.Surface.Chat.Background", keys["--chat-background"]);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DarkMode_ChatBackgroundIsTerminalBackground()
+    {
+        var html = ReadShellHtml();
+
+        Assert.Contains("--terminal-background:   #000000;", html, StringComparison.Ordinal);
+        Assert.Contains("--chat-background:          var(--terminal-background);", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InjectThemeIntoHtml_EmptyVariables_InjectsEmptyStyleBeforeHeadClose()
     {
         var html = "<html><head><title>x</title></head><body></body></html>";

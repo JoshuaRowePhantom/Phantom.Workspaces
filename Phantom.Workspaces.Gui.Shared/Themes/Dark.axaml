@@ -4,6 +4,7 @@
     
     <!-- Entity pane surfaces -->
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#1E1E1E</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.Chat.Background">#000000</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#2A2A2A</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#242424</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#343434</SolidColorBrush>

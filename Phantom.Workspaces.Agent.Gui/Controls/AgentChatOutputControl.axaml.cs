@@ -28,7 +28,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private static readonly IReadOnlyDictionary<string, string> ThemeVariableResourceKeys =
         new Dictionary<string, string>
         {
-            ["--chat-background"] = "Theme.Surface.EntityPane.Background",
+            ["--chat-background"] = "Theme.Surface.Chat.Background",
             ["--chat-foreground"] = "Theme.Class.normal.Foreground",
             ["--chat-role"] = "Theme.Class.accent.Foreground",
             ["--chat-user"] = "Theme.Class.accent.Foreground",
