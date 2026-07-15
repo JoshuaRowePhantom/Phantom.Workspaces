@@ -9,26 +9,7 @@
                x:Class="Phantom.Workspaces.Templates.WorkspaceDataTemplates">
     <TreeDataTemplate DataType="vm:EntityListNodeViewModel"
                       ItemsSource="{Binding Children}">
-        <Panel>
-            <Border Classes="entity-card-tree-parent-bar"
-                    BorderBrush="{Binding ParentColorBrush}"
-                    IsVisible="{Binding HasParent}">
-                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
-                    <Border Width="4"
-                            Classes="entity-card-tree-type-bar"
-                            Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}" />
-                    <entityControls:EntityCardControl Grid.Column="1" DataContext="{Binding Card}" />
-                </Grid>
-            </Border>
-            <Grid ColumnDefinitions="Auto,*"
-                  ColumnSpacing="6"
-                  IsVisible="{Binding !HasParent}">
-                <Border Width="4"
-                        Classes="entity-card-tree-type-bar"
-                        Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}" />
-                <entityControls:EntityCardControl Grid.Column="1" DataContext="{Binding Card}" />
-            </Grid>
-        </Panel>
+        <entityControls:EntityCardControl DataContext="{Binding Card}" />
     </TreeDataTemplate>
 
     <DataTemplate DataType="vm:EntityListItemViewModel">

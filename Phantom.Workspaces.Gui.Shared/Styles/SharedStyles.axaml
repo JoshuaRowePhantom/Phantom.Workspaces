@@ -85,6 +85,9 @@
         <Setter Property="CornerRadius" Value="6" />
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.Background}" />
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="HorizontalAlignment" Value="Left" />
+        <Setter Property="MaxWidth" Value="760" />
+        <Setter Property="ClipToBounds" Value="True" />
     </Style>
     <Style Selector="Border.entity-card:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.HoverBackground}" />
@@ -171,8 +174,8 @@
     </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar">
         <Setter Property="CornerRadius" Value="2" />
-        <Setter Property="VerticalAlignment" Value="Top" />
-        <Setter Property="Height" Value="42" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="Margin" Value="0,0,8,0" />
     </Style>
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
         <Setter Property="Template">
