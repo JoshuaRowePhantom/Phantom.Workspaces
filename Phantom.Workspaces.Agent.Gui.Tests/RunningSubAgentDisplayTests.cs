@@ -101,6 +101,53 @@ public sealed class RunningSubAgentDisplayTests
     }
 
     [Fact]
+    public void RecentActivity_OnReplace_UpdatesExistingEntry_NotAppends()
+    {
+        var runningItems = CreateRunningItems();
+        using var sut = new RunningSubAgentDisplay(runningItems);
+
+        var item = CreateRunningItem(runningItems);
+        item.Items.Add(TextHistoryItem("first"));
+        item.Items[0] = TextHistoryItem("first updated");
+
+        var line = Assert.Single(sut.RecentActivity);
+        Assert.Equal("first updated", line.Text);
+    }
+
+    [Fact]
+    public void RecentActivity_StreamingTokens_ShowsOnlyOneEntryPerMessage()
+    {
+        var runningItems = CreateRunningItems();
+        using var sut = new RunningSubAgentDisplay(runningItems);
+
+        var item = CreateRunningItem(runningItems);
+        item.Items.Add(TextHistoryItem("a"));
+        item.Items[0] = TextHistoryItem("ab");
+        item.Items[0] = TextHistoryItem("abc");
+        item.Items[0] = TextHistoryItem("abcd");
+
+        var line = Assert.Single(sut.RecentActivity);
+        Assert.Equal("abcd", line.Text);
+    }
+
+    [Fact]
+    public void SubscribeToRunningItem_AfterSetItem_SingleHandlerActive()
+    {
+        var runningItems = CreateRunningItems();
+        var item = CreateRunningItem(runningItems);
+        using var sut = new RunningSubAgentDisplay(runningItems);
+
+        var fired = 0;
+        sut.ActivityChanged += (_, _) => fired++;
+
+        runningItems.SetItem(0, item);
+        item.Items.Add(TextHistoryItem("hello"));
+
+        Assert.Equal(1, fired);
+        Assert.Single(sut.RecentActivity);
+    }
+
+    [Fact]
     public void ActivityChanged_FiresWhenActivityLineAdded()
     {
         var runningItems = CreateRunningItems();

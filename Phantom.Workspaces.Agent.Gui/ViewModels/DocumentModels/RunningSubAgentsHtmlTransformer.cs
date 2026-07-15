@@ -214,13 +214,22 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     /// Renders a single activity line as HTML. Exposed as <see langword="internal"/> for unit tests.
     /// </summary>
     internal static string RenderActivityLine(SubAgentActivityLine line)
-        => line.Kind switch
+    {
+        var text = TruncateToSingleLine(line.Text);
+        return line.Kind switch
         {
-            SubAgentActivityKind.ToolCall => "📖 " + ChatOutputHtmlRenderer.HtmlEscape(line.Text),
-            SubAgentActivityKind.AgentText => "💬 " + ChatOutputHtmlRenderer.HtmlEscape(line.Text),
-            SubAgentActivityKind.SubAgent => "⟳ " + ChatOutputHtmlRenderer.HtmlEscape(line.Text),
-            _ => ChatOutputHtmlRenderer.HtmlEscape(line.Text),
+            SubAgentActivityKind.ToolCall => "📖 " + ChatOutputHtmlRenderer.HtmlEscape(text),
+            SubAgentActivityKind.AgentText => "💬 " + ChatOutputHtmlRenderer.HtmlEscape(text),
+            SubAgentActivityKind.SubAgent => "⟳ " + ChatOutputHtmlRenderer.HtmlEscape(text),
+            _ => ChatOutputHtmlRenderer.HtmlEscape(text),
         };
+    }
+
+    private static string TruncateToSingleLine(string text)
+    {
+        var index = text.IndexOfAny(['\r', '\n']);
+        return index >= 0 ? text[..index] : text;
+    }
 
     public void Dispose()
     {

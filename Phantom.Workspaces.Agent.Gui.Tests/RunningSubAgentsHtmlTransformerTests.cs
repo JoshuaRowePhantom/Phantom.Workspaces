@@ -143,6 +143,16 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     }
 
     [Fact]
+    public void ActivityLine_MultiLineContent_TruncatedToFirstLine()
+    {
+        var line = new SubAgentActivityLine(SubAgentActivityKind.AgentText, "first line\r\nsecond line");
+        var rendered = RunningSubAgentsHtmlTransformer.RenderActivityLine(line);
+
+        Assert.Contains("first line", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("second line", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunningSubAgentsHtmlTransformer_MultipleAgents_EachRenderedAsSiblingRow()
     {
         var a1 = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
