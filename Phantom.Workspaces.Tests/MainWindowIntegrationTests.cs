@@ -2426,7 +2426,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
-        => new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+        => TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry());
 
     // ── Float-tab disposal guard (issue #635) ─────────────────────────────────
 

@@ -25,6 +25,7 @@ public sealed class TrustProfileResolutionTests
                 }
               ],
               "https-proxy-policy": { "mode": "required", "proxy-url": "https://proxy:8443" },
+              "default-execution-target": { "type": "user-computer-profile", "entity-id": "11111111-1111-1111-1111-111111111111" },
               "allowed-mcp-tool-call-schemas": [
                 { "properties": { "toolName": { "const": "read_file" } } }
               ]
@@ -42,6 +43,7 @@ public sealed class TrustProfileResolutionTests
         Assert.Single(parsed.Definition.MountPoints);
         Assert.Equal(TrustMountAccessMode.ReadWrite, parsed.Definition.MountPoints[0].AccessMode);
         Assert.Equal(TrustHttpsProxyMode.Required, parsed.Definition.HttpsProxyPolicy.Mode);
+        Assert.Equal("user-computer-profile", parsed.Definition.DefaultExecutionTarget?.GetProperty("type").GetString());
         Assert.Single(parsed.Definition.AllowedMcpToolCallSchemas);
     }
 
@@ -68,6 +70,7 @@ public sealed class TrustProfileResolutionTests
         Assert.Empty(parsed.Definition.HostingWorkspacesClientInstances);
         Assert.Equal(TrustNetworkAccessPolicy.NoNetwork, parsed.Definition.NetworkAccessPolicy);
         Assert.Equal(TrustHttpsProxyMode.Disabled, parsed.Definition.HttpsProxyPolicy.Mode);
+        Assert.Null(parsed.Definition.DefaultExecutionTarget);
         Assert.Empty(parsed.Definition.MountPoints);
         Assert.Empty(parsed.Definition.AllowedMcpToolCallSchemas);
     }

@@ -108,7 +108,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     private static StartAgentSessionFromEntityShortcutHandler CreateHandler()
     {
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var trustedExecutorSelector = new TrustedExecutorSelector([new LocalTrustedExecutor()]);
+        var trustedExecutorSelector = TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry());
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
             trustedExecutorSelector,

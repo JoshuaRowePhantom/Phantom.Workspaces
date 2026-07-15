@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Phantom.Workspaces.Llm.Trust;
@@ -100,6 +101,9 @@ public sealed record TrustProfileDefinition
     /// <summary>Container mount points granted by this profile.</summary>
     public IReadOnlyList<TrustMountPoint> MountPoints { get; init; } = [];
 
+    /// <summary>Connection descriptor used as this profile's default execution target.</summary>
+    public JsonElement? DefaultExecutionTarget { get; init; }
+
     /// <summary>Container network access policy.</summary>
     public TrustNetworkAccessPolicy NetworkAccessPolicy { get; init; } = TrustNetworkAccessPolicy.NoNetwork;
 
@@ -134,6 +138,9 @@ public sealed record TrustProfile
 
     /// <summary>Effective container mount points.</summary>
     public IReadOnlyList<TrustMountPoint> MountPoints { get; init; } = [];
+
+    /// <summary>Effective default execution target connection descriptor.</summary>
+    public JsonElement? DefaultExecutionTarget { get; init; }
 
     /// <summary>Effective container network access policy.</summary>
     public TrustNetworkAccessPolicy NetworkAccessPolicy { get; init; } = TrustNetworkAccessPolicy.NoNetwork;
