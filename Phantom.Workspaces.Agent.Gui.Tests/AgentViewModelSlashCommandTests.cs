@@ -71,8 +71,12 @@ public sealed class AgentViewModelSlashCommandTests
 
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
-        // Act — run /help command
-        await viewModel.RunSlashCommandAsync("/help");
+        // Act — run /help command via the SlashCommandInterceptor
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/help");
+
+        // Wait for the command to enqueue the help item (runs on foreground scheduler)
+        await Task.Delay(500, TestContext.Current.CancellationToken); // Give the async operation time to complete
 
         // Assert — history should contain an item with HelpChatRole
         var helpItem = chat.History.FirstOrDefault(item => item.Role == AgentChatHistoryItem.HelpChatRole);
@@ -90,10 +94,16 @@ public sealed class AgentViewModelSlashCommandTests
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
+        // Register a test command that returns a diagnostic status message
+        ((SlashCommandRegistry)chat.SlashCommands).Register(new FakeDiagnosticCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
-        // Act — run /toggle command (or any other non-help command)
-        await viewModel.RunSlashCommandAsync("/toggle");
+        // Act — run /testdiag command via the SlashCommandInterceptor
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/testdiag");
+
+        // Wait for the command to enqueue the diagnostic item (runs on foreground scheduler)
+        await Task.Delay(500, TestContext.Current.CancellationToken); // Give the async operation time to complete
 
         // Assert — history should contain an item with DiagnosticChatRole, not HelpChatRole
         var diagnosticItem = chat.History.FirstOrDefault(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole);
@@ -109,6 +119,29 @@ public sealed class AgentViewModelSlashCommandTests
           "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
         }
         """);
+
+    /// <summary>
+    /// Fake handler that returns a diagnostic status message (non-help role).
+    /// </summary>
+    private sealed class FakeDiagnosticCommandHandler : ISlashCommandHandler
+    {
+        public string Name => "testdiag";
+        public string Description => "Test diagnostic command.";
+        public string? Usage => null;
+        public string? LongDescription => null;
+
+        public Task<SlashCommandResult> ExecuteAsync(
+            SlashCommandContext context,
+            string arguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult(new SlashCommandResult { StatusMessage = "Test diagnostic message" });
+
+        public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
+            SlashCommandContext context,
+            string partialArguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
+    }
 
     /// <summary>
     /// Fake handler that returns completions in deliberately unsorted order

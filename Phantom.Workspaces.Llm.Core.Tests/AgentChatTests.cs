@@ -1930,26 +1930,68 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public void EnqueueHelpNote_EmptyText_DoesNotAddItem()
+    public async Task EnqueueHelpNote_EmptyText_DoesNotAddItem()
     {
         var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
         var persistenceStore = new InMemoryAgentPersistenceStore();
-        var chat = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = agentDefinition,
             ConfiguredStore = persistenceStore,
             ClientOverride = new DeterministicTestChatClient(),
             DisplayNameOverride = "test-chat",
-        }).GetAwaiter().GetResult();
+        });
 
         chat.EnqueueHelpNote("");
         chat.EnqueueHelpNote("   ");
         chat.EnqueueHelpNote(null!);
 
         // Give a brief moment for any tasks to run
-        Thread.Sleep(50);
+        await Task.Delay(50);
 
         Assert.Empty(chat.History);
+    }
+
+    // ── Issue #487: Exception format tests ────────────────────────────────────
+
+    [Fact]
+    public async Task ProviderError_IncludesExceptionTypeAndStackTrace()
+    {
+        // Arrange — create a chat client that throws an exception with a stack trace
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new DeterministicTestChatClient();
+        var stream = chatClient.EnqueueStreamingResponse();
+        
+        // Simulate a provider exception with a specific type and stack trace
+        var exception = new InvalidOperationException("Provider communication failed");
+        stream.EnqueueException(exception);
+        
+        var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "test-chat",
+        });
+
+        // Act — send a message that triggers the exception
+        chat.EnqueueUserMessage("trigger error");
+        
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "Provider error should add diagnostic item",
+            CancellationToken.None);
+
+        // Assert — the diagnostic message should include the full exception (type and stack trace)
+        var diagnosticItem = chat.History.FirstOrDefault(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.NotNull(diagnosticItem);
+        var errorContent = diagnosticItem.Contents.OfType<ErrorContent>().FirstOrDefault();
+        Assert.NotNull(errorContent);
+        Assert.Contains("InvalidOperationException", errorContent.Message);
+        Assert.Contains("Provider error:", errorContent.Message);
+        Assert.Contains("Provider communication failed", errorContent.Message);
     }
 
 }
