@@ -135,6 +135,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         string? title = null,
         string? dockRegion = null)
     {
+        string? agentSessionId = null;
+        if (agentSessionEntity.Data is System.Text.Json.JsonElement entityDataElement
+            && entityDataElement.TryGetProperty("agent-session-id", out var agentSidEl)
+            && agentSidEl.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            agentSessionId = agentSidEl.GetString();
+        }
+
         var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
             Id = tabId ?? agentSessionEntity.EntityId.ToString(),
@@ -142,6 +150,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             DockRegion = dockRegion ?? "full",
             Entity = agentSessionEntity,
             NotificationService = mainWindowViewModel.NotificationService,
+            AgentSessionId = agentSessionId,
         };
 
         var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
@@ -247,6 +256,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             DockRegion = "full",
             Entity = agentSessionEntity,
             NotificationService = mainWindowViewModel.NotificationService,
+            AgentSessionId = agentChat.AgentSessionId,
         };
         tab.SetReady(agent, loggerFactory);
         return tab;
