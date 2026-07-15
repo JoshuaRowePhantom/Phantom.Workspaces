@@ -92,6 +92,10 @@ public sealed class ChatClientOverTransport : IChatClient
         }
 
         this.disposed = true;
+        // IChatClient only exposes synchronous Dispose(); blocking here is the only way to ensure
+        // the async message-channel close is sent before callers treat the adapter as disposed.
+        // Channel disposal uses ConfigureAwait(false) or completes synchronously, so this cannot
+        // deadlock on a captured synchronization context.
         this.channel?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         this.channel = null;
     }
