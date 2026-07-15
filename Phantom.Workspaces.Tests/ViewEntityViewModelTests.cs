@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
@@ -29,6 +30,22 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
     }
 
     [Fact]
+    public void HasChildren_DefaultsToFalse()
+    {
+        var viewModel = this.CreateViewModel();
+
+        Assert.False(viewModel.HasChildren);
+    }
+
+    [Fact]
+    public void NotHasChildren_DefaultsToTrue()
+    {
+        var viewModel = this.CreateViewModel();
+
+        Assert.True(viewModel.NotHasChildren);
+    }
+
+    [Fact]
     public void HasTraversedChildren_CanBeSetToTrue()
     {
         var viewModel = this.CreateViewModel();
@@ -36,6 +53,31 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         viewModel.HasTraversedChildren = true;
 
         Assert.True(viewModel.HasTraversedChildren);
+    }
+
+    [Fact]
+    public void HasChildren_IsTrueAfterAddChild()
+    {
+        var parent = this.CreateViewModel();
+        var child = this.CreateViewModel();
+
+        parent.AddChild(child);
+
+        Assert.True(parent.HasChildren);
+        Assert.False(parent.NotHasChildren);
+    }
+
+    [Fact]
+    public void HasChildren_RaisesPropertyChanged_WhenHasTraversedChildrenChanges()
+    {
+        var viewModel = this.CreateViewModel();
+        var changed = new List<string?>();
+        viewModel.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        viewModel.HasTraversedChildren = true;
+
+        Assert.Contains(nameof(ViewEntityViewModel.HasChildren), changed);
+        Assert.Contains(nameof(ViewEntityViewModel.NotHasChildren), changed);
     }
 
     [Fact]
@@ -121,6 +163,7 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         Assert.Single(parent.Children);
         Assert.Same(child, parent.Children[0]);
         Assert.True(parent.HasTraversedChildren);
+        Assert.True(parent.HasChildren);
         Assert.True(child.HasParent);
     }
 

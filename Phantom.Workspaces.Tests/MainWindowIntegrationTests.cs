@@ -538,9 +538,12 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(workspaceVm);
         Assert.False(workspaceVm!.IsExpanded);
 
-        // Traversed child must NOT appear in the flat population when disposition is "collapsed".
-        Assert.DoesNotContain(
+        // Collapsed traversals keep children populated so expand/collapse only toggles visibility.
+        Assert.Contains(
             viewModel.CurrentViewPopulation.Entities,
+            e => e.Entity.EntityId == relatedId);
+        Assert.Contains(
+            workspaceVm.Children,
             e => e.Entity.EntityId == relatedId);
     }
 
@@ -6344,7 +6347,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowViewModel_ToggleExpand_HidesAndShowsChildren()
+    public async Task MainWindowViewModel_ToggleExpand_DoesNotRebuildPopulation()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -6423,29 +6426,31 @@ public sealed class MainWindowIntegrationTests
         viewModel.SelectedTopLevelView = workspacesView;
         await (Task)applyMethod!.Invoke(viewModel, [])!;
 
-        // Initially both workspace and child are visible.
+        // Initially both workspace and child are populated.
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
 
-        // Collapse the workspace: child should disappear.
         var workspaceVm = Assert.Single(
             viewModel.CurrentViewPopulation.Entities,
             vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
+        var originalPopulation = viewModel.CurrentViewPopulation;
+        var originalChild = Assert.Single(workspaceVm.Children);
+
         workspaceVm.ToggleExpandCommand.Execute(null);
-        await (Task)applyMethod!.Invoke(viewModel, [])!;
 
-        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
-        Assert.DoesNotContain(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
-
-        // Re-expand the workspace: child should reappear.
-        var collapsedWorkspaceVm = Assert.Single(
-            viewModel.CurrentViewPopulation.Entities,
-            vm => string.Equals(vm.EntityId, workspaceId.ToString(), StringComparison.OrdinalIgnoreCase));
-        collapsedWorkspaceVm.ToggleExpandCommand.Execute(null);
-        await (Task)applyMethod!.Invoke(viewModel, [])!;
-
+        Assert.Same(originalPopulation, viewModel.CurrentViewPopulation);
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
         Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
+        Assert.Same(originalChild, Assert.Single(workspaceVm.Children));
+        Assert.False(workspaceVm.IsExpanded);
+
+        workspaceVm.ToggleExpandCommand.Execute(null);
+
+        Assert.Same(originalPopulation, viewModel.CurrentViewPopulation);
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == workspaceId.ToString());
+        Assert.Contains(viewModel.CurrentViewPopulation.Entities, vm => vm.EntityId == childId.ToString());
+        Assert.Same(originalChild, Assert.Single(workspaceVm.Children));
+        Assert.True(workspaceVm.IsExpanded);
     }
 
     private static async Task<AgentChat> CreateEchoAgentChatAsync()

@@ -74,6 +74,7 @@
 
     <Style Selector="Grid.entity-pane">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+        <Setter Property="ClipToBounds" Value="True" />
     </Style>
     <Style Selector="Grid.entity-pane:pointerover">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.HoverBackground}" />
@@ -172,10 +173,6 @@
         <Setter Property="CornerRadius" Value="2" />
         <Setter Property="VerticalAlignment" Value="Stretch" />
     </Style>
-    <Style Selector="TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-parent-bar">
-        <Setter Property="BorderThickness" Value="1,0,0,0" />
-        <Setter Property="Padding" Value="8,0,0,0" />
-    </Style>
     <Style Selector="TreeView.entity-card-tree TreeViewItem">
         <Setter Property="Template">
             <ControlTemplate>
@@ -193,19 +190,23 @@
                     <Border IsVisible="{Binding HasChildren}"
                             Classes="entity-card-expand-section branch-footer">
                         <Button Classes="entity-card-expand-button"
-                                Content="▾"
+                                Content="{Binding ExpandArrow}"
                                 HorizontalAlignment="Stretch"
                                 HorizontalContentAlignment="Center"
                                 Command="{Binding ToggleExpandCommand}" />
                     </Border>
-                    <ItemsPresenter Margin="20,0,0,0"
-                                    IsVisible="{Binding IsExpanded}" />
+                    <Grid ColumnDefinitions="2,*"
+                          IsVisible="{Binding HasChildren}">
+                        <Border Grid.Column="0"
+                                Background="{Binding ChildRailBrush}"
+                                VerticalAlignment="Stretch" />
+                        <ItemsPresenter Grid.Column="1"
+                                        Margin="18,0,0,0"
+                                        IsVisible="{Binding IsExpanded}" />
+                    </Grid>
                 </StackPanel>
             </ControlTemplate>
         </Setter>
-    </Style>
-    <Style Selector="TreeView.entity-card-tree TreeViewItem:expanded Button.entity-card-expand-button">
-        <Setter Property="Content" Value="▴" />
     </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
         <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>

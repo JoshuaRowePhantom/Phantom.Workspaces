@@ -1394,7 +1394,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             fieldEditorFactory: this.fieldEditorFactory);
         await vm.InitializeAsync();
 
-        // Persist expansion state changes and trigger a view rebuild on toggle.
+        // Persist expansion state changes; the tree template shows/hides cached children locally.
         var entityIdStr = entity.EntityId.ToString();
         vm.PropertyChanged += (sender, e) =>
         {
@@ -1402,7 +1402,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 && sender is ViewEntityViewModel toggled)
             {
                 this.expandedEntityIds[entityIdStr] = toggled.IsExpanded;
-                _ = this.ApplySelectedViewAsync();
             }
         };
 
@@ -1475,7 +1474,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        if (vm is null || vm.IsExpanded)
+        if (vm is null || node.Children.Count > 0)
         {
             foreach (var child in node.Children)
             {

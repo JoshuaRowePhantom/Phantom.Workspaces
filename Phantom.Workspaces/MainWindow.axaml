@@ -168,24 +168,20 @@
                     </StackPanel>
                 </Border>
 
-                <TreeView Grid.Row="1"
-                          Classes="entity-card-tree entity-card-tree-entity"
-                          ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
-                    <TreeView.ItemTemplate>
-                        <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
-                                          ItemsSource="{Binding Children}">
-                            <Panel>
-                                <Border Classes="entity-card-tree-parent-bar"
-                                        BorderBrush="{Binding ParentColorBrush}"
-                                        IsVisible="{Binding HasParent}">
-                                    <ContentControl Content="{Binding EntityCardNode}" />
-                                </Border>
-                                <ContentControl Content="{Binding EntityCardNode}"
-                                                IsVisible="{Binding !HasParent}" />
-                            </Panel>
-                        </TreeDataTemplate>
-                    </TreeView.ItemTemplate>
-                </TreeView>
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Visible"
+                              AllowAutoHide="False">
+                    <TreeView Classes="entity-card-tree entity-card-tree-entity"
+                              ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
+                        <TreeView.ItemTemplate>
+                            <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
+                                              ItemsSource="{Binding Children}">
+                                <ContentControl Content="{Binding EntityCardNode}" />
+                            </TreeDataTemplate>
+                        </TreeView.ItemTemplate>
+                    </TreeView>
+                </ScrollViewer>
             </Grid>
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />

@@ -198,7 +198,11 @@ public sealed class MainWindowAxamlTests
         // ItemsPresenter visibility to IsExpanded; otherwise collapsing a tool node has no
         // effect and the children stay visible.
         Assert.Contains(
-            "<ItemsPresenter Margin=\"20,0,0,0\"",
+            "<ItemsPresenter Grid.Column=\"1\"",
+            sharedStylesContent,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Margin=\"18,0,0,0\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -605,7 +609,7 @@ public sealed class MainWindowAxamlTests
         var darkContent = ReadThemeFile("Dark.axaml");
 
         Assert.Contains(
-            "Theme.Surface.EntityPane.Background\">#1E1E1E",
+            "Theme.Surface.EntityPane.Background\">#000000",
             darkContent,
             StringComparison.Ordinal);
     }
