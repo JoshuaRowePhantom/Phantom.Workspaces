@@ -380,6 +380,19 @@ public sealed class ToolVisualizationTests
         Assert.Contains("<details", html, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ChatOutputHtmlRenderer_FunctionCallContent_PrettyPrintsArgumentsAsKeyValue()
+    {
+        var call = new FunctionCallContent("call-1", "my_tool",
+            new Dictionary<string, object?> { ["description"] = "read file", ["path"] = "README.md" });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("class=\"tool-json-key\">description</span>: <span class=\"tool-json-plaintext\">read file</span>", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-json-key\">       path</span>: <span class=\"tool-json-plaintext\">README.md</span>", html, StringComparison.Ordinal);
+    }
+
     // --- Helpers ---
 
     private static AgentChat CreateChat()

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Xunit;
@@ -389,6 +390,102 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.NotNull(html);
         Assert.Contains("tool call: powershell", html, StringComparison.Ordinal);
         Assert.DoesNotContain("tool call: powershell:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DetectStringType_JsonObject_ReturnsJson()
+    {
+        Assert.Equal(StringContentType.Json, ChatOutputHtmlRenderer.DetectStringType("""{"a":1}"""));
+    }
+
+    [Fact]
+    public void DetectStringType_MarkdownWithHeading_ReturnsMarkdown()
+    {
+        Assert.Equal(StringContentType.Markdown, ChatOutputHtmlRenderer.DetectStringType("## Heading\nBody"));
+    }
+
+    [Fact]
+    public void DetectStringType_MultilineIndentedCode_ReturnsCode()
+    {
+        Assert.Equal(StringContentType.Code, ChatOutputHtmlRenderer.DetectStringType("if (true) {\n    return value;\n}"));
+    }
+
+    [Fact]
+    public void DetectStringType_SimpleSentence_ReturnsPlaintext()
+    {
+        Assert.Equal(StringContentType.Plaintext, ChatOutputHtmlRenderer.DetectStringType("simple sentence"));
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_KeysRightAligned()
+    {
+        using var document = JsonDocument.Parse("""{"a":1,"longer":2}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("<span class=\"tool-json-key\">     a</span>: 1", html, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"tool-json-key\">longer</span>: 2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_MarkdownStringValue_RenderedAsMarkdown()
+    {
+        using var document = JsonDocument.Parse("""{"prompt":"## Heading\nBody"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("tool-json-markdown", html, StringComparison.Ordinal);
+        Assert.Contains("<h2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_JsonStringValue_RenderedRecursively()
+    {
+        using var document = JsonDocument.Parse("""{"payload":"{\"child\":1}"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("child</span>: 1", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Object_PlaintextMultiline_ContinuationLinesIndented()
+    {
+        using var document = JsonDocument.Parse("""{"prompt":"first\nsecond"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("first\n        second", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_Array_EachElementOnOwnLine()
+    {
+        using var document = JsonDocument.Parse("""["one","two"]""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("- <span class=\"tool-json-plaintext\">one</span>", html, StringComparison.Ordinal);
+        Assert.Contains("\n- <span class=\"tool-json-plaintext\">two</span>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_UnicodeEscapedString_DecodedBeforeRender()
+    {
+        using var document = JsonDocument.Parse("""{"text":"\u0060code\u0060"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("`code`", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithJsonArguments_OutputContainsToolJsonKeyClass()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", """{"arg":"val"}""", null);
+
+        Assert.Contains("class=\"tool-json-key\"", html, StringComparison.Ordinal);
+        Assert.Contains("arg</span>: <span class=\"tool-json-plaintext\">val</span>", html, StringComparison.Ordinal);
     }
 
     [Fact]

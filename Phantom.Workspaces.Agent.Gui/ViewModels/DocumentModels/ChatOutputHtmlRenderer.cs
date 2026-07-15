@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using Markdig;
@@ -12,6 +13,14 @@ using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
+
+internal enum StringContentType
+{
+    Json,
+    Markdown,
+    Code,
+    Plaintext,
+}
 
 /// <summary>
 /// Pure HTML generation for chat output. Produces the DOM shape consumed by the browser-hosted
@@ -145,7 +154,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
-            builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(callJson)).Append("</pre>");
+            builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(RenderToolPayload(callJson)).Append("</pre>");
         }
 
         builder.Append("</details>");
@@ -157,7 +166,7 @@ internal static class ChatOutputHtmlRenderer
             builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
-                builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(resultJson)).Append("</pre>");
+                builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(RenderToolPayload(resultJson)).Append("</pre>");
             }
 
             builder.Append("</details>");
@@ -350,7 +359,7 @@ internal static class ChatOutputHtmlRenderer
 
                 var description = call.Arguments is not null && call.Arguments.TryGetValue("description", out var descObj) ? descObj as string : null;
                 var label = string.IsNullOrEmpty(description) ? $"tool call: {call.Name}" : $"tool call: {call.Name}: {description}";
-                return RenderCollapsible(contentId, "chat-tool", label, PrettyJson(call.Arguments), SerializeContentJson(call));
+                return RenderCollapsible(contentId, "chat-tool", label, RenderToolPayload(call.Arguments), SerializeContentJson(call), bodyIsHtml: true);
             }
 
             case FunctionResultContent result:
@@ -366,7 +375,7 @@ internal static class ChatOutputHtmlRenderer
                     }
                 }
 
-                return RenderCollapsible(contentId, "chat-tool", $"tool result: {result.CallId}", PrettyJson(result.Result), SerializeContentJson(result));
+                return RenderCollapsible(contentId, "chat-tool", $"tool result: {result.CallId}", RenderToolPayload(result.Result), SerializeContentJson(result), bodyIsHtml: true);
             }
 
             case DataContent data:
@@ -438,6 +447,162 @@ internal static class ChatOutputHtmlRenderer
         return builder.ToString();
     }
 
+    internal static StringContentType DetectStringType(string value)
+    {
+        var trimmed = value.TrimStart();
+        if ((trimmed.StartsWith('{') || trimmed.StartsWith('['))
+            && TryParseJson(value, out _))
+        {
+            return StringContentType.Json;
+        }
+
+        if (trimmed.Contains("## ", StringComparison.Ordinal)
+            || trimmed.Contains("**", StringComparison.Ordinal)
+            || trimmed.Contains("```", StringComparison.Ordinal)
+            || trimmed.Contains("\n- ", StringComparison.Ordinal)
+            || trimmed.Contains("\n> ", StringComparison.Ordinal)
+            || trimmed.Contains("---", StringComparison.Ordinal))
+        {
+            return StringContentType.Markdown;
+        }
+
+        if (value.Contains('\n')
+            && (value.Contains("    ", StringComparison.Ordinal)
+                || value.Contains('\t')
+                || value.Contains('{', StringComparison.Ordinal)
+                || value.Contains("=>", StringComparison.Ordinal)
+                || value.Contains("return ", StringComparison.Ordinal)
+                || value.Contains("def ", StringComparison.Ordinal)))
+        {
+            return StringContentType.Code;
+        }
+
+        return StringContentType.Plaintext;
+    }
+
+    internal static string RenderJsonValue(JsonElement value, int indentLevel)
+        => RenderJsonValue(value, indentLevel, continuationIndent: indentLevel * 2);
+
+    private static string RenderJsonValue(JsonElement value, int indentLevel, int continuationIndent)
+    {
+        return value.ValueKind switch
+        {
+            JsonValueKind.Object => RenderJsonObject(value, indentLevel),
+            JsonValueKind.Array => RenderJsonArray(value, indentLevel),
+            JsonValueKind.String => RenderStringValue(value.GetString() ?? string.Empty, indentLevel, continuationIndent),
+            JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => HtmlEscape(value.ToString()),
+            JsonValueKind.Null => "null",
+            _ => HtmlEscape(value.ToString()),
+        };
+    }
+
+    private static string RenderJsonObject(JsonElement obj, int indentLevel)
+    {
+        var properties = obj.EnumerateObject().ToList();
+        if (properties.Count == 0)
+        {
+            return "{}";
+        }
+
+        var indent = new string(' ', indentLevel * 2);
+        var maxKeyLength = properties.Max(property => property.Name.Length);
+        var valueColumn = indent.Length + maxKeyLength + 2;
+        var builder = new StringBuilder();
+
+        foreach (var property in properties)
+        {
+            builder.Append(indent);
+            builder.Append("<span class=\"tool-json-key\">")
+                .Append(HtmlEscape(property.Name.PadLeft(maxKeyLength)))
+                .Append("</span>: ");
+
+            var renderedValue = RenderJsonValue(property.Value, indentLevel + 1, valueColumn);
+            if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
+                && renderedValue.Length > 0
+                && renderedValue[0] != '\n')
+            {
+                builder.Append('\n');
+            }
+
+            builder.Append(renderedValue);
+            if (!renderedValue.EndsWith('\n'))
+            {
+                builder.Append('\n');
+            }
+        }
+
+        return builder.ToString().TrimEnd('\n');
+    }
+
+    private static string RenderJsonArray(JsonElement array, int indentLevel)
+    {
+        var values = array.EnumerateArray().ToList();
+        if (values.Count == 0)
+        {
+            return "[]";
+        }
+
+        var indent = new string(' ', indentLevel * 2);
+        var builder = new StringBuilder();
+        foreach (var value in values)
+        {
+            builder.Append(indent).Append("- ");
+            var renderedValue = RenderJsonValue(value, indentLevel + 1, indent.Length + 2);
+            if (value.ValueKind is JsonValueKind.Object or JsonValueKind.Array
+                && renderedValue.Length > 0
+                && renderedValue[0] != '\n')
+            {
+                builder.Append('\n');
+            }
+
+            builder.Append(renderedValue);
+            if (!renderedValue.EndsWith('\n'))
+            {
+                builder.Append('\n');
+            }
+        }
+
+        return builder.ToString().TrimEnd('\n');
+    }
+
+    private static string RenderStringValue(string value, int indentLevel, int continuationIndent)
+    {
+        switch (DetectStringType(value))
+        {
+            case StringContentType.Json:
+                using (var document = JsonDocument.Parse(value))
+                {
+                    return RenderJsonValue(document.RootElement, indentLevel, continuationIndent);
+                }
+            case StringContentType.Markdown:
+                return "<span class=\"tool-json-markdown\">" + MarkdownToHtml(value) + "</span>";
+            case StringContentType.Code:
+                return "<code class=\"tool-json-code\">" + HtmlEscape(value) + "</code>";
+            default:
+                return "<span class=\"tool-json-plaintext\">" + RenderPlaintextWithContinuation(value, continuationIndent) + "</span>";
+        }
+    }
+
+    private static string RenderPlaintextWithContinuation(string value, int continuationIndent)
+    {
+        var normalized = value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
+        var lines = normalized.Split('\n');
+        if (lines.Length == 1)
+        {
+            return HtmlEscape(value);
+        }
+
+        var builder = new StringBuilder();
+        builder.Append(HtmlEscape(lines[0]));
+        var continuation = new string(' ', continuationIndent);
+        for (var i = 1; i < lines.Length; i++)
+        {
+            builder.Append('\n').Append(continuation).Append(HtmlEscape(lines[i]));
+        }
+
+        return builder.ToString();
+    }
+
     private static string TextBlock(string contentId, string cssClass, string text, string detailsJson)
         => $"<div class=\"chat-content {cssClass}\" data-copy-target data-details-target=\"{HtmlEscape(detailsJson)}\" data-inspect-target id=\"{contentId}\">{HtmlEscape(text)}</div>";
 
@@ -461,14 +626,20 @@ internal static class ChatOutputHtmlRenderer
         return writer.ToString().TrimEnd('\n', '\r');
     }
 
-    private static string RenderCollapsible(string contentId, string cssClass, string header, string body, string detailsJson)
+    private static string RenderCollapsible(string contentId, string cssClass, string header, string body, string detailsJson, bool bodyIsHtml = false)
     {
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content ").Append(cssClass).Append("\" data-copy-target data-details-target=\"").Append(HtmlEscape(detailsJson)).Append("\" data-inspect-target data-sticky-base-level=\"1\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
-            builder.Append("<pre class=\"chat-collapsible-body\">").Append(HtmlEscape(body)).Append("</pre>");
+            builder.Append("<pre class=\"chat-collapsible-body");
+            if (bodyIsHtml)
+            {
+                builder.Append(" tool-json-value");
+            }
+
+            builder.Append("\">").Append(bodyIsHtml ? body : HtmlEscape(body)).Append("</pre>");
         }
 
         builder.Append("</details>");
@@ -533,6 +704,37 @@ internal static class ChatOutputHtmlRenderer
         }
     }
 
+    private static string RenderToolPayload(object? value)
+    {
+        switch (value)
+        {
+            case null:
+                return string.Empty;
+            case string text:
+                if (TryParseJson(text, out var document))
+                {
+                    using (document)
+                    {
+                        return RenderJsonValue(document!.RootElement, 0);
+                    }
+                }
+
+                return RenderStringValue(text, 0, 0);
+            case JsonElement element:
+                return RenderJsonValue(element, 0);
+            default:
+                try
+                {
+                    var element = JsonSerializer.SerializeToElement(value, PrettyJsonOptions);
+                    return RenderJsonValue(element, 0);
+                }
+                catch (NotSupportedException)
+                {
+                    return HtmlEscape(value.ToString() ?? string.Empty);
+                }
+        }
+    }
+
     private static bool TryPrettyPrintJson(string text, out string pretty)
     {
         try
@@ -544,6 +746,20 @@ internal static class ChatOutputHtmlRenderer
         catch (JsonException)
         {
             pretty = string.Empty;
+            return false;
+        }
+    }
+
+    private static bool TryParseJson(string text, out JsonDocument? document)
+    {
+        try
+        {
+            document = JsonDocument.Parse(text);
+            return true;
+        }
+        catch (JsonException)
+        {
+            document = null;
             return false;
         }
     }
