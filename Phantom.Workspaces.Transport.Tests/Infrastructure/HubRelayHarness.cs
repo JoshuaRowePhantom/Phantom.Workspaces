@@ -76,6 +76,15 @@ internal sealed class HubRelayHarness : IAsyncDisposable
         return transport;
     }
 
+    /// <summary>
+    /// Simulates Machine C crashing by tearing down its registration channel. The relay pump on the
+    /// hub observes the closed executor side and closes Machine B's relayed channel in turn.
+    /// </summary>
+    public async ValueTask CrashExecutorAsync()
+    {
+        await this.ExecutorRegistrationChannel.DisposeAsync().ConfigureAwait(false);
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var disposable in this.owned)
