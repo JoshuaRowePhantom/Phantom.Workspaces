@@ -1,8 +1,10 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Skia;
+using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 using Dock.Avalonia.Themes.Fluent;
 using Phantom.Workspaces.Templates;
@@ -40,6 +42,19 @@ public static class AvaloniaTestAppBuilder
             {
                 Source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/NotificationsStyles.axaml")
             });
+
+            var themeDictionaries = new ResourceDictionary();
+            themeDictionaries.ThemeDictionaries[ThemeVariant.Light] =
+                new ResourceInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
+                {
+                    Source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Themes/Light.axaml")
+                };
+            themeDictionaries.ThemeDictionaries[ThemeVariant.Dark] =
+                new ResourceInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
+                {
+                    Source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Themes/Dark.axaml")
+                };
+            Resources.MergedDictionaries.Add(themeDictionaries);
 
             foreach (var template in new WorkspaceDataTemplates())
             {

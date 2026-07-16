@@ -25,7 +25,7 @@ public sealed class AgentViewModelSlashCommandTests
 
         // Register a fake handler after ConfigureSlashCommands so it is visible in the registry.
         var fakeHandler = new FakeUnsortedCompletionsHandler("fake-cmd");
-        ((SlashCommandRegistry)chat.SlashCommands).Register(fakeHandler);
+        chat.SlashCommands.Register(fakeHandler);
 
         // Act — invoke the completions provider directly with the fake command name.
         var provider = viewModel.InputQueue!.DefaultComposer.SlashCompletionsProviderAsync!;
@@ -95,7 +95,7 @@ public sealed class AgentViewModelSlashCommandTests
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         // Register a test command that returns a diagnostic status message
-        ((SlashCommandRegistry)chat.SlashCommands).Register(new FakeDiagnosticCommandHandler());
+        chat.SlashCommands.Register(new FakeDiagnosticCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
         // Act — run /testdiag command via the SlashCommandInterceptor
@@ -109,6 +109,59 @@ public sealed class AgentViewModelSlashCommandTests
         var diagnosticItem = chat.History.FirstOrDefault(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole);
         Assert.NotNull(diagnosticItem);
         Assert.DoesNotContain(chat.History, item => item.Role == AgentChatHistoryItem.HelpChatRole);
+    }
+
+    [Fact]
+    public async Task RunSlashCommandAsync_TransientResult_RaisesTransientNotification()
+    {
+        // Arrange
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        chat.SlashCommands.Register(new FakeTransientCommandHandler());
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        var notifications = new List<string>();
+        chat.TransientNotification += (_, text) => notifications.Add(text);
+
+        // Act
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/transient-test");
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        // Assert — notification was raised, history was NOT modified
+        Assert.Single(notifications);
+        Assert.Equal("Transient status", notifications[0]);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public async Task RunSlashCommandAsync_ErrorResult_IsNotTransient()
+    {
+        // Arrange
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        chat.SlashCommands.Register(new FakeThrowingCommandHandler());
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        var notifications = new List<string>();
+        chat.TransientNotification += (_, text) => notifications.Add(text);
+
+        // Act — the handler throws, so the result should be persisted (not transient)
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/throw-test");
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+
+        // Assert — error should be persisted to history, NOT a transient notification
+        Assert.Empty(notifications);
+        Assert.NotEmpty(chat.History);
     }
 
     private static AgentDefinition CreateAgentDefinition()
@@ -134,7 +187,7 @@ public sealed class AgentViewModelSlashCommandTests
             SlashCommandContext context,
             string arguments,
             CancellationToken cancellationToken)
-            => Task.FromResult(new SlashCommandResult { StatusMessage = "Test diagnostic message" });
+            => Task.FromResult(new SlashCommandResult { StatusMessage = "Test diagnostic message", IsTransient = false });
 
         public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
             SlashCommandContext context,
@@ -176,5 +229,51 @@ public sealed class AgentViewModelSlashCommandTests
             ];
             return Task.FromResult(items);
         }
+    }
+
+    /// <summary>
+    /// Fake handler that returns a transient (default) result.
+    /// </summary>
+    private sealed class FakeTransientCommandHandler : ISlashCommandHandler
+    {
+        public string Name => "transient-test";
+        public string Description => "Returns a transient result.";
+        public string? Usage => null;
+        public string? LongDescription => null;
+
+        public Task<SlashCommandResult> ExecuteAsync(
+            SlashCommandContext context,
+            string arguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult(new SlashCommandResult { StatusMessage = "Transient status" });
+
+        public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
+            SlashCommandContext context,
+            string partialArguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
+    }
+
+    /// <summary>
+    /// Fake handler that throws to test error handling (errors should be persisted).
+    /// </summary>
+    private sealed class FakeThrowingCommandHandler : ISlashCommandHandler
+    {
+        public string Name => "throw-test";
+        public string Description => "Always throws.";
+        public string? Usage => null;
+        public string? LongDescription => null;
+
+        public Task<SlashCommandResult> ExecuteAsync(
+            SlashCommandContext context,
+            string arguments,
+            CancellationToken cancellationToken)
+            => throw new InvalidOperationException("Deliberate test failure");
+
+        public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
+            SlashCommandContext context,
+            string partialArguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
     }
 }

@@ -188,9 +188,13 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     }
 
     // ── Ancestry breadcrumb ───────────────────────────────────────────────────
+    // Issue #1046: the ancestor breadcrumb was lifted out of the running panel into an
+    // always-present region in ChatOutputHtmlModel. These tests now verify the panel
+    // no longer renders the breadcrumb (the always-present breadcrumb is tested in
+    // AgentChatOutputJumpLinkTests).
 
     [Fact]
-    public void RunningSubAgentsPanel_AncestryChain_ShowsFromRootToCurrentAgent()
+    public void RunningSubAgentsPanel_AncestryChain_NoBreadcrumbInRunningPanel()
     {
         var root = new StubRunningSubAgent("root-id", "RootAgent");
         var mid = new StubRunningSubAgent("mid-id", "MidAgent");
@@ -200,16 +204,14 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         var agent = new StubSubAgent("a1", "Worker", AgentChatCompletionState.Running);
         var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], ancestors);
 
-        Assert.Contains("running-subagents-breadcrumb", html, StringComparison.Ordinal);
-        Assert.Contains("RootAgent", html, StringComparison.Ordinal);
-        Assert.Contains("MidAgent", html, StringComparison.Ordinal);
-        Assert.Contains("CurrentAgent", html, StringComparison.Ordinal);
-        Assert.Contains("(root)", html, StringComparison.Ordinal);
-        Assert.Contains("(current)", html, StringComparison.Ordinal);
+        // Breadcrumb has been lifted to the always-present region; panel should not duplicate it.
+        Assert.DoesNotContain("running-subagents-breadcrumb", html, StringComparison.Ordinal);
+        // The panel should still render the running agent row.
+        Assert.Contains("data-navigate-agent-id=\"a1\"", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RunningSubAgentsPanel_AncestryChain_EachAncestor_IsClickable()
+    public void RunningSubAgentsPanel_AncestryChain_ClickableAgentsAreChildren_NotAncestors()
     {
         var root = new StubRunningSubAgent("root-id", "RootAgent");
         var current = new StubRunningSubAgent("cur-id", "CurrentAgent");
@@ -218,8 +220,10 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         var agent = new StubSubAgent("a1", "Worker", AgentChatCompletionState.Running);
         var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], ancestors);
 
-        Assert.Contains("data-navigate-agent-id=\"root-id\"", html, StringComparison.Ordinal);
-        Assert.Contains("data-navigate-agent-id=\"cur-id\"", html, StringComparison.Ordinal);
+        // Only the running child agent should have a navigate button, not the ancestors.
+        Assert.Contains("data-navigate-agent-id=\"a1\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-navigate-agent-id=\"root-id\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-navigate-agent-id=\"cur-id\"", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -435,6 +439,27 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         var op = Assert.Single(sink.Operations);
         Assert.Equal("remove", op.Kind);
         Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, op.Path);
+    }
+
+    // ── Issue #1046: ancestor breadcrumb decoupled from hasRunning ────────────
+
+    [Fact]
+    public void AncestorBreadcrumb_RenderedEvenWhenNoRunningChildren()
+    {
+        // The running-panel breadcrumb was previously gated behind hasRunning. Now the
+        // always-present breadcrumb is emitted in the ChatOutputHtmlModel constructor,
+        // so the running panel no longer includes it. Verify the panel renders without
+        // a breadcrumb (no duplication) even when ancestors are provided.
+        var root = new StubRunningSubAgent("root-id", "RootAgent");
+        var current = new StubRunningSubAgent("cur-id", "CurrentAgent");
+        var ancestors = new List<IRunningSubAgent> { root, current };
+
+        // All sub-agents completed — no running children.
+        var completed = new StubSubAgent("a1", "Done", AgentChatCompletionState.Succeeded);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([completed], ancestors);
+
+        // The panel should NOT include the running-subagents-breadcrumb (it's been lifted out).
+        Assert.DoesNotContain("running-subagents-breadcrumb", html, StringComparison.Ordinal);
     }
 
     [Fact]

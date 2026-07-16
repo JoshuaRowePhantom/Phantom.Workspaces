@@ -7,6 +7,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
 {
     private bool isExpanded;
+    private bool hideCompletedAgents = true;
     private string name;
 
     public AgentEditorNavigationItemViewModel(
@@ -18,7 +19,8 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         object detailContent,
         IReadOnlyList<AgentEditorNavigationItemViewModel> children,
         bool isExpanded = false,
-        IRunningSubAgent? runningSubAgent = null)
+        IRunningSubAgent? runningSubAgent = null,
+        bool showHideCompletedToggle = false)
     {
         this.Id = id;
         this.name = name;
@@ -27,6 +29,7 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
         this.Tool = tool;
         this.DetailContent = detailContent;
         this.RunningSubAgent = runningSubAgent;
+        this.ShowHideCompletedToggle = showHideCompletedToggle;
         this.Children = [.. children];
         this.IsExpanded = isExpanded;
         this.ToggleExpandCommand = new RelayCommand(() => this.IsExpanded = !this.IsExpanded, () => this.HasChildren);
@@ -54,6 +57,23 @@ public sealed class AgentEditorNavigationItemViewModel : ViewModelBase
     public AgentChatToolViewModel? Tool { get; }
 
     public IRunningSubAgent? RunningSubAgent { get; }
+
+    /// <summary>
+    /// When <see langword="true"/>, this nav item renders a "hide completed" checkbox in its header
+    /// (only the Sub-agents root sets this). See issue #1033.
+    /// </summary>
+    public bool ShowHideCompletedToggle { get; }
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), completed (Succeeded/Failed) sub-agents are hidden
+    /// from this item's children in the editor tree. Independent from the browser-panel toggle
+    /// (<see cref="SubAgentBrowserViewModel.HideCompleted"/>). See issue #1033.
+    /// </summary>
+    public bool HideCompletedAgents
+    {
+        get => this.hideCompletedAgents;
+        set => this.SetProperty(ref this.hideCompletedAgents, value);
+    }
 
     public AgentChatCompletionState? CompletionState => this.RunningSubAgent?.CompletionState;
 

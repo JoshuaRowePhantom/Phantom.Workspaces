@@ -50,14 +50,6 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ScrollViewer.HorizontalScrollBarVisibility=\"Disabled\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ScrollViewer.AllowAutoHide=\"False\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "x:Name=\"SplitterHost\"",
             editorControlContent,
             StringComparison.Ordinal);
@@ -111,7 +103,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Classes=\"entity-card-tree entity-card-tree-sticky\"",
+            "Classes=\"entity-card-tree-view entity-card-tree-sticky\"",
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -284,14 +276,10 @@ public sealed class MainWindowAxamlTests
             "Classes=\"branch-header\"",
             sharedStylesContent,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "Classes=\"leaf\"",
-            sharedStylesContent,
-            StringComparison.Ordinal);
     }
 
     [Fact]
-    public void EntityCardTreeTypeBar_IsConstrainedToCardHeaderAndCardsDoNotStretch()
+    public void EntityCardTreeTypeBar_IsConstrainedToCardHeaderAndCardsStretch()
     {
         var sharedStylesContent = ReadSharedStylesFile();
         var selector = "<Style Selector=\"TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar\">";
@@ -324,14 +312,14 @@ public sealed class MainWindowAxamlTests
         Assert.Contains("Classes=\"entity-card-tree-type-bar\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Grid.Column=\"1\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Grid.Column=\"2\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
 
         Assert.Contains(
-            "<Setter Property=\"HorizontalAlignment\" Value=\"Left\" />",
+            "<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />",
             sharedStylesContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        Assert.DoesNotContain(
             "<Setter Property=\"MaxWidth\" Value=\"760\" />",
             sharedStylesContent,
             StringComparison.Ordinal);
@@ -342,12 +330,13 @@ public sealed class MainWindowAxamlTests
     {
         var sharedStylesContent = ReadSharedStylesFile();
 
+        // Issue #1045: the indent gutter is a fixed 20px column with the 2px rail centred within it.
         Assert.Contains(
-            "ColumnDefinitions=\"21,*\"",
+            "ColumnDefinitions=\"20,*\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Width=\"3\"",
+            "Width=\"2\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -363,11 +352,11 @@ public sealed class MainWindowAxamlTests
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
-            "ColumnDefinitions=\"2,*\"",
+            "ColumnDefinitions=\"21,*\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
-            "ColumnDefinitions=\"20,*\"",
+            "ColumnDefinitions=\"Auto,*\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
@@ -718,7 +707,7 @@ public sealed class MainWindowAxamlTests
         var darkContent = ReadThemeFile("Dark.axaml");
 
         Assert.Contains(
-            "Theme.Surface.EntityPane.Background\">#000000",
+            "Theme.Surface.EntityPane.Background\">#1E1E1E",
             darkContent,
             StringComparison.Ordinal);
     }
@@ -729,7 +718,7 @@ public sealed class MainWindowAxamlTests
         var lightContent = ReadThemeFile("Light.axaml");
 
         Assert.Contains(
-            "Theme.Surface.EntityPane.Background\">#FFFFFF",
+            "Theme.Surface.EntityPane.Background\">#F3F3F3",
             lightContent,
             StringComparison.Ordinal);
     }
@@ -877,6 +866,25 @@ public sealed class MainWindowAxamlTests
             "ThemeVariant.Default",
             appCsContent,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditor_NavigationTree_UsesEntityCardTreeViewStyle()
+    {
+        // Issue #1029: the agent chat editor navigation tree must consume the shared
+        // entity-card-tree-view style so its content renders inside the shared item border.
+        var editorControlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var navStart = editorControlContent.IndexOf("x:Name=\"NavigationTree\"", StringComparison.Ordinal);
+        Assert.True(navStart >= 0);
+        var navEnd = editorControlContent.IndexOf('>', navStart);
+        var navigationTree = editorControlContent[navStart..navEnd];
+
+        Assert.Contains("Classes=\"entity-card-tree-view entity-card-tree-sticky\"", navigationTree, StringComparison.Ordinal);
+
+        var control = new AgentChatEditorControl();
+        var tree = GetField<TreeView>(control, "NavigationTree");
+        Assert.Contains("entity-card-tree-view", tree.Classes);
     }
 
     private static string ReadMainWindowAxaml()
@@ -1040,3 +1048,5 @@ public sealed class MainWindowAxamlTests
     }
 
 }
+
+

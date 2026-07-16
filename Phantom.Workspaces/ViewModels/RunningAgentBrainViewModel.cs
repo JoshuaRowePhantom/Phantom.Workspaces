@@ -275,16 +275,37 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     private PropertyChangedEventHandler CreateAgentHandler(string sessionKey) =>
         (_, e) =>
         {
-            if (e.PropertyName == nameof(AgentViewModel.IsChatRunning))
+            if (e.PropertyName != nameof(AgentViewModel.IsChatRunning))
             {
+                return;
+            }
+
+            // AgentViewModel.IsChatRunning can be raised from the AgentChat process-loop
+            // continuation (a non-UI context). Marshal onto the UI thread via dispatch before
+            // touching the UI-owned Rows / getAllAgentTabs() collections, so the handler never
+            // observes a torn/transient open-time state (issue #1037).
+            this.dispatch(() =>
+            {
+                if (this._disposed)
+                {
+                    return;
+                }
+
                 var row = this.Rows.FirstOrDefault(r =>
                     string.Equals(r.SessionKey, sessionKey, StringComparison.Ordinal));
+
+                // FirstOrDefault over the AgentTabInfo struct sequence returns default(AgentTabInfo)
+                // (Tab == null) when no open tab matches — a legitimate transient state during the
+                // open-session transition. The `is { Tab: not null }` property pattern correctly
+                // treats that default as "no match" (a struct is never null, so a bare `is { }`
+                // guard would wrongly succeed and dereference a null Tab), making this a safe no-op
+                // instead of an NRE (issue #1037).
                 if (row is not null && this.getAllAgentTabs().FirstOrDefault(
-                        t => string.Equals(t.Tab.AgentSessionId, sessionKey, StringComparison.Ordinal)) is { } info)
+                        t => string.Equals(t.Tab.AgentSessionId, sessionKey, StringComparison.Ordinal)) is { Tab: not null } info)
                 {
                     row.IsThinking = info.Tab.Agent?.IsChatRunning ?? false;
                 }
-            }
+            });
         };
 
     private void UnsubscribeRow(string sessionKey)

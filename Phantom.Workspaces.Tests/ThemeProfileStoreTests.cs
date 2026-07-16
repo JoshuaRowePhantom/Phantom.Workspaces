@@ -15,7 +15,7 @@ public sealed class ProfileStoreTests
     public void ProfileThemeSettings_Light_HasExpectedPopupColors()
     {
         Assert.Equal("#FFFFFF", ProfileThemeSettings.Light.Surfaces.Popup.Background);
-        Assert.Equal("#D0D0D0", ProfileThemeSettings.Light.Surfaces.Popup.Border);
+        Assert.Equal("#CCCCCC", ProfileThemeSettings.Light.Surfaces.Popup.Border);
     }
 
     [PhantomAvaloniaFact]
@@ -137,7 +137,7 @@ public sealed class ProfileStoreTests
 
             Assert.Equal("light", persistedProfile.Theme.Name);
             Assert.Equal("#FFFFFF", persistedProfile.Theme.Surfaces.Popup.Background);
-            Assert.Equal("#D0D0D0", persistedProfile.Theme.Surfaces.Popup.Border);
+            Assert.Equal("#CCCCCC", persistedProfile.Theme.Surfaces.Popup.Border);
         }
         finally
         {

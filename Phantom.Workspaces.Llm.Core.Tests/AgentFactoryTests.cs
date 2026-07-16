@@ -444,6 +444,38 @@ public class AgentFactoryTests
         Assert.Equal("GitHub Copilot (gpt-4.1-mini)", displayName);
     }
 
+    private sealed class RecordingAccountUpsertService : IGitHubAccountUpsertService
+    {
+        public Task UpsertForTokenAsync(string token, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
+    [Fact]
+    public void AgentFactory_CopilotClientCreated_PassesAccountUpsertService()
+    {
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "github-copilot-agent",
+              "model": {
+                "id": "gpt-5",
+                "provider": "github-copilot",
+                "apiType": "OpenAI"
+              },
+              "tools": []
+            }
+            """);
+
+        var upsertService = new RecordingAccountUpsertService();
+        var services = new AgentServices { AccountUpsertService = upsertService };
+
+        var (client, _) = AgentFactory.CreateChatClient(agent, services);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(client);
+        Assert.Same(upsertService, copilotClient.AccountUpsertService);
+    }
+
     [Fact]
     public void CreateChatClient_GitHubCopilotProvider_WithoutConnection_UsesLoggedInUser()
     {

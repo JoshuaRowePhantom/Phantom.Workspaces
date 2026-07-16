@@ -48,6 +48,37 @@ public sealed class UsageTrackerViewModelTests
     }
 
     [Fact]
+    public void TopRightLabel_CopilotAccountAdded_BecomesNonNull()
+    {
+        // Once a routed GitHub Copilot account surfaces metrics, the AI usage indicator label must
+        // become non-null so the indicator is shown (issue #1041).
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        Assert.Null(vm.TopRightLabel);
+
+        var copilotAccount = new UsageAccount
+        {
+            Product = "github.com",
+            UserName = "octocat",
+            SettingsUrl = new Uri("https://github.com/copilot"),
+        };
+        copilotAccount.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 42m,
+            QuantityTotal = 300m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AIC",
+        });
+
+        metrics.Accounts.Add(copilotAccount);
+
+        Assert.NotNull(vm.TopRightLabel);
+        Assert.Contains("42", vm.TopRightLabel);
+    }
+
+    [Fact]
     public void TopRightLabel_BecomesNull_WhenAccountRemoved()
     {
         var metrics = new UsageMetrics();

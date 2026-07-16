@@ -228,7 +228,7 @@
 
     <DataTemplate DataType="vm:JsonSchemaFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
-              ColumnDefinitions="200,*"
+              ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
@@ -247,7 +247,7 @@
         <Expander Header="{Binding FieldName}" Classes="workspace-field-expander">
             <StackPanel Classes="workspace-mime-content">
                 <Grid Classes="workspace-field-row"
-                      ColumnDefinitions="200,*">
+                      ColumnDefinitions="Auto,*">
                     <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
                     <TextBlock Grid.Column="1"
                                Text="{Binding MimeType}"
@@ -259,7 +259,7 @@
                              Classes="workspace-field-value" />
                 </Grid>
                 <Grid Classes="workspace-field-row"
-                      ColumnDefinitions="200,*">
+                      ColumnDefinitions="Auto,*">
                     <TextBlock Text="url" Classes="muted workspace-field-label" />
                     <TextBlock Grid.Column="1"
                                Text="{Binding Url}"
@@ -271,7 +271,7 @@
                              Classes="workspace-field-value" />
                 </Grid>
                 <Grid Classes="workspace-field-row"
-                      ColumnDefinitions="200,*"
+                      ColumnDefinitions="Auto,*"
                       IsVisible="{Binding ShowPlainTextReadMode}">
                     <TextBlock Text="content.text" Classes="muted workspace-field-label" />
                     <TextBlock Grid.Column="1"
@@ -279,7 +279,7 @@
                                Classes="workspace-field-read-value workspace-markdown-content" />
                 </Grid>
                 <Grid Classes="workspace-field-row"
-                      ColumnDefinitions="200,*"
+                      ColumnDefinitions="Auto,*"
                       IsVisible="{Binding ShowPlainTextEditMode}">
                     <TextBlock Text="content.text" Classes="muted workspace-field-label" />
                     <TextBox Grid.Column="1"
@@ -301,7 +301,7 @@
                       IsVisible="{Binding ShowChrome}">
                 <StackPanel Classes="workspace-mime-content">
                     <Grid Classes="workspace-field-row"
-                          ColumnDefinitions="200,*">
+                          ColumnDefinitions="Auto,*">
                         <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
                         <TextBlock Grid.Column="1"
                                    Text="{Binding MimeType}"
@@ -313,7 +313,7 @@
                                  Classes="workspace-field-value" />
                     </Grid>
                     <Grid Classes="workspace-field-row"
-                          ColumnDefinitions="200,*">
+                          ColumnDefinitions="Auto,*">
                         <TextBlock Text="url" Classes="muted workspace-field-label" />
                         <TextBlock Grid.Column="1"
                                    Text="{Binding Url}"
@@ -325,7 +325,7 @@
                                  Classes="workspace-field-value" />
                     </Grid>
                     <Grid Classes="workspace-field-row"
-                          ColumnDefinitions="200,*"
+                          ColumnDefinitions="Auto,*"
                           IsVisible="{Binding ShowMarkdownReadMode}">
                         <TextBlock Text="content.text" Classes="muted workspace-field-label" />
                         <controls:SafeSelectableTextBlock Grid.Column="1"
@@ -334,7 +334,7 @@
                                      Classes="workspace-markdown-viewer" />
                     </Grid>
                     <Grid Classes="workspace-field-row"
-                          ColumnDefinitions="200,*"
+                          ColumnDefinitions="Auto,*"
                           IsVisible="{Binding ShowMarkdownEditMode}">
                         <TextBlock Text="content.text" Classes="muted workspace-field-label" />
                         <controls:SafeSelectableTextBlock Grid.Column="1"

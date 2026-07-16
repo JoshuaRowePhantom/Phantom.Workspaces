@@ -199,6 +199,120 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_GroupedToolCallHistoryItem_RendersCopyAndInspectTargetsOnToolBlocks()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolResultMessage("c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var blob = string.Concat(sink.Operations.Where(op => op.Kind == "update").Select(op => op.Content));
+
+        var callBlock = ExtractOpeningTag(blob, "chat-tool-call");
+        var resultBlock = ExtractOpeningTag(blob, "chat-tool-result");
+        Assert.Contains("data-copy-target", callBlock);
+        Assert.Contains("data-inspect-target", callBlock);
+        Assert.Contains("data-copy-target", resultBlock);
+        Assert.Contains("data-inspect-target", resultBlock);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_GroupedToolBlocks_MatchParityWithGenericMessageBlockGutters()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "generic block"),
+            ToolCallMessage("tool_a", "c1"),
+            ToolResultMessage("c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var blob = string.Concat(sink.Operations.Where(op => op.Kind == "update").Select(op => op.Content));
+
+        // The generic text block carries copy + inspect markers; the grouped tool-call/result blocks
+        // must carry the same pair (parity).
+        var genericBlock = ExtractOpeningTag(blob, "chat-text");
+        var callBlock = ExtractOpeningTag(blob, "chat-tool-call");
+        var resultBlock = ExtractOpeningTag(blob, "chat-tool-result");
+
+        foreach (var marker in new[] { "data-copy-target", "data-inspect-target" })
+        {
+            Assert.Contains(marker, genericBlock);
+            Assert.Contains(marker, callBlock);
+            Assert.Contains(marker, resultBlock);
+        }
+    }
+
+    private static string ExtractOpeningTag(string html, string cssClass)
+    {
+        var classIndex = html.IndexOf(cssClass, System.StringComparison.Ordinal);
+        Assert.True(classIndex >= 0, $"Expected an element with class '{cssClass}' in output.");
+        var start = html.LastIndexOf('<', classIndex);
+        var end = html.IndexOf('>', classIndex);
+        Assert.True(start >= 0 && end >= 0);
+        return html.Substring(start, end - start + 1);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task LiveAndPlan_ToolCallsAcrossNonDisplayedItem_ProduceIdenticalGrouping()
+    {
+        AgentChatHistoryItem EmptyMessage() => new() { Role = ChatRole.Assistant, Contents = [] };
+
+        // Plan (bulk) path.
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            EmptyMessage(),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var planSink = new RecordingSink();
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, planSink, () => true);
+        var planHtml = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.Single(Regex.Matches(planHtml, "chat-tool-group\""));
+        Assert.Contains("2 calls", planHtml);
+        Assert.Contains("tool_a", planHtml);
+        Assert.Contains("tool_b", planHtml);
+
+        // Live (incremental) path over the same logical sequence.
+        var history = new ObservableCollection<AgentChatHistoryItem> { ToolCallMessage("tool_a", "c1") };
+        var liveSink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, liveSink);
+        await model.HistoryLoaded;
+        history.Add(EmptyMessage());
+        history.Add(ToolCallMessage("tool_b", "c2"));
+
+        // Replay the live operations into a mini DOM and assert the same grouped shape.
+        var root = MiniDom.CreateShellRoot();
+        foreach (var op in liveSink.Operations)
+        {
+            switch (op.Kind)
+            {
+                case "remove":
+                    root.RemoveById(op.Path);
+                    break;
+                case "update":
+                    root.FindById(op.Path)?.Apply(op.Location, MiniDom.ParseFragment(op.Content));
+                    break;
+            }
+        }
+
+        var liveSummaryUpdate = liveSink.Operations.Last(op => op.Kind == "update" && op.Path.Contains("summary"));
+        Assert.Contains("2 calls", liveSummaryUpdate.Content);
+        Assert.Contains("tool_a", liveSummaryUpdate.Content);
+        Assert.Contains("tool_b", liveSummaryUpdate.Content);
+
+        // The empty message produced no standalone element in the live DOM.
+        Assert.Null(root.FindById(ChatOutputHtmlRenderer.MessageId(1)));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_NoDuplicateIdsInRepresentativeDom()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();
@@ -400,5 +514,71 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
                 container.children.Insert(index + i, fragment[i]);
             }
         }
+    }
+
+    // ── Issue #1042: structural invariants for expand/collapse toggle ──────────
+
+    [Fact]
+    public void ToolGroup_AfterRender_InnerCallAndResultPanesAreOpen()
+    {
+        var call1 = new FunctionCallContent("c1", "tool_a");
+        var call2 = new FunctionCallContent("c2", "tool_b");
+        var result1 = new FunctionResultContent("c1", "ok");
+        var result2 = new FunctionResultContent("c2", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["c1"] = result1, ["c2"] = result2 };
+
+        var html = ChatOutputHtmlRenderer.RenderToolGroup("c0", new[] { call1, call2 }, lookup);
+
+        // Every chat-tool-call and chat-tool-result must carry "open".
+        var callMatches = Regex.Matches(html, "<details class=\"chat-tool-call\"[^>]*>");
+        Assert.True(callMatches.Count >= 2);
+        Assert.All(callMatches.Cast<Match>(), m => Assert.Contains("open", m.Value));
+
+        var resultMatches = Regex.Matches(html, "<details class=\"chat-tool-result\"[^>]*>");
+        Assert.True(resultMatches.Count >= 2);
+        Assert.All(resultMatches.Cast<Match>(), m => Assert.Contains("open", m.Value));
+
+        // The outer wrapper should not carry "open".
+        var wrapperMatch = Regex.Match(html, "<details class=\"chat-content chat-tool-group-wrapper\"[^>]*>");
+        Assert.True(wrapperMatch.Success);
+        Assert.DoesNotContain("open", wrapperMatch.Value);
+    }
+
+    [Fact]
+    public void ToolGroupSummary_ExpandCollapseToggle_IsChildOfGroupSummaryNotToolPane()
+    {
+        var call1 = new FunctionCallContent("c1", "tool_a");
+        var call2 = new FunctionCallContent("c2", "tool_b");
+        var result1 = new FunctionResultContent("c1", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["c1"] = result1 };
+
+        // Message-level group
+        var groupHtml = ChatOutputHtmlRenderer.RenderToolCallGroup(
+            "grp-0", new[] { "tool_a", "tool_b" }, 2, "<div>body</div>");
+
+        // Toggle button must be inside the <summary> of the group, not in any tool pane.
+        var summaryMatch = Regex.Match(groupHtml, "<summary[^>]*>.*?</summary>", RegexOptions.Singleline);
+        Assert.True(summaryMatch.Success);
+        Assert.Contains("data-tool-expand-toggle", summaryMatch.Value);
+
+        // Content-level wrapper
+        var wrapperHtml = ChatOutputHtmlRenderer.RenderToolGroup(
+            "c0", new[] { call1, call2 }, lookup);
+
+        // The toggle is in the wrapper summary, not inside chat-tool-call / chat-tool-result.
+        var callPanes = Regex.Matches(wrapperHtml, "<details class=\"chat-tool-call\"[\\s\\S]*?</details>");
+        foreach (Match pane in callPanes)
+        {
+            Assert.DoesNotContain("data-tool-expand-toggle", pane.Value);
+        }
+
+        var resultPanes = Regex.Matches(wrapperHtml, "<details class=\"chat-tool-result\"[\\s\\S]*?</details>");
+        foreach (Match pane in resultPanes)
+        {
+            Assert.DoesNotContain("data-tool-expand-toggle", pane.Value);
+        }
+
+        // But the wrapper itself contains the toggle.
+        Assert.Contains("data-tool-expand-toggle", wrapperHtml);
     }
 }

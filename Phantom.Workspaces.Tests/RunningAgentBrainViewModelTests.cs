@@ -681,4 +681,236 @@ public sealed class RunningAgentBrainViewModelTests
         var row = Assert.Single(vm.Rows);
         Assert.False(row.HasOpenTab);
     }
+
+    // ── Issue #1037: open-session no-matching-tab race (ineffective struct guard) ──
+
+    private static AgentDefinition LoadEchoAgentDefinition()
+    {
+        var agentDefinitionJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """;
+        return AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
+    }
+
+    private static AgentChatHistoryItem MakeRunningItem()
+        => new()
+        {
+            Role = Microsoft.Extensions.AI.ChatRole.Assistant,
+            Contents = [new Microsoft.Extensions.AI.TextContent("thinking")],
+        };
+
+    [Fact]
+    public async Task CreateAgentHandler_WhenOpeningSessionAndTabNotYetInAllAgentTabs_DoesNotThrowAndLeavesRowUnchanged()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent");
+
+        // The tab is present at construction so the per-agent handler subscribes.
+        var currentTabs = new List<AgentTabInfo> { new("pane-1", "Workspace", tab) };
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        var thinkingBefore = row.IsThinking;
+
+        // Simulate the open-session transient: the tab is momentarily not resolvable in
+        // getAllAgentTabs() while the running process loop raises IsChatRunning.
+        currentTabs.Clear();
+
+        var exception = Record.Exception(() => chat.CreateRunningItem(MakeRunningItem()));
+
+        Assert.Null(exception); // No NRE — the struct-default no-match is a safe no-op.
+        Assert.Equal(thinkingBefore, row.IsThinking);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task CreateAgentHandler_WhenNoTabMatchesSession_LeavesRowIsThinkingUnchanged()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent");
+
+        var currentTabs = new List<AgentTabInfo> { new("pane-1", "Workspace", tab) };
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.IsThinking);
+
+        // No matching tab when the handler runs → the row must not be mutated.
+        currentTabs.Clear();
+        chat.CreateRunningItem(MakeRunningItem());
+
+        Assert.False(row.IsThinking);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task CreateAgentHandler_WhenTabMatches_UpdatesRowIsThinkingFromAgent()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.IsThinking);
+
+        // A running item makes the agent's IsChatRunning true; the handler resolves the matching
+        // tab and reflects it onto the row.
+        chat.CreateRunningItem(MakeRunningItem());
+
+        Assert.True(row.IsThinking);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task CreateAgentHandler_WhenAgentRaisesFromNonUiThread_MarshalsThroughDispatch()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent");
+
+        var dispatchCount = 0;
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => { dispatchCount++; action(); });
+
+        // The constructor's Refresh runs inline (not via dispatch), so no dispatch yet.
+        var dispatchBefore = dispatchCount;
+
+        chat.CreateRunningItem(MakeRunningItem());
+
+        // The IsChatRunning handler body must be marshalled through dispatch.
+        Assert.True(dispatchCount > dispatchBefore, "Expected the agent handler to run through dispatch.");
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task CreateAgentHandler_WhenSessionHasNoResolvableTab_DoesNotThrowAndDoesNotMutate()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent");
+
+        // getAllAgentTabs always yields a tab whose session id never matches → no resolvable tab.
+        var mismatchTab = new AgentSessionWorkspaceTabViewModel { Id = "tab-x", Title = "Other", AgentSessionId = "other-session" };
+        var currentTabs = new List<AgentTabInfo> { new("pane-1", "Workspace", tab) };
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        var thinkingBefore = row.IsThinking;
+
+        // Swap to a non-matching tab set (session-1 not resolvable) before raising.
+        currentTabs.Clear();
+        currentTabs.Add(new AgentTabInfo("pane-1", "Workspace", mismatchTab));
+
+        var exception = Record.Exception(() => chat.CreateRunningItem(MakeRunningItem()));
+
+        Assert.Null(exception);
+        Assert.Equal(thinkingBefore, row.IsThinking);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task SubscribeRow_AfterTabCloseOrAgentChange_HandlerNoLongerFires()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent");
+
+        var currentTabs = new List<AgentTabInfo> { new("pane-1", "Workspace", tab) };
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => currentTabs,
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        // Close the tab while the session keeps running: Refresh downgrades to a fallback row and
+        // unsubscribes the per-agent handler.
+        currentTabs.Clear();
+        vm.Refresh();
+        var row = Assert.Single(vm.Rows);
+        Assert.False(row.HasOpenTab);
+        row.IsThinking = false;
+
+        // The now-unsubscribed handler must not fire into the stale row.
+        chat.CreateRunningItem(MakeRunningItem());
+
+        Assert.False(row.IsThinking);
+
+        vm.Dispose();
+    }
 }

@@ -420,6 +420,138 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
     }
 
+    // ── Global Alt-N ordering / resolution (issue #1011) ─────────────────────
+
+    private static (System.Collections.Generic.List<WorkspacePaneViewModel> panes,
+                    System.Func<string, WorkspaceDocument?> getDocumentForTab,
+                    System.Collections.Generic.Dictionary<string, WorkspaceDocument> docs)
+        CreateMultiplePanesWithTabs(params int[] tabCountsPerPane)
+    {
+        var panes = new System.Collections.Generic.List<WorkspacePaneViewModel>();
+        var docs = new System.Collections.Generic.Dictionary<string, WorkspaceDocument>(System.StringComparer.Ordinal);
+        for (var pi = 0; pi < tabCountsPerPane.Length; pi++)
+        {
+            using var jsonDoc = System.Text.Json.JsonDocument.Parse(
+                $$$"""{"entity-id":"cccc{{{pi:D4}}}-0000-4000-8000-cccccccccccc","entity-types":["entity","workspace"],"display-name":{"default":"Pane {{{pi}}}"}}""");
+            var entity = new SubscribedEntityViewModel(
+                new EntitySnapshot
+                {
+                    EntityId = new EntityId($"cccc{pi:D4}-0000-4000-8000-cccccccccccc"),
+                    ConcurrencyTag = new ConcurrencyTag("1"),
+                    ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
+                    Data = jsonDoc.RootElement.Clone(),
+                    Relationships = System.Array.Empty<EntitySnapshot>(),
+                });
+            var pane = new WorkspacePaneViewModel(entity, id: $"workspace-{pi}");
+            for (var ti = 0; ti < tabCountsPerPane[pi]; ti++)
+            {
+                var tab = new EntityWorkspaceTabViewModel { Id = $"p{pi}-tab-{ti}", Title = $"P{pi} Tab {ti}" };
+                pane.Tabs.Add(tab);
+                docs[tab.Id] = new WorkspaceDocument(tab);
+            }
+
+            panes.Add(pane);
+        }
+
+        System.Func<string, WorkspaceDocument?> getDocumentForTab = id => docs.TryGetValue(id, out var doc) ? doc : null;
+        return (panes, getDocumentForTab, docs);
+    }
+
+    [Theory]
+    [InlineData(0, "1")]
+    [InlineData(8, "9")]
+    [InlineData(9, "0")]
+    [InlineData(10, null)]
+    [InlineData(-1, null)]
+    public void AltShortcutLabelForIndex_MapsZeroBasedIndexToBadgeLabel(int index, string? expected)
+    {
+        Assert.Equal(expected, MainWindowViewModel.AltShortcutLabelForIndex(index));
+    }
+
+    [Fact]
+    public void ComputeGlobalTabOrder_MultiplePanes_EnumeratesPaneByPaneLeftToRight()
+    {
+        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(2, 2);
+
+        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
+
+        Assert.Equal(
+            new[] { "p0-tab-0", "p0-tab-1", "p1-tab-0", "p1-tab-1" },
+            order.Select(entry => entry.Document.Id).ToArray());
+    }
+
+    [Fact]
+    public void AssignGlobalAltShortcutLabels_MultiplePanes_AssignsSequentialGlobalIndexAcrossAllPanes()
+    {
+        var (panes, getDocumentForTab, docs) = CreateMultiplePanesWithTabs(2, 2);
+        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
+
+        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
+
+        Assert.Equal("1", docs["p0-tab-0"].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs["p0-tab-1"].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docs["p1-tab-0"].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("4", docs["p1-tab-1"].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void FindTabByAltShortcutIndex_MultiplePanes_ResolvesTabDisplayingMatchingBadgeInOtherPane()
+    {
+        // Pane 0: badges 1,2 ; Pane 1: badges 3,4. Alt-3 (index 2) must land on the tab
+        // that displays badge "3" — which lives in the second (non-selected) pane.
+        var (panes, getDocumentForTab, docs) = CreateMultiplePanesWithTabs(2, 2);
+        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
+        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
+
+        var match = MainWindowViewModel.FindTabByAltShortcutIndex(order, 2);
+
+        Assert.NotNull(match);
+        Assert.Same(docs["p1-tab-0"], match.Value.Document);
+        Assert.Same(panes[1], match.Value.Pane);
+        Assert.Equal("3", match.Value.Document.EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [Fact]
+    public void FindTabByAltShortcutIndex_IndexBeyondBadgedTabs_ReturnsNull()
+    {
+        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(2, 2);
+        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
+        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
+
+        // Only four tabs are badged (1–4); requesting index 4 (badge "5") matches nothing.
+        Assert.Null(MainWindowViewModel.FindTabByAltShortcutIndex(order, 4));
+    }
+
+    [Fact]
+    public void FindTabByAltShortcutIndex_OutOfRangeIndex_ReturnsNull()
+    {
+        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(2);
+        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
+        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
+
+        Assert.Null(MainWindowViewModel.FindTabByAltShortcutIndex(order, -1));
+        Assert.Null(MainWindowViewModel.FindTabByAltShortcutIndex(order, 10));
+    }
+
+    [Fact]
+    public void BadgeAssignmentAndAltNResolution_UseSameOrder_ForEveryBadgedIndex()
+    {
+        // Regression guard for the reported divergence: after badges are assigned, resolving
+        // Alt-N for each badged index must return exactly the document at that global position.
+        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(3, 2, 4);
+        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
+        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
+
+        var badgedCount = System.Math.Min(order.Count, 10);
+        for (var index = 0; index < badgedCount; index++)
+        {
+            var match = MainWindowViewModel.FindTabByAltShortcutIndex(order, index);
+            Assert.NotNull(match);
+            Assert.Same(order[index].Document, match.Value.Document);
+            Assert.Same(order[index].Pane, match.Value.Pane);
+        }
+    }
+
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

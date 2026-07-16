@@ -49,6 +49,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly AgentChatQueueManager chatQueueManager;
     private AgentChatHistoryService? historyService;
     private readonly AgentChatHistoryCollection history = new();
+    private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly AgentChatRunningItemCollection runningItems = new();
     private readonly AgentRunningItems runningItemOperations;
     private readonly ObservableCollection<AgentChatPendingApprovalItem> pendingApprovalItems = [];
@@ -59,7 +60,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly List<ToolStateNode> toolRoots = [];
     private readonly SemaphoreSlim toolMutationLock = new(1, 1);
     private readonly CancellationTokenSource cts = new();
-    private readonly SlashCommandRegistry slashCommands = new();
+    private readonly SlashCommandRegistry outerSlashCommands = new();
+    private readonly ReplaceableSlashCommandHandlerRegistry replaceableCommands = new();
     private Task processTask = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
 
@@ -124,6 +126,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            ?? (SynchronizationContext.Current is not null
                ? TaskScheduler.FromCurrentSynchronizationContext()
                : this.foregroundSchedulerPair.ExclusiveScheduler);
+       this.outerSlashCommands.Register(this.replaceableCommands);
+       this.outerSlashCommands.Register(new HelpSlashCommandHandler(this.outerSlashCommands));
     }
 
     // Enforces the foreground-context affinity invariant (issue #909): AgentChat construction and
@@ -181,14 +185,19 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        }
 
        this.agentDefinition = resolvedAgentDefinition;
+       var innerRegistry = new SlashCommandRegistry();
+       var servicesWithRegistry = this.request.AgentServices is not null
+           ? this.request.AgentServices with { SlashCommandRegistry = innerRegistry }
+           : new AgentServices { SlashCommandRegistry = innerRegistry };
        var clientInfo = this.request.ClientOverride is not null
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
            : await AgentFactory.CreateChatClientAsync(
                resolvedAgentDefinition,
-               this.request.AgentServices,
+               servicesWithRegistry,
                queueManager: this.queueManager,
                subAgentChatRegistry: this,
                cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
+       this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
        if (resolvedClient is SubAgentChatClient sac)
@@ -313,6 +322,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            this.request.CancellationToken);
 
        this.LoadInitialHistory(persistedMessages);
+
+       // Signal that persisted history has been loaded into History. Consumers (e.g. the chat
+       // output control) await this before taking the initial history snapshot so the first render
+       // never captures an empty/partial History (issue #1009).
+       this.historyPopulated.TrySetResult();
+
        this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
        this.SetAgentSessionId(resolvedAgentSessionId);
 
@@ -324,8 +339,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.StartProcessingLoop();
 
        await this.InitializeMcpToolsAsync(this.request.CancellationToken);
-
-       this.RegisterSlashCommands(resolvedClient);
     }
 
     /// <summary>
@@ -340,6 +353,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
+
+    /// <summary>
+    /// Raised when a slash command or the host wants to display a one-off status message
+    /// in the chat area without persisting it to conversation history.
+    /// </summary>
+    public event EventHandler<string>? TransientNotification;
     
     /// <summary>
     /// Fired when the completion state of this agent changes.
@@ -349,6 +368,13 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     /// <summary>Completed conversation turns, in order.</summary>
     public AgentChatHistoryCollection History => this.history;
+
+    /// <summary>
+    /// Completes once persisted history has been loaded into <see cref="History"/> during
+    /// initialization. Await this before snapshotting <see cref="History"/> to avoid rendering an
+    /// empty/partial history on first open (issue #1009).
+    /// </summary>
+    public Task HistoryPopulated => this.historyPopulated.Task;
 
     /// <summary>Currently executing agent response items.</summary>
     public AgentChatRunningItemCollection RunningItems => this.runningItems;
@@ -408,7 +434,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// Provider-specific commands (e.g. <c>/working-directory</c> for GitHub Copilot) are
     /// registered automatically during initialisation; <c>/help</c> is always present.
     /// </summary>
-    public ISlashCommandRegistry SlashCommands => this.slashCommands;
+    public ISlashCommandRegistry SlashCommands => this.outerSlashCommands;
 
     public long? TotalInputTokenCount { get; private set; }
 
@@ -616,6 +642,20 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
+    }
+
+    /// <summary>
+    /// Fires <see cref="TransientNotification"/> without touching <see cref="History"/>.
+    /// Used for slash-command status messages that should be shown as one-off inline notifications.
+    /// </summary>
+    public void RaiseTransientNotification(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        this.TransientNotification?.Invoke(this, text);
     }
 
     /// <summary>
@@ -1955,16 +1995,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
-    private void RegisterSlashCommands(IChatClient resolvedClient)
-    {
-        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
-        {
-            this.slashCommands.Register(new CopilotSdkWorkingDirectorySlashCommandHandler(copilotSdkClient));
-        }
-
-        this.slashCommands.Register(new HelpSlashCommandHandler(this.slashCommands));
-    }
-
     private async Task<IReadOnlyList<RuntimeContextProviderRegistration>> CreateRuntimeContextProviderRegistrationsAsync(
         AgentDefinition agent,
         AgentServices? services,

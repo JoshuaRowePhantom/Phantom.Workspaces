@@ -72,13 +72,13 @@ internal static class ChatOutputHtmlRenderer
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
     /// tool-call messages. <paramref name="bodyContent"/> is the pre-rendered HTML of the first
     /// message and is placed directly inside the body container.
-    /// <paramref name="toolName"/> is null when the group contains mixed tool types.
+    /// <paramref name="toolNames"/> is the deduped, first-seen-order list of tool names in the group.
     /// </summary>
-    public static string RenderToolCallGroup(string groupId, string? toolName, int callCount, string bodyContent)
+    public static string RenderToolCallGroup(string groupId, IReadOnlyList<string> toolNames, int callCount, string bodyContent)
     {
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
-        builder.Append(RenderToolCallGroupSummary(groupId, toolName, callCount));
+        builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount));
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
@@ -86,25 +86,39 @@ internal static class ChatOutputHtmlRenderer
     }
 
     /// <summary>
-    /// Builds the <c>summary</c> element for a tool-call group.
-    /// <paramref name="toolName"/> is null when the group contains mixed tool types, in which case
-    /// a neutral "tools" label is shown instead.
+    /// Builds the <c>summary</c> element for a tool-call group. Always lists the unique tool names
+    /// in first-seen order, formatted <c>tools (a, b)</c> (a single tool renders <c>tools (a)</c>),
+    /// followed by the call-count badge.
     /// </summary>
-    public static string RenderToolCallGroupSummary(string groupId, string? toolName, int callCount)
+    public static string RenderToolCallGroupSummary(string groupId, IReadOnlyList<string> toolNames, int callCount)
     {
         var builder = new StringBuilder();
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolGroupSummaryId(groupId)).Append("\">");
-        
-        if (toolName is not null)
+
+        if (toolNames is { Count: > 0 })
         {
-            builder.Append("tool call: <span class=\"tool-name\">").Append(HtmlEscape(toolName)).Append("</span>");
+            builder.Append("tools (");
+            for (var i = 0; i < toolNames.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.Append("<span class=\"tool-name\">").Append(HtmlEscape(toolNames[i])).Append("</span>");
+            }
+
+            builder.Append(')');
         }
         else
         {
             builder.Append("tools");
         }
-        
+
         builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
+        builder.Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
+            .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
+            .Append("\u21F2</button>");
         builder.Append("</summary>");
         return builder.ToString();
     }
@@ -120,7 +134,11 @@ internal static class ChatOutputHtmlRenderer
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-wrapper\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">tools  ").Append(HtmlEscape(summary))
-            .Append("  (").Append(callCount).Append(" calls)</summary>");
+            .Append("  (").Append(callCount).Append(" calls)")
+            .Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
+            .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
+            .Append("\u21F2</button>")
+            .Append("</summary>");
         builder.Append(innerHtml);
         builder.Append("</details>");
         return builder.ToString();
@@ -137,9 +155,13 @@ internal static class ChatOutputHtmlRenderer
         string? contentId,
         string name,
         string callJson,
-        string? resultJson)
+        string? resultJson,
+        string? callDetailsJson = null,
+        string? resultDetailsJson = null,
+        string? memberIdBase = null)
     {
         var callSummary = HtmlEscape(name) + "(…)";
+        var idBase = memberIdBase ?? contentId;
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-item\"");
         if (!string.IsNullOrEmpty(contentId))
@@ -150,7 +172,20 @@ internal static class ChatOutputHtmlRenderer
         builder.Append(">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"3\">tool ").Append(callSummary).Append("</summary>");
 
-        builder.Append("<details class=\"chat-tool-call\" open>");
+        // Tool-CALL block — gutter host (copy + inspect). The "..." details-gutter was removed (#1038),
+        // so reusing data-details-target for the inspect payload is safe (#1039).
+        builder.Append("<details class=\"chat-tool-call\" data-copy-target data-inspect-target");
+        if (!string.IsNullOrEmpty(callDetailsJson))
+        {
+            builder.Append(" data-details-target=\"").Append(HtmlEscape(callDetailsJson)).Append("\"");
+        }
+
+        if (!string.IsNullOrEmpty(idBase))
+        {
+            builder.Append(" id=\"").Append(idBase).Append("-call\"");
+        }
+
+        builder.Append(" open>");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
@@ -162,7 +197,20 @@ internal static class ChatOutputHtmlRenderer
         if (resultJson is not null)
         {
             var resultSummary = FirstLine(resultJson);
-            builder.Append("<details class=\"chat-tool-result\" open>");
+
+            // Tool-RESULT block — gutter host (copy + inspect).
+            builder.Append("<details class=\"chat-tool-result\" data-copy-target data-inspect-target");
+            if (!string.IsNullOrEmpty(resultDetailsJson))
+            {
+                builder.Append(" data-details-target=\"").Append(HtmlEscape(resultDetailsJson)).Append("\"");
+            }
+
+            if (!string.IsNullOrEmpty(idBase))
+            {
+                builder.Append(" id=\"").Append(idBase).Append("-result\"");
+            }
+
+            builder.Append(" open>");
             builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
@@ -203,12 +251,15 @@ internal static class ChatOutputHtmlRenderer
                 contentId,
                 call.Name ?? string.Empty,
                 PrettyJson(call.Arguments),
-                result is not null ? PrettyJson(result.Result) : null);
+                result is not null ? PrettyJson(result.Result) : null,
+                SerializeContentJson(call),
+                result is not null ? SerializeContentJson(result) : null);
         }
         else
         {
             var innerBuilder = new StringBuilder();
             var lastCallName = string.Empty;
+            var memberIndex = 0;
             foreach (var call in calls)
             {
                 FunctionResultContent? result = null;
@@ -221,8 +272,12 @@ internal static class ChatOutputHtmlRenderer
                     null,
                     call.Name ?? string.Empty,
                     PrettyJson(call.Arguments),
-                    result is not null ? PrettyJson(result.Result) : null));
+                    result is not null ? PrettyJson(result.Result) : null,
+                    SerializeContentJson(call),
+                    result is not null ? SerializeContentJson(result) : null,
+                    $"{contentId}-{memberIndex}"));
                 lastCallName = call.Name ?? string.Empty;
+                memberIndex++;
             }
 
             return RenderToolGroupWrapper(contentId, calls.Count, lastCallName + "(…)", innerBuilder.ToString());
@@ -271,6 +326,41 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("→ Open sub-agent");
         builder.Append("</button></div>");
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Renders a breadcrumb bar of ancestor links for a sub-agent view, root-first. Each entry is a
+    /// <c>chat-jump-link</c> button carrying <c>data-navigate-agent-id</c> so the existing JS click
+    /// handler dispatches navigation. Returns <see cref="string.Empty"/> when <paramref name="ancestors"/>
+    /// is empty (i.e. root agent — no ancestors to display).
+    /// </summary>
+    public static string RenderAncestorLinks(IReadOnlyList<AncestorLinkHtmlModel> ancestors)
+    {
+        if (ancestors.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        sb.Append("<div class=\"chat-ancestor-breadcrumb\">");
+        for (var i = 0; i < ancestors.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(" &rsaquo; ");
+            }
+
+            var a = ancestors[i];
+            var label = a.IsRoot ? a.DisplayName + " (root)"
+                : a.IsCurrent ? a.DisplayName + " (current)"
+                : a.DisplayName;
+            sb.Append("<button class=\"chat-jump-link\" data-navigate-agent-id=\"")
+                .Append(HtmlEscape(a.AgentId)).Append("\">")
+                .Append(HtmlEscape(label)).Append("</button>");
+        }
+
+        sb.Append("</div>");
+        return sb.ToString();
     }
 
 
@@ -513,7 +603,7 @@ internal static class ChatOutputHtmlRenderer
         {
             builder.Append(indent);
             builder.Append("<span class=\"tool-json-key\">")
-                .Append(HtmlEscape(property.Name.PadLeft(maxKeyLength)))
+                .Append(HtmlEscape(property.Name.PadRight(maxKeyLength)))
                 .Append("</span>: ");
 
             var renderedValue = RenderJsonValue(property.Value, indentLevel + 1, valueColumn);
@@ -697,7 +787,7 @@ internal static class ChatOutputHtmlRenderer
                 {
                     return JsonSerializer.Serialize(value, PrettyJsonOptions);
                 }
-                catch (NotSupportedException)
+                catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
                 {
                     return value.ToString() ?? string.Empty;
                 }
@@ -706,32 +796,38 @@ internal static class ChatOutputHtmlRenderer
 
     private static string RenderToolPayload(object? value)
     {
-        switch (value)
+        if (value is null)
         {
-            case null:
-                return string.Empty;
-            case string text:
-                if (TryParseJson(text, out var document))
-                {
-                    using (document)
-                    {
-                        return RenderJsonValue(document!.RootElement, 0);
-                    }
-                }
+            return string.Empty;
+        }
 
-                return RenderStringValue(text, 0, 0);
-            case JsonElement element:
-                return RenderJsonValue(element, 0);
-            default:
-                try
-                {
-                    var element = JsonSerializer.SerializeToElement(value, PrettyJsonOptions);
+        // Fallback renderer: a pathological tool payload (non-serializable / cyclic arguments,
+        // malformed markdown, etc.) must never abort chat rendering. Any non-fatal failure falls
+        // back to escaped text so history and live output always render.
+        try
+        {
+            switch (value)
+            {
+                case string text:
+                    if (TryParseJson(text, out var document))
+                    {
+                        using (document)
+                        {
+                            return RenderJsonValue(document!.RootElement, 0);
+                        }
+                    }
+
+                    return RenderStringValue(text, 0, 0);
+                case JsonElement element:
                     return RenderJsonValue(element, 0);
-                }
-                catch (NotSupportedException)
-                {
-                    return HtmlEscape(value.ToString() ?? string.Empty);
-                }
+                default:
+                    var serialized = JsonSerializer.SerializeToElement(value, PrettyJsonOptions);
+                    return RenderJsonValue(serialized, 0);
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException and not StackOverflowException)
+        {
+            return HtmlEscape(value.ToString() ?? string.Empty);
         }
     }
 
@@ -788,3 +884,8 @@ internal static class ChatOutputHtmlRenderer
         }
     }
 }
+
+/// <summary>
+/// Immutable model for a single ancestor entry in the breadcrumb bar.
+/// </summary>
+internal sealed record AncestorLinkHtmlModel(string AgentId, string DisplayName, bool IsRoot, bool IsCurrent);

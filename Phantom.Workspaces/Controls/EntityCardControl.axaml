@@ -6,29 +6,26 @@
     <UserControl.Resources>
         <converters:StatusBrushKeyConverter x:Key="StatusBrushKeyConverter" />
     </UserControl.Resources>
-    <StackPanel Classes="workspace-entity-node-root"
-                HorizontalAlignment="Left"
+    <StackPanel Classes="workspace-entity-card-content"
                 Classes.workspace-entity-deleted="{Binding IsDeleted}"
-                IsEnabled="{Binding IsInteractive}">
-        <Border Classes="entity-card"
-                CornerRadius="6"
+                IsEnabled="{Binding IsInteractive}"
                 ClipToBounds="True"
-                HorizontalAlignment="Left"
                 Tapped="OnEntityCardTapped">
-            <StackPanel Classes="workspace-entity-card-content">
                 <Grid ColumnDefinitions="Auto,*,Auto">
                     <Border Width="4"
                             Classes="entity-card-tree-type-bar"
                             Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}"
-                            HorizontalAlignment="Left"
                             VerticalAlignment="Stretch" />
                     <StackPanel Grid.Column="1"
-                                Classes="workspace-entity-header-row">
+                                Classes="workspace-entity-header-row"
+                                MinWidth="67"
+                                Margin="0,0,12,0">
                         <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
                         <TextBlock Text="{Binding EntityType}" Classes="muted" />
                     </StackPanel>
-                    <StackPanel Grid.Column="2"
-                                Classes="workspace-entity-actions-row">
+                    <WrapPanel Grid.Column="2"
+                               Classes="workspace-entity-actions-row"
+                               MinWidth="67">
                         <ItemsControl IsVisible="{Binding HasBadges}"
                                       IsEnabled="{Binding AreBadgesEnabled}"
                                       ItemsSource="{Binding Badges.Badges}">
@@ -109,7 +106,7 @@
                                 IsVisible="{Binding ShowEditActions}"
                                 Command="{Binding DiscardEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
-                    </StackPanel>
+                    </WrapPanel>
                 </Grid>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list"
@@ -125,7 +122,6 @@
                            IsVisible="{Binding ShowEditActions}"
                            Classes="workspace-validation-status"
                            Classes.workspace-validation-error="{Binding Validation.HasError}" />
-            </StackPanel>
-        </Border>
     </StackPanel>
 </UserControl>
+

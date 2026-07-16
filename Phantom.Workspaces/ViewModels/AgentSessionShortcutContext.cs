@@ -51,12 +51,21 @@ public sealed class AgentSessionShortcutContext
             ToolsetFactory.CreateWorkspaceGuiToolsetFactory(
                 workspaceGuiContextProvider,
                 ToolsetFactory.CreateDefaultToolsetFactory()));
+
+        // Materialize a user-account entity the first time a Copilot session resolves a GitHub
+        // token (issue #1047). Without this the upsert service is orphaned and no account entity
+        // is ever persisted, which also keeps the AI usage indicator empty (issue #1041).
+        var accountUpsertService = new GitHubAccountUpsertService(
+            dataAccessLayer,
+            new GitHubIdentityResolver());
+
         return new AgentServices
         {
             AgentPersistenceStoreOverride = agentPersistenceStore,
             LoggerFactory = loggerFactory,
             ToolsetFactory = toolsetFactory,
             ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
+            AccountUpsertService = accountUpsertService,
         };
     }
 

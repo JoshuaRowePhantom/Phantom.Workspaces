@@ -198,8 +198,9 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task SubAgentNavItem_HasBackgroundTasksChild()
+    public async Task SubAgentNavItem_DoesNotHaveBackgroundTasksChild()
     {
+        // Issue #1030: The "Background tasks" section was removed from every sub-agent too.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
@@ -210,7 +211,47 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
         var subAgentNav = Assert.Single(subAgentsNav.Children);
 
-        Assert.Contains(subAgentNav.Children, c => c.Id == "chat-background-tasks");
+        Assert.DoesNotContain(subAgentNav.Children, c => c.Id == "chat-background-tasks");
+    }
+
+    [Fact]
+    public async Task EditorItems_DoesNotContainBackgroundTasksSection()
+    {
+        // Issue #1030: The "Background tasks" placeholder section was removed.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        Assert.DoesNotContain(root.Children, c => c.Id == "chat-background-tasks");
+    }
+
+    [Fact]
+    public async Task EditorItems_RootChildren_AreChatDetailsToolsSubAgents()
+    {
+        // Issue #1030: The root nav item's children are exactly Chat details, Tools, Sub-agents.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        Assert.Equal(
+            new[] { "chat-details", "chat-tools", "chat-sub-agents" },
+            root.Children.Select(c => c.Id).ToArray());
+    }
+
+    [Fact]
+    public async Task SubAgentsNavItem_OnCreation_IsExpanded()
+    {
+        // Issue #1031: The Sub-agents nav item is expanded by default.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
+
+        Assert.True(subAgentsNav.IsExpanded);
     }
 
     [Fact]
@@ -304,8 +345,8 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentSubAgentsNav = subAgentNav.Children.First(c => c.Id == "chat-sub-agents");
 
         var grandchildNav = Assert.Single(subAgentSubAgentsNav.Children);
-        // Issue #819: Diagnostics tab was removed, so count is now 4 instead of 5
-        Assert.Equal(4, grandchildNav.Children.Count);
+        // Issue #819 removed Diagnostics; issue #1030 removed Background tasks. Count is now 3.
+        Assert.Equal(3, grandchildNav.Children.Count);
     }
 
     [Fact]
@@ -315,8 +356,8 @@ public sealed class AgentViewModelEditorTreeTests
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
-        // Issue #819: Diagnostics slot was removed, so count is now 5 instead of 6
-        Assert.Equal(5, viewModel.DetailContentSlots.Count);
+        // Issue #819 removed Diagnostics; issue #1030 removed Background tasks. Count is now 4.
+        Assert.Equal(4, viewModel.DetailContentSlots.Count);
     }
 
     [Fact]
@@ -391,8 +432,10 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task SubAgentsNavItem_AutoExpands_WhenFirstSubAgentAdded()
+    public async Task SubAgentsNavItem_StaysExpanded_WhenFirstSubAgentAdded()
     {
+        // Issue #1031: The Sub-agents node is expanded by default and stays expanded
+        // when the first sub-agent is added.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
@@ -400,7 +443,7 @@ public sealed class AgentViewModelEditorTreeTests
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
 
-        Assert.False(subAgentsNav.IsExpanded);
+        Assert.True(subAgentsNav.IsExpanded);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 

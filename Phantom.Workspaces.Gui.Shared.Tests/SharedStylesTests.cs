@@ -4,6 +4,7 @@ using Avalonia.Headless.XUnit;
 using Avalonia.Markup.Xaml;
 using Avalonia.Media;
 using Avalonia.Styling;
+using Avalonia.VisualTree;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
@@ -172,14 +173,15 @@ public sealed class SharedStylesTests
     }
 
     [Fact]
-    public void EntityCardTree_SelectedItem_UsesGoldThemeBorder()
+    public void EntityCardTree_SelectedItem_UsesSelectedThemeBorder()
     {
         var repositoryRoot = FindRepositoryRoot();
         var darkTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Dark.axaml"));
         var lightTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Light.axaml"));
 
-        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">Gold</SolidColorBrush>", darkTheme, StringComparison.Ordinal);
-        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#C19C00</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
+        // Reconciled to the canonical (formerly profile-effective) selection colours per issue #1004.
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#5EA0FF</SolidColorBrush>", darkTheme, StringComparison.Ordinal);
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#2B67D1</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -300,6 +302,32 @@ public sealed class SharedStylesTests
         Assert.Contains("Background=\"{ReflectionBinding Background}\"", content, StringComparison.Ordinal);
         Assert.Contains("BorderBrush=\"{ReflectionBinding BorderBrush}\"", content, StringComparison.Ordinal);
         Assert.Contains("Text=\"{ReflectionBinding GlyphText}\"", content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardStyle_WhenRendered_StretchesAndHasNoFixedMaxWidth()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Styles", "SharedStyles.axaml");
+        var stylesContent = File.ReadAllText(stylesPath);
+        var cardRule = ExtractStyle(stylesContent, "Border.entity-card");
+
+        Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", cardRule, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxWidth", cardRule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardStyle_WhenHasChildren_BottomCornersAreSquare()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Styles", "SharedStyles.axaml");
+        var stylesContent = File.ReadAllText(stylesPath);
+
+        var branchRule = ExtractStyle(stylesContent, "Border.entity-card.branch-header");
+        var leafRule = ExtractStyle(stylesContent, "Border.entity-card.leaf");
+
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"6,6,0,0\" />", branchRule, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"6\" />", leafRule, StringComparison.Ordinal);
     }
 
     private static DirectoryInfo FindRepositoryRoot()
@@ -569,4 +597,667 @@ public sealed class SharedStylesTests
         Assert.Contains("DoubleTransition", styleBlock, StringComparison.Ordinal);
         Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
     }
+
+    // Issue #1029 --------------------------------------------------------------------------------
+
+    private const string EntityCardTreeTemplateSelector =
+        "TreeView.entity-card-tree TreeViewItem, TreeView.entity-card-tree-view TreeViewItem";
+
+    private static string ReadSharedStylesText()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var stylesPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Styles", "SharedStyles.axaml");
+        return File.ReadAllText(stylesPath);
+    }
+
+    private static string ReadEntityCardControlText()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var cardPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces", "Controls", "EntityCardControl.axaml");
+        return File.ReadAllText(cardPath);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_Exists_TargetsNamedTreeView()
+    {
+        var styles = ReadSharedStylesText();
+        Assert.Contains("<Style Selector=\"TreeView.entity-card-tree-view\">", styles, StringComparison.Ordinal);
+        Assert.Contains("TreeView.entity-card-tree-view TreeViewItem", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_ItemTemplate_UsesTwoByTwoGrid()
+    {
+        var styles = ReadSharedStylesText();
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("RowDefinitions=\"Auto,*\"", template, StringComparison.Ordinal);
+        Assert.Contains("ColumnDefinitions=\"20,*\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_WhenHasChildren_BorderBottomCornersAreSquare()
+    {
+        var styles = ReadSharedStylesText();
+        var baseBorder = ExtractStyle(styles, "Border.entity-card-shell-border");
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"6\" />", baseBorder, StringComparison.Ordinal);
+
+        var hasChildrenBorder = ExtractStyle(styles, "Border.entity-card-shell-border.has-children");
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"6,6,0,0\" />", hasChildrenBorder, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_ExpanderButton_IsBottomRoundedTopSquare()
+    {
+        var styles = ReadSharedStylesText();
+        var footer = ExtractStyle(styles, "Button.entity-card-shell-footer");
+        Assert.Contains("<Setter Property=\"CornerRadius\" Value=\"0,0,6,6\" />", footer, StringComparison.Ordinal);
+
+        // The footer expander is only shown when the item has children.
+        Assert.Contains(
+            "IsVisible=\"{Binding HasChildren, FallbackValue=False}\"",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_BorderThickness_MatchesInputTextBox()
+    {
+        var styles = ReadSharedStylesText();
+        var borderThicknessSetter = "<Setter Property=\"BorderThickness\" Value=\"{DynamicResource TextControlBorderThemeThickness}\" />";
+
+        var border = ExtractStyle(styles, "Border.entity-card-shell-border");
+        Assert.Contains(borderThicknessSetter, border, StringComparison.Ordinal);
+
+        var footer = ExtractStyle(styles, "Button.entity-card-shell-footer");
+        Assert.Contains(borderThicknessSetter, footer, StringComparison.Ordinal);
+
+        // The agent-chat input TextBox must not set its own BorderThickness so it resolves to the
+        // same FluentTheme TextControlBorderThemeThickness the shell reuses.
+        var repositoryRoot = FindRepositoryRoot();
+        var composerPath = Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Agent.Gui", "Controls", "QueueComposerControl.axaml");
+        var composer = File.ReadAllText(composerPath);
+        var inputStart = composer.IndexOf("x:Name=\"InputBox\"", StringComparison.Ordinal);
+        Assert.True(inputStart >= 0);
+        var inputEnd = composer.IndexOf("/>", inputStart, StringComparison.Ordinal);
+        var inputBox = composer[inputStart..inputEnd];
+        Assert.DoesNotContain("BorderThickness", inputBox, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_ChildRail_IsTwoPixelsWithChildRailBrush()
+    {
+        var styles = ReadSharedStylesText();
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("Background=\"{Binding ChildRailBrush, FallbackValue=#808080}\"", template, StringComparison.Ordinal);
+        Assert.Contains("Width=\"2\"", template, StringComparison.Ordinal);
+        Assert.Contains("HorizontalAlignment=\"Center\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_ItemsPresenter_InSecondRowSecondColumn()
+    {
+        var styles = ReadSharedStylesText();
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("<ItemsPresenter Grid.Column=\"1\" Grid.Row=\"1\"", template, StringComparison.Ordinal);
+        Assert.Contains("IsVisible=\"{Binding IsExpanded}\" />", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_TreeViewBackground_IsEntityPaneBackground()
+    {
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+        Assert.Contains(
+            "<Setter Property=\"Background\" Value=\"{DynamicResource Theme.Surface.EntityPane.Background}\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_HorizontalScrollBar_OnlyWhenMinWidthHit_AndNotOverlapping()
+    {
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.AllowAutoHide\" Value=\"False\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+
+        // A minimum width on the item gates when the horizontal scrollbar appears.
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"160\" />", template, StringComparison.Ordinal);
+
+        // Issue #1049: the ItemsPanel wrapper carries MinWidth="160" and MaxWidth bound to viewport.
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_VerticalScrollBar_DoesNotOverlapContent()
+    {
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.VerticalScrollBarVisibility\" Value=\"Auto\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.AllowAutoHide\" Value=\"False\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCardShellTemplate_AppliedToContentControl_RendersSameBorder()
+    {
+        var sharedStyles = LoadSharedStyles();
+
+        var content = new ContentControl { Content = new TextBlock { Text = "standalone" } };
+        content.Classes.Add("entity-card-shell");
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(content);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        var shellBorder = content.GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(static border => border.Classes.Contains("entity-card-shell-border"));
+
+        Assert.NotNull(shellBorder);
+        Assert.Equal(new CornerRadius(6), shellBorder!.CornerRadius);
+    }
+
+    [Fact]
+    public void EntityCardControl_HasNoOuterBorderOrBackground()
+    {
+        var card = ReadEntityCardControlText();
+        Assert.DoesNotContain("<Border Classes=\"entity-card\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-entity-node-root\"", card, StringComparison.Ordinal);
+        Assert.Contains("<StackPanel Classes=\"workspace-entity-card-content\"", card, StringComparison.Ordinal);
+        Assert.Contains("Tapped=\"OnEntityCardTapped\"", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkspaceFieldColumns_MinWidth_IsSixtySeven()
+    {
+        // Issue #1045: property-name and property-value column min-widths drop to 2/3 (100 -> 67).
+        var styles = ReadSharedStylesText();
+        var label = ExtractStyle(styles, "TextBlock.workspace-field-label");
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"67\" />", label, StringComparison.Ordinal);
+        var value = ExtractStyle(styles, "TextBox.workspace-field-value");
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"67\" />", value, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_HeaderAndActionsRow_MinWidthIsSixtySeven()
+    {
+        // Issue #1045: display-name column and actions row min-widths drop to 2/3 (100 -> 67).
+        var card = ReadEntityCardControlText();
+
+        var headerStart = card.IndexOf("Classes=\"workspace-entity-header-row\"", StringComparison.Ordinal);
+        Assert.True(headerStart >= 0);
+        var headerEnd = card.IndexOf(">", headerStart, StringComparison.Ordinal);
+        var header = card[headerStart..headerEnd];
+        Assert.Contains("MinWidth=\"67\"", header, StringComparison.Ordinal);
+
+        var actionsStart = card.IndexOf("<WrapPanel Grid.Column=\"2\"", StringComparison.Ordinal);
+        Assert.True(actionsStart >= 0, "Actions row must be a WrapPanel so action buttons wrap.");
+        var actionsEnd = card.IndexOf(">", actionsStart, StringComparison.Ordinal);
+        var actions = card[actionsStart..actionsEnd];
+        Assert.Contains("Classes=\"workspace-entity-actions-row\"", actions, StringComparison.Ordinal);
+        Assert.Contains("MinWidth=\"67\"", actions, StringComparison.Ordinal);
+
+        var styles = ReadSharedStylesText();
+        Assert.Contains("<Style Selector=\"WrapPanel.workspace-entity-actions-row\">", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_ItemMinWidth_IsTwoThirdsOfPrior()
+    {
+        // Issue #1045: the tree item MinWidth drops to 2/3 (240 -> 160).
+        var styles = ReadSharedStylesText();
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"160\" />", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("<Setter Property=\"MinWidth\" Value=\"240\" />", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_IndentColumn_IsFixedTwentyPixels()
+    {
+        // Issue #1045: the indent gutter is a fixed 20px column (was Auto) with the rail centred.
+        var styles = ReadSharedStylesText();
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("ColumnDefinitions=\"20,*\"", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("ColumnDefinitions=\"Auto,*\"", template, StringComparison.Ordinal);
+        Assert.Contains("Width=\"2\"", template, StringComparison.Ordinal);
+        Assert.Contains("HorizontalAlignment=\"Center\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_Sticky_AppliesToWholeTreeViewItem()
+    {
+        // Issue #1045: sticky must cover the whole item (border + footer), so AutoRowLevel moves
+        // from the inner ContentPresenter.branch-header to the item content root StackPanel.
+        var styles = ReadSharedStylesText();
+
+        Assert.Contains(
+            "<Style Selector=\"TreeView.entity-card-tree-view.entity-card-tree-sticky StackPanel.entity-card-tree-item\">",
+            styles,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Style Selector=\"TreeView.entity-card-tree.entity-card-tree-sticky StackPanel.entity-card-tree-item\">",
+            styles,
+            StringComparison.Ordinal);
+
+        var stickyItemStyle = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view.entity-card-tree-sticky StackPanel.entity-card-tree-item");
+        Assert.Contains(
+            "<Setter Property=\"controls:TreeSticky.AutoRowLevel\" Value=\"True\"/>",
+            stickyItemStyle,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "entity-card-tree-sticky ContentPresenter.branch-header",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOver_RecoloursBothBorderAndFooter()
+    {
+        // Issue #1048: hover is now scoped to the StackPanel.entity-card-tree-item:pointerover,
+        // not TreeViewItem:pointerover. Both border and footer are still recoloured (preserves #1045).
+        var styles = ReadSharedStylesText();
+
+        var borderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
+            borderRule,
+            StringComparison.Ordinal);
+
+        var footerRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Button.entity-card-shell-footer");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
+            footerRule,
+            StringComparison.Ordinal);
+
+        // The per-element pointerover rules that caused the seam must be gone.
+        Assert.DoesNotContain(
+            "<Style Selector=\"Border.entity-card-shell-border:pointerover\">",
+            styles,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<Style Selector=\"Button.entity-card-shell-footer:pointerover\">",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_Selected_RecoloursBothBorderAndFooter()
+    {
+        // Issue #1048: selection is now scoped to the StackPanel.entity-card-tree-item.selected class,
+        // not TreeViewItem:selected. Both border and footer are still recoloured (preserves #1045).
+        var styles = ReadSharedStylesText();
+
+        var borderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item.selected Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
+            borderRule,
+            StringComparison.Ordinal);
+
+        var footerRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item.selected Button.entity-card-shell-footer");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
+            footerRule,
+            StringComparison.Ordinal);
+    }
+
+    // Issue #1048 — new tests -----------------------------------------------------------------------
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOverHighlight_ScopedToOwnHeaderStackPanel()
+    {
+        // The blue ActiveBorder recolour selectors are keyed off StackPanel.entity-card-tree-item:pointerover
+        // (not TreeViewItem:pointerover), so hover cannot propagate to ancestor/descendant items.
+        var styles = ReadSharedStylesText();
+
+        var borderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
+            borderRule,
+            StringComparison.Ordinal);
+
+        var treeViewBorderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
+            treeViewBorderRule,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOver_NoTreeViewItemPointerOverDescendantSelector()
+    {
+        // The old TreeViewItem:pointerover descendant selectors must be gone to prevent regression.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Button.entity-card-shell-footer",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOver_StillRecoloursBothBorderAndFooter()
+    {
+        // Preserves #1045: both the shell border AND the footer are recoloured to ActiveBorder
+        // under the new scoped selector (hovering header or footer recolours both).
+        var styles = ReadSharedStylesText();
+
+        // entity-card-tree variant
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item:pointerover Button.entity-card-shell-footer");
+
+        // entity-card-tree-view variant
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Button.entity-card-shell-footer");
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_SelectedHighlight_ScopedToOwnHeaderStackPanelClass()
+    {
+        // The gold SelectedBorder recolour is keyed off StackPanel.entity-card-tree-item.selected
+        // and the template binds Classes.selected to the container IsSelected.
+        var styles = ReadSharedStylesText();
+
+        // Template must bind Classes.selected
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("Classes.selected=", template, StringComparison.Ordinal);
+
+        // Selection selectors for both tree class variants
+        var borderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item.selected Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
+            borderRule,
+            StringComparison.Ordinal);
+
+        var treeViewBorderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item.selected Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
+            treeViewBorderRule,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_Selected_NoTreeViewItemSelectedDescendantSelector()
+    {
+        // The old TreeViewItem:selected descendant selectors must be gone.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:selected Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TreeViewItem:selected Button.entity-card-shell-footer",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_HoverChildItem_DoesNotHighlightParentBorder()
+    {
+        // Selector-scope proxy: because the hover selector is keyed off
+        // StackPanel.entity-card-tree-item:pointerover (not TreeViewItem:pointerover),
+        // a child's header hover cannot propagate to the parent's StackPanel — the parent's
+        // StackPanel is a sibling of the ItemsPresenter containing the child, not an ancestor.
+        var styles = ReadSharedStylesText();
+
+        // The selector uses StackPanel.entity-card-tree-item:pointerover, not TreeViewItem:pointerover.
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+
+        // And the template places ItemsPresenter as a sibling of the StackPanel, not a descendant.
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("StackPanel Grid.Row=\"0\"", template, StringComparison.Ordinal);
+        Assert.Contains("ItemsPresenter Grid.Column=\"1\" Grid.Row=\"1\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_HoverParentHeader_DoesNotHighlightChildBorders()
+    {
+        // Selector-scope proxy: the hover selector descends from StackPanel.entity-card-tree-item:pointerover,
+        // not TreeViewItem:pointerover. The StackPanel is in grid row 0, and children are in
+        // the row-1 ItemsPresenter (a sibling), so the descendant combinator cannot reach child borders.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("ItemsPresenter Grid.Column=\"1\" Grid.Row=\"1\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_SelectParent_DoesNotHighlightChildBorders()
+    {
+        // Selector-scope proxy: the selection selector uses StackPanel.entity-card-tree-item.selected,
+        // not TreeViewItem:selected. Classes.selected is bound to the container's IsSelected via
+        // the template, so only THIS item's StackPanel gets the .selected class — child StackPanels
+        // in the row-1 ItemsPresenter do not inherit it.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:selected Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("Classes.selected=", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_HorizontalScrollBar_ConfiguredOnceOnStyle()
+    {
+        // Issue #1045: the ScrollViewer configuration lives only on the shared style; the consumer
+        // (AgentChatEditorControl NavigationTree) must not duplicate it.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.VerticalScrollBarVisibility\" Value=\"Auto\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+
+        // Issue #1049: the ItemsPanel wrapper with MinWidth + viewport-MaxWidth is also in the shared style.
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+
+        var repositoryRoot = FindRepositoryRoot();
+        var editorPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Agent.Gui",
+            "Controls",
+            "AgentChatEditorControl.axaml");
+        var editor = File.ReadAllText(editorPath);
+        var treeStart = editor.IndexOf("x:Name=\"NavigationTree\"", StringComparison.Ordinal);
+        Assert.True(treeStart >= 0);
+        var treeEnd = editor.IndexOf(">", treeStart, StringComparison.Ordinal);
+        var navigationTree = editor[treeStart..treeEnd];
+        Assert.DoesNotContain("ScrollViewer.HorizontalScrollBarVisibility", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("ScrollViewer.VerticalScrollBarVisibility", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("ScrollViewer.AllowAutoHide", navigationTree, StringComparison.Ordinal);
+    }
+
+    // Issue #1049 — new tests -----------------------------------------------------------------------
+
+    [Fact]
+    public void EntityCardTreeView_ItemsWrapper_MaxWidthBoundToViewport()
+    {
+        // The entity-card-tree-view ItemsPanel override declares MinWidth="160" and
+        // MaxWidth bound to the tree's ScrollViewer viewport width, with HorizontalScrollBarVisibility="Auto" retained.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        Assert.Contains("<Setter Property=\"ItemsPanel\">", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<ItemsPanelTemplate>", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkspaceMarkdownFieldRow_LabelColumn_IsNotFixedTwoHundred()
+    {
+        // Issue #1049: the note/markdown field-row grids must not hard-code ColumnDefinitions="200,*".
+        var repositoryRoot = FindRepositoryRoot();
+        var templatePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces",
+            "Templates",
+            "WorkspaceDataTemplates.axaml");
+        var content = File.ReadAllText(templatePath);
+
+        // Find all workspace-field-row grids inside note/markdown DataTemplates
+        // (JsonSchemaFieldEditorViewModel, PlainMimeAttachmentFieldEditorViewModel,
+        //  MarkdownMimeAttachmentFieldEditorViewModel). None should use 200,*.
+        // The "200,*" column definition was the root of the oversized label floor.
+        var fieldRowMatches = System.Text.RegularExpressions.Regex.Matches(
+            content,
+            @"workspace-markdown-viewer|workspace-markdown-content|workspace-markdown-editor|workspace-json-schema");
+
+        Assert.NotEmpty(fieldRowMatches);
+
+        // No grid in the file should still use ColumnDefinitions="200,*" after the fix
+        // for the markdown/note templates — verify the total count dropped.
+        var remaining200 = System.Text.RegularExpressions.Regex.Matches(
+            content,
+            @"ColumnDefinitions=""200,\*""");
+
+        // The note/markdown grids (9 occurrences) should all be converted. The non-markdown grids
+        // (EntityReference, EntityList, String, BooleanToggle) may still use 200,*.
+        // Assert that none of the remaining 200,* grids are inside markdown/note templates.
+        foreach (System.Text.RegularExpressions.Match match in remaining200)
+        {
+            // Check that no workspace-markdown-viewer/editor/json-schema appears within 500 chars
+            // after this ColumnDefinitions (i.e. it's not a markdown grid).
+            var lookAhead = content.Substring(match.Index, Math.Min(500, content.Length - match.Index));
+            Assert.DoesNotContain("workspace-markdown-viewer", lookAhead, StringComparison.Ordinal);
+            Assert.DoesNotContain("workspace-json-schema", lookAhead, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void EntityCardTreeView_ViewportWiderThanMin_ContentFillsAndWraps_NoHScroll()
+    {
+        // Style/attached-property assertion proxy: when the viewport is wider than MinWidth (160),
+        // the ItemsPanel wrapper's MaxWidth == Viewport.Width caps content to the viewport,
+        // enabling wrap and fill. The HorizontalScrollBarVisibility="Auto" means no scrollbar
+        // appears because extent == viewport.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        // MaxWidth bound to viewport ensures content is capped at viewport width (finite measure).
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+        // HorizontalAlignment="Stretch" ensures content fills the viewport.
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", treeViewStyle, StringComparison.Ordinal);
+        // Auto means scrollbar only appears when extent > viewport; with MaxWidth == viewport, it won't.
+        Assert.Contains("<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_ViewportNarrowerThanMin_ShowsHorizontalScrollBar()
+    {
+        // Style assertion proxy: when viewport < MinWidth (160), Avalonia's MinMax clamp
+        // resolves wrapper to MinWidth (160 > viewport), so extent > viewport → scrollbar appears.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_NestedItem_WrapsWithinIndentedWidth()
+    {
+        // Style/template assertion proxy: the single ItemsPanel wrapper is constrained to
+        // [MinWidth, Viewport.Width]. Indentation is handled INSIDE the wrapper by the
+        // TreeViewItem template's 20,* grid, so nested items wrap at (wrapper - indent),
+        // not at the full viewport width.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        // Only ONE wrapper (the ItemsPanel) is bound to the viewport — not per-item.
+        Assert.Contains("<ItemsPanelTemplate>", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+
+        // The TreeViewItem template uses 20,* grid for indentation inside the wrapper.
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("ColumnDefinitions=\"20,*\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditor_NavigationTree_InheritsWrapperFromSharedStyle()
+    {
+        // The NavigationTree consumer does not redeclare ScrollViewer settings or the ItemsPanel
+        // wrapper and therefore inherits the Auto + ItemsPanel wrapper from the shared style.
+        var repositoryRoot = FindRepositoryRoot();
+        var editorPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Agent.Gui",
+            "Controls",
+            "AgentChatEditorControl.axaml");
+        var editor = File.ReadAllText(editorPath);
+        var treeStart = editor.IndexOf("x:Name=\"NavigationTree\"", StringComparison.Ordinal);
+        Assert.True(treeStart >= 0);
+        var treeEnd = editor.IndexOf(">", treeStart, StringComparison.Ordinal);
+        var navigationTree = editor[treeStart..treeEnd];
+
+        Assert.DoesNotContain("ItemsPanel", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxWidth", navigationTree, StringComparison.Ordinal);
+    }
 }
+

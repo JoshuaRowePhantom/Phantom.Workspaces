@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Reflection;
+using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Xunit;
@@ -19,30 +20,29 @@ public sealed class PhantomAvaloniaFactTests
         Assert.True(Dispatcher.UIThread.CheckAccess(), "Test body should be running on the Avalonia UI thread.");
     }
 
-    // Regression test for issue #815: verify no PerTest isolation in Agent.Gui.Tests
+    // Regression test for issues #815 / #1012: the Agent.Gui.Tests assembly MUST declare
+    // shared-application (PerAssembly) isolation. When no AvaloniaTestIsolationAttribute is
+    // present, Avalonia's HeadlessUnitTestSession.GetOrStartForAssembly defaults to
+    // AvaloniaTestIsolationLevel.PerTest, which rebuilds the Application/Dispatcher/compositor
+    // on every test. That per-test rebuild is the crash surface for the intermittent
+    // "The calling thread cannot access this object because a different thread owns it"
+    // failure in AvaloniaHeadlessPlatform.Initialize -> DefaultRenderLoop.Add. Declaring
+    // PerAssembly makes the app build exactly once (EnsureSharedApplication), removing the
+    // crash path deterministically.
+    //
+    // This assertion deliberately fails when the attribute is missing (the #1012 regression
+    // state) — the previous version of this guard resolved the attribute type from the wrong
+    // assembly/namespace and read a non-existent "Level" property, so it silently passed even
+    // while the assembly ran in the crash-prone PerTest default.
     [Fact]
-    public void AvaloniaXUnitSetup_AgentGuiTests_DoesNotDeclarePerTestIsolation()
+    public void AvaloniaXUnitSetup_AgentGuiTests_DeclaresPerAssemblyIsolation()
     {
         var assembly = typeof(PhantomAvaloniaFactTests).Assembly;
-        
-        // The AvaloniaTestIsolationAttribute is in Avalonia.Headless.XUnit
-        var avaloniaAssembly = typeof(AvaloniaFactAttribute).Assembly;
-        var isolationAttrType = avaloniaAssembly.GetType("Avalonia.Headless.XUnit.AvaloniaTestIsolationAttribute");
-        
-        if (isolationAttrType != null)
-        {
-            var isolationAttr = assembly.GetCustomAttribute(isolationAttrType);
-            
-            // Assert: either no attribute is present OR the level is not PerTest
-            if (isolationAttr != null)
-            {
-                var levelProperty = isolationAttrType.GetProperty("Level");
-                var levelValue = levelProperty?.GetValue(isolationAttr);
-                var perTestValue = Enum.Parse(levelValue!.GetType(), "PerTest");
-                
-                Assert.NotEqual(perTestValue, levelValue);
-            }
-        }
+
+        var isolationAttr = assembly.GetCustomAttribute<AvaloniaTestIsolationAttribute>();
+
+        Assert.NotNull(isolationAttr);
+        Assert.Equal(AvaloniaTestIsolationLevel.PerAssembly, isolationAttr!.IsolationLevel);
     }
 
     // Meta-test for issue #815: verify ChatOutputHtmlModelTests can run without _dispatchTask faults

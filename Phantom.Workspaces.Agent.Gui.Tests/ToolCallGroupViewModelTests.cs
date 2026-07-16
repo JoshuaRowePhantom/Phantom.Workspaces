@@ -33,7 +33,7 @@ public sealed class ToolCallGroupViewModelTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task ToolCallGroup_MixedTools_HeaderShowsNeutralLabel()
+    public async Task ToolCallGroup_MixedTools_HeaderListsUniqueToolNames()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
@@ -46,21 +46,22 @@ public sealed class ToolCallGroupViewModelTests
         sink.Operations.Clear();
 
         // Live-add a second, different tool call so the pair is promoted into a group and the
-        // group summary is refreshed with the mixed-tools label.
+        // group summary is refreshed with the mixed-tools name list.
         history.Add(ToolCallMessage("workspaces_entity_get"));
 
         var groupSummaryUpdate = sink.Operations.FirstOrDefault(op => op.Path.Contains("-summary"));
         Assert.True(groupSummaryUpdate != default);
-        
+
         var summaryHtml = groupSummaryUpdate.Content;
         Assert.Contains("2 calls", summaryHtml);
-        
-        // Should NOT show a single tool name when mixed
-        Assert.DoesNotContain("report_intent", summaryHtml);
-        Assert.DoesNotContain("workspaces_entity_get", summaryHtml);
-        
-        // Should show neutral label "tools" not "tool call:"
-        Assert.Contains("tools", summaryHtml);
+
+        // Mixed group lists all unique tool names in first-seen order.
+        Assert.Contains("tools (", summaryHtml);
+        Assert.Contains("report_intent", summaryHtml);
+        Assert.Contains("workspaces_entity_get", summaryHtml);
+        Assert.True(
+            summaryHtml.IndexOf("report_intent", System.StringComparison.Ordinal) <
+            summaryHtml.IndexOf("workspaces_entity_get", System.StringComparison.Ordinal));
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -81,13 +82,14 @@ public sealed class ToolCallGroupViewModelTests
 
         var groupSummaryUpdate = sink.Operations.FirstOrDefault(op => op.Path.Contains("-summary"));
         Assert.True(groupSummaryUpdate != default);
-        
+
         var summaryHtml = groupSummaryUpdate.Content;
         Assert.Contains("grep", summaryHtml);
         Assert.Contains("2 calls", summaryHtml);
-        
-        // When homogeneous, should use "tool call:" prefix
-        Assert.Contains("tool call:", summaryHtml);
+
+        // Homogeneous group lists the single tool name as "tools (grep)".
+        Assert.Contains("tools (", summaryHtml);
+        Assert.DoesNotContain("tool call:", summaryHtml);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

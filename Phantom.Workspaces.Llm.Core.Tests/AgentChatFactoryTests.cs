@@ -4,6 +4,8 @@ using MongoDB.Bson;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 namespace Phantom.Workspaces.Llm.Tests;
@@ -341,6 +343,155 @@ public sealed class AgentChatFactoryTests
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
         Assert.NotNull(field);
         return (TaskScheduler?)field!.GetValue(chat);
+    }
+
+    // ── Factory self-injection (issue #1036) ─────────────────────────────────
+    //
+    // When the factory hands its services to the chats it creates, it must inject
+    // itself as the RunningAgentChatFactory. Otherwise a reopened session cannot
+    // materialise its persisted sub-agents (RestoreSubAgentsAsync bails out when the
+    // factory is null), so the sub-agents tree comes back empty.
+
+    private static AgentServices GetRequestServices(AgentChat chat)
+    {
+        var requestField = typeof(AgentChat).GetField(
+            "request",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(requestField);
+        var request = requestField!.GetValue(chat);
+        Assert.NotNull(request);
+
+        var servicesProperty = request!.GetType().GetProperty("AgentServices");
+        Assert.NotNull(servicesProperty);
+        var services = (AgentServices?)servicesProperty!.GetValue(request);
+        Assert.NotNull(services);
+        return services!;
+    }
+
+    private static async Task WaitForSubAgentCountAsync(AgentChat chat, int expected)
+    {
+        if (chat.SubAgents.Count >= expected)
+        {
+            return;
+        }
+
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (chat.SubAgents.Count >= expected)
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        var incc = (INotifyCollectionChanged)chat.SubAgents;
+        incc.CollectionChanged += Handler;
+        try
+        {
+            if (chat.SubAgents.Count >= expected)
+            {
+                return;
+            }
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await tcs.Task.WaitAsync(timeout.Token);
+        }
+        finally
+        {
+            incc.CollectionChanged -= Handler;
+        }
+    }
+
+    private static async Task StoreChildAsync(
+        InMemoryAgentPersistenceStore store,
+        string parentSessionId,
+        string childSessionId)
+    {
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = BsonDocument.Parse(EchoAgentDefinition.ToJson()),
+            }
+        });
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+    }
+
+    [Fact]
+    public async Task GetAsync_CreatedChat_ExposesFactoryAsRunningAgentChatFactory()
+    {
+        var sessionId = new AgentSessionId("session-selffactory-get");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(sessionId);
+
+        var services = GetRequestServices(lease.AgentChat);
+        Assert.Same(factory, services.RunningAgentChatFactory);
+    }
+
+    [Fact]
+    public async Task GetOrCreateAsync_CreatedChat_ExposesFactoryAsRunningAgentChatFactory()
+    {
+        var sessionId = new AgentSessionId("session-selffactory-getorcreate");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetOrCreateAsync(sessionId);
+
+        var services = GetRequestServices(lease.AgentChat);
+        Assert.Same(factory, services.RunningAgentChatFactory);
+    }
+
+    [Fact]
+    public async Task CreateAsync_CreatedChat_ExposesFactoryAsRunningAgentChatFactory()
+    {
+        var sessionId = new AgentSessionId("session-selffactory-create");
+        await using var factory = CreateFactory();
+
+        await using var lease = await factory.CreateAsync(EchoAgentDefinition, sessionId);
+
+        var services = GetRequestServices(lease.AgentChat);
+        Assert.Same(factory, services.RunningAgentChatFactory);
+    }
+
+    [Fact]
+    public async Task GetAsync_ExplicitFactoryInServices_IsNotOverwritten()
+    {
+        var sessionId = new AgentSessionId("session-selffactory-explicit");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        var explicitFactory = CreateFactory(store: store);
+        await using var _ = explicitFactory;
+        var services = new AgentServices
+        {
+            ChatClientOverride = new DeterministicTestChatClient(),
+            RunningAgentChatFactory = explicitFactory,
+        };
+        await using var factory = new AgentChatFactory(store, services, TaskScheduler.Default);
+
+        await using var lease = await factory.GetAsync(sessionId);
+
+        var chatServices = GetRequestServices(lease.AgentChat);
+        Assert.Same(explicitFactory, chatServices.RunningAgentChatFactory);
+    }
+
+    [Fact]
+    public async Task GetAsync_ResumeSessionWithPersistedSubAgents_RestoresThem()
+    {
+        var parentSessionId = "session-selffactory-resume";
+        var store = await CreatePopulatedStoreAsync(new AgentSessionId(parentSessionId));
+        await StoreChildAsync(store, parentSessionId, "resume-child-a");
+        await StoreChildAsync(store, parentSessionId, "resume-child-b");
+
+        // Bare services (no RunningAgentChatFactory): the factory must self-inject so
+        // the reopened parent can materialise its persisted sub-agents.
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
+
+        await WaitForSubAgentCountAsync(lease.AgentChat, 2);
+        Assert.Equal(2, lease.AgentChat.SubAgents.Count);
     }
 
     // ── Test doubles ──────────────────────────────────────────────────────────

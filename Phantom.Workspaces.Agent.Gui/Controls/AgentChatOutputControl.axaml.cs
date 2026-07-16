@@ -52,6 +52,7 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     private AgentViewModel? subscribedViewModel;
     private bool isAttached;
     private bool suppressScrollOnEnable;
+    private TaskCompletionSource? historyLoadedSource;
 
     /// <summary>
     /// Raised when the page requests opening a URL in an external browser.
@@ -132,7 +133,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
 
     public void EndBatch() => this.browser.EndBatch();
 
-    internal Task HistoryLoaded => this.outputModel?.HistoryLoaded ?? Task.CompletedTask;
+    internal Task HistoryLoaded
+        => this.historyLoadedSource?.Task ?? this.outputModel?.HistoryLoaded ?? Task.CompletedTask;
 
     public void UpdateStatus(AgentStatusField field, string? value)
         => this.subscribedViewModel?.StatusSink.UpdateStatus(field, value);
@@ -226,6 +228,11 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             this.subscribedViewModel = null;
         }
 
+        // Release any pending history-load waiter so awaiters of HistoryLoaded do not hang after a
+        // detach/re-bind, and so a stale OnBrowserReady cycle abandons itself (issue #1009).
+        this.historyLoadedSource?.TrySetResult();
+        this.historyLoadedSource = null;
+
         this.outputModel?.Dispose();
         this.outputModel = null;
     }
@@ -256,28 +263,77 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         this.outputModel?.Dispose();
         this.outputModel = null;
 
-        if (this.subscribedViewModel is { } vm)
+        if (this.subscribedViewModel is not { } vm)
         {
-            // Auto-scroll is enabled from the start. ScrollToBottom will be called after the
-            // first (newest) history chunk in Phase B, making recent content visible immediately.
-            this.browser.BeginBatch();
-            this.outputModel = new ChatOutputHtmlModel(
-                vm.History,
-                vm.RunningItems,
-                isReasoningVisible: () => vm.IsReasoningVisible,
-                sink: this,
-                toolFactory: DefaultToolFactory,
-                statusSink: this,
-                resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
-                subAgents: vm.SubAgentDisplays,
-                ancestors: BuildAncestors(vm.AgentChat));
-            this.browser.EndBatch();
+            return;
+        }
 
-            // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom
-            // is issued by the model after the first history chunk, not here.
-            this.suppressScrollOnEnable = true;
-            vm.AutoScrollEnabled = true;
-            this.suppressScrollOnEnable = false;
+        // Track the full ready → history-populated → rendered pipeline so callers (and tests) can
+        // await the point at which persisted history has actually been rendered (issue #1009).
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        this.historyLoadedSource = completion;
+
+        // Wait until the view model's history has been fully loaded from persistence before
+        // constructing the model, whose constructor snapshots History synchronously. Without this,
+        // a WebView Ready that arrives before persistence completes captures an empty History and
+        // renders nothing until a manual reload (issue #1009). When history is already loaded (the
+        // common case) the awaited task is already complete and execution continues synchronously.
+        try
+        {
+            await vm.HistoryPopulated;
+        }
+        catch (Exception)
+        {
+            // A failed or cancelled history load must not crash the UI thread; fall through and
+            // render whatever history is currently available.
+        }
+
+        // The control may have been detached or re-bound to a different view model while awaiting;
+        // abandon this stale cycle rather than rendering into a reused browser.
+        if (this.subscribedViewModel != vm || this.historyLoadedSource != completion)
+        {
+            completion.TrySetResult();
+            return;
+        }
+
+        // Auto-scroll is enabled from the start. ScrollToBottom will be called after the
+        // first (newest) history chunk in Phase B, making recent content visible immediately.
+        this.browser.BeginBatch();
+        this.outputModel = new ChatOutputHtmlModel(
+            vm.History,
+            vm.RunningItems,
+            isReasoningVisible: () => vm.IsReasoningVisible,
+            sink: this,
+            toolFactory: DefaultToolFactory,
+            statusSink: this,
+            resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
+            subAgents: vm.SubAgentDisplays,
+            ancestors: BuildAncestors(vm.AgentChat));
+        this.browser.EndBatch();
+
+        // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom
+        // is issued by the model after the first history chunk, not here.
+        this.suppressScrollOnEnable = true;
+        vm.AutoScrollEnabled = true;
+        this.suppressScrollOnEnable = false;
+
+        // Complete the tracked pipeline task once the initial history render finishes.
+        _ = CompleteWhenLoadedAsync(completion, this.outputModel.HistoryLoaded);
+    }
+
+    private static async Task CompleteWhenLoadedAsync(TaskCompletionSource completion, Task historyLoaded)
+    {
+        try
+        {
+            await historyLoaded;
+        }
+        catch (Exception)
+        {
+            // The initial render task faulting must still release awaiters of HistoryLoaded.
+        }
+        finally
+        {
+            completion.TrySetResult();
         }
     }
 
@@ -418,12 +474,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     /// </summary>
     private static IReadOnlyList<IRunningSubAgent> BuildAncestors(AgentChat agentChat)
     {
+        const int maxDepth = 64;
         var chain = new List<IRunningSubAgent>();
         AgentChat? current = agentChat;
-        while (current is not null)
+        var depth = 0;
+        while (current is not null && depth < maxDepth)
         {
             chain.Add(current);
             current = current.ParentAgent;
+            depth++;
         }
 
         chain.Reverse();

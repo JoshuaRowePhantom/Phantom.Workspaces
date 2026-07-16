@@ -124,7 +124,8 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         sb.Append("<div class=\"running-subagents-panel\" id=\"").Append(ChatOutputHtmlRenderer.SubAgentPanelInnerId).Append("\">");
         sb.Append("<h4 class=\"running-subagents-header\">[Running sub-agents]</h4>");
 
-        AppendBreadcrumb(sb, ancestors);
+        // Ancestor breadcrumb is now emitted unconditionally in the history container (issue #1046);
+        // omit the running-panel duplicate to avoid double breadcrumbs.
 
         foreach (var agent in subAgents)
         {

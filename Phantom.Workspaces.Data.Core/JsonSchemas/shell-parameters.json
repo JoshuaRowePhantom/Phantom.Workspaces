@@ -1,0 +1,17 @@
+{
+  "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/shell-parameters.json",
+  "description": "Reusable shell execution parameters used by shell entities and transport stream-open requests.",
+  "type": "object",
+  "properties": {
+    "type": { "const": "shell" },
+    "command": { "type": "string" },
+    "args": { "type": "array", "items": { "type": "string" } },
+    "command-arguments": { "type": "array", "items": { "type": "string" } },
+    "working-directory": { "type": "string" },
+    "environment": { "type": "object", "additionalProperties": { "type": "string" } },
+    "mode": { "type": "string", "enum": ["pty", "pipe"] },
+    "columns": { "type": "integer", "minimum": 1 },
+    "rows": { "type": "integer", "minimum": 1 }
+  },
+  "required": ["command"]
+}

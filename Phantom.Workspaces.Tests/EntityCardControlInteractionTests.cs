@@ -9,6 +9,41 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardControlInteractionTests
 {
+    [Fact]
+    public void EntityCardControl_TapHandlers_WiredToRootElement()
+    {
+        // Issue #1029: after removing the outer Border chrome, the tap-to-activate and
+        // interactive-child bubbling-suppression handlers must remain wired to the new content root.
+        var cardPath = Path.Combine(FindRepositoryRoot().FullName, "Phantom.Workspaces", "Controls", "EntityCardControl.axaml");
+        var card = File.ReadAllText(cardPath);
+
+        Assert.DoesNotContain("<Border Classes=\"entity-card\"", card, StringComparison.Ordinal);
+
+        var rootStart = card.IndexOf("<StackPanel Classes=\"workspace-entity-card-content\"", StringComparison.Ordinal);
+        Assert.True(rootStart >= 0, "The card root must be the content StackPanel.");
+        var rootEnd = card.IndexOf('>', rootStart);
+        var root = card[rootStart..rootEnd];
+        Assert.Contains("Tapped=\"OnEntityCardTapped\"", root, StringComparison.Ordinal);
+
+        Assert.Contains("Tapped=\"OnInteractiveChildTapped\"", card, StringComparison.Ordinal);
+    }
+
+    private static DirectoryInfo FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return current;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void EntityCardControl_WhenTappedEventAlreadyHandled_DoesNotOpenEntity()
     {

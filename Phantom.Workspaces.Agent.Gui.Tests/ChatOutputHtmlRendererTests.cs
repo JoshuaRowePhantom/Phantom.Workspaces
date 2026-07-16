@@ -306,7 +306,7 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolCallGroupSummary_SummaryHasDataStickyLevel2()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", "my_tool", 3);
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "my_tool" }, 3);
 
         Assert.Contains("data-sticky-level=\"2\"", html);
     }
@@ -314,9 +314,41 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolCallGroup_SummaryHasDataStickyLevel2()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("grp-0", "my_tool", 1, "<div>body</div>");
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("grp-0", new[] { "my_tool" }, 1, "<div>body</div>");
 
         Assert.Contains("data-sticky-level=\"2\"", html);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_MixedTools_ListsUniqueNamesInFirstSeenOrder()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell", "edit" }, 3);
+
+        Assert.Contains("tools (<span class=\"tool-name\">powershell</span>, <span class=\"tool-name\">edit</span>)", html, StringComparison.Ordinal);
+        Assert.Contains("3 calls", html, StringComparison.Ordinal);
+        // First-seen order: powershell precedes edit.
+        Assert.True(
+            html.IndexOf("powershell", StringComparison.Ordinal) < html.IndexOf("edit", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_SingleTool_ListsSingleName()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell" }, 2);
+
+        Assert.Contains("tools (<span class=\"tool-name\">powershell</span>)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("tool call:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_DuplicateToolNames_DedupedOnce()
+    {
+        // The model dedupes; the renderer lists whatever it is given. Verify a single entry renders once.
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell" }, 3);
+
+        var first = html.IndexOf("powershell", StringComparison.Ordinal);
+        var last = html.LastIndexOf("powershell", StringComparison.Ordinal);
+        Assert.Equal(first, last);
     }
 
     [Fact]
@@ -340,7 +372,8 @@ public sealed class ChatOutputHtmlRendererTests
     {
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
 
-        Assert.Contains("<details class=\"chat-tool-call\" open>", html, StringComparison.Ordinal);
+        Assert.Contains("<details class=\"chat-tool-call\"", html, StringComparison.Ordinal);
+        Assert.Contains(" open>", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -348,7 +381,95 @@ public sealed class ChatOutputHtmlRendererTests
     {
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
 
-        Assert.Contains("<details class=\"chat-tool-result\" open>", html, StringComparison.Ordinal);
+        Assert.Contains("<details class=\"chat-tool-result\"", html, StringComparison.Ordinal);
+        Assert.Contains(" open>", html, StringComparison.Ordinal);
+    }
+
+    // ── Issue #1039: copy + inspect gutters on tool-call/tool-result blocks ─────
+
+    [Fact]
+    public void RenderToolCallPair_WithCallJson_ToolCallBlockHasDataCopyTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        var callBlock = ExtractToolBlock(html, "chat-tool-call");
+        Assert.Contains("data-copy-target", callBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithCallJson_ToolCallBlockHasDataInspectTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        var callBlock = ExtractToolBlock(html, "chat-tool-call");
+        Assert.Contains("data-inspect-target", callBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithResultJson_ToolResultBlockHasDataCopyTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        var resultBlock = ExtractToolBlock(html, "chat-tool-result");
+        Assert.Contains("data-copy-target", resultBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithResultJson_ToolResultBlockHasDataInspectTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        var resultBlock = ExtractToolBlock(html, "chat-tool-result");
+        Assert.Contains("data-inspect-target", resultBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_ToolBlocks_DoNotEmitStandaloneDetailsGutterOverflowMarker()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        // The "..." overflow button is JS-injected by details-gutter (removed by #1038); the renderer
+        // must never emit its marker class.
+        Assert.DoesNotContain("details-gutter-btn", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithCallDetailsJson_InspectPayloadContainsSerializedCallJson()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair(
+            "c0", "my_tool", "{}", null, callDetailsJson: "{\"kind\":\"call\"}");
+
+        Assert.Contains("data-details-target=\"{&quot;kind&quot;:&quot;call&quot;}\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroup_SingleCallWithResult_BothToolBlocksExposeCopyAndInspectTargets()
+    {
+        var call = new FunctionCallContent("call-1", "my_tool", null);
+        var result = new FunctionResultContent("call-1", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["call-1"] = result };
+
+        var html = ChatOutputHtmlRenderer.RenderToolGroup("c0", new[] { call }, lookup);
+
+        var callBlock = ExtractToolBlock(html, "chat-tool-call");
+        var resultBlock = ExtractToolBlock(html, "chat-tool-result");
+        Assert.Contains("data-copy-target", callBlock, StringComparison.Ordinal);
+        Assert.Contains("data-inspect-target", callBlock, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=", callBlock, StringComparison.Ordinal);
+        Assert.Contains("data-copy-target", resultBlock, StringComparison.Ordinal);
+        Assert.Contains("data-inspect-target", resultBlock, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=", resultBlock, StringComparison.Ordinal);
+    }
+
+    // Extracts the opening tag (up to and including '>') of the first <details class="{cssClass}" ...> element.
+    private static string ExtractToolBlock(string html, string cssClass)
+    {
+        var marker = $"<details class=\"{cssClass}\"";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected a <details class=\"{cssClass}\"> element in output.");
+        var end = html.IndexOf('>', start);
+        Assert.True(end >= 0);
+        return html.Substring(start, end - start + 1);
     }
 
     [Fact]
@@ -417,14 +538,82 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void RenderJsonValue_Object_KeysRightAligned()
+    public void RenderJsonValue_Object_KeysLeftAlignedAndColonsAligned()
     {
         using var document = JsonDocument.Parse("""{"a":1,"longer":2}""");
 
         var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
 
-        Assert.Contains("<span class=\"tool-json-key\">     a</span>: 1", html, StringComparison.Ordinal);
+        // Keys are left-aligned (text starts immediately after the span tag) and
+        // padded on the right so the colons still line up at the same column.
+        Assert.Contains("<span class=\"tool-json-key\">a     </span>: 1", html, StringComparison.Ordinal);
         Assert.Contains("<span class=\"tool-json-key\">longer</span>: 2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_FlatObjectWithVariableLengthKeys_KeyTextLeftEdgesAlignAtSameColumn()
+    {
+        using var document = JsonDocument.Parse("""{"a":1,"longKey":2}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        const string keyTagOpen = "<span class=\"tool-json-key\">";
+        var lines = html.Split('\n').Where(line => line.Contains(keyTagOpen, StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, lines.Count);
+        // The key text begins immediately after the opening span tag on every line,
+        // so all sibling keys share the same left edge (no staircase).
+        var leftEdges = lines
+            .Select(line => line.IndexOf(keyTagOpen, StringComparison.Ordinal) + keyTagOpen.Length)
+            .Distinct()
+            .ToList();
+        Assert.Single(leftEdges);
+    }
+
+    [Fact]
+    public void RenderJsonValue_SiblingKeysAtSameDepth_AllHaveIdenticalColonOffset()
+    {
+        using var document = JsonDocument.Parse(
+            """{"entityId":"x","concurrencyTag":"y","names":"z"}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        var colonOffsets = html.Split('\n')
+            .Where(line => line.Contains("</span>: ", StringComparison.Ordinal))
+            .Select(line => line.IndexOf("</span>: ", StringComparison.Ordinal))
+            .Distinct()
+            .ToList();
+        Assert.Single(colonOffsets);
+    }
+
+    [Fact]
+    public void RenderJsonValue_NestedObject_InnerKeysIndentedByExactlyOneLevel()
+    {
+        using var document = JsonDocument.Parse("""{"outer":{"inner":1}}""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("\n  <span class=\"tool-json-key\">inner</span>: 1", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderJsonValue_ArrayItems_DashPrefixConsistentlyIndented()
+    {
+        using var document = JsonDocument.Parse("""["alpha","beta","gamma"]""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 1);
+
+        var lines = html.Split('\n');
+        Assert.All(lines, line => Assert.StartsWith("  - ", line, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RenderJsonValue_NestedObjectInsideArray_KeysIndentedTwoLevelsBelowArray()
+    {
+        using var document = JsonDocument.Parse("""[{"key":"val"}]""");
+
+        var html = ChatOutputHtmlRenderer.RenderJsonValue(document.RootElement, 0);
+
+        Assert.Contains("- \n  <span class=\"tool-json-key\">key</span>: ", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -556,7 +745,7 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolCallGroup_Output_ContainsNoInsertAfterDiv()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("tool-group-0", "my_tool", 2, "<div>body</div>");
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("tool-group-0", new[] { "my_tool" }, 2, "<div>body</div>");
 
         Assert.DoesNotContain("insert-after", html, StringComparison.Ordinal);
     }
@@ -634,5 +823,91 @@ public sealed class ChatOutputHtmlRendererTests
 
         Assert.Contains("[help]", html, StringComparison.Ordinal);
         Assert.DoesNotContain("[diagnostic]", html, StringComparison.Ordinal);
+    }
+
+    private sealed class CyclicPayload
+    {
+        // A self-referencing property makes JsonSerializer.SerializeToElement throw JsonException
+        // (object-cycle), reproducing the non-serializable tool-argument fault from #1008.
+        public CyclicPayload Self => this;
+    }
+
+    [Fact]
+    public void RenderContent_FunctionCallWithNonSerializableArguments_DoesNotThrowAndFallsBackToText()
+    {
+        var call = new FunctionCallContent(
+            "call-1",
+            "myTool",
+            new Dictionary<string, object?> { ["x"] = new CyclicPayload() });
+
+        var exception = Record.Exception(() =>
+        {
+            var html = ChatOutputHtmlRenderer.RenderContent("c0", call, includeReasoning: false, isDiagnostic: false);
+            Assert.NotNull(html);
+        });
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void RenderContent_FunctionResultWithNonSerializableResult_DoesNotThrow()
+    {
+        var result = new FunctionResultContent("call-1", new CyclicPayload());
+
+        var exception = Record.Exception(() =>
+            ChatOutputHtmlRenderer.RenderContent("c0", result, includeReasoning: false, isDiagnostic: false));
+
+        Assert.Null(exception);
+    }
+
+    // ── Issue #1042: expand/collapse-all toggle button on tool groups ────────
+
+    [Fact]
+    public void RenderToolCallGroupSummary_Always_EmitsExpandCollapseToggleButton()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "my_tool" }, 3);
+
+        Assert.Contains("data-tool-expand-toggle", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-expand-toggle\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_MultipleCalls_EmitsExpandCollapseToggleButton()
+    {
+        var call1 = new FunctionCallContent("c1", "tool_a");
+        var call2 = new FunctionCallContent("c2", "tool_b");
+        var result1 = new FunctionResultContent("c1", "ok");
+        var result2 = new FunctionResultContent("c2", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["c1"] = result1, ["c2"] = result2 };
+
+        var html = ChatOutputHtmlRenderer.RenderToolGroup("c0", new[] { call1, call2 }, lookup);
+
+        Assert.Contains("chat-tool-group-wrapper", html, StringComparison.Ordinal);
+        Assert.Contains("data-tool-expand-toggle", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-expand-toggle\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_Always_EmitsToolCallAndResultPanesOpen()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        // Both inner panes must be force-expanded (open attribute).
+        Assert.Contains("<details class=\"chat-tool-call\"", html, StringComparison.Ordinal);
+        Assert.Matches("chat-tool-call[^>]*\\sopen>", html);
+        Assert.Contains("<details class=\"chat-tool-result\"", html, StringComparison.Ordinal);
+        Assert.Matches("chat-tool-result[^>]*\\sopen>", html);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_Always_ToggleButtonIsAfterCountBadge()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "my_tool" }, 3);
+
+        var badgeIndex = html.IndexOf("tool-count-badge", StringComparison.Ordinal);
+        var toggleIndex = html.IndexOf("data-tool-expand-toggle", StringComparison.Ordinal);
+        Assert.True(badgeIndex >= 0);
+        Assert.True(toggleIndex >= 0);
+        Assert.True(toggleIndex > badgeIndex, "Toggle button must appear after the count badge.");
     }
 }

@@ -23,16 +23,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentChatConversationDetailViewModel conversationDetail;
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
-    private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
+    private readonly ObservableCollection<AgentEditorNavigationItemViewModel> subAgentAllChildren = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
-    private readonly AgentEditorNavigationItemViewModel backgroundTasksNavItem;
     private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
@@ -55,9 +54,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
         this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
         this.toolsDetail = new AgentChatToolsDetailViewModel();
-        this.backgroundTasksDetail = new AgentChatPlaceholderDetailViewModel(
-            "Background tasks",
-            "Background task model coming later.");
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
@@ -90,7 +86,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.detailContentSlots.Add(new DetailContentSlot(this.conversationDetail) { IsVisible = true });
         this.detailContentSlots.Add(new DetailContentSlot(this.chatDetailsDetail));
         this.detailContentSlots.Add(new DetailContentSlot(this.toolsDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.backgroundTasksDetail));
         this.detailContentSlots.Add(new DetailContentSlot(this.subAgentsContainerDetail));
         this.DetailContentSlots = new ReadOnlyObservableCollection<DetailContentSlot>(this.detailContentSlots);
 
@@ -114,15 +109,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             [],
             isExpanded: true);
 
-        this.backgroundTasksNavItem = new AgentEditorNavigationItemViewModel(
-            "chat-background-tasks",
-            "Background tasks",
-            null,
-            "Planned background work",
-            null,
-            this.backgroundTasksDetail,
-            []);
-
         this.subAgentsNavItem = new AgentEditorNavigationItemViewModel(
             "chat-sub-agents",
             "Sub-agents",
@@ -130,7 +116,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             "Sub-agents",
             null,
             this.subAgentsContainerDetail,
-            []);
+            [],
+            isExpanded: true,
+            showHideCompletedToggle: true);
 
         var root = new AgentEditorNavigationItemViewModel(
             "chat",
@@ -139,7 +127,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             null,
             null,
             this.conversationDetail,
-            [this.chatDetailsNavItem, this.toolsNavItem, this.backgroundTasksNavItem, this.subAgentsNavItem],
+            [this.chatDetailsNavItem, this.toolsNavItem, this.subAgentsNavItem],
             isExpanded: false);
 
         this.EditorItems.Add(root);
@@ -148,10 +136,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // Set up tools transformer.
         this.toolsTransformer = new ToolsCollectionTransformer(this.Tools, this.toolsNavItem.Children, this.toolsDetail);
 
-        // Set up sub-agents transformer.
+        // Set up sub-agents transformer. The transformer maintains the full (unfiltered) set of
+        // sub-agent nav items in subAgentAllChildren and projects a completion-filtered view into
+        // subAgentsNavItem.Children (see issue #1033).
         this.subAgentsTransformer = new SubAgentsCollectionTransformer(
             this.subAgentsContainerDetail.Slots,
-            this.subAgentsNavItem.Children,
+            this.subAgentAllChildren,
             this.subAgentsNavItem);
 
         // Seed slots for any sub-agents already present (e.g. restored from persistence).
@@ -246,6 +236,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public InputQueueViewModel? InputQueue { get; }
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
+
+    /// <summary>
+    /// Completes once the underlying <see cref="AgentChat"/> has loaded persisted history into
+    /// <see cref="History"/>. The chat output control awaits this before taking its initial history
+    /// snapshot so first-open never renders an empty history (issue #1009). Tests may override this
+    /// via <see cref="SetHistoryPopulatedForTest"/> to simulate a still-loading session.
+    /// </summary>
+    public Task HistoryPopulated => this.historyPopulatedOverride ?? this.agentChat.HistoryPopulated;
+
+    private Task? historyPopulatedOverride;
+
+    /// <summary>Test seam: force <see cref="HistoryPopulated"/> to track a caller-controlled task.</summary>
+    internal void SetHistoryPopulatedForTest(Task historyPopulated)
+        => this.historyPopulatedOverride = historyPopulated;
 
     public ReadOnlyObservableCollection<AgentChatRunningItem> RunningItems => this.agentChat.RunningItems;
 
@@ -382,17 +386,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 .ToArray();
         };
 
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new AutoResumeSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
+        this.agentChat.SlashCommands.Register(new AutoResumeSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new InputHelpSlashCommandHandler(
             getValue: () => this.ShowChatInputHelpText,
             setValue: v => this.ShowChatInputHelpText = v));
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new ReasoningSlashCommandHandler(
+        this.agentChat.SlashCommands.Register(new ReasoningSlashCommandHandler(
             getValue: () => this.IsReasoningVisible,
             setValue: v => this.SetReasoningVisibility(v)));
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RestartSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new CloneSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RenameSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new TitleSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new RestartSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new CloneSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new RenameSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new TitleSlashCommandHandler());
     }
 
     private async Task RunSlashCommandAsync(
@@ -427,7 +431,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             result = new SlashCommandResult
             {
                 StatusMessage = $"Command /{commandName} failed: {exception.Message}",
+                IsTransient = false,
             };
+        }
+
+        // Transient results are displayed as a one-off inline notification rather than
+        // being persisted into conversation history.
+        if (result.IsTransient)
+        {
+            this.agentChat.RaiseTransientNotification(result.StatusMessage);
+            return;
         }
 
         // Show the status message as a system note in the chat history so the user
@@ -589,6 +602,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler);
+        // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
+        // (issue #1046): the parent can resolve its own children, and if the target is above this
+        // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
+        subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
@@ -623,6 +640,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void NavigateToSubAgent(string agentId)
     {
+        // If the target is this agent itself, show the conversation view (navigate to self/root).
+        if (string.Equals(agentId, this.agentChat.AgentId, StringComparison.Ordinal))
+        {
+            if (this.EditorItems.Count > 0)
+            {
+                this.SelectedEditorItem = this.EditorItems[0];
+            }
+
+            return;
+        }
+
         // Select the "Sub-agents" group node in the editor tree so the container is shown,
         // then tell the container to display the requested sub-agent.
         if (this.EditorItems.Count == 0)
@@ -699,16 +727,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
         private readonly SubAgentsContainerViewModel container;
+        private readonly IList<AgentEditorNavigationItemViewModel> visibleChildren;
 
         public SubAgentsCollectionTransformer(
             IReadOnlyList<SubAgentSlotViewModel> source,
-            IList<AgentEditorNavigationItemViewModel> target,
+            IList<AgentEditorNavigationItemViewModel> allChildren,
             AgentEditorNavigationItemViewModel subAgentsNavItem)
-            : base(source, target)
+            : base(source, allChildren)
         {
             this.subAgentsNavItem = subAgentsNavItem;
             this.container = (SubAgentsContainerViewModel)subAgentsNavItem.DetailContent;
+            this.visibleChildren = subAgentsNavItem.Children;
+            this.subAgentsNavItem.PropertyChanged += this.OnNavItemPropertyChanged;
             this.ApplyInitialTransform();
+            this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
         }
 
@@ -734,19 +766,71 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 {
                     target.RefreshStatus();
                     this.container.NotifySubAgentUpdated();
+                    this.RefreshVisibleChildren();
                 };
             }
 
+            this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
-            if (this.Target.Count == 1)
-            {
-                this.subAgentsNavItem.IsExpanded = true;
-            }
         }
 
         protected override void OnRemoveAt(int index, AgentEditorNavigationItemViewModel target)
         {
+            this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
+        }
+
+        public override void Dispose()
+        {
+            this.subAgentsNavItem.PropertyChanged -= this.OnNavItemPropertyChanged;
+            base.Dispose();
+        }
+
+        private void OnNavItemPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(AgentEditorNavigationItemViewModel.HideCompletedAgents))
+            {
+                this.RefreshVisibleChildren();
+            }
+        }
+
+        // Projects the full (unfiltered) set of sub-agent nav items in Target into
+        // subAgentsNavItem.Children, excluding completed (Succeeded/Failed) items when
+        // HideCompletedAgents is true. Preserves source order. See issue #1033.
+        private void RefreshVisibleChildren()
+        {
+            var hide = this.subAgentsNavItem.HideCompletedAgents;
+
+            var desired = new List<AgentEditorNavigationItemViewModel>();
+            foreach (var item in this.Target)
+            {
+                if (!hide || !(item.IsSucceeded || item.IsFailed))
+                {
+                    desired.Add(item);
+                }
+            }
+
+            for (int i = this.visibleChildren.Count - 1; i >= 0; i--)
+            {
+                if (!desired.Contains(this.visibleChildren[i]))
+                {
+                    this.visibleChildren.RemoveAt(i);
+                }
+            }
+
+            for (int i = 0; i < desired.Count; i++)
+            {
+                if (i >= this.visibleChildren.Count || !ReferenceEquals(this.visibleChildren[i], desired[i]))
+                {
+                    var existing = this.visibleChildren.IndexOf(desired[i]);
+                    if (existing >= 0)
+                    {
+                        this.visibleChildren.RemoveAt(existing);
+                    }
+
+                    this.visibleChildren.Insert(i, desired[i]);
+                }
+            }
         }
 
         private void UpdateSubAgentsLabel()

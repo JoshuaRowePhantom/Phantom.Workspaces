@@ -709,7 +709,9 @@ public static class AgentFactory
             services?.LoggerFactory,
             queueManager: queueManager,
             modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry);
+            subAgentChatRegistry: subAgentChatRegistry,
+            accountUpsertService: services?.AccountUpsertService,
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
 
         return (client, displayName);
     }
@@ -762,7 +764,8 @@ public static class AgentFactory
             byokOptions: byokOptions,
             queueManager: queueManager,
             modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry);
+            subAgentChatRegistry: subAgentChatRegistry,
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
 
         return (client, displayName);
     }
@@ -800,7 +803,9 @@ public static class AgentFactory
             services?.LoggerFactory,
             queueManager: queueManager,
             modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry);
+            subAgentChatRegistry: subAgentChatRegistry,
+            accountUpsertService: services?.AccountUpsertService,
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
 
         return (client, displayName);
     }
@@ -847,7 +852,8 @@ public static class AgentFactory
             byokOptions: byokOptions,
             queueManager: queueManager,
             modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry);
+            subAgentChatRegistry: subAgentChatRegistry,
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
 
         return (client, displayName);
     }

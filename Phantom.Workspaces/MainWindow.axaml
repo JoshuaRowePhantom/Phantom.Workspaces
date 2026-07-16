@@ -154,6 +154,7 @@
         <Grid Grid.Row="1" ColumnDefinitions="*,Auto,2*">
             <Grid Grid.Column="0"
                   Classes="entity-pane"
+                  HorizontalAlignment="Stretch"
                   RowDefinitions="Auto,*">
                 <Border Grid.Row="0" Classes="pane-header">
                     <StackPanel>
@@ -169,10 +170,12 @@
                 </Border>
 
                 <ScrollViewer Grid.Row="1"
+                              HorizontalAlignment="Stretch"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Visible"
                               AllowAutoHide="False">
                     <TreeView Classes="entity-card-tree entity-card-tree-entity"
+                              HorizontalAlignment="Stretch"
                               ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
@@ -207,3 +210,6 @@
         </Popup>
     </Grid>
 </Window>
+
+
+

@@ -1,6 +1,8 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+                    xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
+                    xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
                     x:CompileBindings="False">
     <TreeDataTemplate x:Key="AgentNavigationTreeHeaderItemTemplate"
                       ItemsSource="{Binding Children}">
@@ -21,17 +23,20 @@
     <DataTemplate x:Key="AgentToolHeaderTemplate"
                   DataType="vm:AgentChatToolViewModel">
         <Grid ColumnDefinitions="Auto,*"
-              ColumnSpacing="6">
+              ColumnSpacing="6"
+              HorizontalAlignment="Stretch">
             <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
                       Command="{Binding ToggleEnabledCommand}"
                       CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}"
                       VerticalAlignment="Center"/>
             <StackPanel Grid.Column="1"
+                        HorizontalAlignment="Stretch"
                         Spacing="2">
                 <TextBlock Text="{Binding Name}"
                            Classes="agent-tool-node-title"/>
                 <TextBlock Text="{Binding Summary}"
-                           Classes="muted"/>
+                           Classes="muted"
+                           TextWrapping="Wrap"/>
             </StackPanel>
         </Grid>
     </DataTemplate>
@@ -63,26 +68,48 @@
 
     <DataTemplate x:Key="AgentNavigationHeaderTemplate"
                   DataType="vm:AgentEditorNavigationItemViewModel">
-        <StackPanel>
+        <StackPanel HorizontalAlignment="Stretch">
             <ContentControl IsVisible="{Binding HasTool}"
+                            HorizontalAlignment="Stretch"
                             Content="{Binding Tool}"
                             ContentTemplate="{StaticResource AgentToolHeaderTemplate}"/>
             <StackPanel IsVisible="{Binding NotHasTool}"
+                        HorizontalAlignment="Stretch"
                         Spacing="2">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <ProgressBar Classes="glyph-indicator pulsating-brain"
-                                 IsVisible="{Binding IsBrainVisible}"
-                                 IsIndeterminate="{Binding IsRunning}"
-                                 Opacity="{Binding StatusIconOpacity}"/>
-                    <ProgressBar Classes="running-indicator succeeded"
-                                 IsVisible="{Binding IsSucceeded}"/>
-                    <ProgressBar Classes="running-indicator failed"
-                                 IsVisible="{Binding IsFailed}"/>
-                    <TextBlock Text="{Binding Name}"
-                               Classes="agent-tool-node-title"/>
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto"
+                      HorizontalAlignment="Stretch">
+                    <StackPanel Grid.Column="0"
+                                Orientation="Horizontal"
+                                Spacing="6">
+                        <ProgressBar Classes="glyph-indicator pulsating-brain"
+                                     IsVisible="{Binding IsBrainVisible}"
+                                     IsIndeterminate="{Binding IsRunning}"
+                                     Opacity="{Binding StatusIconOpacity}"/>
+                        <ProgressBar Classes="running-indicator succeeded"
+                                     IsVisible="{Binding IsSucceeded}"/>
+                        <ProgressBar Classes="running-indicator failed"
+                                     IsVisible="{Binding IsFailed}"/>
+                        <TextBlock Text="{Binding Name}"
+                                   Classes="agent-tool-node-title"/>
+                    </StackPanel>
+                    <!-- Issue #1034: sub-agent last-modified time as a relative "ago" label,
+                         positioned in the lower-right of the item. Hidden when LastUpdatedAt is null. -->
+                    <controls:AgoTextBlock Grid.Column="1"
+                                           Classes="muted"
+                                           VerticalAlignment="Bottom"
+                                           HorizontalAlignment="Right"
+                                           Margin="8,0,0,0"
+                                           Value="{Binding LastUpdatedAt}"
+                                           IsVisible="{Binding LastUpdatedAt, Converter={x:Static converters:NotNullConverter.Instance}}"/>
+                </Grid>
                 <TextBlock Text="{Binding Summary}"
-                           Classes="muted"/>
+                           Classes="muted"
+                           TextWrapping="Wrap"/>
+                <!-- Issue #1033: tree-level "hide completed" checkbox. Only the Sub-agents root sets
+                     ShowHideCompletedToggle; independent from the browser-panel HideCompleted toggle. -->
+                <CheckBox IsVisible="{Binding ShowHideCompletedToggle}"
+                          IsChecked="{Binding HideCompletedAgents, Mode=TwoWay}"
+                          Content="Hide completed"/>
             </StackPanel>
         </StackPanel>
     </DataTemplate>
