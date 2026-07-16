@@ -75,6 +75,14 @@ internal sealed class ChatMessageHtmlModel
     public bool IsInserted { get; set; }
 
     /// <summary>
+    /// True when the message has been rendered and produced no visible content bindings (an empty
+    /// message, a whitespace-only message, or a message whose contents were all filtered out — e.g.
+    /// reasoning while reasoning is hidden). Such messages render no visible DOM element and must be
+    /// transparent to tool-call grouping.
+    /// </summary>
+    public bool ProducesNoVisibleContent => this.hasRendered && this.bindings.Count == 0;
+
+    /// <summary>
     /// Returns true if this message's source contains a <see cref="FunctionCallContent"/> with the
     /// given <paramref name="callId"/>. Used by the transformer to locate the matching call slot when
     /// a tool-result message arrives in a separate message.
@@ -324,8 +332,7 @@ internal sealed class ChatMessageHtmlModel
 internal sealed class ToolCallGroupHtmlModel
 {
     private readonly IChatOutputHtmlSink sink;
-    private readonly HashSet<string> distinctToolNames;
-    private string lastToolName;
+    private readonly List<string> orderedToolNames;
     private int callCount;
 
     public ToolCallGroupHtmlModel(int firstHistoryIndex, string groupId, IChatOutputHtmlSink sink, string firstToolName)
@@ -333,9 +340,8 @@ internal sealed class ToolCallGroupHtmlModel
         this.FirstHistoryIndex = firstHistoryIndex;
         this.GroupId = groupId;
         this.sink = sink;
-        this.lastToolName = firstToolName;
         this.callCount = 1;
-        this.distinctToolNames = new HashSet<string> { firstToolName };
+        this.orderedToolNames = new List<string> { firstToolName };
     }
 
     /// <summary>The source index of the first (top-level) member the group replaced.</summary>
@@ -343,21 +349,21 @@ internal sealed class ToolCallGroupHtmlModel
 
     public string GroupId { get; }
 
-    public bool IsHomogeneous => this.distinctToolNames.Count == 1;
+    /// <summary>The distinct tool names in the group, in first-seen (encounter) order.</summary>
+    public IReadOnlyList<string> DistinctToolNames => this.orderedToolNames;
 
     /// <summary>
     /// Builds the complete group element for DOM insertion, with <paramref name="firstMessageHtml"/>
     /// (or the concatenated member HTML) pre-placed inside the body container.
     /// </summary>
     public string BuildHtml(string firstMessageHtml)
-        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.GroupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount, firstMessageHtml);
+        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.GroupId, this.orderedToolNames, this.callCount, firstMessageHtml);
 
     /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model, string toolName)
     {
         this.callCount++;
-        this.lastToolName = toolName;
-        this.distinctToolNames.Add(toolName);
+        this.AddToolName(toolName);
 
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolGroupBodyId(this.GroupId),
@@ -368,19 +374,26 @@ internal sealed class ToolCallGroupHtmlModel
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolGroupSummaryId(this.GroupId),
             ChatOutputUpdateLocation.Replace,
-            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.IsHomogeneous ? this.lastToolName : null, this.callCount));
+            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.orderedToolNames, this.callCount));
     }
 
     /// <summary>
-    /// Updates group state (call count, last tool name) without emitting any sink operations.
+    /// Updates group state (call count, tool names) without emitting any sink operations.
     /// Used by render-plan/chunk generation and run rebuilds, where the group HTML is produced
     /// as one blob rather than by incremental DOM operations.
     /// </summary>
     internal void AppendItemStateOnly(ChatMessageHtmlModel model, string toolName)
     {
         this.callCount++;
-        this.lastToolName = toolName;
-        this.distinctToolNames.Add(toolName);
+        this.AddToolName(toolName);
+    }
+
+    private void AddToolName(string toolName)
+    {
+        if (!this.orderedToolNames.Contains(toolName))
+        {
+            this.orderedToolNames.Add(toolName);
+        }
     }
 }
 
@@ -618,6 +631,15 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         // model so it renders nested under its call item. Any unmatched result keeps the whole
         // message standalone.
         if (IsToolResultOnlyItem(sourceItem) && this.TryInjectResults(sourceItem))
+        {
+            slot.HasDomElement = false;
+            return;
+        }
+
+        // A message that renders no visible content (empty, whitespace-only, or fully filtered — e.g.
+        // reasoning while reasoning is hidden) produces no DOM element of its own. Suppressing it here
+        // avoids a stray empty bubble and keeps it transparent to tool-call grouping.
+        if (slot.Model.ProducesNoVisibleContent)
         {
             slot.HasDomElement = false;
             return;
@@ -981,29 +1003,38 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     }
 
     /// <summary>
-    /// Searches backwards from <paramref name="index"/> - 1, skipping tool-result-only messages,
-    /// and returns the slot of the most recent source item that is either a tool-call-only message
-    /// or already belongs to a group. Returns <see langword="null"/> when the search reaches the
-    /// start of the collection or hits any other kind of message: grouping never crosses text,
-    /// suppressed diagnostics, or other non-tool content.
+    /// True when <paramref name="slot"/> renders no visible top-level DOM element and must be
+    /// transparent to tool-call grouping: a result-only message injected into its matched call, a
+    /// suppressed diagnostic or other slot with no DOM element, or a message that produced no
+    /// visible content (empty / whitespace / fully-filtered).
+    /// </summary>
+    internal static bool IsGroupingTransparent(RenderSlot slot)
+        => !slot.HasDomElement
+            || IsToolResultOnlyItem(slot.Model.Source)
+            || slot.Model.ProducesNoVisibleContent;
+
+    /// <summary>
+    /// Searches backwards from <paramref name="index"/> - 1, skipping every grouping-transparent
+    /// slot (result-only messages, suppressed diagnostics, and messages that render no visible
+    /// content), and returns the slot of the most recent source item that is either a tool-call-only
+    /// message or already belongs to a group. Returns <see langword="null"/> when the search reaches
+    /// the start of the collection or hits any displayed non-tool message: grouping never crosses
+    /// visible text or other visible non-tool content.
     /// </summary>
     internal RenderSlot? FindGroupablePredecessor(int index)
     {
         for (var i = index - 1; i >= 0; i--)
         {
             var candidate = this.Target[i];
-            if (IsToolResultOnlyItem(candidate.Model.Source))
+            if (IsGroupingTransparent(candidate))
             {
                 continue;
             }
 
-            if (candidate.HasDomElement &&
-                (candidate.Group is not null || IsToolCallOnlyItem(candidate.Model.Source)))
-            {
-                return candidate;
-            }
-
-            return null;
+            return candidate.HasDomElement &&
+                   (candidate.Group is not null || IsToolCallOnlyItem(candidate.Model.Source))
+                ? candidate
+                : null;
         }
 
         return null;
@@ -1413,13 +1444,20 @@ public sealed class ChatOutputHtmlModel : IDisposable
             }
         }
 
-        // Pass 2: suppress diagnostics and inject fully-matched result-only messages.
+        // Pass 2: suppress diagnostics and inject fully-matched result-only messages; also suppress
+        // any message that renders no visible content so it neither emits an empty bubble nor breaks
+        // tool-call grouping.
         for (var i = 0; i < snapshot.Count; i++)
         {
             var item = snapshot[i];
 
             if (!ChatMessageHtmlTransformer.IsToolResultOnlyItem(item))
             {
+                if (slots[i].Model.ProducesNoVisibleContent)
+                {
+                    slots[i].HasDomElement = false;
+                }
+
                 continue;
             }
 
@@ -1451,7 +1489,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         }
 
         // Pass 3: compute contiguous tool-call groups globally. Group ids use the first member's
-        // history index; grouping skips result-only items but never crosses any other message kind.
+        // history index; grouping skips grouping-transparent items (result-only, no-DOM, and
+        // no-visible-content messages) but never crosses any displayed non-tool message.
         for (var i = 0; i < snapshot.Count; i++)
         {
             if (!ChatMessageHtmlTransformer.IsToolCallOnlyItem(snapshot[i]))
@@ -1462,7 +1501,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
             RenderSlot? groupablePredecessor = null;
             for (var j = i - 1; j >= 0; j--)
             {
-                if (ChatMessageHtmlTransformer.IsToolResultOnlyItem(snapshot[j]))
+                if (ChatMessageHtmlTransformer.IsGroupingTransparent(slots[j]))
                 {
                     continue;
                 }

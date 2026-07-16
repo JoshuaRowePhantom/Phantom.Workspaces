@@ -496,10 +496,10 @@ public sealed class ChatOutputHtmlModelTests
         // Summary updated to count 2
         var summaryOp = contentOps.First(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
         Assert.Contains("2 calls", summaryOp.Content);
-        // When tools are mixed (read_file and write_file), summary should show "tools" not a specific tool name
-        Assert.Contains("tools", summaryOp.Content);
-        Assert.DoesNotContain("write_file", summaryOp.Content);
-        Assert.DoesNotContain("read_file", summaryOp.Content);
+        // Mixed group (read_file and write_file) lists both unique tool names.
+        Assert.Contains("tools (", summaryOp.Content);
+        Assert.Contains("write_file", summaryOp.Content);
+        Assert.Contains("read_file", summaryOp.Content);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -1176,6 +1176,94 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("tool_b", html);
         Assert.Contains("tool_c", html);
         Assert.Contains("3 calls", html);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_ToolCallsSeparatedByNonDisplayedItem_GroupedTogether()
+    {
+        // An empty (non-displayed) message sits between two tool calls; grouping must ignore it.
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            new() { Role = ChatRole.Assistant, Contents = [] },
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // A single group wraps both calls; the empty message emits nothing.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        Assert.Contains("tool_a", html);
+        Assert.Contains("tool_b", html);
+        Assert.Contains("2 calls", html);
+        // The non-displayed intervening slot carries no DOM element.
+        Assert.False(plan.Slots[1].HasDomElement);
+    }
+
+    [Fact]
+    public void BuildHistoryRenderPlan_NonDisplayedInterveningItem_ProducesNoDomElement()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            new() { Role = ChatRole.Assistant, Contents = [] },
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var sink = new RecordingSink();
+
+        var plan = BuildPlan(snapshot, sink);
+
+        Assert.False(plan.Slots[1].HasDomElement);
+        Assert.True(plan.Slots[1].Model.ProducesNoVisibleContent);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task LiveTransformer_ToolCallsSeparatedByEmptyMessage_CoalesceIntoOneGroup()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // A non-displayed empty message, then a second tool call: the two calls must coalesce.
+        history.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [] });
+        history.Add(ToolCallMessage("tool_b", "c2"));
+
+        var summaryOp = sink.ContentOperations.FirstOrDefault(op => op.Path.Contains("summary"));
+        Assert.NotNull(summaryOp);
+        Assert.Contains("2 calls", summaryOp!.Content);
+
+        // No standalone empty chat-message bubble was appended for the empty item.
+        Assert.DoesNotContain(
+            sink.ContentOperations,
+            op => op.Location == ChatOutputUpdateLocation.Append
+                && op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task LiveTransformer_NonDisplayedInterveningItem_ProducesNoDomElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [] });
+
+        // The empty message must not emit any content operation of its own.
+        Assert.DoesNotContain(
+            sink.ContentOperations,
+            op => op.Content.Contains(ChatOutputHtmlRenderer.MessageId(1)));
     }
 
     [Fact]

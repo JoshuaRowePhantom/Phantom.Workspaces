@@ -50,16 +50,26 @@ public sealed class ChatOutputHtmlTransformerLookupTests
     private static AgentChatHistoryItem TextMessage(ChatRole role, string text)
         => new() { Role = role, Contents = [new TextContent(text)] };
 
+    private static AgentChatHistoryItem EmptyMessage(ChatRole role)
+        => new() { Role = role, Contents = [] };
+
+    private static AgentChatHistoryItem DiagnosticMessage(string text)
+        => new() { Role = AgentChatHistoryItem.DiagnosticChatRole, Contents = [new TextContent(text)] };
+
+    private static AgentChatHistoryItem ReasoningMessage(string text)
+        => new() { Role = ChatRole.Assistant, Contents = [new TextReasoningContent(text)] };
+
     private static ChatMessageHtmlTransformer MakeTransformer(
         ObservableCollection<AgentChatHistoryItem> source,
         List<RenderSlot> target,
         RecordingSink sink,
-        Dictionary<string, RenderSlot>? sharedSlotByCallId = null)
+        Dictionary<string, RenderSlot>? sharedSlotByCallId = null,
+        bool isReasoningVisible = true)
         => new(
             source,
             target,
             sink,
-            () => true,
+            () => isReasoningVisible,
             containerPath: "container",
             elementIdForSourceIndex: ChatOutputHtmlRenderer.MessageId,
             groupIdForSourceIndex: ChatOutputHtmlRenderer.ToolGroupId,
@@ -270,6 +280,87 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         var predecessor = transformer.FindGroupablePredecessor(2);
 
         Assert.Null(predecessor);
+        Assert.Null(target[2].Group);
+    }
+
+    [Fact]
+    public void FindGroupablePredecessor_EmptyMessageBetween_ReturnsPriorToolCall()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1"),
+            EmptyMessage(ChatRole.Assistant),
+            ToolCallMessage("tool_b", "call-2"),
+        };
+        var target = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        using var transformer = MakeTransformer(source, target, sink);
+
+        var predecessor = transformer.FindGroupablePredecessor(2);
+
+        Assert.Same(target[0], predecessor);
+        Assert.False(target[1].HasDomElement);
+        // The two tool calls coalesced across the empty message.
+        Assert.NotNull(target[0].Group);
+        Assert.Same(target[0].Group, target[2].Group);
+    }
+
+    [Fact]
+    public void FindGroupablePredecessor_SuppressedDiagnosticBetween_ReturnsPriorToolCall()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1"),
+            DiagnosticMessage("   "), // whitespace diagnostic renders no visible content
+            ToolCallMessage("tool_b", "call-2"),
+        };
+        var target = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        using var transformer = MakeTransformer(source, target, sink);
+
+        var predecessor = transformer.FindGroupablePredecessor(2);
+
+        Assert.Same(target[0], predecessor);
+        Assert.False(target[1].HasDomElement);
+    }
+
+    [Fact]
+    public void FindGroupablePredecessor_AllFilteredMessageBetween_ReturnsPriorToolCall()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1"),
+            ReasoningMessage("private thoughts"),
+            ToolCallMessage("tool_b", "call-2"),
+        };
+        var target = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        // Reasoning hidden ⇒ the reasoning-only message is fully filtered and renders nothing.
+        using var transformer = MakeTransformer(source, target, sink, isReasoningVisible: false);
+
+        var predecessor = transformer.FindGroupablePredecessor(2);
+
+        Assert.Same(target[0], predecessor);
+        Assert.False(target[1].HasDomElement);
+    }
+
+    [Fact]
+    public void FindGroupablePredecessor_DisplayedTextBetween_ReturnsNull()
+    {
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1"),
+            TextMessage(ChatRole.Assistant, "a visible reply"),
+            ToolCallMessage("tool_b", "call-2"),
+        };
+        var target = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        using var transformer = MakeTransformer(source, target, sink);
+
+        var predecessor = transformer.FindGroupablePredecessor(2);
+
+        Assert.Null(predecessor);
+        Assert.True(target[1].HasDomElement);
         Assert.Null(target[2].Group);
     }
 

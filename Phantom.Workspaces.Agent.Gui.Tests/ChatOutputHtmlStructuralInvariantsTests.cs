@@ -260,6 +260,59 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task LiveAndPlan_ToolCallsAcrossNonDisplayedItem_ProduceIdenticalGrouping()
+    {
+        AgentChatHistoryItem EmptyMessage() => new() { Role = ChatRole.Assistant, Contents = [] };
+
+        // Plan (bulk) path.
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            EmptyMessage(),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var planSink = new RecordingSink();
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, planSink, () => true);
+        var planHtml = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.Single(Regex.Matches(planHtml, "chat-tool-group\""));
+        Assert.Contains("2 calls", planHtml);
+        Assert.Contains("tool_a", planHtml);
+        Assert.Contains("tool_b", planHtml);
+
+        // Live (incremental) path over the same logical sequence.
+        var history = new ObservableCollection<AgentChatHistoryItem> { ToolCallMessage("tool_a", "c1") };
+        var liveSink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, liveSink);
+        await model.HistoryLoaded;
+        history.Add(EmptyMessage());
+        history.Add(ToolCallMessage("tool_b", "c2"));
+
+        // Replay the live operations into a mini DOM and assert the same grouped shape.
+        var root = MiniDom.CreateShellRoot();
+        foreach (var op in liveSink.Operations)
+        {
+            switch (op.Kind)
+            {
+                case "remove":
+                    root.RemoveById(op.Path);
+                    break;
+                case "update":
+                    root.FindById(op.Path)?.Apply(op.Location, MiniDom.ParseFragment(op.Content));
+                    break;
+            }
+        }
+
+        var liveSummaryUpdate = liveSink.Operations.Last(op => op.Kind == "update" && op.Path.Contains("summary"));
+        Assert.Contains("2 calls", liveSummaryUpdate.Content);
+        Assert.Contains("tool_a", liveSummaryUpdate.Content);
+        Assert.Contains("tool_b", liveSummaryUpdate.Content);
+
+        // The empty message produced no standalone element in the live DOM.
+        Assert.Null(root.FindById(ChatOutputHtmlRenderer.MessageId(1)));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_NoDuplicateIdsInRepresentativeDom()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();

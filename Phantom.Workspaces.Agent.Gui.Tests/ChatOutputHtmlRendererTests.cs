@@ -306,7 +306,7 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolCallGroupSummary_SummaryHasDataStickyLevel2()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", "my_tool", 3);
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "my_tool" }, 3);
 
         Assert.Contains("data-sticky-level=\"2\"", html);
     }
@@ -314,9 +314,41 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolCallGroup_SummaryHasDataStickyLevel2()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("grp-0", "my_tool", 1, "<div>body</div>");
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("grp-0", new[] { "my_tool" }, 1, "<div>body</div>");
 
         Assert.Contains("data-sticky-level=\"2\"", html);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_MixedTools_ListsUniqueNamesInFirstSeenOrder()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell", "edit" }, 3);
+
+        Assert.Contains("tools (<span class=\"tool-name\">powershell</span>, <span class=\"tool-name\">edit</span>)", html, StringComparison.Ordinal);
+        Assert.Contains("3 calls", html, StringComparison.Ordinal);
+        // First-seen order: powershell precedes edit.
+        Assert.True(
+            html.IndexOf("powershell", StringComparison.Ordinal) < html.IndexOf("edit", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_SingleTool_ListsSingleName()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell" }, 2);
+
+        Assert.Contains("tools (<span class=\"tool-name\">powershell</span>)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("tool call:", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_DuplicateToolNames_DedupedOnce()
+    {
+        // The model dedupes; the renderer lists whatever it is given. Verify a single entry renders once.
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "powershell" }, 3);
+
+        var first = html.IndexOf("powershell", StringComparison.Ordinal);
+        var last = html.LastIndexOf("powershell", StringComparison.Ordinal);
+        Assert.Equal(first, last);
     }
 
     [Fact]
@@ -713,7 +745,7 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolCallGroup_Output_ContainsNoInsertAfterDiv()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("tool-group-0", "my_tool", 2, "<div>body</div>");
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup("tool-group-0", new[] { "my_tool" }, 2, "<div>body</div>");
 
         Assert.DoesNotContain("insert-after", html, StringComparison.Ordinal);
     }

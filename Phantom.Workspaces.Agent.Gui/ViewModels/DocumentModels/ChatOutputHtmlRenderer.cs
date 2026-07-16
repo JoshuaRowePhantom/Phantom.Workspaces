@@ -72,13 +72,13 @@ internal static class ChatOutputHtmlRenderer
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
     /// tool-call messages. <paramref name="bodyContent"/> is the pre-rendered HTML of the first
     /// message and is placed directly inside the body container.
-    /// <paramref name="toolName"/> is null when the group contains mixed tool types.
+    /// <paramref name="toolNames"/> is the deduped, first-seen-order list of tool names in the group.
     /// </summary>
-    public static string RenderToolCallGroup(string groupId, string? toolName, int callCount, string bodyContent)
+    public static string RenderToolCallGroup(string groupId, IReadOnlyList<string> toolNames, int callCount, string bodyContent)
     {
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
-        builder.Append(RenderToolCallGroupSummary(groupId, toolName, callCount));
+        builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount));
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
@@ -86,24 +86,35 @@ internal static class ChatOutputHtmlRenderer
     }
 
     /// <summary>
-    /// Builds the <c>summary</c> element for a tool-call group.
-    /// <paramref name="toolName"/> is null when the group contains mixed tool types, in which case
-    /// a neutral "tools" label is shown instead.
+    /// Builds the <c>summary</c> element for a tool-call group. Always lists the unique tool names
+    /// in first-seen order, formatted <c>tools (a, b)</c> (a single tool renders <c>tools (a)</c>),
+    /// followed by the call-count badge.
     /// </summary>
-    public static string RenderToolCallGroupSummary(string groupId, string? toolName, int callCount)
+    public static string RenderToolCallGroupSummary(string groupId, IReadOnlyList<string> toolNames, int callCount)
     {
         var builder = new StringBuilder();
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\" id=\"").Append(ToolGroupSummaryId(groupId)).Append("\">");
-        
-        if (toolName is not null)
+
+        if (toolNames is { Count: > 0 })
         {
-            builder.Append("tool call: <span class=\"tool-name\">").Append(HtmlEscape(toolName)).Append("</span>");
+            builder.Append("tools (");
+            for (var i = 0; i < toolNames.Count; i++)
+            {
+                if (i > 0)
+                {
+                    builder.Append(", ");
+                }
+
+                builder.Append("<span class=\"tool-name\">").Append(HtmlEscape(toolNames[i])).Append("</span>");
+            }
+
+            builder.Append(')');
         }
         else
         {
             builder.Append("tools");
         }
-        
+
         builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
         builder.Append("</summary>");
         return builder.ToString();
