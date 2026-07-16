@@ -5,6 +5,7 @@ using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Trust;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -108,7 +109,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
     private static StartAgentSessionFromEntityShortcutHandler CreateHandler()
     {
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var trustedExecutorSelector = TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry());
+        var trustedExecutorSelector = new DeferredTrustedExecutorSelector();
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
             trustedExecutorSelector,

@@ -9,18 +9,18 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.DevTunnels.Contracts;
 using Microsoft.DevTunnels.Management;
 using Phantom.Workspaces.Configuration;
-using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
 namespace Phantom.Workspaces.IntegrationTests;
 
 /// <summary>
 /// xUnit async-lifetime fixture that creates and hosts a real dev tunnel in Private access mode,
-/// starts a local Kestrel server with the <c>/reverse/connect</c> WebSocket endpoint, and exposes
-/// the API-issued connect token from <see cref="ConnectToken"/>. Requires
-/// <c>PHANTOM_INTEGRATION_GITHUB_TOKEN</c> to be set; if absent the fixture initialises silently
-/// so individual tests can skip gracefully with <c>[IntegrationFact]</c>.
+/// starts a local Kestrel server with the transport reverse WebSocket endpoint
+/// (<c>/reverse-transport/connect</c>), and exposes the API-issued connect token from
+/// <see cref="ConnectToken"/>. Requires <c>PHANTOM_INTEGRATION_GITHUB_TOKEN</c> to be set; if absent
+/// the fixture initialises silently so individual tests can skip gracefully with <c>[IntegrationFact]</c>.
 /// </summary>
 public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
 {
@@ -49,8 +49,8 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
     /// <summary>The name label of the hosted tunnel; null when not started.</summary>
     public string? TunnelName { get; private set; }
 
-    /// <summary>The registry that receives reverse connections from test clients.</summary>
-    public ReverseExecutionRegistry Registry { get; } = new();
+    /// <summary>The registry that records reverse transport connection status from test clients.</summary>
+    public ReverseConnectionStatusRegistry StatusRegistry { get; } = new();
 
     public async ValueTask InitializeAsync()
     {
@@ -65,12 +65,12 @@ public sealed class InProcessDevTunnelPrivateFixture : IAsyncLifetime
         TunnelName = $"pw-integ-priv-{Guid.NewGuid():N}";
 
         // Start a local Kestrel server that accepts WebSocket upgrade requests and handles them as
-        // reverse-execution connections.
+        // reverse transport connections.
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel(options => options.Listen(IPAddress.Loopback, LocalPort));
         app = builder.Build();
         app.UseWebSockets();
-        app.MapReverseEndpoints(Registry);
+        app.MapTransportReverseEndpoints(new ReverseHttpServerTransportFactory(StatusRegistry), StatusRegistry);
         await app.StartAsync(appLifetime.Token).ConfigureAwait(false);
 
         // Create and host the dev tunnel pointing at LocalPort in Private mode.

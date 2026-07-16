@@ -47,7 +47,8 @@ public sealed class RemoteTrustedExecutorTests
         };
         var profile = TrustProfileComposer.Compose([definition]);
         var remote = new RemoteTrustedExecutor("remote-a", "https://remote.example/");
-        var selector = TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry(), remote);
+        var selector = new DeferredTrustedExecutorSelector();
+        selector.SetRemoteExecutor(remote);
 
         var selected = selector.SelectExecutor(profile, "remote-a");
 

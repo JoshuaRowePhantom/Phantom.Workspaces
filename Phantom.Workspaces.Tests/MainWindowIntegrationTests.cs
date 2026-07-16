@@ -26,6 +26,7 @@ using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Trust;
 using Phantom.Workspaces.ViewModels;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
 
@@ -1967,9 +1968,8 @@ public sealed class MainWindowIntegrationTests
             viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: remoteProfileEntityId);
         Assert.NotNull(agentSessionEntity);
 
-        // Empty registry → no reverse connection available for the remote profile
-        var emptyRegistry = new ReverseExecutionRegistry();
-        var selectorWithNoRemote = TrustedExecutorComposition.CreateSelector(emptyRegistry);
+        // No remote executor configured → no reverse connection available for the remote profile
+        var selectorWithNoRemote = new DeferredTrustedExecutorSelector();
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
             selectorWithNoRemote,
@@ -2445,7 +2445,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
-        => TrustedExecutorComposition.CreateSelector(new ReverseExecutionRegistry());
+        => new DeferredTrustedExecutorSelector();
 
     // ── Float-tab disposal guard (issue #635) ─────────────────────────────────
 
