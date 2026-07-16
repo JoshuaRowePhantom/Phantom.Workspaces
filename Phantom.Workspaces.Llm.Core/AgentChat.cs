@@ -60,7 +60,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly List<ToolStateNode> toolRoots = [];
     private readonly SemaphoreSlim toolMutationLock = new(1, 1);
     private readonly CancellationTokenSource cts = new();
-    private readonly SlashCommandRegistry slashCommands = new();
+    private readonly SlashCommandRegistry outerSlashCommands = new();
+    private readonly ReplaceableSlashCommandHandlerRegistry replaceableCommands = new();
     private Task processTask = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
 
@@ -125,6 +126,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            ?? (SynchronizationContext.Current is not null
                ? TaskScheduler.FromCurrentSynchronizationContext()
                : this.foregroundSchedulerPair.ExclusiveScheduler);
+       this.outerSlashCommands.Register(this.replaceableCommands);
+       this.outerSlashCommands.Register(new HelpSlashCommandHandler(this.outerSlashCommands));
     }
 
     // Enforces the foreground-context affinity invariant (issue #909): AgentChat construction and
@@ -182,14 +185,19 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        }
 
        this.agentDefinition = resolvedAgentDefinition;
+       var innerRegistry = new SlashCommandRegistry();
+       var servicesWithRegistry = this.request.AgentServices is not null
+           ? this.request.AgentServices with { SlashCommandRegistry = innerRegistry }
+           : new AgentServices { SlashCommandRegistry = innerRegistry };
        var clientInfo = this.request.ClientOverride is not null
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
            : await AgentFactory.CreateChatClientAsync(
                resolvedAgentDefinition,
-               this.request.AgentServices,
+               servicesWithRegistry,
                queueManager: this.queueManager,
                subAgentChatRegistry: this,
                cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
+       this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
        if (resolvedClient is SubAgentChatClient sac)
@@ -331,8 +339,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.StartProcessingLoop();
 
        await this.InitializeMcpToolsAsync(this.request.CancellationToken);
-
-       this.RegisterSlashCommands(resolvedClient);
     }
 
     /// <summary>
@@ -422,7 +428,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// Provider-specific commands (e.g. <c>/working-directory</c> for GitHub Copilot) are
     /// registered automatically during initialisation; <c>/help</c> is always present.
     /// </summary>
-    public ISlashCommandRegistry SlashCommands => this.slashCommands;
+    public ISlashCommandRegistry SlashCommands => this.outerSlashCommands;
 
     public long? TotalInputTokenCount { get; private set; }
 
@@ -1969,16 +1975,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
-    private void RegisterSlashCommands(IChatClient resolvedClient)
-    {
-        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
-        {
-            this.slashCommands.Register(new CopilotSdkWorkingDirectorySlashCommandHandler(copilotSdkClient));
-        }
-
-        this.slashCommands.Register(new HelpSlashCommandHandler(this.slashCommands));
-    }
-
     private async Task<IReadOnlyList<RuntimeContextProviderRegistration>> CreateRuntimeContextProviderRegistrationsAsync(
         AgentDefinition agent,
         AgentServices? services,

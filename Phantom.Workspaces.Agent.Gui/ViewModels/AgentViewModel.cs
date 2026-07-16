@@ -386,17 +386,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 .ToArray();
         };
 
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new AutoResumeSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new InputHelpSlashCommandHandler(
+        this.agentChat.SlashCommands.Register(new AutoResumeSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new InputHelpSlashCommandHandler(
             getValue: () => this.ShowChatInputHelpText,
             setValue: v => this.ShowChatInputHelpText = v));
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new ReasoningSlashCommandHandler(
+        this.agentChat.SlashCommands.Register(new ReasoningSlashCommandHandler(
             getValue: () => this.IsReasoningVisible,
             setValue: v => this.SetReasoningVisibility(v)));
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RestartSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new CloneSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new RenameSlashCommandHandler());
-        ((SlashCommandRegistry)this.agentChat.SlashCommands).Register(new TitleSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new RestartSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new CloneSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new RenameSlashCommandHandler());
+        this.agentChat.SlashCommands.Register(new TitleSlashCommandHandler());
     }
 
     private async Task RunSlashCommandAsync(

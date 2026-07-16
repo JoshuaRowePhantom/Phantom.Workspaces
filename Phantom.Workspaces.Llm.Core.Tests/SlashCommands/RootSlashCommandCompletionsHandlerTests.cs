@@ -122,7 +122,11 @@ public sealed class RootSlashCommandCompletionsHandlerTests
     {
         private readonly List<ISlashCommandHandler> commands = [];
 
-        public IReadOnlyList<ISlashCommandHandler> Commands => this.commands;
+        public IEnumerable<ISlashCommandHandler> Commands => this.commands;
+
+        public void Register(ISlashCommandHandler handler) => this.commands.Add(handler);
+
+        public void Register(ISlashCommandRegistry registry) { }
 
         public void Add(string name, string description)
             => this.commands.Add(new FakeHandler(name, description));

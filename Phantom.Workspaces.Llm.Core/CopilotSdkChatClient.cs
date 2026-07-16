@@ -31,7 +31,7 @@ namespace Phantom.Workspaces.Llm;
 /// </remarks>
 public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient
 {
-    private readonly string modelId;
+    private string modelId;
     private readonly string displayName;
     private readonly string? gitHubToken;
     private readonly ILoggerFactory? loggerFactory;
@@ -48,6 +48,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// through to the Copilot client (issue #1047).
     /// </summary>
     internal IGitHubAccountUpsertService? AccountUpsertService => this.accountUpsertService;
+
+    /// <summary>
+    /// The currently active model identifier.
+    /// </summary>
+    public string ModelId => this.modelId;
 
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
@@ -150,7 +155,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         AgentInputQueueManager? queueManager = null,
         ModelOptions? modelOptions = null,
         ISubAgentChatRegistry? subAgentChatRegistry = null,
-        IGitHubAccountUpsertService? accountUpsertService = null)
+        IGitHubAccountUpsertService? accountUpsertService = null,
+        SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -165,6 +171,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
         this.accountUpsertService = accountUpsertService;
+
+        if (slashCommandRegistry is { } registry)
+        {
+            registry.Register(new SlashCommands.CopilotSdkWorkingDirectorySlashCommandHandler(this));
+            registry.Register(new SlashCommands.CopilotSdkModelSlashCommandHandler(this));
+        }
     }
 
     /// <summary>
@@ -356,6 +368,64 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Exposed internally for unit-test assertions.
     /// </summary>
     internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
+
+    /// <summary>
+    /// Changes the active model for this client. The current session signature is invalidated so
+    /// the next turn creates a fresh session with the new model.
+    /// </summary>
+    public void SetModelId(string modelId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
+        this.modelId = modelId;
+        this.currentSessionSignature = null;
+    }
+
+    /// <summary>
+    /// Returns the models available from the Copilot backend.
+    /// Ensures the <see cref="CopilotClient"/> is started before calling
+    /// <see cref="CopilotClient.ListModelsAsync"/>.
+    /// </summary>
+    public async Task<IReadOnlyList<GitHub.Copilot.SDK.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+    {
+        await this.EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        var models = await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
+        return models.ToArray();
+    }
+
+    /// <summary>
+    /// Ensures the <see cref="CopilotClient"/> is started without creating a full session.
+    /// </summary>
+    private async Task EnsureConnectedAsync(CancellationToken cancellationToken)
+    {
+        if (this.copilotClient is not null)
+        {
+            return;
+        }
+
+        await this.sessionInitializationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (this.copilotClient is not null)
+            {
+                return;
+            }
+
+            var clientOptions = new CopilotClientOptions
+            {
+                GitHubToken = this.gitHubToken,
+                Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                CliPath = this.cliPath,
+            };
+
+            var client = new CopilotClient(clientOptions);
+            await client.StartAsync(cancellationToken).ConfigureAwait(false);
+            this.copilotClient = client;
+        }
+        finally
+        {
+            this.sessionInitializationLock.Release();
+        }
+    }
 
     /// <summary>
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that

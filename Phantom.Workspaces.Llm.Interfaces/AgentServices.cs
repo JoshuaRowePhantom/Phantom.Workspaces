@@ -48,6 +48,13 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public IGitHubAccountUpsertService? AccountUpsertService { get; init; }
 
+    /// <summary>
+    /// Optional slash command registry for component self-registration. Typed as <see langword="object"/>
+    /// to avoid a reverse project reference from <c>Phantom.Workspaces.Llm.Interfaces</c> to
+    /// <c>Phantom.Workspaces.Llm.Core</c>; consuming code casts to <c>ISlashCommandRegistry</c>.
+    /// </summary>
+    public object? SlashCommandRegistry { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

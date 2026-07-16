@@ -25,7 +25,7 @@ public sealed class AgentViewModelSlashCommandTests
 
         // Register a fake handler after ConfigureSlashCommands so it is visible in the registry.
         var fakeHandler = new FakeUnsortedCompletionsHandler("fake-cmd");
-        ((SlashCommandRegistry)chat.SlashCommands).Register(fakeHandler);
+        chat.SlashCommands.Register(fakeHandler);
 
         // Act — invoke the completions provider directly with the fake command name.
         var provider = viewModel.InputQueue!.DefaultComposer.SlashCompletionsProviderAsync!;
@@ -95,7 +95,7 @@ public sealed class AgentViewModelSlashCommandTests
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         // Register a test command that returns a diagnostic status message
-        ((SlashCommandRegistry)chat.SlashCommands).Register(new FakeDiagnosticCommandHandler());
+        chat.SlashCommands.Register(new FakeDiagnosticCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
         // Act — run /testdiag command via the SlashCommandInterceptor

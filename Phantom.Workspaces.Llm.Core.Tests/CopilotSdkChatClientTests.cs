@@ -963,4 +963,60 @@ public sealed class CopilotSdkChatClientTests
         Assert.True(wasOnThreadPoolThread);
         Assert.True(subscription.Disposed);
     }
+
+    [Fact]
+    public void SetModelId_ChangesModelId()
+    {
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        client.SetModelId("claude-4");
+
+        Assert.Equal("claude-4", client.ModelId);
+    }
+
+    [Fact]
+    public void SetModelId_InvalidatesPreviousSession()
+    {
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        // Access the internal currentSessionSignature field via reflection to verify invalidation.
+        var signatureField = typeof(CopilotSdkChatClient).GetField(
+            "currentSessionSignature",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        // Pre-set a fake signature to simulate an established session.
+        signatureField.SetValue(client, "fake-session-signature");
+        Assert.NotNull(signatureField.GetValue(client));
+
+        client.SetModelId("new-model");
+
+        Assert.Null(signatureField.GetValue(client));
+    }
+
+    [Fact]
+    public void CopilotSdkChatClient_WhenRegistryProvided_RegistersWorkingDirectoryAndModelHandlers()
+    {
+        var registry = new Phantom.Workspaces.Llm.SlashCommands.SlashCommandRegistry();
+
+        using var client = new CopilotSdkChatClient(
+            "gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null,
+            slashCommandRegistry: registry);
+
+        Assert.Contains(registry.Commands, c => c.Name == "working-directory");
+        Assert.Contains(registry.Commands, c => c.Name == "model");
+    }
+
+    [Fact]
+    public void CopilotSdkChatClient_WhenRegistryNull_DoesNotThrow()
+    {
+        using var client = new CopilotSdkChatClient(
+            "gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null,
+            slashCommandRegistry: null);
+
+        // Should not throw — assert client is usable.
+        Assert.Equal("gpt-5", client.ModelId);
+    }
+
+    // NOTE: ListModelsAsync_ReturnsModelsFromCopilotClient requires a running Copilot CLI process
+    // and network access. It cannot be tested deterministically in CI without Docker/Copilot.
 }

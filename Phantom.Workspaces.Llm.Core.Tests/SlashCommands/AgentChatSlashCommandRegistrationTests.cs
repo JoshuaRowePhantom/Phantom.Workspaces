@@ -68,4 +68,44 @@ public sealed class AgentChatSlashCommandRegistrationTests
         var handler = Assert.Single(chat.SlashCommands.Commands, c => c.Name == "working-directory");
         Assert.IsType<CopilotSdkWorkingDirectorySlashCommandHandler>(handler);
     }
+
+    [Fact]
+    public async Task SlashCommands_ForCopilotAgent_IncludesModelCommand()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = CreateCopilotAgent(),
+        });
+
+        Assert.Contains(chat.SlashCommands.Commands, c => c.Name == "model");
+    }
+
+    [Fact]
+    public void AgentChat_DoesNotDirectlyReferenceConcreteAgentTypes()
+    {
+        // Static analysis: AgentChat.cs must not contain slash-command registrations for
+        // concrete agent-type handlers. Those are now self-registered by the components.
+        var agentChatSource = System.IO.File.ReadAllText(
+            FindSourceFile("AgentChat.cs"));
+
+        Assert.DoesNotContain("CopilotSdkWorkingDirectorySlashCommandHandler", agentChatSource);
+        Assert.DoesNotContain("CopilotSdkModelSlashCommandHandler", agentChatSource);
+        Assert.DoesNotContain("RegisterSlashCommands", agentChatSource);
+    }
+
+    private static string FindSourceFile(string fileName)
+    {
+        // Walk up from the test assembly output directory to the repo root,
+        // then locate the source file in the Llm.Core project.
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "Phantom.Workspaces.slnx")))
+        {
+            dir = dir.Parent;
+        }
+
+        Assert.NotNull(dir);
+        var path = System.IO.Path.Combine(dir!.FullName, "Phantom.Workspaces.Llm.Core", fileName);
+        Assert.True(System.IO.File.Exists(path), $"Source file not found: {path}");
+        return path;
+    }
 }
