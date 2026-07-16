@@ -267,6 +267,14 @@
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
         <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate>
+                <StackPanel Orientation="Vertical"
+                            HorizontalAlignment="Stretch"
+                            MinWidth="160"
+                            MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+            </ItemsPanelTemplate>
+        </Setter>
     </Style>
     <!-- Issue #1048: scope hover/selection highlights to the item's own header StackPanel so
          ancestor/descendant chains are not highlighted. The StackPanel.entity-card-tree-item sits

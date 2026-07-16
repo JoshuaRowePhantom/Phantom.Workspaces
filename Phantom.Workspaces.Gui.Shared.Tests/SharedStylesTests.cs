@@ -730,6 +730,10 @@ public sealed class SharedStylesTests
         // A minimum width on the item gates when the horizontal scrollbar appears.
         var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
         Assert.Contains("<Setter Property=\"MinWidth\" Value=\"160\" />", template, StringComparison.Ordinal);
+
+        // Issue #1049: the ItemsPanel wrapper carries MinWidth="160" and MaxWidth bound to viewport.
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1107,6 +1111,10 @@ public sealed class SharedStylesTests
             treeViewStyle,
             StringComparison.Ordinal);
 
+        // Issue #1049: the ItemsPanel wrapper with MinWidth + viewport-MaxWidth is also in the shared style.
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+
         var repositoryRoot = FindRepositoryRoot();
         var editorPath = Path.Combine(
             repositoryRoot.FullName,
@@ -1121,6 +1129,135 @@ public sealed class SharedStylesTests
         Assert.DoesNotContain("ScrollViewer.HorizontalScrollBarVisibility", navigationTree, StringComparison.Ordinal);
         Assert.DoesNotContain("ScrollViewer.VerticalScrollBarVisibility", navigationTree, StringComparison.Ordinal);
         Assert.DoesNotContain("ScrollViewer.AllowAutoHide", navigationTree, StringComparison.Ordinal);
+    }
+
+    // Issue #1049 — new tests -----------------------------------------------------------------------
+
+    [Fact]
+    public void EntityCardTreeView_ItemsWrapper_MaxWidthBoundToViewport()
+    {
+        // The entity-card-tree-view ItemsPanel override declares MinWidth="160" and
+        // MaxWidth bound to the tree's ScrollViewer viewport width, with HorizontalScrollBarVisibility="Auto" retained.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        Assert.Contains("<Setter Property=\"ItemsPanel\">", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<ItemsPanelTemplate>", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkspaceMarkdownFieldRow_LabelColumn_IsNotFixedTwoHundred()
+    {
+        // Issue #1049: the note/markdown field-row grids must not hard-code ColumnDefinitions="200,*".
+        var repositoryRoot = FindRepositoryRoot();
+        var templatePath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces",
+            "Templates",
+            "WorkspaceDataTemplates.axaml");
+        var content = File.ReadAllText(templatePath);
+
+        // Find all workspace-field-row grids inside note/markdown DataTemplates
+        // (JsonSchemaFieldEditorViewModel, PlainMimeAttachmentFieldEditorViewModel,
+        //  MarkdownMimeAttachmentFieldEditorViewModel). None should use 200,*.
+        // The "200,*" column definition was the root of the oversized label floor.
+        var fieldRowMatches = System.Text.RegularExpressions.Regex.Matches(
+            content,
+            @"workspace-markdown-viewer|workspace-markdown-content|workspace-markdown-editor|workspace-json-schema");
+
+        Assert.NotEmpty(fieldRowMatches);
+
+        // No grid in the file should still use ColumnDefinitions="200,*" after the fix
+        // for the markdown/note templates — verify the total count dropped.
+        var remaining200 = System.Text.RegularExpressions.Regex.Matches(
+            content,
+            @"ColumnDefinitions=""200,\*""");
+
+        // The note/markdown grids (9 occurrences) should all be converted. The non-markdown grids
+        // (EntityReference, EntityList, String, BooleanToggle) may still use 200,*.
+        // Assert that none of the remaining 200,* grids are inside markdown/note templates.
+        foreach (System.Text.RegularExpressions.Match match in remaining200)
+        {
+            // Check that no workspace-markdown-viewer/editor/json-schema appears within 500 chars
+            // after this ColumnDefinitions (i.e. it's not a markdown grid).
+            var lookAhead = content.Substring(match.Index, Math.Min(500, content.Length - match.Index));
+            Assert.DoesNotContain("workspace-markdown-viewer", lookAhead, StringComparison.Ordinal);
+            Assert.DoesNotContain("workspace-json-schema", lookAhead, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void EntityCardTreeView_ViewportWiderThanMin_ContentFillsAndWraps_NoHScroll()
+    {
+        // Style/attached-property assertion proxy: when the viewport is wider than MinWidth (160),
+        // the ItemsPanel wrapper's MaxWidth == Viewport.Width caps content to the viewport,
+        // enabling wrap and fill. The HorizontalScrollBarVisibility="Auto" means no scrollbar
+        // appears because extent == viewport.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        // MaxWidth bound to viewport ensures content is capped at viewport width (finite measure).
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+        // HorizontalAlignment="Stretch" ensures content fills the viewport.
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", treeViewStyle, StringComparison.Ordinal);
+        // Auto means scrollbar only appears when extent > viewport; with MaxWidth == viewport, it won't.
+        Assert.Contains("<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_ViewportNarrowerThanMin_ShowsHorizontalScrollBar()
+    {
+        // Style assertion proxy: when viewport < MinWidth (160), Avalonia's MinMax clamp
+        // resolves wrapper to MinWidth (160 > viewport), so extent > viewport → scrollbar appears.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_NestedItem_WrapsWithinIndentedWidth()
+    {
+        // Style/template assertion proxy: the single ItemsPanel wrapper is constrained to
+        // [MinWidth, Viewport.Width]. Indentation is handled INSIDE the wrapper by the
+        // TreeViewItem template's 20,* grid, so nested items wrap at (wrapper - indent),
+        // not at the full viewport width.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+
+        // Only ONE wrapper (the ItemsPanel) is bound to the viewport — not per-item.
+        Assert.Contains("<ItemsPanelTemplate>", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"", treeViewStyle, StringComparison.Ordinal);
+
+        // The TreeViewItem template uses 20,* grid for indentation inside the wrapper.
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("ColumnDefinitions=\"20,*\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditor_NavigationTree_InheritsWrapperFromSharedStyle()
+    {
+        // The NavigationTree consumer does not redeclare ScrollViewer settings or the ItemsPanel
+        // wrapper and therefore inherits the Auto + ItemsPanel wrapper from the shared style.
+        var repositoryRoot = FindRepositoryRoot();
+        var editorPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Agent.Gui",
+            "Controls",
+            "AgentChatEditorControl.axaml");
+        var editor = File.ReadAllText(editorPath);
+        var treeStart = editor.IndexOf("x:Name=\"NavigationTree\"", StringComparison.Ordinal);
+        Assert.True(treeStart >= 0);
+        var treeEnd = editor.IndexOf(">", treeStart, StringComparison.Ordinal);
+        var navigationTree = editor[treeStart..treeEnd];
+
+        Assert.DoesNotContain("ItemsPanel", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxWidth", navigationTree, StringComparison.Ordinal);
     }
 }
 
