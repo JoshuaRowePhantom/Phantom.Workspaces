@@ -168,7 +168,7 @@ touching `PART_HeaderPresenter`.
 ## 4. API Design
 
 The API is a static attached-property host class `DockTabSwitch` in a new
-`Dock.Avalonia.TabSwitching` assembly/namespace, plus a small config object and a default badge
+`Phantom.Dock.Avalonia.TabSwitching` assembly/namespace, plus a small config object and a default badge
 `ControlTheme`. Nothing here references any product view-model.
 
 ```
@@ -338,13 +338,38 @@ public static readonly AttachedProperty<ControlTheme?> IndexThemeProperty =
 ```
 
 **Template data contract.** The badge template targets a tiny, dependency-free view object the
-controller creates per realized header, `DockTabIndexContext` (a plain `AvaloniaObject`/INPC):
+controller creates per realized header, `DockTabIndexContext` (a plain `AvaloniaObject`/INPC). Because
+a `DockControl` may carry several gesture sets at once (§4.2), a **single tab can be numbered by more
+than one binding** — e.g. an `Alt+1` binding *and* a `Ctrl+Shift+F1` binding both target the same tab.
+The context therefore exposes a **collection** of per-binding labels (`Labels`) as well as a
+single-label convenience (`Label`, the first/primary entry) so simple custom themes stay trivial:
 
 | Member | Type | Meaning |
 |---|---|---|
-| `Label` | `string?` | The displayed number ("1".."9","0", or "F1"…) — `null` ⇒ out of range, hide |
-| `Index` | `int` | Zero-based order index |
+| `Labels` | `IReadOnlyList<DockTabIndexLabel>` | One entry per gesture set that numbers this tab (may be empty, one, or several). Each `DockTabIndexLabel` carries `Text` ("1".."9","0", or "F1"…) and the originating gesture set. |
+| `Label` | `string?` | Convenience: `Labels[0].Text` (the primary binding), or `null` ⇒ out of range, hide |
+| `Index` | `int` | Zero-based order index of the primary binding |
 | `IsVisible` | `bool` | True while the activation modifier is held (badge fade-in trigger) |
+
+**Default theme — hidden by default, overlapping, sized to the widest label.** The default `IndexTheme`
+is intentionally minimal in the space it reserves:
+
+- **Hidden by default.** Label text is never shown while no activation modifier is held; the badges only
+  fade in while the modifier is down (driven by `IsVisible`, exactly the existing `alt-held` behavior).
+- **Overlap, don't lay out side-by-side.** When more than one label applies to a tab (multiple gesture
+  sets number it, e.g. both `Alt+1` and `Ctrl+Shift+F1`), the default theme **stacks the labels in the
+  same cell** rather than flowing them horizontally, so no extra horizontal space is reserved for the
+  second, third, … label. Concretely, the default theme hosts `Labels` in a single-cell `Panel` (a
+  `Grid` with one row/column, or a `Panel` whose children all occupy the same position) so every label
+  is drawn on top of the same spot. Because only one label is legible at a time (they share a cell), the
+  activation-modifier that is currently held determines which label reads on top — the theme raises the
+  label whose gesture set matches the held modifier to the front.
+- **Reserve space for the largest label.** The single overlapping cell measures to the **widest**
+  member of `Labels`, so if a tab carries both `"1"` and `"F1"`, the reserved/measured width is that of
+  `"F1"` (the larger), and the `"1"` badge simply centres within that same footprint. This is achieved
+  by letting the overlapping `Panel` size to its largest child (a `Panel`/`Grid` naturally measures to
+  the union of its children's desired sizes) — no per-label padding is added, so a tab with a single
+  short label reserves only that label's width.
 
 **Default template = the product's existing animated badge.** The default `IndexTheme` packages the
 existing markup so consumers get the "nicely animated" badge for free:
@@ -356,11 +381,14 @@ existing markup so consumers get the "nicely animated" badge for free:
 
 These are lifted verbatim into a `ControlTheme TargetType="ContentPresenter"` (or a small
 `DockTabIndexBadge : TemplatedControl`) shipped as
-`Dock.Avalonia.TabSwitching`'s default resource, rebinding `Text→Label`,
-`IsVisible→(Label is not null)`, and the `alt-held` pseudo-class → `IsVisible`. The default lives in
-the new assembly's theme dictionary; `IndexThemeProperty`'s effective value falls back to it when
-unset (resolved in the changed-handler, since attached-property `defaultValue` can't reference a
-resource directly).
+`Phantom.Dock.Avalonia.TabSwitching`'s default resource, rebinding `Text→Label`,
+`IsVisible→(Label is not null)`, and the `alt-held` pseudo-class → `IsVisible`. When more than one
+label applies (multiple gesture sets, see the data contract above), the default theme wraps the
+per-label badges in a single-cell overlapping `Panel` that measures to the widest label, so the
+markup above is instanced once per member of `Labels` and the instances are drawn on top of one
+another. The default lives in the new assembly's theme dictionary; `IndexThemeProperty`'s effective
+value falls back to it when unset (resolved in the changed-handler, since attached-property
+`defaultValue` can't reference a resource directly).
 
 ### 4.4 Requirement 4 — Automatic, composable injection into the tab header
 
@@ -487,7 +515,7 @@ created purely from attached properties — no view-model involvement.
 ### 6.1 Defaults (opt-out switchable, Alt+1..0, animated badge)
 
 ```xml
-<DockControl xmlns:ts="clr-namespace:Dock.Avalonia.TabSwitching;assembly=Dock.Avalonia.TabSwitching"
+<DockControl xmlns:ts="clr-namespace:Phantom.Dock.Avalonia.TabSwitching;assembly=Phantom.Dock.Avalonia.TabSwitching"
              ts:DockTabSwitch.Enabled="True"
              Layout="{Binding Layout}" />
 ```
@@ -551,6 +579,14 @@ injects (`ContentPresenter`, §4.4), and whose `DataContext` is the controller-o
 </ControlTheme>
 ```
 
+The custom theme above shows the *single-label* case. The **default** theme differs deliberately: it
+keeps the labels hidden until the activation modifier is held, and when a tab is numbered by more than
+one gesture set it **overlaps** the labels in a single cell (sized to the widest label) rather than
+laying them out side by side — see §4.3 "Default theme — hidden by default, overlapping, sized to the
+widest label." A custom theme is free to bind the whole `Labels` collection the same way if it wants
+the same overlap behaviour; binding only `Label` (the primary) is sufficient for the common single-set
+case.
+
 Here `Label` drives the text and self-hiding, and `IsVisible` toggles the `.visible` class that fades the
 badge in — exactly mirroring the default badge's `Border.alt-index-badge` / `.alt-held` opacity
 transition (§4.3). `Index` is available for tests/diagnostics but not needed for display.
@@ -600,8 +636,8 @@ modifier-exact (`KeyGesture.Matches`, §4.1).
 Integrating this API into your own `DockControl` is deliberately small, but it is **not** completely
 zero-config — the badge visuals rely on theme resources that must be merged. Concretely:
 
-1. **Reference the package** `Dock.Avalonia.TabSwitching` and add the XAML namespace
-   (`xmlns:ts="clr-namespace:Dock.Avalonia.TabSwitching;assembly=Dock.Avalonia.TabSwitching"`).
+1. **Reference the package** `Phantom.Dock.Avalonia.TabSwitching` and add the XAML namespace
+   (`xmlns:ts="clr-namespace:Phantom.Dock.Avalonia.TabSwitching;assembly=Phantom.Dock.Avalonia.TabSwitching"`).
 
 2. **Merge the default theme dictionary** into your `Application.Resources` (or a merged dictionary):
 
@@ -838,3 +874,44 @@ Source worktrees are pinned to the in-use versions: **Avalonia 12.1.0**
 - **#1043** — Alt+N numbering scoped to the active workspace's content dock (`1..N` per scope),
   Alt+Shift+N as an independent numbering over the workspace-tab host — expressible here via two
   scoped configs.
+
+---
+
+## 10. Packaging / Repository structure
+
+All of this API's code lives in a **new, standalone git repository** published as the
+`Phantom.Dock.Avalonia.TabSwitching` submodule. The repository is added as a **git submodule of
+Phantom.Workspaces** and its project is included in the Phantom.Workspaces solution so it **compiles as
+part of the Phantom.Workspaces build**. This keeps day-to-day development in-tree (edit, build, test the
+submodule alongside the app) while preserving a clean split for eventual release.
+
+### Independence for separate release
+
+The submodule is intended for eventual **separate NuGet release**, so it must be self-contained:
+
+- It depends **only** on Avalonia (12.1.0) and Dock.Avalonia (12.0.0.2) — never on any
+  Phantom.Workspaces-specific type, view-model, or assembly.
+- Everything reusable and generic — `DockTabSwitch` attached properties, `DockTabSwitchController`,
+  `DockTabSwitchGestures`/`DockTabSwitchBindings`, `DockTabOrder`, `DockTabIndexContext`, the default
+  badge `ControlTheme`/theme dictionary, and the `DocumentTabStripItem` composition theme — moves **into
+  the submodule**.
+- Phantom.Workspaces-specific wiring (replacing the current bespoke `Alt+N`/badge path, choosing gesture
+  sets and scopes, opting specific strips out) **stays in the Phantom.Workspaces app** and merely
+  **consumes** the submodule's public API. No product types leak into the package.
+
+### Two-step commit workflow
+
+Because the code lives in a submodule, any change spans two commits, in this order:
+
+1. **Commit inside the submodule first.** Make and commit all `Phantom.Dock.Avalonia.TabSwitching`
+   changes in the submodule's own repository, on its own branch/history.
+2. **Bump the submodule reference in Phantom.Workspaces.** Then add a commit in the Phantom.Workspaces
+   superproject that advances the recorded submodule pointer to that latest submodule commit
+   (`git add <submodule-path>` in the superproject, then commit). Phantom.Workspaces always builds
+   against a pinned submodule revision, so this second commit is what makes the new submodule code take
+   effect in the app.
+
+This ordering matters: the superproject reference must point at a commit that already exists in the
+submodule, so the submodule commit must land before the superproject bump. The implementation plan's
+first commit therefore scaffolds the submodule and wires it into the solution before any feature code is
+written.
