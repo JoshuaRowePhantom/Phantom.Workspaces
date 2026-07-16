@@ -16,5 +16,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Transport\Phantom.Workspaces.Transport.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Llm.Core.Tests\Phantom.Workspaces.Llm.Core.Tests.csproj" />
   </ItemGroup>
 </Project>
