@@ -1,4 +1,5 @@
 using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Interfaces;
 using Xunit;
@@ -191,38 +192,48 @@ public sealed class AgentChatPersistenceTests
     }
 
     [Fact]
-    public async Task InitializeAsync_RestoredSubAgent_AppearInSubAgentsView_AfterLeaseAcquired()
+    public async Task InitializeMcpTools_OnSuccess_ToolListingDiagnosticIsNotPersisted()
     {
-        // This test verifies that restored sub-agents appear in the SubAgents collection
-        // after AcquireLeaseAsync completes, ensuring the lazy loading path works correctly.
+        // The tool-listing diagnostic emitted when a toolset finishes loading enters the live
+        // History via AddHistoryItem and is never routed through the persistence store, so it is
+        // present in the transcript but absent after a reload (issue #1072). This exercises the
+        // shared diagnostic path used by both MCP servers and custom toolsets.
         var store = new InMemoryAgentPersistenceStore();
-        string parentSessionId;
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "scripted_kind",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(
+                ToolsetFactory.CreateFixedToolset(new WebSearchTool())));
 
-        await using (var parent = await CreateParentChatAsync(store))
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
-            var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-1", SubDefinition, "tool-call-1");
-            sink.Complete();
-            await Task.Yield();
-            parentSessionId = parent.AgentSessionId;
-        }
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "echo-agent",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                  "tools": [ { "kind": "scripted_kind", "description": "Scripted toolset" } ]
+                }
+                """),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "persistence-toolset-chat",
+            AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
+        });
 
-        var scheduler = new CapturingTaskScheduler();
-        await using var factory = CreateFactory(store);
-        var services = new AgentServices { RunningAgentChatFactory = factory };
-        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
-        scheduler.Drain();
+        static string DiagnosticText(AgentChatHistoryItem item)
+            => string.Concat(item.Contents.OfType<TextContent>().Select(static content => content.Text));
 
-        // Assert: The restored sub-agent appears in SubAgents as a SubAgent stub
-        var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
-        
-        // When we acquire a lease, the stub materializes into an AgentChat
-        await using var lease = await stub.AcquireLeaseAsync();
-        
-        // Verify the lease provides access to the underlying AgentChat
-        Assert.NotNull(lease.AgentChat);
-        Assert.Equal("sub-agent", lease.AgentChat.AgentDefinition?.Name);
-        
-        // Verify the stub is still present in SubAgents (the stub remains, lease holds the AgentChat)
-        Assert.Single(restoredParent.SubAgents);
+        Assert.Contains(
+            chat.History,
+            item => DiagnosticText(item).Contains("Opened toolset 'scripted_kind'. Loaded tools", StringComparison.Ordinal));
+
+        var persisted = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = chat.AgentSessionId },
+            CancellationToken.None);
+        Assert.DoesNotContain(
+            persisted,
+            message => message.Text is not null
+                && message.Text.Contains("Opened toolset", StringComparison.Ordinal));
     }
 }

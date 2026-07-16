@@ -1676,6 +1676,132 @@ public sealed class AgentChatTests
         Assert.False(IsChatRunning());
     }
 
+    private static string DiagnosticText(AgentChatHistoryItem item)
+        => string.Concat(item.Contents.Select(static content => content switch
+        {
+            TextContent text => text.Text,
+            ErrorContent error => error.Message,
+            _ => string.Empty,
+        }));
+
+    private static string FirstDiagnosticText(AgentChatRunningItem runningItem)
+        => runningItem.Items.Count > 0 ? DiagnosticText(runningItem.Items[0]) : string.Empty;
+
+    [Fact]
+    public async Task InitializeAsync_SessionInitialization_CreatesAndClearsRunningItem()
+    {
+        var seenRunningTexts = new List<string>();
+        void Capture(AgentChat chat)
+            => ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(FirstDiagnosticText(item));
+                        }
+                    }
+                };
+
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        };
+        await using var chat = await AgentChat.CreateAsync(request, Capture);
+
+        Assert.Contains(seenRunningTexts, text => text == "Loading session");
+        Assert.Empty(chat.RunningItems);
+    }
+
+    [Fact]
+    public async Task InitializeCustomTool_WhenToolsetLoadThrows_UnpersistedHistoryContainsExceptionAndFailedStep()
+    {
+        var failure = new InvalidOperationException("toolset boom");
+        var provider = new ScriptedToolsetContextProvider(failure: failure);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider);
+        await using var _ = chat;
+        await createTask;
+
+        var diagnostics = chat.History.Select(DiagnosticText).ToArray();
+        Assert.Contains(diagnostics, text =>
+            text.Contains("Failed to load toolset 'scripted_kind'", StringComparison.Ordinal)
+            && text.Contains("toolset boom", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, text => text.Contains("Agent startup failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InitializeMcpTools_MultipleToolsets_EmitsIndividualRunningItemsNotSingleLumpedItem()
+    {
+        var firstFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "kind_a",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(
+                ToolsetFactory.CreateFixedToolset(new WebSearchTool())));
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "kind_b",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(
+                ToolsetFactory.CreateFixedToolset(new WebRequestTool())),
+            underlyingInstance: firstFactory);
+
+        var seenRunningTexts = new List<string>();
+        void Capture(AgentChat chat)
+            => ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(FirstDiagnosticText(item));
+                        }
+                    }
+                };
+
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "echo-agent",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                  "tools": [
+                    { "kind": "kind_a", "description": "Toolset A" },
+                    { "kind": "kind_b", "description": "Toolset B" }
+                  ]
+                }
+                """),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+            AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
+        };
+        await using var chat = await AgentChat.CreateAsync(request, Capture);
+
+        Assert.Contains(seenRunningTexts, text => text == "Loading toolset kind_a");
+        Assert.Contains(seenRunningTexts, text => text == "Loading toolset kind_b");
+        Assert.DoesNotContain(seenRunningTexts, text => text.Contains("Agent ready", StringComparison.Ordinal));
+
+        var diagnostics = chat.History.Select(DiagnosticText).ToArray();
+        Assert.DoesNotContain(diagnostics, text => text.Contains("Agent ready", StringComparison.Ordinal));
+        Assert.Equal(
+            2,
+            diagnostics.Count(text => text.Contains("Opened toolset", StringComparison.Ordinal)));
+    }
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 

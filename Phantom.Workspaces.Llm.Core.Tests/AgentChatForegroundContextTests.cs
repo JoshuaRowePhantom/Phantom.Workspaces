@@ -170,6 +170,53 @@ public sealed class AgentChatForegroundContextTests
     }
 
     [Fact]
+    public async Task InitializeMcpTools_RunningItemMutations_OccurOnForegroundScheduler()
+    {
+        // Every init/tool running-item create/update/complete call (session init plus each toolset
+        // load) executes on the foreground scheduler, and the session step surfaces its own running
+        // item (issue #1072, consistent with #1068).
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        var provider = new ScriptedToolsetContextProvider(tools: [new WebSearchTool()]);
+
+        var mutationThreads = new ConcurrentQueue<int>();
+        var seenRunningTexts = new List<string>();
+        var chat = await pump.PostAsync(() => AgentChat.CreateAsync(
+            CreateRequestWithToolset(scheduler, provider),
+            onConstructed: c => ((INotifyCollectionChanged)c.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    mutationThreads.Enqueue(Environment.CurrentManagedThreadId);
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        var text = item.Items.Count > 0
+                            ? string.Concat(item.Items[0].Contents.OfType<TextContent>().Select(static content => content.Text))
+                            : string.Empty;
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(text);
+                        }
+                    }
+                }));
+        try
+        {
+            Assert.NotEmpty(mutationThreads);
+            Assert.All(mutationThreads, threadId => Assert.Equal(pump.ThreadId, threadId));
+            Assert.Contains(seenRunningTexts, text => text == "Loading session");
+            Assert.Empty(chat.RunningItems);
+        }
+        finally
+        {
+            await chat.DisposeAsync();
+        }
+    }
+
+    [Fact]
     public void Constructor_SynchronizationContextSchedulerOffContext_ThrowsInvalidOperationException()
     {
         using var pump = new SingleThreadPump(installSynchronizationContext: true);
@@ -277,7 +324,6 @@ public sealed class AgentChatForegroundContextTests
         {
             return;
         }
-
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {

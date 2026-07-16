@@ -330,25 +330,68 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
            this.request.CancellationToken);
 
-       this.LoadInitialHistory(persistedMessages);
-
-       // Signal that persisted history has been loaded into History. Consumers (e.g. the chat
-       // output control) await this before taking the initial history snapshot so the first render
-       // never captures an empty/partial History (issue #1009).
-       this.historyPopulated.TrySetResult();
-
-       this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
-       this.SetAgentSessionId(resolvedAgentSessionId);
-
-       if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+       // Session initialization runs inline (not dispatched) so the session is fully established
+       // when CreateAsync returns, preserving the historical contract that callers — and tests that
+       // supply a foreground scheduler which only executes when externally pumped — depend on.
+       // CreateAsync already executes on the foreground context (enforced by the constructor for a
+       // SynchronizationContextTaskScheduler), so these running-item mutations are on the foreground
+       // scheduler, and the session-init running item is fully completed before the processing loop
+       // starts, so it never races the loop (issues #1068 / #1072).
+       var sessionInitItem = this.CreateRunningItem(new AgentChatHistoryItem
        {
-           await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+           Role = AgentChatHistoryItem.DiagnosticChatRole,
+           Contents = new AIContent[] { new TextContent("Loading session") },
+           Timestamp = DateTimeOffset.UtcNow,
+       });
+       try
+       {
+           this.LoadInitialHistory(persistedMessages);
+
+           // Signal that persisted history has been loaded into History. Consumers (e.g. the
+           // chat output control) await this before taking the initial history snapshot so the
+           // first render never captures an empty/partial History (issue #1009).
+           this.historyPopulated.TrySetResult();
+
+           this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
+           this.SetAgentSessionId(resolvedAgentSessionId);
+
+           if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+           {
+               await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+           }
+
+           // The session-init step is transient progress only: clear the running item without
+           // echoing "Loading session" into the History transcript. Failures (below) still
+           // surface an error diagnostic (issue #1072).
+           this.CompleteRunningItem(sessionInitItem, writeToHistory: false);
+       }
+       catch (Exception ex)
+       {
+           this.UpdateRunningItem(sessionInitItem, [new AgentChatHistoryItem
+           {
+               Role = AgentChatHistoryItem.DiagnosticChatRole,
+               Contents = new AIContent[] { new ErrorContent($"Failed to load session: {ex}") },
+               Timestamp = DateTimeOffset.UtcNow,
+           }]);
+           this.CompleteRunningItem(sessionInitItem, writeToHistory: true);
+           throw;
        }
 
        this.StartProcessingLoop();
 
-       await this.RunOnForegroundAsync(
-           () => this.InitializeMcpToolsAsync(this.request.CancellationToken));
+       // Tool initialization mutates running items (one per toolset / MCP server) and must be
+       // serialized with the processing loop on the foreground scheduler (issue #1068). Only
+       // dispatch when there is actual tool work: a tool-less agent performs no running-item
+       // mutations, so skipping the dispatch keeps CreateAsync from blocking on a foreground
+       // scheduler that defers execution until externally pumped (e.g. sub-agent restore tests).
+       var runtimeTools = AgentFactory.ExtractTools(resolvedAgentDefinition);
+       var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0
+           || (runtimeTools?.OfType<McpTool>().Any() ?? false);
+       if (hasToolWork)
+       {
+           await this.RunOnForegroundAsync(
+               () => this.InitializeMcpToolsAsync(this.request.CancellationToken));
+       }
     }
 
     // Binds the continuation chain of the supplied action to the foreground scheduler, mirroring
@@ -1991,17 +2034,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             var roots = results.SelectMany(static result => result.Roots).ToList();
 
             this.ReplaceToolNodes(roots);
-            var summaryRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
-            {
-                Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(this.GetEnabledRuntimeTools())) },
-                Timestamp = DateTimeOffset.UtcNow,
-            });
-            this.CompleteRunningItem(summaryRunningItem, true);
+
+            // Per-step running items (one per toolset / MCP server) already emit their own
+            // "Loading …" -> tool-listing diagnostics into unpersisted history, so no lumped
+            // "Agent ready. Loaded tools: …" summary running item is emitted here (issue #1072).
             this.ToolsChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
         {
+            // Each toolset / MCP step now captures its own failure into a per-step diagnostic that
+            // names the failed step, so this only handles truly unexpected orchestration errors.
             var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -2068,7 +2110,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
-            Contents = new AIContent[] { new TextContent($"Initializing toolset '{displayName}'...") },
+            Contents = new AIContent[] { new TextContent($"Loading toolset {displayName}") },
             Timestamp = DateTimeOffset.UtcNow,
         });
 
@@ -2150,6 +2192,31 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             }]);
             return new ToolInitializationResult([root], runtimeTools.ToList());
         }
+        catch (Exception ex)
+        {
+            // Attribute a custom-toolset failure to this step (mirroring the MCP path) so the
+            // exception and the failed step name land in the unpersisted history diagnostic rather
+            // than being swallowed into the generic "Agent startup failed" summary (issue #1072).
+            var failureMessage = $"Failed to load toolset '{displayName}': {ex}";
+            this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = new AIContent[] { new ErrorContent(failureMessage) },
+                Timestamp = DateTimeOffset.UtcNow,
+            }]);
+
+            var failedNode = new ToolStateNode(
+                id: BuildCustomToolId(tool),
+                name: displayName,
+                description: summary,
+                instructions: summary,
+                kind: kind,
+                runtimeTool: null,
+                parent: null,
+                isEnabled: false,
+                status: failureMessage);
+            return new ToolInitializationResult([failedNode], []);
+        }
         finally
         {
             this.CompleteRunningItem(runningItem, true);
@@ -2166,7 +2233,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
-            Contents = new AIContent[] { new TextContent($"Initializing MCP server '{displayName}'...") },
+            Contents = new AIContent[] { new TextContent($"Loading mcp server {displayName}") },
             Timestamp = DateTimeOffset.UtcNow,
         });
 
@@ -2438,9 +2505,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private static string BuildMcpChildToolId(string? serverName, string toolName)
         => $"{BuildMcpServerToolId(serverName)}:{toolName}";
-
-    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
-        => $"Agent ready. {McpClientToolListing.BuildLoadedToolsMessage(runtimeTools)}";
 
     private void ReplaceToolNodes(IReadOnlyList<ToolStateNode> roots)
     {
