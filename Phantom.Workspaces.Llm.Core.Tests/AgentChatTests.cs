@@ -1659,20 +1659,33 @@ public sealed class AgentChatTests
         // indicator turns off exactly when the running-item collection is cleared.
         var client = new DeterministicTestChatClient();
         var stream = client.EnqueueStreamingResponse();
-        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "answer")
-        {
-            FinishReason = ChatFinishReason.Stop,
-        });
+
+        // Gate the turn's terminal update so the run is deterministically held in-flight. Without
+        // this the loop can drive RunningItems 0 -> 1 -> 0 before the test observes the transient
+        // count > 0 state, causing the untimeouted wait to miss it and hang under load. Holding the
+        // gate guarantees the running item is present when we assert IsChatRunning is true; releasing
+        // it lets the collection drain so IsChatRunning turns back off.
+        var gate = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "answer")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
         stream.Complete();
         await using var chat = CreateChat(client);
+
+        // Bounded timeout so a regression fails fast with a clear message instead of hanging.
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         bool IsChatRunning() => chat.RunningItems.Count > 0;
 
         chat.EnqueueUserMessage("hi");
-        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "run to start");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "run to start", cts.Token);
         Assert.True(IsChatRunning());
 
-        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to finish");
+        gate.MarkReady();
+
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to finish", cts.Token);
         Assert.False(IsChatRunning());
     }
 
