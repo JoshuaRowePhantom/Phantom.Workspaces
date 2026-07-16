@@ -13,6 +13,7 @@
 
     <!-- Entity card surfaces -->
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.Background">#FAFAFA</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.ItemPanelBackground">#FAFAFA</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#E0E0E0</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#F0F0F0</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#C0C0C0</SolidColorBrush>

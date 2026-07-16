@@ -177,40 +177,88 @@
         <Setter Property="VerticalAlignment" Value="Stretch" />
         <Setter Property="Margin" Value="0,0,8,0" />
     </Style>
-    <Style Selector="TreeView.entity-card-tree TreeViewItem">
+    <!-- Issue #1029: reusable entity-card border/header shell. Applied by the entity-card
+         TreeViewItem template and by a standalone ContentControl so entity-like content is
+         presented identically everywhere. Border/footer thickness reuses the same resource the
+         agent-chat input TextBox resolves to (TextControlBorderThemeThickness) so hover/selection
+         recolouring never reflows. -->
+    <Style Selector="ContentControl.entity-card-shell">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="Template">
             <ControlTemplate>
-                <Grid RowDefinitions="Auto,Auto"
-                      ColumnDefinitions="21,*"
+                <StackPanel HorizontalAlignment="Stretch">
+                    <Border Classes="entity-card-shell-border"
+                            Classes.has-children="{Binding HasChildren, FallbackValue=False}"
+                            ClipToBounds="True"
+                            HorizontalAlignment="Stretch">
+                        <ContentPresenter Classes="branch-header"
+                                          HorizontalAlignment="Stretch"
+                                          VerticalAlignment="Top"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                    <Button Classes="entity-card-shell-footer"
+                            IsVisible="{Binding HasChildren, FallbackValue=False}"
+                            Content="{Binding ExpandArrow, FallbackValue=▼}"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Center"
+                            Command="{Binding ToggleExpandCommand}" />
+                </StackPanel>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="Border.entity-card-shell-border">
+        <Setter Property="Padding" Value="10" />
+        <Setter Property="BorderThickness" Value="{DynamicResource TextControlBorderThemeThickness}" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.ItemPanelBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border.has-children">
+        <Setter Property="CornerRadius" Value="6,6,0,0" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+    <Style Selector="Button.entity-card-shell-footer">
+        <Setter Property="Padding" Value="0,2" />
+        <Setter Property="FontSize" Value="8" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Margin" Value="0,-1,0,0" />
+        <Setter Property="BorderThickness" Value="{DynamicResource TextControlBorderThemeThickness}" />
+        <Setter Property="CornerRadius" Value="0,0,6,6" />
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityCard.ItemPanelBackground}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+    <Style Selector="Button.entity-card-shell-footer:pointerover">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+
+    <!-- Issue #1029: shared entity-card TreeViewItem template built on the reusable shell.
+         Applies to both the legacy `entity-card-tree` class and the named `entity-card-tree-view`
+         style so every entity tree gets the same chrome while EntityCardControl stays content-only. -->
+    <Style Selector="TreeView.entity-card-tree TreeViewItem, TreeView.entity-card-tree-view TreeViewItem">
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="MinWidth" Value="240" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid RowDefinitions="Auto,*"
+                      ColumnDefinitions="Auto,*"
                       HorizontalAlignment="Stretch">
-                    <StackPanel Grid.Row="0" Grid.ColumnSpan="2"
+                    <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                                 Classes="entity-card-tree-item"
                                 HorizontalAlignment="Stretch">
-                        <ContentPresenter IsVisible="{Binding HasChildren}"
-                                          HorizontalAlignment="Stretch"
-                                          Classes="branch-header"
-                                          VerticalAlignment="Top"
-                                          Content="{TemplateBinding Header}"
-                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                        <ContentPresenter IsVisible="{Binding NotHasChildren}"
-                                          HorizontalAlignment="Stretch"
-                                          Classes="leaf"
-                                          VerticalAlignment="Top"
-                                          Content="{TemplateBinding Header}"
-                                          ContentTemplate="{TemplateBinding HeaderTemplate}" />
-                        <Border IsVisible="{Binding HasChildren}"
-                                HorizontalAlignment="Stretch"
-                                Classes="entity-card-expand-section branch-footer">
-                            <Button Classes="entity-card-expand-button"
-                                    Content="{Binding ExpandArrow, FallbackValue=▼}"
-                                    HorizontalAlignment="Stretch"
-                                    HorizontalContentAlignment="Center"
-                                    Command="{Binding ToggleExpandCommand}" />
-                        </Border>
+                        <ContentControl Classes="entity-card-shell"
+                                        HorizontalAlignment="Stretch"
+                                        Content="{TemplateBinding Header}"
+                                        ContentTemplate="{TemplateBinding HeaderTemplate}" />
                     </StackPanel>
                     <Border Grid.Column="0" Grid.Row="1"
+                            Classes="entity-card-child-rail"
                             Background="{Binding ChildRailBrush, FallbackValue=#808080}"
-                            Width="3"
+                            Width="2"
                             HorizontalAlignment="Center"
                             VerticalAlignment="Stretch" />
                     <ItemsPresenter Grid.Column="1" Grid.Row="1"
@@ -219,10 +267,28 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <Style Selector="TreeView.entity-card-tree-view">
+        <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem:selected Border.entity-card-shell-border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree-view TreeViewItem:selected Border.entity-card-shell-border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
         <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
     </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ContentPresenter.branch-header">
+        <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
+    </Style>
+    <Style Selector="TreeView.entity-card-tree-view.entity-card-tree-sticky ScrollViewer">
+        <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
+    </Style>
+    <Style Selector="TreeView.entity-card-tree-view.entity-card-tree-sticky ContentPresenter.branch-header">
         <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
     </Style>
 
@@ -502,6 +568,9 @@
     <Style Selector="StackPanel.workspace-entity-card-content">
         <Setter Property="Spacing" Value="6" />
     </Style>
+    <Style Selector="StackPanel.workspace-entity-card-content.workspace-entity-deleted">
+        <Setter Property="Opacity" Value="0.4" />
+    </Style>
     <Style Selector="StackPanel.workspace-entity-header-row">
         <Setter Property="Orientation" Value="Vertical" />
         <Setter Property="Spacing" Value="2" />
@@ -514,11 +583,11 @@
     <Style Selector="TextBlock.workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
     </Style>
-    <Style Selector="StackPanel.workspace-entity-actions-row">
+    <Style Selector="WrapPanel.workspace-entity-actions-row">
         <Setter Property="Orientation" Value="Horizontal" />
-        <Setter Property="Spacing" Value="4" />
         <Setter Property="HorizontalAlignment" Value="Right" />
         <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="MinWidth" Value="100" />
     </Style>
     <Style Selector="Button.workspace-edit-indicator-button">
         <Setter Property="HorizontalAlignment" Value="Right" />
@@ -603,6 +672,26 @@
     <Style Selector="Border.entity-card:pointerover Button.workspace-entity-badge-button.workspace-entity-badge-active">
         <Setter Property="Opacity" Value="1" />
     </Style>
+    <!-- Issue #1029: reveal action buttons when hovering/focusing the reusable shell border,
+         since EntityCardControl no longer owns the outer entity-card Border. -->
+    <Style Selector="Border.entity-card-shell-border:pointerover Button.workspace-entity-shortcut-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:focus-within Button.workspace-entity-shortcut-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:pointerover Button.workspace-edit-indicator-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:focus-within Button.workspace-edit-indicator-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:pointerover Button.workspace-entity-badge-button">
+        <Setter Property="Opacity" Value="0.6" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:pointerover Button.workspace-entity-badge-button.workspace-entity-badge-active">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
     <Style Selector="Button.workspace-entity-badge-button:pointerover">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="Background" Value="#60808080" />
@@ -618,10 +707,12 @@
     </Style>
     <Style Selector="TextBlock.workspace-field-label">
         <Setter Property="Margin" Value="0,4,8,0" />
+        <Setter Property="MinWidth" Value="100" />
     </Style>
     <Style Selector="TextBox.workspace-field-value">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="MinWidth" Value="100" />
     </Style>
     <Style Selector="TextBlock.workspace-field-read-value">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
