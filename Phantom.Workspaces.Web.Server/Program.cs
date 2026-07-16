@@ -5,6 +5,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
+using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
@@ -22,6 +23,7 @@ builder.Services.AddSingleton(reverseConnectionStatusRegistry);
 var reverseTransportServerFactory = new ReverseHttpServerTransportFactory(reverseConnectionStatusRegistry);
 builder.Services.AddSingleton(reverseTransportServerFactory);
 var transportFactoryRegistry = new TransportFactoryRegistry();
+transportFactoryRegistry.Register(new LocalTransportFactory(transportRegistry));
 transportFactoryRegistry.Register(new HttpClientTransportFactory());
 transportFactoryRegistry.Register(new ReverseHttpForwardingTransportFactory());
 builder.Services.AddSingleton<ITransportFactoryRegistry>(transportFactoryRegistry);
