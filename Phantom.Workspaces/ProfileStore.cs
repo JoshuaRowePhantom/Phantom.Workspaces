@@ -598,7 +598,7 @@ public sealed record ProfileThemeSettings(
                 SelectedBorder: "#2B67D1"),
             Popup: new ProfileThemeSurfaceSet(
                 Background: "#FFFFFF",
-                Border: "#D0D0D0",
+                Border: "#CCCCCC",
                 HoverBackground: "#F6F6F6",
                 HoverBorder: "#C2C2C2",
                 SelectedBackground: "#EFEFEF",

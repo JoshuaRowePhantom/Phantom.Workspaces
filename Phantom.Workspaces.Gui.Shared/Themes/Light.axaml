@@ -2,36 +2,60 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <!-- Light theme color palette -->
     
-    <!-- Entity pane surfaces -->
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#FFFFFF</SolidColorBrush>
+    <!-- Entity pane surfaces (aligned with ProfileThemeSettings.Light) -->
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Background">#F3F3F3</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.Chat.Background">#FFFFFF</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#E0E0E0</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#F5F5F5</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#D0D0D0</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBackground">#E8F0FE</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBorder">#1976D2</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.Border">#DDDDDD</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBackground">#EBEBEB</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.HoverBorder">#D2D2D2</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBackground">#E5E5E5</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityPane.SelectedBorder">#C6C6C6</SolidColorBrush>
 
-    <!-- Entity card surfaces -->
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.Background">#FAFAFA</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.ItemPanelBackground">#FAFAFA</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#E0E0E0</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#F0F0F0</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#C0C0C0</SolidColorBrush>
+    <!-- Entity card surfaces (aligned with ProfileThemeSettings.Light) -->
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.Background">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.ItemPanelBackground">#FFFFFF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.Border">#D0D0D0</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBackground">#F6F6F6</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.HoverBorder">#C2C2C2</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.EntityCard.ActiveBorder">#6080C0FF</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#E8F0FE</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#C19C00</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBackground">#EFEFEF</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Surface.EntityCard.SelectedBorder">#2B67D1</SolidColorBrush>
 
-    <!-- Popup surfaces -->
+    <!-- Popup surfaces (canonical theme-file value for Border: #CCCCCC) -->
     <SolidColorBrush x:Key="Theme.Surface.Popup.Background">#FFFFFF</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Surface.Popup.Border">#CCCCCC</SolidColorBrush>
 
-    <!-- Text classes -->
-    <SolidColorBrush x:Key="Theme.Class.normal.Foreground">#212121</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Class.heading.Foreground">#000000</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Class.section-title.Foreground">#212121</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Class.caption.Foreground">#424242</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Class.muted.Foreground">#757575</SolidColorBrush>
-    <SolidColorBrush x:Key="Theme.Class.accent.Foreground">#1976D2</SolidColorBrush>
+    <!-- Text classes (aligned with ProfileThemeSettings.Light) -->
+    <SolidColorBrush x:Key="Theme.Class.normal.Foreground">#1A1A1A</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.heading.Foreground">#1A1A1A</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.section-title.Foreground">#1A1A1A</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.caption.Foreground">#1A1A1A</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.muted.Foreground">#5C5C5C</SolidColorBrush>
+    <SolidColorBrush x:Key="Theme.Class.accent.Foreground">#2B67D1</SolidColorBrush>
+
+    <!-- Font defaults -->
+    <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
+    <x:Double x:Key="Theme.FontSize.Base">13</x:Double>
+
+    <!-- Text class typography defaults -->
+    <x:Double x:Key="Theme.Class.normal.Opacity">1</x:Double>
+    <x:Double x:Key="Theme.Class.normal.FontSize">13</x:Double>
+    <FontWeight x:Key="Theme.Class.normal.FontWeight">Normal</FontWeight>
+    <x:Double x:Key="Theme.Class.heading.Opacity">1</x:Double>
+    <x:Double x:Key="Theme.Class.heading.FontSize">16</x:Double>
+    <FontWeight x:Key="Theme.Class.heading.FontWeight">Bold</FontWeight>
+    <x:Double x:Key="Theme.Class.section-title.Opacity">1</x:Double>
+    <x:Double x:Key="Theme.Class.section-title.FontSize">14</x:Double>
+    <FontWeight x:Key="Theme.Class.section-title.FontWeight">Bold</FontWeight>
+    <x:Double x:Key="Theme.Class.caption.Opacity">1</x:Double>
+    <x:Double x:Key="Theme.Class.caption.FontSize">11</x:Double>
+    <FontWeight x:Key="Theme.Class.caption.FontWeight">Normal</FontWeight>
+    <x:Double x:Key="Theme.Class.muted.Opacity">0.75</x:Double>
+    <x:Double x:Key="Theme.Class.muted.FontSize">13</x:Double>
+    <FontWeight x:Key="Theme.Class.muted.FontWeight">Normal</FontWeight>
+    <x:Double x:Key="Theme.Class.accent.Opacity">1</x:Double>
+    <x:Double x:Key="Theme.Class.accent.FontSize">13</x:Double>
+    <FontWeight x:Key="Theme.Class.accent.FontWeight">Normal</FontWeight>
 
     <!-- Status badges -->
     <SolidColorBrush x:Key="Theme.Status.Good">#2E7D32</SolidColorBrush>

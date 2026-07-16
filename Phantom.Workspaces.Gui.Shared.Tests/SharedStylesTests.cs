@@ -173,14 +173,15 @@ public sealed class SharedStylesTests
     }
 
     [Fact]
-    public void EntityCardTree_SelectedItem_UsesGoldThemeBorder()
+    public void EntityCardTree_SelectedItem_UsesSelectedThemeBorder()
     {
         var repositoryRoot = FindRepositoryRoot();
         var darkTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Dark.axaml"));
         var lightTheme = File.ReadAllText(Path.Combine(repositoryRoot.FullName, "Phantom.Workspaces.Gui.Shared", "Themes", "Light.axaml"));
 
-        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">Gold</SolidColorBrush>", darkTheme, StringComparison.Ordinal);
-        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#C19C00</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
+        // Reconciled to the canonical (formerly profile-effective) selection colours per issue #1004.
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#5EA0FF</SolidColorBrush>", darkTheme, StringComparison.Ordinal);
+        Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#2B67D1</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

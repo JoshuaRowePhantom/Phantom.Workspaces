@@ -707,7 +707,7 @@ public sealed class MainWindowAxamlTests
         var darkContent = ReadThemeFile("Dark.axaml");
 
         Assert.Contains(
-            "Theme.Surface.EntityPane.Background\">#000000",
+            "Theme.Surface.EntityPane.Background\">#1E1E1E",
             darkContent,
             StringComparison.Ordinal);
     }
@@ -718,7 +718,7 @@ public sealed class MainWindowAxamlTests
         var lightContent = ReadThemeFile("Light.axaml");
 
         Assert.Contains(
-            "Theme.Surface.EntityPane.Background\">#FFFFFF",
+            "Theme.Surface.EntityPane.Background\">#F3F3F3",
             lightContent,
             StringComparison.Ordinal);
     }

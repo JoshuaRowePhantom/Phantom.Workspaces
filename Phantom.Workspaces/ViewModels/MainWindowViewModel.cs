@@ -898,25 +898,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ProfileThemeSettings theme)
     {
         var resources = Application.Current!.Resources;
+
+        // Font and class typography keys are user-customizable per-profile,
+        // so they are written to the flat dict (correctly overriding theme defaults).
+        // Theme-variant keys (Surface.*, Class.*.Foreground) are NOT written here;
+        // they resolve through ThemeDictionaries (Light.axaml / Dark.axaml) so that
+        // PopupRoot and secondary windows update correctly on theme switch.
         SetResource(resources, "Theme.FontFamily", new FontFamily(theme.Fonts.BaseFamily));
         SetResource(resources, "Theme.FontSize.Base", theme.Fonts.BaseSize * theme.Fonts.GlobalScale.Value);
-
-        SetBrushResource(resources, "Theme.Surface.EntityPane.Background", theme.Surfaces.EntityPane.Background);
-        SetBrushResource(resources, "Theme.Surface.EntityPane.Border", theme.Surfaces.EntityPane.Border);
-        SetBrushResource(resources, "Theme.Surface.EntityPane.HoverBackground", theme.Surfaces.EntityPane.HoverBackground);
-        SetBrushResource(resources, "Theme.Surface.EntityPane.HoverBorder", theme.Surfaces.EntityPane.HoverBorder);
-        SetBrushResource(resources, "Theme.Surface.EntityPane.SelectedBackground", theme.Surfaces.EntityPane.SelectedBackground);
-        SetBrushResource(resources, "Theme.Surface.EntityPane.SelectedBorder", theme.Surfaces.EntityPane.SelectedBorder);
-
-        SetBrushResource(resources, "Theme.Surface.EntityCard.Background", theme.Surfaces.EntityCard.Background);
-        SetBrushResource(resources, "Theme.Surface.EntityCard.Border", theme.Surfaces.EntityCard.Border);
-        SetBrushResource(resources, "Theme.Surface.EntityCard.HoverBackground", theme.Surfaces.EntityCard.HoverBackground);
-        SetBrushResource(resources, "Theme.Surface.EntityCard.HoverBorder", theme.Surfaces.EntityCard.HoverBorder);
-        SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBackground", theme.Surfaces.EntityCard.SelectedBackground);
-        SetBrushResource(resources, "Theme.Surface.EntityCard.SelectedBorder", theme.Surfaces.EntityCard.SelectedBorder);
-
-        SetBrushResource(resources, "Theme.Surface.Popup.Background", theme.Surfaces.Popup.Background);
-        SetBrushResource(resources, "Theme.Surface.Popup.Border", theme.Surfaces.Popup.Border);
 
         var classNames = new[] { "normal", "heading", "section-title", "caption", "muted", "accent" };
         foreach (var className in classNames)
@@ -931,7 +920,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ProfileThemeClass themeClass,
         ProfileThemeSettings theme)
     {
-        SetBrushResource(resources, $"Theme.Class.{className}.Foreground", themeClass.Foreground);
         SetResource(resources, $"Theme.Class.{className}.Opacity", themeClass.Opacity);
         SetResource(
             resources,
