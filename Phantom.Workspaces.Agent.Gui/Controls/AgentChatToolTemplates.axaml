@@ -105,6 +105,11 @@
                 <TextBlock Text="{Binding Summary}"
                            Classes="muted"
                            TextWrapping="Wrap"/>
+                <!-- Issue #1033: tree-level "hide completed" checkbox. Only the Sub-agents root sets
+                     ShowHideCompletedToggle; independent from the browser-panel HideCompleted toggle. -->
+                <CheckBox IsVisible="{Binding ShowHideCompletedToggle}"
+                          IsChecked="{Binding HideCompletedAgents, Mode=TwoWay}"
+                          Content="Hide completed"/>
             </StackPanel>
         </StackPanel>
     </DataTemplate>

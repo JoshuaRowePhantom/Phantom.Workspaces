@@ -29,6 +29,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
     private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
+    private readonly ObservableCollection<AgentEditorNavigationItemViewModel> subAgentAllChildren = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
     private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
@@ -116,7 +117,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             null,
             this.subAgentsContainerDetail,
             [],
-            isExpanded: true);
+            isExpanded: true,
+            showHideCompletedToggle: true);
 
         var root = new AgentEditorNavigationItemViewModel(
             "chat",
@@ -134,10 +136,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // Set up tools transformer.
         this.toolsTransformer = new ToolsCollectionTransformer(this.Tools, this.toolsNavItem.Children, this.toolsDetail);
 
-        // Set up sub-agents transformer.
+        // Set up sub-agents transformer. The transformer maintains the full (unfiltered) set of
+        // sub-agent nav items in subAgentAllChildren and projects a completion-filtered view into
+        // subAgentsNavItem.Children (see issue #1033).
         this.subAgentsTransformer = new SubAgentsCollectionTransformer(
             this.subAgentsContainerDetail.Slots,
-            this.subAgentsNavItem.Children,
+            this.subAgentAllChildren,
             this.subAgentsNavItem);
 
         // Seed slots for any sub-agents already present (e.g. restored from persistence).
@@ -699,16 +703,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
         private readonly SubAgentsContainerViewModel container;
+        private readonly IList<AgentEditorNavigationItemViewModel> visibleChildren;
 
         public SubAgentsCollectionTransformer(
             IReadOnlyList<SubAgentSlotViewModel> source,
-            IList<AgentEditorNavigationItemViewModel> target,
+            IList<AgentEditorNavigationItemViewModel> allChildren,
             AgentEditorNavigationItemViewModel subAgentsNavItem)
-            : base(source, target)
+            : base(source, allChildren)
         {
             this.subAgentsNavItem = subAgentsNavItem;
             this.container = (SubAgentsContainerViewModel)subAgentsNavItem.DetailContent;
+            this.visibleChildren = subAgentsNavItem.Children;
+            this.subAgentsNavItem.PropertyChanged += this.OnNavItemPropertyChanged;
             this.ApplyInitialTransform();
+            this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
         }
 
@@ -734,15 +742,71 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 {
                     target.RefreshStatus();
                     this.container.NotifySubAgentUpdated();
+                    this.RefreshVisibleChildren();
                 };
             }
 
+            this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
         }
 
         protected override void OnRemoveAt(int index, AgentEditorNavigationItemViewModel target)
         {
+            this.RefreshVisibleChildren();
             this.UpdateSubAgentsLabel();
+        }
+
+        public override void Dispose()
+        {
+            this.subAgentsNavItem.PropertyChanged -= this.OnNavItemPropertyChanged;
+            base.Dispose();
+        }
+
+        private void OnNavItemPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(AgentEditorNavigationItemViewModel.HideCompletedAgents))
+            {
+                this.RefreshVisibleChildren();
+            }
+        }
+
+        // Projects the full (unfiltered) set of sub-agent nav items in Target into
+        // subAgentsNavItem.Children, excluding completed (Succeeded/Failed) items when
+        // HideCompletedAgents is true. Preserves source order. See issue #1033.
+        private void RefreshVisibleChildren()
+        {
+            var hide = this.subAgentsNavItem.HideCompletedAgents;
+
+            var desired = new List<AgentEditorNavigationItemViewModel>();
+            foreach (var item in this.Target)
+            {
+                if (!hide || !(item.IsSucceeded || item.IsFailed))
+                {
+                    desired.Add(item);
+                }
+            }
+
+            for (int i = this.visibleChildren.Count - 1; i >= 0; i--)
+            {
+                if (!desired.Contains(this.visibleChildren[i]))
+                {
+                    this.visibleChildren.RemoveAt(i);
+                }
+            }
+
+            for (int i = 0; i < desired.Count; i++)
+            {
+                if (i >= this.visibleChildren.Count || !ReferenceEquals(this.visibleChildren[i], desired[i]))
+                {
+                    var existing = this.visibleChildren.IndexOf(desired[i]);
+                    if (existing >= 0)
+                    {
+                        this.visibleChildren.RemoveAt(existing);
+                    }
+
+                    this.visibleChildren.Insert(i, desired[i]);
+                }
+            }
         }
 
         private void UpdateSubAgentsLabel()
