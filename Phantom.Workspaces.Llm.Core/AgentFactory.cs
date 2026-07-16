@@ -709,7 +709,8 @@ public static class AgentFactory
             services?.LoggerFactory,
             queueManager: queueManager,
             modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry);
+            subAgentChatRegistry: subAgentChatRegistry,
+            accountUpsertService: services?.AccountUpsertService);
 
         return (client, displayName);
     }
@@ -800,7 +801,8 @@ public static class AgentFactory
             services?.LoggerFactory,
             queueManager: queueManager,
             modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry);
+            subAgentChatRegistry: subAgentChatRegistry,
+            accountUpsertService: services?.AccountUpsertService);
 
         return (client, displayName);
     }

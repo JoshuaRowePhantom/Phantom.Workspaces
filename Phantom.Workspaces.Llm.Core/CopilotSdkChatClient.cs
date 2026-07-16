@@ -41,6 +41,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly AgentInputQueueManager? queueManager;
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly IGitHubAccountUpsertService? accountUpsertService;
+
+    /// <summary>
+    /// The account-upsert service wired in by the factory, or <see langword="null"/> when none was
+    /// supplied. Exposed internally so factory-wiring tests can confirm the service is threaded
+    /// through to the Copilot client (issue #1047).
+    /// </summary>
+    internal IGitHubAccountUpsertService? AccountUpsertService => this.accountUpsertService;
+
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 

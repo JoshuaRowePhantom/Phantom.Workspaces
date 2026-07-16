@@ -41,6 +41,13 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public IToolResourceFactory? ToolResourceFactory { get; init; }
 
+    /// <summary>
+    /// Service that auto-creates and persists a <c>user-account</c> entity the first time a GitHub
+    /// Copilot session is established for a token. Threaded into <see cref="CopilotSdkChatClient"/>
+    /// by the agent factory so account entities actually materialize during normal Copilot use.
+    /// </summary>
+    public IGitHubAccountUpsertService? AccountUpsertService { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;
@@ -48,6 +55,7 @@ public sealed record AgentServices : IServiceProvider
         if (serviceType == typeof(IRunningAgentChatFactory))   return RunningAgentChatFactory;
         if (serviceType == typeof(IToolsetFactory))            return ToolsetFactory;
         if (serviceType == typeof(IToolResourceFactory))       return ToolResourceFactory;
+        if (serviceType == typeof(IGitHubAccountUpsertService)) return AccountUpsertService;
         return null;
     }
 }

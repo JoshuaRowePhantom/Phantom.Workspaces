@@ -24,6 +24,12 @@ public sealed class AgentServicesTests
             => Task.FromResult<AgentSchema.Tool?>(null);
     }
 
+    private sealed class StubAccountUpsertService : IGitHubAccountUpsertService
+    {
+        public Task UpsertForTokenAsync(string token, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+    }
+
     [Fact]
     public void AgentServices_GetService_ReturnsNullForUnknownType()
     {
@@ -57,5 +63,19 @@ public sealed class AgentServicesTests
         Assert.Same(runningAgentChatFactory, services.GetService(typeof(RunningAgentChatFactoryKey)));
         Assert.Same(toolsetFactory, services.GetService(typeof(IToolsetFactory)));
         Assert.Same(toolResourceFactory, services.GetService(typeof(IToolResourceFactory)));
+    }
+
+    [Fact]
+    public void AgentServices_GetService_ReturnsRegisteredAccountUpsertService()
+    {
+        var upsertService = new StubAccountUpsertService();
+
+        var services = new AgentServices
+        {
+            AccountUpsertService = upsertService,
+        };
+
+        Assert.Same(upsertService, services.AccountUpsertService);
+        Assert.Same(upsertService, services.GetService(typeof(IGitHubAccountUpsertService)));
     }
 }
