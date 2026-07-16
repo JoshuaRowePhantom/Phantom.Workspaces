@@ -910,4 +910,81 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.True(toggleIndex >= 0);
         Assert.True(toggleIndex > badgeIndex, "Toggle button must appear after the count badge.");
     }
+
+    // ── Issue #1069: tool result truncation ────────────────────────────────────
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeResultJson_SummaryShowsLineCount()
+    {
+        var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
+        var largeResult = string.Join("\n", Enumerable.Range(0, lineCount).Select(i => $"line-{i}"));
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
+
+        Assert.Contains($"result  ({lineCount} lines)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeSingleLineResult_SummaryShowsCharacterCount()
+    {
+        var largeResult = new string('x', ChatOutputHtmlRenderer.MaxToolResultCharacters + 500);
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
+
+        Assert.Contains($"result  ({largeResult.Length} characters)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeResultJson_BodyDoesNotContainFullPayload()
+    {
+        var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
+        var lines = Enumerable.Range(0, lineCount).Select(i => $"line-{i}").ToList();
+        lines[10] = "UNIQUE_PAYLOAD_MARKER_XYZ";
+        var largeResult = string.Join("\n", lines);
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
+
+        Assert.DoesNotContain("UNIQUE_PAYLOAD_MARKER_XYZ", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithEscapedJsonStringResult_DoesNotRenderRawEscapeSequencesVerbatim()
+    {
+        // A JSON-string payload re-serialized to a single escaped one-liner larger than the cap.
+        var inner = string.Concat(Enumerable.Repeat("{\\u0022key\\u0022:\\u0022value\\r\\n\\u0022},", 200));
+        var escapedOneLiner = "\"" + inner + "\"";
+        Assert.True(escapedOneLiner.Length > ChatOutputHtmlRenderer.MaxToolResultCharacters);
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", escapedOneLiner);
+
+        Assert.DoesNotContain("\\u0022", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\r\\n", html, StringComparison.Ordinal);
+        Assert.Contains($"result  ({escapedOneLiner.Length} characters)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithSmallResultJson_ShownInFullUntruncated()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        // Small result: the actual value is rendered in the body, and no "(N lines)"/"(N characters)"
+        // collapse summary is emitted.
+        Assert.Contains("ok", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("lines)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("characters)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeResultJson_FullPayloadPreservedInDetailsTarget()
+    {
+        var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
+        var largeResult = string.Join("\n", Enumerable.Range(0, lineCount).Select(i => $"line-{i}"));
+        var resultDetails = "{\"kind\":\"result\",\"marker\":\"FULL_PAYLOAD_TOKEN\"}";
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair(
+            "c0", "my_tool", "{}", largeResult, callDetailsJson: null, resultDetailsJson: resultDetails);
+
+        Assert.Contains("data-details-target=", html, StringComparison.Ordinal);
+        Assert.Contains("FULL_PAYLOAD_TOKEN", html, StringComparison.Ordinal);
+    }
 }

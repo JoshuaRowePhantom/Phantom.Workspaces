@@ -37,6 +37,13 @@ internal static class ChatOutputHtmlRenderer
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
 
+    // Tool RESULT display caps (issue #1069). A result whose payload exceeds either threshold is
+    // collapsed to a short "(N lines)" / "(N characters)" summary instead of dumping the entire
+    // escaped one-liner into the summary and the fully-expanded tree into the body. The full
+    // payload remains available for inspection via the data-details-target attribute.
+    internal const int MaxToolResultLines = 20;
+    internal const int MaxToolResultCharacters = 2000;
+
     // Assistant/user text is authored in Markdown. Raw HTML pass-through is disabled so any literal
     // angle brackets in the model output are escaped (the rendered HTML is injected into the chat
     // WebView, where un-escaped markup would be an injection risk).
@@ -196,7 +203,7 @@ internal static class ChatOutputHtmlRenderer
 
         if (resultJson is not null)
         {
-            var resultSummary = FirstLine(resultJson);
+            var resultSummary = SummarizeResult(resultJson);
 
             // Tool-RESULT block — gutter host (copy + inspect).
             builder.Append("<details class=\"chat-tool-result\" data-copy-target data-inspect-target");
@@ -214,7 +221,8 @@ internal static class ChatOutputHtmlRenderer
             builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
-                builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(RenderToolPayload(resultJson)).Append("</pre>");
+                var (bodyHtml, _) = RenderToolResultBody(resultJson);
+                builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(bodyHtml).Append("</pre>");
             }
 
             builder.Append("</details>");
@@ -742,6 +750,52 @@ internal static class ChatOutputHtmlRenderer
         var newlineIdx = trimmed.IndexOf('\n');
         return newlineIdx >= 0 ? trimmed[..newlineIdx].TrimEnd('\r') : trimmed;
     }
+
+    private static int CountLines(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+
+        var count = 1;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static bool ToolResultOverflows(string resultJson)
+        => resultJson.Length > MaxToolResultCharacters || CountLines(resultJson) > MaxToolResultLines;
+
+    private static string ToolResultOverflowSummary(string resultJson)
+    {
+        var lineCount = CountLines(resultJson);
+        return lineCount > 1
+            ? $"({lineCount} lines)"
+            : $"({resultJson.Length} characters)";
+    }
+
+    // Summary line for the tool RESULT block. Small results show their real first line; oversized
+    // results collapse to "(N lines)" / "(N characters)" so the escaped one-liner is never dumped
+    // verbatim into the summary (issue #1069).
+    private static string SummarizeResult(string resultJson)
+        => ToolResultOverflows(resultJson)
+            ? ToolResultOverflowSummary(resultJson)
+            : FirstLine(resultJson);
+
+    // Body for the tool RESULT block. Small results render in full; oversized results render only
+    // the short "(N lines)" / "(N characters)" summary instead of the fully-expanded payload tree
+    // (issue #1069). The full payload stays available via data-details-target.
+    private static (string Html, bool Overflowed) RenderToolResultBody(string resultJson)
+        => ToolResultOverflows(resultJson)
+            ? (HtmlEscape(ToolResultOverflowSummary(resultJson)), true)
+            : (RenderToolPayload(resultJson), false);
 
     private static string DiagnosticHeader(string text)
     {
