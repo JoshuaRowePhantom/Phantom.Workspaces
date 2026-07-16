@@ -11,19 +11,19 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
 
     public bool IsRegistered(string entityId) => this.registrations.ContainsKey(entityId);
 
-    public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+    public async Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
     {
         if (!request.TryGetProperty("type", out var typeProperty)
             || typeProperty.GetString() is not { } type)
         {
-            return Task.FromResult<IAsyncDisposable?>(null);
+            return null;
         }
 
         if (string.Equals(type, "reverse-register", StringComparison.OrdinalIgnoreCase))
         {
             var entityId = ReadEntityId(request);
             this.registrations[entityId] = channel;
-            return Task.FromResult<IAsyncDisposable?>(new RegistrationLease(this.registrations, entityId, channel));
+            return new RegistrationLease(this.registrations, entityId, channel);
         }
 
         if (string.Equals(type, "reverse-http", StringComparison.OrdinalIgnoreCase))
@@ -31,13 +31,17 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
             var entityId = ReadEntityId(request);
             if (this.registrations.TryGetValue(entityId, out var registrationChannel))
             {
-                return Task.FromResult<IAsyncDisposable?>(new RelaySession(channel, registrationChannel, ct));
+                // Acknowledge the relay before pumping so the forwarding client can distinguish an
+                // established relay from a rejected one (see ReverseHttpTransport.WaitForRelayEstablishedAsync).
+                using var ackDocument = JsonDocument.Parse("""{"type":"channel-open-ack"}""");
+                await channel.Writer.WriteAsync(ackDocument.RootElement.Clone(), ct).ConfigureAwait(false);
+                return new RelaySession(channel, registrationChannel, ct);
             }
 
-            return Task.FromResult<IAsyncDisposable?>(new ErrorLease(channel, "not-registered", $"No reverse HTTP registration exists for '{entityId}'."));
+            return new ErrorLease(channel, "not-registered", $"No reverse HTTP registration exists for '{entityId}'.");
         }
 
-        return Task.FromResult<IAsyncDisposable?>(null);
+        return null;
     }
 
     public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)

@@ -79,8 +79,10 @@ public sealed class ReverseHttpServerTransportFactoryTests
         using var frame = JsonDocument.Parse("""{"type":"channel-message","payload":{"text":"hello"}}""");
 
         await machineC.DeliverAsync(frame.RootElement);
+        var relayAck = await machineB.Sent.ReadAsync();
         var forwarded = await machineB.Sent.ReadAsync();
 
+        Assert.Equal("channel-open-ack", relayAck.GetProperty("type").GetString());
         Assert.Equal(frame.RootElement.GetRawText(), forwarded.GetRawText());
     }
 
@@ -96,9 +98,11 @@ public sealed class ReverseHttpServerTransportFactoryTests
         await using var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
 
         machineC.CompleteInbound();
+        var relayAck = await machineB.Sent.ReadAsync();
         var close = await machineB.Sent.ReadAsync();
         await machineB.Sent.Completion;
 
+        Assert.Equal("channel-open-ack", relayAck.GetProperty("type").GetString());
         Assert.Equal("channel-close", close.GetProperty("type").GetString());
         Assert.True(machineB.Disposed);
         Assert.True(machineC.Disposed);
@@ -119,6 +123,7 @@ public sealed class ReverseHttpServerTransportFactoryTests
 
         Assert.True(machineB.Disposed);
         Assert.True(machineC.Disposed);
+        Assert.Equal("channel-open-ack", (await machineB.Sent.ReadAsync()).GetProperty("type").GetString());
         Assert.Equal("channel-close", (await machineB.Sent.ReadAsync()).GetProperty("type").GetString());
         Assert.Equal("channel-close", (await machineC.Sent.ReadAsync()).GetProperty("type").GetString());
     }

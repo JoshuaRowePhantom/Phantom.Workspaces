@@ -72,6 +72,11 @@ public sealed record TransportFrame
         public const string ChannelOpenError = "channel-open-error";
 
         /// <summary>
+        /// Channel open request accepted / relay established (server to client).
+        /// </summary>
+        public const string ChannelOpenAck = "channel-open-ack";
+
+        /// <summary>
         /// Message on an open channel (bidirectional).
         /// </summary>
         public const string ChannelMessage = "channel-message";
