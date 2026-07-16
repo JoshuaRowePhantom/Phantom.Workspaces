@@ -842,6 +842,115 @@ public sealed class SharedStylesTests
         Assert.Equal(new CornerRadius(6), shellBorder!.CornerRadius);
     }
 
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCardShell_AppliedToSingleEntityHost_ProducesSameBorderAsTreeCard()
+    {
+        // Issue #1066: the single-entity host carries the same entity-card-shell class as the tree
+        // card, so it renders the identical rounded shell border.
+        var sharedStyles = LoadSharedStyles();
+
+        var content = new ContentControl { Content = new TextBlock { Text = "single" } };
+        content.Classes.Add("entity-card-shell");
+        content.Classes.Add("entity-card-single-host");
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(content);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        var shellBorder = content.GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(static border => border.Classes.Contains("entity-card-shell-border"));
+
+        Assert.NotNull(shellBorder);
+        Assert.Equal(new CornerRadius(6), shellBorder!.CornerRadius);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void EntityCardShell_WhenHasChildren_SingleEntityFooterIsVisible()
+    {
+        // Issue #1066: the shell footer expand button visibility binds to HasChildren for the
+        // single-entity host, matching tree behaviour.
+        var sharedStyles = LoadSharedStyles();
+
+        var content = new ContentControl
+        {
+            Content = new TextBlock { Text = "single" },
+            DataContext = new SingleEntityShellModel { HasChildren = true },
+        };
+        content.Classes.Add("entity-card-shell");
+        content.Classes.Add("entity-card-single-host");
+
+        var host = new StackPanel();
+        host.Styles.Add(sharedStyles);
+        host.Children.Add(content);
+
+        host.Measure(new Size(1000, 1000));
+        host.Arrange(new Rect(0, 0, 1000, 1000));
+
+        var footer = content.GetVisualDescendants()
+            .OfType<Button>()
+            .FirstOrDefault(static button => button.Classes.Contains("entity-card-shell-footer"));
+
+        Assert.NotNull(footer);
+        Assert.True(footer!.IsVisible);
+    }
+
+    [Fact]
+    public void SingleEntityView_LongContent_WrapsToCappedWidth()
+    {
+        // Issue #1066 (regime 1): the single-entity host caps to the ScrollViewer viewport width
+        // (and ~1/3 of the pane) so long content wraps rather than overflowing when wide.
+        var dataTemplates = ReadWorkspaceDataTemplatesText();
+        var template = ExtractSingleEntityTemplate(dataTemplates);
+        Assert.Contains("$parent[ScrollViewer].Viewport.Width", template, StringComparison.Ordinal);
+        Assert.Contains("SingleEntityMaxWidthConverter", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_BelowMinimumWidth_ShowsHorizontalScrollbar()
+    {
+        // Issue #1066 (regime 2): the host floors at MinWidth="160" inside an H=Auto ScrollViewer,
+        // so below the minimum the extent exceeds the viewport and a horizontal scrollbar appears.
+        var dataTemplates = ReadWorkspaceDataTemplatesText();
+        var template = ExtractSingleEntityTemplate(dataTemplates);
+        Assert.Contains("MinWidth=\"160\"", template, StringComparison.Ordinal);
+        Assert.Contains("HorizontalScrollBarVisibility=\"Auto\"", template, StringComparison.Ordinal);
+    }
+
+    private sealed class SingleEntityShellModel
+    {
+        public bool HasChildren { get; init; }
+
+        public string ExpandArrow => "\u25BC";
+
+        public System.Windows.Input.ICommand? ToggleExpandCommand => null;
+    }
+
+    private static string ReadWorkspaceDataTemplatesText()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var path = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces",
+            "Templates",
+            "WorkspaceDataTemplates.axaml");
+        return File.ReadAllText(path);
+    }
+
+    private static string ExtractSingleEntityTemplate(string dataTemplatesContent)
+    {
+        var start = dataTemplatesContent.IndexOf(
+            "<DataTemplate DataType=\"vm:EntityWorkspaceTabViewModel\">",
+            StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected the EntityWorkspaceTabViewModel DataTemplate to exist.");
+        var end = dataTemplatesContent.IndexOf("</DataTemplate>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Expected the EntityWorkspaceTabViewModel DataTemplate to be closed.");
+        return dataTemplatesContent[start..(end + "</DataTemplate>".Length)];
+    }
+
     [Fact]
     public void EntityCardControl_HasNoOuterBorderOrBackground()
     {

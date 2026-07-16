@@ -28,8 +28,30 @@
         </StackPanel>
     </DataTemplate>
 
+    <!-- Issue #1066: the single-entity view reuses the same entity-card shell chrome as tree
+         cards, hosted in a top-margined, horizontally centered ScrollViewer capped to ~1/3 of the
+         pane width, and shares the #1064 two-regime scroll handling (content wraps to the capped
+         width; a horizontal scrollbar appears only below the ~160px minimum). -->
     <DataTemplate DataType="vm:EntityWorkspaceTabViewModel">
-        <ContentControl Content="{Binding EntityCardNode}" />
+        <ScrollViewer Classes="entity-card-single"
+                      HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      AllowAutoHide="False">
+            <ContentControl Classes="entity-card-shell entity-card-single-host"
+                            DataContext="{Binding EntityCardNode}"
+                            Content="{Binding}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Top"
+                            Margin="0,12,0,0"
+                            MinWidth="160">
+                <ContentControl.MaxWidth>
+                    <MultiBinding Converter="{x:Static converters:SingleEntityMaxWidthConverter.Instance}">
+                        <Binding Path="$parent[ScrollViewer].Viewport.Width" />
+                        <Binding Path="$parent[ScrollViewer].Bounds.Width" />
+                    </MultiBinding>
+                </ContentControl.MaxWidth>
+            </ContentControl>
+        </ScrollViewer>
     </DataTemplate>
 
     <!-- DataTemplate for WebViewModel: embedded web browser with navigation -->

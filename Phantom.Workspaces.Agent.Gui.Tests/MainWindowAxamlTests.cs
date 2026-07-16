@@ -381,6 +381,80 @@ public sealed class MainWindowAxamlTests
     }
 
     [Fact]
+    public void SingleEntityView_ContentControl_UsesEntityCardShellClass()
+    {
+        // Issue #1066: the single-entity host reuses the entity-card-shell chrome.
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains(
+            "Classes=\"entity-card-shell entity-card-single-host\"",
+            template,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_IsHorizontallyCentered()
+    {
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("HorizontalAlignment=\"Center\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_HasTopMargin()
+    {
+        // Issue #1066: a non-zero top margin separates the card from the tab strip.
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("Margin=\"0,12,0,0\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_MaxWidthCapsToAboutOneThird()
+    {
+        // Issue #1066: MaxWidth binds to ~1/3 of the pane width (via the shared converter), not
+        // unbounded.
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("<ContentControl.MaxWidth>", template, StringComparison.Ordinal);
+        Assert.Contains("SingleEntityMaxWidthConverter", template, StringComparison.Ordinal);
+        Assert.Contains("$parent[ScrollViewer].Bounds.Width", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_HasMinWidthOneSixty()
+    {
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("MinWidth=\"160\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_ScrollViewer_HorizontalIsAutoAndCapsToViewport()
+    {
+        // Issue #1066: the host ScrollViewer uses H=Auto and the host MaxWidth binds to the
+        // ScrollViewer viewport width (two-regime cap shared with #1064).
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("HorizontalScrollBarVisibility=\"Auto\"", template, StringComparison.Ordinal);
+        Assert.Contains("$parent[ScrollViewer].Viewport.Width", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_ScrollViewer_VerticalIsAutoAndDoesNotAutoHide()
+    {
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", template, StringComparison.Ordinal);
+        Assert.Contains("AllowAutoHide=\"False\"", template, StringComparison.Ordinal);
+    }
+
+    private static string ExtractSingleEntityTemplate()
+    {
+        var dataTemplates = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
+        var start = dataTemplates.IndexOf(
+            "<DataTemplate DataType=\"vm:EntityWorkspaceTabViewModel\">",
+            StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected the EntityWorkspaceTabViewModel DataTemplate to exist.");
+        var end = dataTemplates.IndexOf("</DataTemplate>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Expected the EntityWorkspaceTabViewModel DataTemplate to be closed.");
+        return dataTemplates[start..(end + "</DataTemplate>".Length)];
+    }
+
+    [Fact]
     public void SharedStyles_EntityCardTreeControlTemplate_CentersChildRailInIndentColumn()
     {
         var sharedStylesContent = ReadSharedStylesFile();
