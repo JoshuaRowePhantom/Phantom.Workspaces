@@ -247,6 +247,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public ReadOnlyObservableCollection<AgentChatHistoryItem> History => this.agentChat.History;
 
+    /// <summary>
+    /// Completes once the underlying <see cref="AgentChat"/> has loaded persisted history into
+    /// <see cref="History"/>. The chat output control awaits this before taking its initial history
+    /// snapshot so first-open never renders an empty history (issue #1009). Tests may override this
+    /// via <see cref="SetHistoryPopulatedForTest"/> to simulate a still-loading session.
+    /// </summary>
+    public Task HistoryPopulated => this.historyPopulatedOverride ?? this.agentChat.HistoryPopulated;
+
+    private Task? historyPopulatedOverride;
+
+    /// <summary>Test seam: force <see cref="HistoryPopulated"/> to track a caller-controlled task.</summary>
+    internal void SetHistoryPopulatedForTest(Task historyPopulated)
+        => this.historyPopulatedOverride = historyPopulated;
+
     public ReadOnlyObservableCollection<AgentChatRunningItem> RunningItems => this.agentChat.RunningItems;
 
     public ObservableCollection<AgentChatToolViewModel> Tools { get; } = [];

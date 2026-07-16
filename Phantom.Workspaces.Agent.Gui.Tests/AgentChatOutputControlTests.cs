@@ -574,6 +574,123 @@ public sealed class AgentChatOutputControlTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_WhenHistoryPopulatedAfterBrowserReady_RendersPersistedMessages()
+    {
+        // #1009: the WebView can report Ready before persistence finishes loading history. The
+        // control must wait for AgentViewModel.HistoryPopulated before snapshotting History so the
+        // persisted messages are rendered even though Ready fired first.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        // Simulate a session whose history is still loading when the browser becomes ready.
+        var historyPopulated = new TaskCompletionSource();
+        viewModel.SetHistoryPopulatedForTest(historyPopulated.Task);
+
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+
+        // Fire the ready path before history is available.
+        control.DataContext = viewModel;
+
+        // Nothing should be rendered yet: the snapshot is deferred until HistoryPopulated completes.
+        Assert.Equal(0, CountUpdateCommands(browser));
+        Assert.False(control.HistoryLoaded.IsCompleted);
+
+        // History becomes available, then persistence signals completion.
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("one")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("two")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("three")] });
+        historyPopulated.SetResult();
+
+        await control.HistoryLoaded;
+
+        // The persisted messages are now rendered.
+        Assert.True(CountUpdateCommands(browser) > 0, "Expected persisted history to be rendered after HistoryPopulated completed.");
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_WhenHistoryAlreadyPopulated_RendersHistoryImmediately()
+    {
+        // #1009 regression guard: when history is already loaded, the deferred-await path must not
+        // regress the common case — the initial render still happens.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
+        chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var control = new AgentChatOutputControl();
+        var browser = GetBrowser(control);
+        SetAttached(control);
+
+        control.DataContext = viewModel;
+        await control.HistoryLoaded;
+
+        Assert.True(CountUpdateCommands(browser) > 0, "Expected already-loaded history to be rendered immediately.");
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task OnBrowserReady_HistoryLoadedTask_DoesNotCompleteBeforeHistoryPopulated()
+    {
+        // #1009: HistoryLoaded must not complete until history has actually been populated and
+        // rendered — it tracks the full ready → populated → rendered pipeline.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var historyPopulated = new TaskCompletionSource();
+        viewModel.SetHistoryPopulatedForTest(historyPopulated.Task);
+
+        var control = new AgentChatOutputControl();
+        _ = GetBrowser(control);
+        SetAttached(control);
+
+        control.DataContext = viewModel;
+
+        Assert.False(control.HistoryLoaded.IsCompleted);
+
+        historyPopulated.SetResult();
+        await control.HistoryLoaded;
+
+        Assert.True(control.HistoryLoaded.IsCompleted);
+    }
+
+    private static HeadlessControllableBrowser GetBrowser(AgentChatOutputControl control)
+    {
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        return Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+    }
+
+    private static void SetAttached(AgentChatOutputControl control)
+    {
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+    }
+
+    private static int CountUpdateCommands(HeadlessControllableBrowser browser)
+        => browser.PostedMessages.Count(msg =>
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(msg);
+                return doc.RootElement.TryGetProperty("type", out var t) && t.GetString() == "update";
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        });
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()
     {
         // Arrange: attach a view model with AutoScrollEnabled = false, then trigger OnBrowserReady.

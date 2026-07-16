@@ -49,6 +49,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly AgentChatQueueManager chatQueueManager;
     private AgentChatHistoryService? historyService;
     private readonly AgentChatHistoryCollection history = new();
+    private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly AgentChatRunningItemCollection runningItems = new();
     private readonly AgentRunningItems runningItemOperations;
     private readonly ObservableCollection<AgentChatPendingApprovalItem> pendingApprovalItems = [];
@@ -313,6 +314,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            this.request.CancellationToken);
 
        this.LoadInitialHistory(persistedMessages);
+
+       // Signal that persisted history has been loaded into History. Consumers (e.g. the chat
+       // output control) await this before taking the initial history snapshot so the first render
+       // never captures an empty/partial History (issue #1009).
+       this.historyPopulated.TrySetResult();
+
        this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
        this.SetAgentSessionId(resolvedAgentSessionId);
 
@@ -349,6 +356,13 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     /// <summary>Completed conversation turns, in order.</summary>
     public AgentChatHistoryCollection History => this.history;
+
+    /// <summary>
+    /// Completes once persisted history has been loaded into <see cref="History"/> during
+    /// initialization. Await this before snapshotting <see cref="History"/> to avoid rendering an
+    /// empty/partial history on first open (issue #1009).
+    /// </summary>
+    public Task HistoryPopulated => this.historyPopulated.Task;
 
     /// <summary>Currently executing agent response items.</summary>
     public AgentChatRunningItemCollection RunningItems => this.runningItems;
