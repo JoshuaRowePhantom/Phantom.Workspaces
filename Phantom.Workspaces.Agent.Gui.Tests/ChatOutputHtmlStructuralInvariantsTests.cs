@@ -199,6 +199,67 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_GroupedToolCallHistoryItem_RendersCopyAndInspectTargetsOnToolBlocks()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolResultMessage("c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var blob = string.Concat(sink.Operations.Where(op => op.Kind == "update").Select(op => op.Content));
+
+        var callBlock = ExtractOpeningTag(blob, "chat-tool-call");
+        var resultBlock = ExtractOpeningTag(blob, "chat-tool-result");
+        Assert.Contains("data-copy-target", callBlock);
+        Assert.Contains("data-inspect-target", callBlock);
+        Assert.Contains("data-copy-target", resultBlock);
+        Assert.Contains("data-inspect-target", resultBlock);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ChatOutput_GroupedToolBlocks_MatchParityWithGenericMessageBlockGutters()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "generic block"),
+            ToolCallMessage("tool_a", "c1"),
+            ToolResultMessage("c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var blob = string.Concat(sink.Operations.Where(op => op.Kind == "update").Select(op => op.Content));
+
+        // The generic text block carries copy + inspect markers; the grouped tool-call/result blocks
+        // must carry the same pair (parity).
+        var genericBlock = ExtractOpeningTag(blob, "chat-text");
+        var callBlock = ExtractOpeningTag(blob, "chat-tool-call");
+        var resultBlock = ExtractOpeningTag(blob, "chat-tool-result");
+
+        foreach (var marker in new[] { "data-copy-target", "data-inspect-target" })
+        {
+            Assert.Contains(marker, genericBlock);
+            Assert.Contains(marker, callBlock);
+            Assert.Contains(marker, resultBlock);
+        }
+    }
+
+    private static string ExtractOpeningTag(string html, string cssClass)
+    {
+        var classIndex = html.IndexOf(cssClass, System.StringComparison.Ordinal);
+        Assert.True(classIndex >= 0, $"Expected an element with class '{cssClass}' in output.");
+        var start = html.LastIndexOf('<', classIndex);
+        var end = html.IndexOf('>', classIndex);
+        Assert.True(start >= 0 && end >= 0);
+        return html.Substring(start, end - start + 1);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_NoDuplicateIdsInRepresentativeDom()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();

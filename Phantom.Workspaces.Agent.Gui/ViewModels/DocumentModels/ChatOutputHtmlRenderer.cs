@@ -137,9 +137,13 @@ internal static class ChatOutputHtmlRenderer
         string? contentId,
         string name,
         string callJson,
-        string? resultJson)
+        string? resultJson,
+        string? callDetailsJson = null,
+        string? resultDetailsJson = null,
+        string? memberIdBase = null)
     {
         var callSummary = HtmlEscape(name) + "(…)";
+        var idBase = memberIdBase ?? contentId;
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-item\"");
         if (!string.IsNullOrEmpty(contentId))
@@ -150,7 +154,20 @@ internal static class ChatOutputHtmlRenderer
         builder.Append(">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"3\">tool ").Append(callSummary).Append("</summary>");
 
-        builder.Append("<details class=\"chat-tool-call\" open>");
+        // Tool-CALL block — gutter host (copy + inspect). The "..." details-gutter was removed (#1038),
+        // so reusing data-details-target for the inspect payload is safe (#1039).
+        builder.Append("<details class=\"chat-tool-call\" data-copy-target data-inspect-target");
+        if (!string.IsNullOrEmpty(callDetailsJson))
+        {
+            builder.Append(" data-details-target=\"").Append(HtmlEscape(callDetailsJson)).Append("\"");
+        }
+
+        if (!string.IsNullOrEmpty(idBase))
+        {
+            builder.Append(" id=\"").Append(idBase).Append("-call\"");
+        }
+
+        builder.Append(" open>");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
@@ -162,7 +179,20 @@ internal static class ChatOutputHtmlRenderer
         if (resultJson is not null)
         {
             var resultSummary = FirstLine(resultJson);
-            builder.Append("<details class=\"chat-tool-result\" open>");
+
+            // Tool-RESULT block — gutter host (copy + inspect).
+            builder.Append("<details class=\"chat-tool-result\" data-copy-target data-inspect-target");
+            if (!string.IsNullOrEmpty(resultDetailsJson))
+            {
+                builder.Append(" data-details-target=\"").Append(HtmlEscape(resultDetailsJson)).Append("\"");
+            }
+
+            if (!string.IsNullOrEmpty(idBase))
+            {
+                builder.Append(" id=\"").Append(idBase).Append("-result\"");
+            }
+
+            builder.Append(" open>");
             builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
@@ -203,12 +233,15 @@ internal static class ChatOutputHtmlRenderer
                 contentId,
                 call.Name ?? string.Empty,
                 PrettyJson(call.Arguments),
-                result is not null ? PrettyJson(result.Result) : null);
+                result is not null ? PrettyJson(result.Result) : null,
+                SerializeContentJson(call),
+                result is not null ? SerializeContentJson(result) : null);
         }
         else
         {
             var innerBuilder = new StringBuilder();
             var lastCallName = string.Empty;
+            var memberIndex = 0;
             foreach (var call in calls)
             {
                 FunctionResultContent? result = null;
@@ -221,8 +254,12 @@ internal static class ChatOutputHtmlRenderer
                     null,
                     call.Name ?? string.Empty,
                     PrettyJson(call.Arguments),
-                    result is not null ? PrettyJson(result.Result) : null));
+                    result is not null ? PrettyJson(result.Result) : null,
+                    SerializeContentJson(call),
+                    result is not null ? SerializeContentJson(result) : null,
+                    $"{contentId}-{memberIndex}"));
                 lastCallName = call.Name ?? string.Empty;
+                memberIndex++;
             }
 
             return RenderToolGroupWrapper(contentId, calls.Count, lastCallName + "(…)", innerBuilder.ToString());

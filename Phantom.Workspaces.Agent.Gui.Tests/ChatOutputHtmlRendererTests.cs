@@ -340,7 +340,8 @@ public sealed class ChatOutputHtmlRendererTests
     {
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
 
-        Assert.Contains("<details class=\"chat-tool-call\" open>", html, StringComparison.Ordinal);
+        Assert.Contains("<details class=\"chat-tool-call\"", html, StringComparison.Ordinal);
+        Assert.Contains(" open>", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -348,7 +349,95 @@ public sealed class ChatOutputHtmlRendererTests
     {
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
 
-        Assert.Contains("<details class=\"chat-tool-result\" open>", html, StringComparison.Ordinal);
+        Assert.Contains("<details class=\"chat-tool-result\"", html, StringComparison.Ordinal);
+        Assert.Contains(" open>", html, StringComparison.Ordinal);
+    }
+
+    // ── Issue #1039: copy + inspect gutters on tool-call/tool-result blocks ─────
+
+    [Fact]
+    public void RenderToolCallPair_WithCallJson_ToolCallBlockHasDataCopyTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        var callBlock = ExtractToolBlock(html, "chat-tool-call");
+        Assert.Contains("data-copy-target", callBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithCallJson_ToolCallBlockHasDataInspectTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", null);
+
+        var callBlock = ExtractToolBlock(html, "chat-tool-call");
+        Assert.Contains("data-inspect-target", callBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithResultJson_ToolResultBlockHasDataCopyTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        var resultBlock = ExtractToolBlock(html, "chat-tool-result");
+        Assert.Contains("data-copy-target", resultBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithResultJson_ToolResultBlockHasDataInspectTargetAttribute()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        var resultBlock = ExtractToolBlock(html, "chat-tool-result");
+        Assert.Contains("data-inspect-target", resultBlock, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_ToolBlocks_DoNotEmitStandaloneDetailsGutterOverflowMarker()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        // The "..." overflow button is JS-injected by details-gutter (removed by #1038); the renderer
+        // must never emit its marker class.
+        Assert.DoesNotContain("details-gutter-btn", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithCallDetailsJson_InspectPayloadContainsSerializedCallJson()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair(
+            "c0", "my_tool", "{}", null, callDetailsJson: "{\"kind\":\"call\"}");
+
+        Assert.Contains("data-details-target=\"{&quot;kind&quot;:&quot;call&quot;}\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroup_SingleCallWithResult_BothToolBlocksExposeCopyAndInspectTargets()
+    {
+        var call = new FunctionCallContent("call-1", "my_tool", null);
+        var result = new FunctionResultContent("call-1", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["call-1"] = result };
+
+        var html = ChatOutputHtmlRenderer.RenderToolGroup("c0", new[] { call }, lookup);
+
+        var callBlock = ExtractToolBlock(html, "chat-tool-call");
+        var resultBlock = ExtractToolBlock(html, "chat-tool-result");
+        Assert.Contains("data-copy-target", callBlock, StringComparison.Ordinal);
+        Assert.Contains("data-inspect-target", callBlock, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=", callBlock, StringComparison.Ordinal);
+        Assert.Contains("data-copy-target", resultBlock, StringComparison.Ordinal);
+        Assert.Contains("data-inspect-target", resultBlock, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=", resultBlock, StringComparison.Ordinal);
+    }
+
+    // Extracts the opening tag (up to and including '>') of the first <details class="{cssClass}" ...> element.
+    private static string ExtractToolBlock(string html, string cssClass)
+    {
+        var marker = $"<details class=\"{cssClass}\"";
+        var start = html.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected a <details class=\"{cssClass}\"> element in output.");
+        var end = html.IndexOf('>', start);
+        Assert.True(end >= 0);
+        return html.Substring(start, end - start + 1);
     }
 
     [Fact]

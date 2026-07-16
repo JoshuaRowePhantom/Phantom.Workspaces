@@ -362,6 +362,42 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
         });
 
+    [Fact]
+    public Task ToolBlocks_WithCopyAndInspectMarkers_InjectButtonsButNotDotsButton()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var group = ChatOutputHtmlRenderer.RenderToolGroup(
+                    "history-0-0",
+                    new List<FunctionCallContent> { new("call-1", "powershell", null) },
+                    null);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    "<div class=\"chat-message\" id=\"tgm-0\"><div class=\"chat-contents\" id=\"tgm-0-contents\">"
+                        + group + "</div></div>"));
+
+                var copyPresent = await EvalAsync(
+                    web,
+                    "document.querySelector('.chat-tool-call .copy-gutter-btn') !== null");
+                var inspectPresent = await EvalAsync(
+                    web,
+                    "document.querySelector('.chat-tool-call .inspect-gutter-btn') !== null");
+                var dotsPresent = await EvalAsync(
+                    web,
+                    "document.querySelector('.details-gutter-btn') !== null");
+                Assert.Contains("true", copyPresent, StringComparison.Ordinal);
+                Assert.Contains("true", inspectPresent, StringComparison.Ordinal);
+                Assert.Contains("false", dotsPresent, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static async Task<(ControllableWebViewControl Web, Window Window)> ShowReadyBrowserAsync()
     {
         var web = new ControllableWebViewControl();
