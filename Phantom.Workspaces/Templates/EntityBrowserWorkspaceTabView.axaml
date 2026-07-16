@@ -4,13 +4,12 @@
              xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
              x:Class="Phantom.Workspaces.Templates.EntityBrowserWorkspaceTabView"
              x:DataType="vm:EntityBrowserWorkspaceTabViewModel">
-    <ScrollViewer x:Name="BrowserScrollViewer"
-                  AllowAutoHide="False"
-                  HorizontalScrollBarVisibility="Disabled"
-                  VerticalScrollBarVisibility="Auto"
-                  controls:StickyScroll.IsEnabled="True">
-        <TreeView x:Name="BrowserTreeView"
-                  Classes="entity-card-tree entity-card-tree-entity"
-                  ItemsSource="{Binding EntityList.Items}" />
-    </ScrollViewer>
+    <!-- Issue #1064: no surrounding ScrollViewer; the entity-card-tree two-regime wrapper makes
+         the tree's own inner scroller the single scroller (vertical scroll plus below-minimum
+         horizontal scroll) and wraps content to the viewport. The entity-card-tree-sticky class
+         re-enables StickyScroll on that inner scroller via the shared selector
+         (SharedStyles.axaml: TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer). -->
+    <TreeView x:Name="BrowserTreeView"
+              Classes="entity-card-tree entity-card-tree-entity entity-card-tree-sticky"
+              ItemsSource="{Binding EntityList.Items}" />
 </UserControl>

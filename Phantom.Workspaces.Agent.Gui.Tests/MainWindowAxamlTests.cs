@@ -363,17 +363,23 @@ public sealed class MainWindowAxamlTests
     }
 
     [Fact]
-    public void EntityBrowserView_BrowserTree_HasEntityCardTreeWrapperClass()
+    public void EntityBrowserView_BrowserTree_HasNoSurroundingScrollViewer_AndIsSticky()
     {
-        // Issue #1064: the entity-browser tree carries the entity-card-tree class and therefore
-        // inherits the two-regime wrapper. (The surrounding ScrollViewer is retained here to keep
-        // its StickyScroll behavior; the inner wrapper alone fixes the horizontal overflow.)
+        // Issue #1064: the entity-browser tree carries the entity-card-tree class and inherits the
+        // two-regime wrapper, so the surrounding ScrollViewer is removed and the tree's own inner
+        // scroller is the single scroller. StickyScroll is preserved on that inner scroller via the
+        // entity-card-tree-sticky class (SharedStyles selector
+        // TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer sets StickyScroll.IsEnabled).
         var browserContent = ReadMainAppFile(Path.Combine("Templates", "EntityBrowserWorkspaceTabView.axaml"));
 
         Assert.Contains(
-            "Classes=\"entity-card-tree entity-card-tree-entity\"",
+            "Classes=\"entity-card-tree entity-card-tree-entity entity-card-tree-sticky\"",
             browserContent,
             StringComparison.Ordinal);
+        // The surrounding ScrollViewer (with its inline StickyScroll/H=Disabled) is gone.
+        Assert.DoesNotContain("BrowserScrollViewer", browserContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("HorizontalScrollBarVisibility=\"Disabled\"", browserContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("controls:StickyScroll.IsEnabled", browserContent, StringComparison.Ordinal);
     }
 
     [Fact]
