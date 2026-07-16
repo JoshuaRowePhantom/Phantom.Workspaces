@@ -16,7 +16,47 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
         }
         """);
 
-    private static CopilotSdkChatClient CreateClient(string modelId = "gpt-5") =>
+    /// <summary>
+    /// Deterministic in-memory test double for <see cref="IModelSlashCommandClient"/>.
+    /// Lets tests control the model list, simulate a failing <c>ListModelsAsync</c>,
+    /// and observe <c>SetModelId</c> calls without any Copilot connectivity.
+    /// </summary>
+    private sealed class FakeModelClient : IModelSlashCommandClient
+    {
+        private readonly IReadOnlyList<ModelInfo>? models;
+        private readonly bool throwOnList;
+
+        public FakeModelClient(IReadOnlyList<ModelInfo>? models = null, bool throwOnList = false, string modelId = "gpt-5")
+        {
+            this.models = models;
+            this.throwOnList = throwOnList;
+            this.ModelId = modelId;
+        }
+
+        public string ModelId { get; private set; }
+
+        public void SetModelId(string modelId) => this.ModelId = modelId;
+
+        public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+        {
+            if (this.throwOnList)
+            {
+                throw new InvalidOperationException("Simulated Copilot connection failure.");
+            }
+
+            return Task.FromResult(this.models ?? Array.Empty<ModelInfo>());
+        }
+    }
+
+    private static ModelInfo Model(string id, string name, double? multiplier = null) =>
+        new()
+        {
+            Id = id,
+            Name = name,
+            Billing = multiplier is { } m ? new ModelBilling { Multiplier = m } : null,
+        };
+
+    private static CopilotSdkChatClient CreateRealClient(string modelId = "gpt-5") =>
         new(modelId, $"GitHub Copilot ({modelId})", gitHubToken: null, loggerFactory: null);
 
     private static async Task<SlashCommandContext> CreateContextAsync()
@@ -31,8 +71,7 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     [Fact]
     public void Name_IsModel()
     {
-        using var client = CreateClient();
-        var handler = new CopilotSdkModelSlashCommandHandler(client);
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient());
 
         Assert.Equal("model", handler.Name);
     }
@@ -40,7 +79,7 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     [Fact]
     public async Task ExecuteAsync_WithModelId_CallsSetModelId()
     {
-        using var client = CreateClient();
+        var client = new FakeModelClient(modelId: "gpt-5");
         var handler = new CopilotSdkModelSlashCommandHandler(client);
         var context = await CreateContextAsync();
 
@@ -52,8 +91,7 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     [Fact]
     public async Task ExecuteAsync_WithModelId_ReturnsConfirmationMessage()
     {
-        using var client = CreateClient();
-        var handler = new CopilotSdkModelSlashCommandHandler(client);
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient());
         var context = await CreateContextAsync();
 
         var result = await handler.ExecuteAsync(context, "claude-4", CancellationToken.None);
@@ -64,8 +102,7 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     [Fact]
     public async Task ExecuteAsync_WithNoArgument_ReturnsCurrentModel()
     {
-        using var client = CreateClient("gpt-5");
-        var handler = new CopilotSdkModelSlashCommandHandler(client);
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(modelId: "gpt-5"));
         var context = await CreateContextAsync();
 
         var result = await handler.ExecuteAsync(context, string.Empty, CancellationToken.None);
@@ -74,34 +111,172 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task GetCompletionsAsync_WhenListModelsAsyncThrows_ReturnsEmpty()
-    {
-        // A disconnected client will fail on ListModelsAsync — handler should return empty, not throw.
-        using var client = CreateClient();
-        var handler = new CopilotSdkModelSlashCommandHandler(client);
-        var context = await CreateContextAsync();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-
-        var completions = await handler.GetCompletionsAsync(context, string.Empty, cts.Token);
-
-        Assert.Empty(completions);
-    }
-
-    // NOTE: Tests requiring a running CopilotClient (GetCompletionsAsync_WithModels_*,
-    // GetCompletionsAsync_WithPartialArgument_*, GetCompletionsAsync_Description_*)
-    // cannot run without network/Copilot access. The handler logic is validated through
-    // the deterministic tests above and the FormatDescription test below.
-
-    [Fact]
     public async Task ExecuteAsync_WithNoArgument_DoesNotCallSetModelId()
     {
-        using var client = CreateClient("original-model");
+        var client = new FakeModelClient(modelId: "original-model");
         var handler = new CopilotSdkModelSlashCommandHandler(client);
         var context = await CreateContextAsync();
 
         await handler.ExecuteAsync(context, string.Empty, CancellationToken.None);
 
-        // ModelId should remain unchanged.
         Assert.Equal("original-model", client.ModelId);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_WhenListModelsAsyncThrows_ReturnsEmpty()
+    {
+        // Deterministic: the injected client always throws from ListModelsAsync, regardless of
+        // ambient Copilot connectivity. The handler must swallow the failure and return empty.
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(throwOnList: true));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        Assert.Empty(completions);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_WithModels_ReturnsAllModels()
+    {
+        var models = new[]
+        {
+            Model("auto", "Auto"),
+            Model("claude-sonnet-4.6", "Claude Sonnet 4.6"),
+            Model("claude-opus-4.7", "Claude Opus 4.7"),
+        };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        Assert.Equal(3, completions.Count);
+        Assert.Equal(new[] { "auto", "claude-sonnet-4.6", "claude-opus-4.7" }, completions.Select(c => c.CompletionText));
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_CompletionTextAndLabelMatchModelId()
+    {
+        var models = new[] { Model("gpt-5", "GPT-5") };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        var completion = Assert.Single(completions);
+        Assert.Equal("gpt-5", completion.CompletionText);
+        Assert.Equal("gpt-5", completion.Label);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_WithPartialArgument_FiltersByPrefixCaseInsensitively()
+    {
+        var models = new[]
+        {
+            Model("auto", "Auto"),
+            Model("claude-sonnet-4.6", "Claude Sonnet 4.6"),
+            Model("claude-opus-4.7", "Claude Opus 4.7"),
+            Model("gpt-5", "GPT-5"),
+        };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, "CLAUDE", CancellationToken.None);
+
+        Assert.Equal(
+            new[] { "claude-sonnet-4.6", "claude-opus-4.7" },
+            completions.Select(c => c.CompletionText));
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_WithPartialArgument_TrimsWhitespaceBeforeMatching()
+    {
+        var models = new[]
+        {
+            Model("auto", "Auto"),
+            Model("gpt-5", "GPT-5"),
+        };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, "  gpt", CancellationToken.None);
+
+        var completion = Assert.Single(completions);
+        Assert.Equal("gpt-5", completion.CompletionText);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_WithEmptyModelList_ReturnsEmpty()
+    {
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(Array.Empty<ModelInfo>()));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        Assert.Empty(completions);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_Description_ContainsModelName()
+    {
+        var models = new[] { Model("gpt-5", "GPT-5 Turbo") };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        var completion = Assert.Single(completions);
+        Assert.Contains("GPT-5 Turbo", completion.Description);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_Description_ContainsMultiplier_WhenNotOne()
+    {
+        var models = new[] { Model("premium", "Premium Model", multiplier: 2.5) };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        var completion = Assert.Single(completions);
+        Assert.Contains("Premium Model", completion.Description);
+        Assert.Contains("x2.50 billing", completion.Description);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_Description_OmitsMultiplier_WhenExactlyOne()
+    {
+        var models = new[] { Model("standard", "Standard Model", multiplier: 1.0) };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        var completion = Assert.Single(completions);
+        Assert.Equal("Standard Model", completion.Description);
+        Assert.DoesNotContain("billing", completion.Description);
+    }
+
+    [Fact]
+    public async Task GetCompletionsAsync_Description_OmitsMultiplier_WhenBillingNull()
+    {
+        var models = new[] { Model("free", "Free Model") };
+        var handler = new CopilotSdkModelSlashCommandHandler(new FakeModelClient(models));
+        var context = await CreateContextAsync();
+
+        var completions = await handler.GetCompletionsAsync(context, string.Empty, CancellationToken.None);
+
+        var completion = Assert.Single(completions);
+        Assert.Equal("Free Model", completion.Description);
+        Assert.DoesNotContain("billing", completion.Description);
+    }
+
+    [Fact]
+    public void RealCopilotSdkChatClient_ImplementsModelSeam()
+    {
+        // Guards the production seam: the real client must satisfy the interface the handler depends on.
+        using var client = CreateRealClient("gpt-5");
+
+        Assert.IsAssignableFrom<IModelSlashCommandClient>(client);
+        Assert.Equal("gpt-5", ((IModelSlashCommandClient)client).ModelId);
     }
 }

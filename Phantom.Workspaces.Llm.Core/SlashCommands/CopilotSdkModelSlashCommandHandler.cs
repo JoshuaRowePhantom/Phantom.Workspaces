@@ -15,9 +15,9 @@ namespace Phantom.Workspaces.Llm.SlashCommands;
 /// </summary>
 internal sealed class CopilotSdkModelSlashCommandHandler : ISlashCommandHandler
 {
-    private readonly CopilotSdkChatClient client;
+    private readonly IModelSlashCommandClient client;
 
-    public CopilotSdkModelSlashCommandHandler(CopilotSdkChatClient client)
+    public CopilotSdkModelSlashCommandHandler(IModelSlashCommandClient client)
     {
         ArgumentNullException.ThrowIfNull(client);
         this.client = client;

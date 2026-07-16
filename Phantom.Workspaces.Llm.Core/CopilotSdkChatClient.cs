@@ -29,7 +29,7 @@ namespace Phantom.Workspaces.Llm;
 /// documentation entities: <c>["documentation", "agent-options", "providers"]</c> and
 /// <c>["documentation", "agent-options", "model-options"]</c>.
 /// </remarks>
-public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient
+public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient, SlashCommands.IModelSlashCommandClient
 {
     private string modelId;
     private readonly string displayName;
