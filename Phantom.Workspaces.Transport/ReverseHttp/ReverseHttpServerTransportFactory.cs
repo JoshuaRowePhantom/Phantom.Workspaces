@@ -6,6 +6,18 @@ namespace Phantom.Workspaces.Transport.ReverseHttp;
 public sealed class ReverseHttpServerTransportFactory : ITransportListener
 {
     private readonly ConcurrentDictionary<string, IMessageChannel> registrations = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, int> inFlightCounts = new(StringComparer.Ordinal);
+    private readonly ReverseConnectionStatusRegistry? statusRegistry;
+
+    public ReverseHttpServerTransportFactory()
+        : this(null)
+    {
+    }
+
+    public ReverseHttpServerTransportFactory(ReverseConnectionStatusRegistry? statusRegistry)
+    {
+        this.statusRegistry = statusRegistry;
+    }
 
     public int RegistrationCount => this.registrations.Count;
 
@@ -23,7 +35,9 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         {
             var entityId = ReadEntityId(request);
             this.registrations[entityId] = channel;
-            return new RegistrationLease(this.registrations, entityId, channel);
+            this.inFlightCounts[entityId] = 0;
+            this.statusRegistry?.OnRegistered(entityId, DateTimeOffset.UtcNow);
+            return new RegistrationLease(this, entityId, channel);
         }
 
         if (string.Equals(type, "reverse-http", StringComparison.OrdinalIgnoreCase))
@@ -35,7 +49,8 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
                 // established relay from a rejected one (see ReverseHttpTransport.WaitForRelayEstablishedAsync).
                 using var ackDocument = JsonDocument.Parse("""{"type":"channel-open-ack"}""");
                 await channel.Writer.WriteAsync(ackDocument.RootElement.Clone(), ct).ConfigureAwait(false);
-                return new RelaySession(channel, registrationChannel, ct);
+                this.OnRelayOpened(entityId);
+                return new RelayLease(this, entityId, new RelaySession(channel, registrationChannel, ct));
             }
 
             return new ErrorLease(channel, "not-registered", $"No reverse HTTP registration exists for '{entityId}'.");
@@ -44,12 +59,37 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
         return null;
     }
 
+    private void OnRelayOpened(string entityId)
+    {
+        var count = this.inFlightCounts.AddOrUpdate(entityId, 1, static (_, current) => current + 1);
+        this.statusRegistry?.OnInFlightChanged(entityId, count);
+    }
+
+    private void OnRelayClosed(string entityId)
+    {
+        if (!this.inFlightCounts.ContainsKey(entityId))
+        {
+            return;
+        }
+
+        var count = this.inFlightCounts.AddOrUpdate(entityId, 0, static (_, current) => current > 0 ? current - 1 : 0);
+        this.statusRegistry?.OnInFlightChanged(entityId, count);
+    }
+
+    private void RemoveRegistration(string entityId, IMessageChannel channel)
+    {
+        this.registrations.TryRemove(new KeyValuePair<string, IMessageChannel>(entityId, channel));
+        this.inFlightCounts.TryRemove(entityId, out _);
+        this.statusRegistry?.OnUnregistered(entityId);
+    }
+
     public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
         => Task.FromResult<IAsyncDisposable?>(null);
 
     public ValueTask DisposeAsync()
     {
         this.registrations.Clear();
+        this.inFlightCounts.Clear();
         return ValueTask.CompletedTask;
     }
 
@@ -65,14 +105,32 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
     }
 
     private sealed class RegistrationLease(
-        ConcurrentDictionary<string, IMessageChannel> registrations,
+        ReverseHttpServerTransportFactory factory,
         string entityId,
         IMessageChannel channel) : IAsyncDisposable
     {
         public ValueTask DisposeAsync()
         {
-            registrations.TryRemove(new KeyValuePair<string, IMessageChannel>(entityId, channel));
+            factory.RemoveRegistration(entityId, channel);
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class RelayLease(
+        ReverseHttpServerTransportFactory factory,
+        string entityId,
+        RelaySession session) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                factory.OnRelayClosed(entityId);
+            }
         }
     }
 
