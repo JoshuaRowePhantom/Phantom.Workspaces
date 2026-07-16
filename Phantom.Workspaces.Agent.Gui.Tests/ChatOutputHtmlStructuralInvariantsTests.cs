@@ -515,4 +515,70 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
             }
         }
     }
+
+    // ── Issue #1042: structural invariants for expand/collapse toggle ──────────
+
+    [Fact]
+    public void ToolGroup_AfterRender_InnerCallAndResultPanesAreOpen()
+    {
+        var call1 = new FunctionCallContent("c1", "tool_a");
+        var call2 = new FunctionCallContent("c2", "tool_b");
+        var result1 = new FunctionResultContent("c1", "ok");
+        var result2 = new FunctionResultContent("c2", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["c1"] = result1, ["c2"] = result2 };
+
+        var html = ChatOutputHtmlRenderer.RenderToolGroup("c0", new[] { call1, call2 }, lookup);
+
+        // Every chat-tool-call and chat-tool-result must carry "open".
+        var callMatches = Regex.Matches(html, "<details class=\"chat-tool-call\"[^>]*>");
+        Assert.True(callMatches.Count >= 2);
+        Assert.All(callMatches.Cast<Match>(), m => Assert.Contains("open", m.Value));
+
+        var resultMatches = Regex.Matches(html, "<details class=\"chat-tool-result\"[^>]*>");
+        Assert.True(resultMatches.Count >= 2);
+        Assert.All(resultMatches.Cast<Match>(), m => Assert.Contains("open", m.Value));
+
+        // The outer wrapper should not carry "open".
+        var wrapperMatch = Regex.Match(html, "<details class=\"chat-content chat-tool-group-wrapper\"[^>]*>");
+        Assert.True(wrapperMatch.Success);
+        Assert.DoesNotContain("open", wrapperMatch.Value);
+    }
+
+    [Fact]
+    public void ToolGroupSummary_ExpandCollapseToggle_IsChildOfGroupSummaryNotToolPane()
+    {
+        var call1 = new FunctionCallContent("c1", "tool_a");
+        var call2 = new FunctionCallContent("c2", "tool_b");
+        var result1 = new FunctionResultContent("c1", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["c1"] = result1 };
+
+        // Message-level group
+        var groupHtml = ChatOutputHtmlRenderer.RenderToolCallGroup(
+            "grp-0", new[] { "tool_a", "tool_b" }, 2, "<div>body</div>");
+
+        // Toggle button must be inside the <summary> of the group, not in any tool pane.
+        var summaryMatch = Regex.Match(groupHtml, "<summary[^>]*>.*?</summary>", RegexOptions.Singleline);
+        Assert.True(summaryMatch.Success);
+        Assert.Contains("data-tool-expand-toggle", summaryMatch.Value);
+
+        // Content-level wrapper
+        var wrapperHtml = ChatOutputHtmlRenderer.RenderToolGroup(
+            "c0", new[] { call1, call2 }, lookup);
+
+        // The toggle is in the wrapper summary, not inside chat-tool-call / chat-tool-result.
+        var callPanes = Regex.Matches(wrapperHtml, "<details class=\"chat-tool-call\"[\\s\\S]*?</details>");
+        foreach (Match pane in callPanes)
+        {
+            Assert.DoesNotContain("data-tool-expand-toggle", pane.Value);
+        }
+
+        var resultPanes = Regex.Matches(wrapperHtml, "<details class=\"chat-tool-result\"[\\s\\S]*?</details>");
+        foreach (Match pane in resultPanes)
+        {
+            Assert.DoesNotContain("data-tool-expand-toggle", pane.Value);
+        }
+
+        // But the wrapper itself contains the toggle.
+        Assert.Contains("data-tool-expand-toggle", wrapperHtml);
+    }
 }

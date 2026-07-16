@@ -116,6 +116,9 @@ internal static class ChatOutputHtmlRenderer
         }
 
         builder.Append(" <span class=\"tool-count-badge\">").Append(callCount).Append(" calls</span>");
+        builder.Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
+            .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
+            .Append("\u21F2</button>");
         builder.Append("</summary>");
         return builder.ToString();
     }
@@ -131,7 +134,11 @@ internal static class ChatOutputHtmlRenderer
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-wrapper\" id=\"").Append(contentId).Append("\">");
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">tools  ").Append(HtmlEscape(summary))
-            .Append("  (").Append(callCount).Append(" calls)</summary>");
+            .Append("  (").Append(callCount).Append(" calls)")
+            .Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
+            .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
+            .Append("\u21F2</button>")
+            .Append("</summary>");
         builder.Append(innerHtml);
         builder.Append("</details>");
         return builder.ToString();

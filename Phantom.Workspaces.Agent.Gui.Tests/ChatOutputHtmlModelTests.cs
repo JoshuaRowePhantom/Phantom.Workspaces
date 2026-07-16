@@ -2899,4 +2899,27 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("before-tool", allRenderedHtml, StringComparison.Ordinal);
         Assert.Contains("after-tool", allRenderedHtml, StringComparison.Ordinal);
     }
+
+    // ── Issue #1042: streaming summary-replace retains expand/collapse toggle ──
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task ToolCallGroupHtmlModel_SummaryReplaceOnAppend_RetainsExpandCollapseToggle()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // Append a second tool call to trigger the streaming summary-replace path.
+        history.Add(ToolCallMessage("write_file", "c2"));
+
+        var summaryOp = sink.ContentOperations.FirstOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.NotNull(summaryOp);
+        Assert.Contains("data-tool-expand-toggle", summaryOp!.Content, StringComparison.Ordinal);
+    }
 }

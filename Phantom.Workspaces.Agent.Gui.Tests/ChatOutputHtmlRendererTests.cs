@@ -859,4 +859,55 @@ public sealed class ChatOutputHtmlRendererTests
 
         Assert.Null(exception);
     }
+
+    // ── Issue #1042: expand/collapse-all toggle button on tool groups ────────
+
+    [Fact]
+    public void RenderToolCallGroupSummary_Always_EmitsExpandCollapseToggleButton()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "my_tool" }, 3);
+
+        Assert.Contains("data-tool-expand-toggle", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-expand-toggle\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_MultipleCalls_EmitsExpandCollapseToggleButton()
+    {
+        var call1 = new FunctionCallContent("c1", "tool_a");
+        var call2 = new FunctionCallContent("c2", "tool_b");
+        var result1 = new FunctionResultContent("c1", "ok");
+        var result2 = new FunctionResultContent("c2", "ok");
+        var lookup = new Dictionary<string, FunctionResultContent> { ["c1"] = result1, ["c2"] = result2 };
+
+        var html = ChatOutputHtmlRenderer.RenderToolGroup("c0", new[] { call1, call2 }, lookup);
+
+        Assert.Contains("chat-tool-group-wrapper", html, StringComparison.Ordinal);
+        Assert.Contains("data-tool-expand-toggle", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tool-expand-toggle\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_Always_EmitsToolCallAndResultPanesOpen()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        // Both inner panes must be force-expanded (open attribute).
+        Assert.Contains("<details class=\"chat-tool-call\"", html, StringComparison.Ordinal);
+        Assert.Matches("chat-tool-call[^>]*\\sopen>", html);
+        Assert.Contains("<details class=\"chat-tool-result\"", html, StringComparison.Ordinal);
+        Assert.Matches("chat-tool-result[^>]*\\sopen>", html);
+    }
+
+    [Fact]
+    public void RenderToolCallGroupSummary_Always_ToggleButtonIsAfterCountBadge()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroupSummary("grp-0", new[] { "my_tool" }, 3);
+
+        var badgeIndex = html.IndexOf("tool-count-badge", StringComparison.Ordinal);
+        var toggleIndex = html.IndexOf("data-tool-expand-toggle", StringComparison.Ordinal);
+        Assert.True(badgeIndex >= 0);
+        Assert.True(toggleIndex >= 0);
+        Assert.True(toggleIndex > badgeIndex, "Toggle button must appear after the count badge.");
+    }
 }

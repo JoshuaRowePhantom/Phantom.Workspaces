@@ -293,6 +293,21 @@
       display: none;
     }
 
+    .tool-expand-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.85em;
+      opacity: 0.6;
+      margin-left: 0.5em;
+      padding: 0 0.2em;
+      color: inherit;
+      vertical-align: middle;
+    }
+    .tool-expand-toggle:hover {
+      opacity: 1;
+    }
+
     .chat-tool-group-body {
       padding-left: 1em;
       border-left: 2px solid var(--chat-tool-summary);
@@ -557,6 +572,64 @@
     })();
   </script>
   <script>
+    /* tool-group-expand-collapse.js — bulk expand/collapse for tool groups.
+     * Call ToolGroupExpandCollapse.init(root) to wire up all [data-tool-expand-toggle] elements.
+     * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
+     */
+    var ToolGroupExpandCollapse = (function () {
+      "use strict";
+
+      function init(root) {
+        root.querySelectorAll("[data-tool-expand-toggle]").forEach(attach);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-tool-expand-toggle")) { attach(node); }
+              node.querySelectorAll("[data-tool-expand-toggle]").forEach(attach);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      function attach(el) {
+        if (el._toolExpandCollapseAttached) { return; }
+        el._toolExpandCollapseAttached = true;
+
+        el.addEventListener("click", function (e) {
+          e.stopPropagation();
+          e.preventDefault();
+
+          var group = el.closest("details.chat-tool-group, details.chat-tool-group-wrapper");
+          if (!group) { return; }
+
+          var wrappers = group.querySelectorAll("details.chat-tool-group-item");
+          var anyClosed = !group.open;
+          if (!anyClosed) {
+            wrappers.forEach(function (w) {
+              if (!w.open) { anyClosed = true; }
+            });
+          }
+
+          if (anyClosed) {
+            // Expand all
+            group.open = true;
+            wrappers.forEach(function (w) { w.open = true; });
+          } else {
+            // Collapse all — preserve force-expanded inner panes
+            wrappers.forEach(function (w) { w.open = false; });
+            group.open = false;
+            group.querySelectorAll("details.chat-tool-call, details.chat-tool-result")
+              .forEach(function (p) { p.open = true; });
+          }
+        });
+      }
+
+      return { init: init };
+    })();
+  </script>
+  <script>
     /* timestamp-formatter.js — formats [data-utc] spans in local time.
      * Same day as now: shows HH:MM only. Different day: shows Mon D HH:MM.
      * A MutationObserver keeps watching for spans added by streaming updates.
@@ -701,6 +774,7 @@
       // Initialise gutter components once the host bridge is wired up.
       CopyGutter.init(document);
       InspectGutter.init(document);
+      ToolGroupExpandCollapse.init(document);
       TimestampFormatter.init(document);
     })();
   </script>
