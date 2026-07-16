@@ -18,6 +18,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
     private readonly IMessageChannel registrationChannel;
     private readonly TransportRegistry registry;
     private readonly ConcurrentDictionary<string, DispatchedChannel> channels = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IAsyncDisposable> sessions = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
     private readonly Task readLoop;
@@ -45,6 +46,11 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             channel.CompleteIncoming();
         }
 
+        foreach (var stream in this.streams.Values)
+        {
+            stream.CompleteIncoming();
+        }
+
         foreach (var session in this.sessions.Values)
         {
             try
@@ -57,6 +63,7 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
 
         this.channels.Clear();
+        this.streams.Clear();
         this.sessions.Clear();
         this.shutdown.Dispose();
     }
@@ -117,6 +124,25 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
             case "stream-open":
                 await this.HandleStreamOpenAsync(frame).ConfigureAwait(false);
                 break;
+
+            case "stream-data":
+                if (TryGetId(frame, "streamId", out var dataStreamId)
+                    && this.streams.TryGetValue(dataStreamId, out var dataStream)
+                    && frame.TryGetProperty("data", out var dataProperty)
+                    && dataProperty.GetString() is { } base64)
+                {
+                    dataStream.DeliverIncoming(Convert.FromBase64String(base64));
+                }
+
+                break;
+
+            case "stream-close":
+                if (TryGetId(frame, "streamId", out var closeStreamId))
+                {
+                    await this.CloseStreamAsync(closeStreamId).ConfigureAwait(false);
+                }
+
+                break;
         }
     }
 
@@ -152,15 +178,36 @@ public sealed class ReverseExecutionDispatcher : IAsyncDisposable
         }
 
         var stream = new DispatchedStream(this.registrationChannel.Writer, streamId);
+        this.streams[streamId] = stream;
         var session = await this.registry.OnStreamOpenAsync(request.Clone(), stream, this.shutdown.Token).ConfigureAwait(false);
         if (session is null)
         {
+            this.streams.TryRemove(streamId, out _);
             await stream.DisposeAsync().ConfigureAwait(false);
             await this.SendChannelOpenErrorAsync(streamId, "no-listener", "No transport listener accepted the stream open request.").ConfigureAwait(false);
             return;
         }
 
         this.sessions[streamId] = session;
+    }
+
+    private async Task CloseStreamAsync(string streamId)
+    {
+        if (this.streams.TryRemove(streamId, out var stream))
+        {
+            stream.CompleteIncoming();
+        }
+
+        if (this.sessions.TryRemove(streamId, out var session))
+        {
+            try
+            {
+                await session.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+        }
     }
 
     private async Task CloseChannelAsync(string channelId)

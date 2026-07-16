@@ -94,7 +94,43 @@ public sealed class ReverseExecutionDispatcherTests
         await disposed.Task.WaitAsync(Ct());
     }
 
+    [Fact]
+    public async Task ExecutorDispatcher_RelayedStream_RoundTripsDataFrames()
+    {
+        await using var underlying = new UnderlyingChannel();
+        var streamReady = new TaskCompletionSource<Stream>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new TransportRegistry();
+        registry.Register(new CapturingStreamListener(stream => streamReady.TrySetResult(stream)));
+        await using var dispatcher = new ReverseExecutionDispatcher(underlying, registry);
+
+        await underlying.DeliverInbound(Json("""{"type":"stream-open","streamId":"sh1","request":{"type":"shell","command":"echo"}}"""));
+        var listenerStream = await streamReady.Task.WaitAsync(Ct());
+
+        // Inbound stream-data is demuxed by streamId and surfaced to the listener's stream.
+        var inbound = new byte[] { 5, 6, 7 };
+        await underlying.DeliverInbound(StreamData("sh1", inbound));
+        var buffer = new byte[16];
+        var read = await listenerStream.ReadAsync(buffer, Ct());
+        Assert.Equal(inbound, buffer[..read]);
+
+        // The listener's outbound write is multiplexed back as a stream-data frame.
+        var outbound = new byte[] { 1, 2 };
+        await listenerStream.WriteAsync(outbound, Ct());
+        var data = await underlying.Outbound.ReadAsync(Ct());
+        Assert.Equal("stream-data", data.GetProperty("type").GetString());
+        Assert.Equal("sh1", data.GetProperty("streamId").GetString());
+        Assert.Equal(outbound, Convert.FromBase64String(data.GetProperty("data").GetString()!));
+    }
+
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
+
+    private static JsonElement StreamData(string streamId, byte[] data)
+        => JsonSerializer.SerializeToElement(new
+        {
+            type = "stream-data",
+            streamId,
+            data = Convert.ToBase64String(data),
+        });
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
@@ -158,6 +194,27 @@ public sealed class ReverseExecutionDispatcherTests
                 return ValueTask.CompletedTask;
             }
         }
+    }
+
+    private sealed class CapturingStreamListener(Action<Stream> onStream) : ITransportListener
+    {
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+        {
+            if (request.ValueKind != JsonValueKind.Object
+                || !request.TryGetProperty("type", out var typeElement)
+                || !string.Equals(typeElement.GetString(), "shell", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult<IAsyncDisposable?>(null);
+            }
+
+            onStream(stream);
+            return Task.FromResult<IAsyncDisposable?>(new NoopDisposable());
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class NoopDisposable : IAsyncDisposable

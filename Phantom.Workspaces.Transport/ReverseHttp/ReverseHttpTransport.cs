@@ -14,6 +14,7 @@ public sealed class ReverseHttpTransport : ITransport
 {
     private readonly IMessageChannel registrationChannel;
     private readonly ConcurrentDictionary<string, ReverseHttpMessageChannel> channels = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
 
     // Completes with null once the relay is acknowledged (channel-open-ack) or with a TransportException
@@ -47,6 +48,8 @@ public sealed class ReverseHttpTransport : ITransport
     public async Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
     {
         var streamId = Guid.NewGuid().ToString("D");
+        var stream = new DispatchedStream(this.registrationChannel.Writer, streamId);
+        this.streams[streamId] = stream;
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
         {
             type = "stream-open",
@@ -54,7 +57,7 @@ public sealed class ReverseHttpTransport : ITransport
             request = JsonSerializer.Deserialize<JsonElement>(request.GetRawText()),
         }));
         await this.registrationChannel.Writer.WriteAsync(document.RootElement.Clone(), ct).ConfigureAwait(false);
-        return new MemoryStream();
+        return stream;
     }
 
     /// <summary>
@@ -87,6 +90,11 @@ public sealed class ReverseHttpTransport : ITransport
             channel.CompleteIncoming();
         }
 
+        foreach (var stream in this.streams.Values)
+        {
+            stream.CompleteIncoming();
+        }
+
         this.relayReady.TrySetResult(new TransportException("Reverse HTTP transport disposed before the relay was established."));
         this.shutdown.Dispose();
     }
@@ -115,6 +123,11 @@ public sealed class ReverseHttpTransport : ITransport
             foreach (var channel in this.channels.Values)
             {
                 channel.CompleteIncoming();
+            }
+
+            foreach (var stream in this.streams.Values)
+            {
+                stream.CompleteIncoming();
             }
         }
     }
@@ -159,7 +172,40 @@ public sealed class ReverseHttpTransport : ITransport
                 }
 
                 break;
+
+            case "stream-data":
+                if (TryGetStreamId(frame, out var dataStreamId)
+                    && this.streams.TryGetValue(dataStreamId, out var dataStream)
+                    && frame.TryGetProperty("data", out var dataProperty)
+                    && dataProperty.GetString() is { } base64)
+                {
+                    dataStream.DeliverIncoming(Convert.FromBase64String(base64));
+                }
+
+                break;
+
+            case "stream-close":
+                if (TryGetStreamId(frame, out var closeStreamId)
+                    && this.streams.TryRemove(closeStreamId, out var closingStream))
+                {
+                    closingStream.CompleteIncoming();
+                }
+
+                break;
         }
+    }
+
+    private static bool TryGetStreamId(JsonElement frame, out string streamId)
+    {
+        if (frame.TryGetProperty("streamId", out var streamIdProperty)
+            && streamIdProperty.GetString() is { Length: > 0 } value)
+        {
+            streamId = value;
+            return true;
+        }
+
+        streamId = string.Empty;
+        return false;
     }
 
     private static bool TryGetChannelId(JsonElement frame, out string channelId)

@@ -94,7 +94,57 @@ public sealed class ReverseHttpTransportTests
         await Assert.ThrowsAsync<TransportException>(async () => await transport.WaitForRelayEstablishedAsync(Ct()));
     }
 
+    [Fact]
+    public async Task ReverseHttpTransport_RelayedStream_RoundTripsDataFrames()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var transport = new ReverseHttpTransport(underlying);
+        var stream = await transport.ConnectToStreamAsync(Json("""{"type":"shell","command":"echo"}"""), Ct());
+
+        var open = await underlying.Outbound.ReadAsync(Ct());
+        var streamId = open.GetProperty("streamId").GetString()!;
+        Assert.Equal("stream-open", open.GetProperty("type").GetString());
+
+        // Outbound write is multiplexed as a stream-data frame carrying base64 bytes.
+        var outboundBytes = new byte[] { 1, 2, 3, 4 };
+        await stream.WriteAsync(outboundBytes, Ct());
+        var data = await underlying.Outbound.ReadAsync(Ct());
+        Assert.Equal("stream-data", data.GetProperty("type").GetString());
+        Assert.Equal(streamId, data.GetProperty("streamId").GetString());
+        Assert.Equal(outboundBytes, Convert.FromBase64String(data.GetProperty("data").GetString()!));
+
+        // Inbound stream-data is demuxed by streamId and surfaced on the stream reader.
+        var inboundBytes = new byte[] { 9, 8, 7 };
+        await underlying.DeliverInbound(StreamData(streamId, inboundBytes));
+        var buffer = new byte[16];
+        var read = await stream.ReadAsync(buffer, Ct());
+        Assert.Equal(inboundBytes, buffer[..read]);
+    }
+
+    [Fact]
+    public async Task ReverseHttpTransport_StreamClose_CompletesOriginatingStream()
+    {
+        await using var underlying = new UnderlyingChannel();
+        await using var transport = new ReverseHttpTransport(underlying);
+        var stream = await transport.ConnectToStreamAsync(Json("""{"type":"shell","command":"echo"}"""), Ct());
+        var open = await underlying.Outbound.ReadAsync(Ct());
+        var streamId = open.GetProperty("streamId").GetString();
+
+        await underlying.DeliverInbound(Json($$"""{"type":"stream-close","streamId":"{{streamId}}"}"""));
+
+        var read = await stream.ReadAsync(new byte[8], Ct());
+        Assert.Equal(0, read);
+    }
+
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
+
+    private static JsonElement StreamData(string streamId, byte[] data)
+        => JsonSerializer.SerializeToElement(new
+        {
+            type = "stream-data",
+            streamId,
+            data = Convert.ToBase64String(data),
+        });
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
