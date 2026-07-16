@@ -35,13 +35,43 @@ public sealed class DevTunnelEndpointResolverTests
     }
 
     [Fact]
-    public async Task ResolveAsync_PrivateMode_WhenConnectTokenIsNull_Throws()
+    public async Task ResolveAsync_PrivateMode_WhenConnectTokenIsNull_DoesNotThrow()
+    {
+        // Issue #1082 / design #19: Private connect is identity-derived, so a null Connect token
+        // is valid and must not throw — the client authorizes via its GitHub identity.
+        var resolver = new DevTunnelEndpointResolver(
+            new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280], ConnectToken: null)));
+
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(resolution);
+        Assert.Equal(new Uri("https://tunnel-abc-5280.usw2.devtunnels.ms/"), resolution.BaseUri);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_PrivateMode_WhenConnectTokenIsNull_YieldsNullTunnelAuthToken()
     {
         var resolver = new DevTunnelEndpointResolver(
             new FakeLookupClient(new DevTunnelLookupResult("tunnel-abc", "usw2", [5280], ConnectToken: null)));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken));
+        var resolution = await resolver.ResolveAsync("my-tunnel", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
+
+        Assert.Null(resolution.TunnelAuthToken);
+    }
+
+    [Fact]
+    public async Task ResolveAsync_PrivateMode_ConnectsAsOwner_WithoutConnectToken()
+    {
+        // The owner on the same machine/account resolves successfully even though the Management
+        // API's list path never mints a Connect token for the tunnel-name Private flow.
+        var lookupClient = new FakeLookupClient(new DevTunnelLookupResult("playspace-3", "usw2", [5280], ConnectToken: null));
+        var resolver = new DevTunnelEndpointResolver(lookupClient);
+
+        var resolution = await resolver.ResolveAsync("playspace 3", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
+
+        Assert.Equal(new Uri("https://playspace-3-5280.usw2.devtunnels.ms/"), resolution.BaseUri);
+        Assert.Null(resolution.TunnelAuthToken);
+        Assert.Equal("playspace 3", lookupClient.LookedUpName);
     }
 
     [Fact]

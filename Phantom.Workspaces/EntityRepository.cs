@@ -131,9 +131,22 @@ public sealed class EntityRepository
                 repositorySource.TunnelName,
                 repositorySource.AccessMode,
                 cancellationToken),
-            buildDataAccessLayer: resolution => new WebClientDataAccessLayer(
-                resolution.BaseUri.ToString(),
-                resolution.TunnelAuthToken),   // null for Anonymous; connect-token for Private
+            buildDataAccessLayer: resolution =>
+            {
+                // Private connect is identity-derived (design #19, issue #1082): when the Management
+                // API returns no Connect token, authorize with the GitHub identity token plus a
+                // 401-refresh resolver, mirroring the WebRepositorySource UseGitHubAuthToken path.
+                // Anonymous access sends no tunnel-authorization header.
+                var authorization = Services.DevTunnel.DevTunnelClientAuthorization.Resolve(
+                    resolution,
+                    repositorySource.AccessMode,
+                    () => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve());
+
+                return new WebClientDataAccessLayer(
+                    resolution.BaseUri.ToString(),
+                    authorization.Token,
+                    authorization.RefreshResolver);
+            },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
         await reconnectingDataAccessLayer.StartAsync().ConfigureAwait(false);
