@@ -21,7 +21,7 @@ public sealed class UsageMetricsService : IAsyncDisposable
 {
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly UsageMetrics usageMetrics;
-    private readonly IReadOnlyDictionary<Uri, IUsageProvider> providersByUri;
+    private readonly IReadOnlyDictionary<string, IReadOnlyList<IUsageProvider>> providersByHost;
     private readonly TimeProvider timeProvider;
     private readonly ILogger<UsageMetricsService> logger;
     private readonly CancellationTokenSource cancellationTokenSource = new();
@@ -47,7 +47,16 @@ public sealed class UsageMetricsService : IAsyncDisposable
         this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         this.logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        this.providersByUri = providers.ToDictionary(p => p.ProviderUri, p => p);
+        // Route discovered accounts to every provider that shares the account URI's host, so a
+        // single "https://github.com" account fans out to both the Copilot provider
+        // ("https://github.com/copilot") and the Actions provider ("https://github.com").
+        // Exact-URI routing previously dropped the Copilot provider entirely (issue #1041).
+        this.providersByHost = providers
+            .GroupBy(p => p.ProviderUri.Host, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyList<IUsageProvider>)g.ToList(),
+                StringComparer.OrdinalIgnoreCase);
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -69,7 +78,9 @@ public sealed class UsageMetricsService : IAsyncDisposable
 
         var cancellationToken = linkedCts.Token;
 
-        // Discover accounts once at startup
+        // Discover accounts at startup, then again on every poll so accounts created lazily after
+        // startup (the normal case for the auto-created GitHub account) are picked up without an
+        // application restart (issue #1041).
         var discoveredAccounts = await this.DiscoverAccountsAsync(cancellationToken).ConfigureAwait(false);
 
         // Immediate run on startup
@@ -109,6 +120,7 @@ public sealed class UsageMetricsService : IAsyncDisposable
                 break;
             }
 
+            discoveredAccounts = await this.DiscoverAccountsAsync(cancellationToken).ConfigureAwait(false);
             await this.RefreshAllAccountsAsync(discoveredAccounts, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -158,18 +170,23 @@ public sealed class UsageMetricsService : IAsyncDisposable
 
                 var userName = userNameElement.GetString() ?? string.Empty;
 
-                // Only include accounts with a registered provider
-                if (!this.providersByUri.TryGetValue(providerUri, out var provider))
+                // Fan out to every provider registered for this account URI's host. A single
+                // github.com account thus routes to both the Copilot and Actions providers, each
+                // producing its own distinct UsageAccount (keyed by the provider's own URI).
+                if (!this.providersByHost.TryGetValue(providerUri.Host, out var matchingProviders))
                 {
                     continue;
                 }
 
-                discoveredAccounts.Add(new DiscoveredAccount
+                foreach (var provider in matchingProviders)
                 {
-                    ProviderUri = providerUri,
-                    UserName = userName,
-                    Provider = provider
-                });
+                    discoveredAccounts.Add(new DiscoveredAccount
+                    {
+                        ProviderUri = provider.ProviderUri,
+                        UserName = userName,
+                        Provider = provider
+                    });
+                }
             }
         }
 

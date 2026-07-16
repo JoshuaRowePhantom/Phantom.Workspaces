@@ -789,6 +789,162 @@ public sealed class UsageMetricsServiceTests
         Assert.Equal(1, provider.CallCount); // Only first call, no new calls after disposal
     }
 
+    [Fact]
+    public async Task UsageMetricsService_GitHubAccount_RoutesToBothCopilotAndActionsProviders()
+    {
+        // A single account stamped "https://github.com" must fan out to both providers registered
+        // for the github.com host (Copilot at .../copilot and Actions at github.com), each producing
+        // its own UsageAccount. Exact-URI routing previously dropped Copilot entirely (issue #1041).
+        var copilotCalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var actionsCalled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var copilotProvider = new FakeUsageProvider(
+            new Uri("https://github.com/copilot"),
+            (_, _) =>
+            {
+                copilotCalled.TrySetResult();
+                return Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "Copilot Usage" }]);
+            });
+
+        var actionsProvider = new FakeUsageProvider(
+            new Uri("https://github.com"),
+            (_, _) =>
+            {
+                actionsCalled.TrySetResult();
+                return Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "Actions Minutes" }]);
+            });
+
+        var dal = new FakeDataAccessLayer([
+            CreateUserAccountEntity("https://github.com", "octocat"),
+        ]);
+
+        var mutationCount = 0;
+        var bothMutationsCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            if (Interlocked.Increment(ref mutationCount) == 2)
+            {
+                bothMutationsCompleted.TrySetResult();
+            }
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var timeProvider = new FakeTimeProvider();
+
+        await using var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { copilotProvider, actionsProvider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await copilotCalled.Task;
+        await actionsCalled.Task;
+        await bothMutationsCompleted.Task;
+
+        Assert.Equal(1, copilotProvider.CallCount);
+        Assert.Equal(1, actionsProvider.CallCount);
+        Assert.Equal(2, usageMetrics.Accounts.Count);
+        Assert.Contains(usageMetrics.Accounts, a => a.SettingsUrl == new Uri("https://github.com/copilot"));
+        Assert.Contains(usageMetrics.Accounts, a => a.SettingsUrl == new Uri("https://github.com"));
+    }
+
+    [Fact]
+    public async Task UsageMetricsService_AccountCreatedAfterStartup_IsDiscoveredOnNextPoll()
+    {
+        // The account is created lazily after the service has started; re-discovering accounts on
+        // every poll (rather than once at startup) must pick it up without an app restart (issue #1041).
+        var provider = new FakeUsageProvider(
+            new Uri("https://example.com"),
+            (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "API Calls" }]));
+
+        var dal = new MutableFakeDataAccessLayer();
+
+        var mutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            mutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var timeProvider = new FakeTimeProvider();
+
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { provider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        // Startup discovery found no accounts; the loop is now parked on the delay.
+        await delayScheduled.Task;
+        Assert.Empty(usageMetrics.Accounts);
+
+        // Account appears after startup; the next poll must discover and refresh it.
+        dal.Entities = [CreateUserAccountEntity("https://example.com", "user1")];
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+
+        await mutationCompleted.Task;
+
+        Assert.Equal(1, provider.CallCount);
+        var account = Assert.Single(usageMetrics.Accounts);
+        Assert.Equal("user1", account.UserName);
+    }
+
+    /// <summary>
+    /// A fake DAL whose returned entity set can be changed after construction, so tests can simulate
+    /// accounts being created after the service has started.
+    /// </summary>
+    private sealed class MutableFakeDataAccessLayer : IDataAccessLayer
+    {
+        private volatile IReadOnlyList<QueryEntitySnapshot> entities = Array.Empty<QueryEntitySnapshot>();
+
+        public IReadOnlyList<QueryEntitySnapshot> Entities
+        {
+            get => this.entities;
+            set => this.entities = value;
+        }
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(new QueryResult
+            {
+                Batches =
+                [
+                    new TimestampedQueryBatch
+                    {
+                        Timestamp = null,
+                        Entities = this.entities,
+                    },
+                ],
+            });
+
+        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
+
     /// <summary>
     /// A TaskScheduler that executes tasks synchronously, immediately on the queuing thread.
     /// </summary>
