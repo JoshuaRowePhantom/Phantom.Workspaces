@@ -17,6 +17,10 @@ builder.Services.AddSingleton(reverseExecutionRegistry);
 var transportRegistry = new TransportRegistry();
 transportRegistry.Register(new ReverseHttpServerTransportFactory());
 builder.Services.AddSingleton(transportRegistry);
+var reverseConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
+builder.Services.AddSingleton(reverseConnectionStatusRegistry);
+var reverseTransportServerFactory = new ReverseHttpServerTransportFactory(reverseConnectionStatusRegistry);
+builder.Services.AddSingleton(reverseTransportServerFactory);
 var transportFactoryRegistry = new TransportFactoryRegistry();
 transportFactoryRegistry.Register(new HttpClientTransportFactory());
 transportFactoryRegistry.Register(new ReverseHttpForwardingTransportFactory());
@@ -38,6 +42,7 @@ app.MapGet("/", () => $"Phantom.Workspaces.Web.Server ({typeof(WebServerMarker).
 app.MapWebDataAccessEndpoints();
 app.MapAgentEndpoints();
 app.MapReverseEndpoints(reverseExecutionRegistry);
+app.MapTransportReverseEndpoints(reverseTransportServerFactory, reverseConnectionStatusRegistry);
 app.Services.GetRequiredService<HttpServerTransportFactory>().Map(app);
 app.MapStreamEndpoints();
 app.MapWorkspaceToolEndpoints();
