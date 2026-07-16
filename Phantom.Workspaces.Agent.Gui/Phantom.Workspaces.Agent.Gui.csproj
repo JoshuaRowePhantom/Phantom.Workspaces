@@ -15,10 +15,13 @@
     <PackageReference Include="Avalonia.Fonts.Inter" />
     <PackageReference Include="Markdig.Signed" />
     <PackageReference Include="System.CommandLine" />
-    <PackageReference Include="AvaloniaUI.DiagnosticsSupport">
-      <IncludeAssets Condition="'$(Configuration)' != 'Debug'">None</IncludeAssets>
-      <PrivateAssets Condition="'$(Configuration)' != 'Debug'">All</PrivateAssets>
-    </PackageReference>
+    <!-- Referenced unconditionally so restore is configuration-independent and the
+         #if DEBUG AttachDeveloperTools() call always resolves during no-restore parallel
+         test builds. Conditioning asset metadata on $(Configuration) made restore output
+         config-dependent and intermittently dropped the compile assets, silently skipping
+         this project's test assembly (see #1050). The call is still #if DEBUG, so DevTools
+         never attaches in Release. -->
+    <PackageReference Include="AvaloniaUI.DiagnosticsSupport" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />

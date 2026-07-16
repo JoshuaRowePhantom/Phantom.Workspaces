@@ -96,6 +96,23 @@ if ($filterClauses.Count -gt 0)
     $dotnetArgs += @('--filter', ($filterClauses -join '&'))
 }
 
+# Restore once, up front, so the subsequent `dotnet test --no-restore` build works from a
+# deterministic project.assets.json. Skipping this (relying on whatever restore happened to run
+# last) is what allowed a parallel --no-restore build to intermittently drop a configuration-
+# conditional PackageReference and silently skip a whole test project (see #1050). When -NoBuild
+# is set the projects are already built, so no restore is needed.
+if (-not $NoBuild)
+{
+    $restoreOutput = & dotnet restore $solutionPath --nologo 2>&1
+    if ($LASTEXITCODE -ne 0)
+    {
+        $restoreOutput | ForEach-Object { $_.ToString() } | Set-Content -Path $TestResultsPath -Encoding utf8
+        Write-Host 'FAIL: dotnet restore failed — see test-results.log'
+        $restoreOutput | ForEach-Object { Write-Host $_ }
+        exit 1
+    }
+}
+
 $runStart = Get-Date
 $rawOutput = & dotnet @dotnetArgs 2>&1
 $dotnetExitCode = $LASTEXITCODE
@@ -118,6 +135,19 @@ $totalExecuted = 0
 $totalPassed = 0
 $totalFailed = 0
 $benignAbortsDetected = $false
+
+# Detect projects that failed to BUILD. Under `dotnet test --no-restore`, a project that fails
+# to compile produces no TRX and its entire test assembly is silently skipped while dotnet still
+# exits non-zero. Surface this as a distinct, loud failure (rather than a generic "unexpected exit
+# code") so a build-time skip can never be mistaken for — or mask — a normal test result (#1050).
+$buildErrorLines = $rawOutput |
+    ForEach-Object { $_.ToString() } |
+    Where-Object { $_ -match ': error ' -or $_ -match 'Build FAILED' }
+if ($buildErrorLines)
+{
+    $errorBlock = ($buildErrorLines | Select-Object -First 30) -join "`n  "
+    $failures += "FAIL: BUILD FAILED — one or more projects did not compile; a test project may have been silently skipped:`n  $errorBlock"
+}
 
 # Check if any TRX files were produced
 if (-not $trxFiles -or $trxFiles.Count -eq 0)
