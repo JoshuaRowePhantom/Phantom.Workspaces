@@ -28,6 +28,41 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("e.preventDefault()", html, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ChatOutputShellHtml_DetailsGutterComponent_IsRemoved()
+    {
+        // #1038: the "..." raw-details gutter button and its modal must be removed entirely.
+        var html = ReadShellHtml();
+
+        Assert.DoesNotContain("DetailsGutter", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("details-gutter-btn", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-details-dialog", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-details-content", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("raw-details-close", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_CopyAndInspectGutters_AreRetained()
+    {
+        // #1038 regression guard: removing "..." must not remove the copy or inspect gutters.
+        var html = ReadShellHtml();
+
+        Assert.Contains("CopyGutter.init(document);", html, StringComparison.Ordinal);
+        Assert.Contains("InspectGutter.init(document);", html, StringComparison.Ordinal);
+        Assert.Contains("inspect-gutter-btn", html, StringComparison.Ordinal);
+        // The inspect gutter still relies on the co-located data-details-target attribute.
+        Assert.Contains("data-details-target", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_DetailsGutterInit_IsNotInvoked()
+    {
+        // #1038: the bootstrap must no longer call DetailsGutter.init.
+        var html = ReadShellHtml();
+
+        Assert.DoesNotContain("DetailsGutter.init", html, StringComparison.Ordinal);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_RaisesUrlNavigationRequested()
     {

@@ -290,6 +290,78 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
         });
 
+    [Fact]
+    public Task DetailsGutter_BlockWithDataDetailsTarget_DoesNotInjectDotsButton()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithDetailsTarget("dg-0", "raw json")));
+
+                var present = await EvalAsync(
+                    web,
+                    "document.querySelector('.details-gutter-btn') !== null");
+                Assert.Contains("false", present, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task DetailsGutter_NoRawDetailsDialogElementExists()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithDetailsTarget("dg-1", "raw json")));
+
+                var dialogPresent = await EvalAsync(
+                    web,
+                    "document.querySelector('#raw-details-dialog') !== null");
+                Assert.Contains("false", dialogPresent, StringComparison.Ordinal);
+
+                var gutterDefined = await EvalAsync(web, "typeof DetailsGutter");
+                Assert.Equal("\"undefined\"", gutterDefined);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task InspectGutter_BlockWithDataDetailsTarget_StillInjectsInfoButton()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithDetailsTarget("dg-2", "raw json")));
+
+                var present = await EvalAsync(
+                    web,
+                    "document.querySelector('#dg-2-c0 .inspect-gutter-btn') !== null");
+                Assert.Contains("true", present, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static async Task<(ControllableWebViewControl Web, Window Window)> ShowReadyBrowserAsync()
     {
         var web = new ControllableWebViewControl();
@@ -327,6 +399,13 @@ public sealed class ChatOutputBrowserIntegrationTests
             + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
             + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
             + $"<div class=\"chat-content chat-text\" data-copy-target id=\"{id}-c0\">{text}</div>"
+            + "</div></div>";
+
+    private static string MessageWithDetailsTarget(string id, string json)
+        => $"<div class=\"chat-message\" id=\"{id}\">"
+            + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
+            + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
+            + $"<div class=\"chat-content chat-text\" data-copy-target data-details-target=\"{json}\" data-inspect-target id=\"{id}-c0\">{json}</div>"
             + "</div></div>";
 
     private static string MessageWithTimestamp(string id, string utcIso)
