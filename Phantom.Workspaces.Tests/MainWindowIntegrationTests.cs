@@ -12,6 +12,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -34,6 +35,24 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowIntegrationTests
 {
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task TrustedExecutor_Production_UsesTransportFactoryRegistry()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        // The production executor selector's remote executor is produced through the transport layer
+        // (TransportTrustedExecutor over ITransportFactoryRegistry), not CreateSelector(reverseExecutionRegistry).
+        Assert.NotNull(viewModel.TransportComposition);
+        Assert.IsType<Phantom.Workspaces.Llm.Core.Transport.TransportTrustedExecutor>(
+            viewModel.ProductionRemoteExecutor);
+
+        using var localDescriptor = JsonDocument.Parse("""{"type":"local"}""");
+        await using var transport = await viewModel.TransportComposition!.TransportFactoryRegistry
+            .ConnectToAsync(localDescriptor.RootElement, CancellationToken.None);
+        Assert.NotNull(transport);
+    }
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task ThemeResources_UseFontFamilyType()
     {

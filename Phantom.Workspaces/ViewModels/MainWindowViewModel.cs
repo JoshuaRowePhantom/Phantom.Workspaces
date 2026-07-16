@@ -43,6 +43,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly WorkspacesConfiguration? configuration;
     private WorkspacesWebHost? webHost;
     private Services.WorkspacesTransportComposition? transportComposition;
+    private readonly Trust.DeferredTrustedExecutorSelector trustedExecutorSelector;
     private Services.DevTunnel.IDevTunnelHostService? devTunnelHostService;
     private Task? devTunnelHostStartTask;
     private EntityBroker? entityBroker;
@@ -122,7 +123,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
             persistenceStoreCache: services.AgentPersistenceStoreCache);
-        var trustedExecutorSelector = Llm.Trust.TrustedExecutorComposition.CreateSelector(this.reverseExecutionRegistry);
+        var trustedExecutorSelector = new Trust.DeferredTrustedExecutorSelector();
+        this.trustedExecutorSelector = trustedExecutorSelector;
         this.openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext, trustedExecutorSelector, services.RunningAgentChats);
         this.shortcutManager.AddShortcutHandler(new OpenAgentDefinitionShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
@@ -188,6 +190,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     public RepositorySource RepositorySource { get; }
+
+    /// <summary>The transport composition built during initialization (null before init / without configuration).</summary>
+    internal Services.WorkspacesTransportComposition? TransportComposition => this.transportComposition;
+
+    /// <summary>The transport-backed executor the production selector uses for non-local targets.</summary>
+    internal Llm.Trust.ITrustedExecutor? ProductionRemoteExecutor => this.trustedExecutorSelector.RemoteExecutor;
 
     public ObservableCollection<ViewDefinitionViewModel> TopLevelViews { get; }
 
@@ -745,6 +753,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession);
         this.transportComposition = composition;
+        this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
+        await composition.StartAsync();
         this.webHost = new WorkspacesWebHost(reverseExecutionRegistry);
         this.ConnectionStatus = new ConnectionStatusViewModel(
             composition.ConnectionStatusRegistry,
