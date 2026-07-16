@@ -169,22 +169,20 @@
                     </StackPanel>
                 </Border>
 
-                <ScrollViewer Grid.Row="1"
-                              HorizontalAlignment="Stretch"
-                              HorizontalScrollBarVisibility="Disabled"
-                              VerticalScrollBarVisibility="Visible"
-                              AllowAutoHide="False">
-                    <TreeView Classes="entity-card-tree entity-card-tree-entity"
-                              HorizontalAlignment="Stretch"
-                              ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
-                        <TreeView.ItemTemplate>
-                            <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
-                                              ItemsSource="{Binding Children}">
-                                <ContentControl Content="{Binding EntityCardNode}" />
-                            </TreeDataTemplate>
-                        </TreeView.ItemTemplate>
-                    </TreeView>
-                </ScrollViewer>
+                <!-- Issue #1064: no surrounding ScrollViewer; the entity-card-tree two-regime
+                     wrapper makes the tree's own inner scroller the single scroller (vertical
+                     scroll plus below-minimum horizontal scroll), and wraps content to the viewport. -->
+                <TreeView Grid.Row="1"
+                          Classes="entity-card-tree entity-card-tree-entity"
+                          HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
+                    <TreeView.ItemTemplate>
+                        <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
+                                          ItemsSource="{Binding Children}">
+                            <ContentControl Content="{Binding EntityCardNode}" />
+                        </TreeDataTemplate>
+                    </TreeView.ItemTemplate>
+                </TreeView>
             </Grid>
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />

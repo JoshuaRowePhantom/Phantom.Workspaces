@@ -98,7 +98,7 @@
 
     <DataTemplate DataType="vm:EntityReferenceFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
-              ColumnDefinitions="200,*"
+              ColumnDefinitions="Auto,*"
               RowDefinitions="Auto,Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <!-- Read mode: navigable link to the referenced entity (resolved display name). -->
@@ -135,7 +135,7 @@
 
     <DataTemplate DataType="vm:EntityListFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
-              ColumnDefinitions="200,*"
+              ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <ItemsControl Grid.Column="1"
@@ -156,7 +156,7 @@
 
     <DataTemplate DataType="vm:StringFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
-              ColumnDefinitions="200,*"
+              ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <TextBlock Grid.Column="1"
@@ -172,7 +172,7 @@
 
     <DataTemplate DataType="vm:BooleanToggleFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
-              ColumnDefinitions="200,*"
+              ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <TextBlock Grid.Column="1"
@@ -190,7 +190,7 @@
 
     <DataTemplate DataType="vm:LocalStringFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
-              ColumnDefinitions="200,*,Auto"
+              ColumnDefinitions="Auto,*,Auto"
               RowDefinitions="Auto,Auto">
             <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <TextBlock Grid.Column="1"
@@ -352,7 +352,7 @@
             <ContentControl Content="{Binding ActiveEditor}"
                             IsVisible="{Binding ShowInlineReadMode}" />
             <Grid Classes="workspace-field-row"
-                  ColumnDefinitions="200,*,Auto"
+                  ColumnDefinitions="Auto,*,Auto"
                   RowDefinitions="Auto,Auto"
                   IsVisible="{Binding ShowChrome}">
                 <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />

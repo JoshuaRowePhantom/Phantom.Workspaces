@@ -144,7 +144,9 @@ public sealed class MainWindowAxamlTests
             "ItemTemplate=\"{StaticResource AgentNavigationTreeDetailItemTemplate}\"",
             toolsControlContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        // Issue #1064: the tools-detail tree no longer sets inline ScrollViewer.* setters; it
+        // inherits the two-regime entity-card-tree wrapper (H=Auto + items-region cap).
+        Assert.DoesNotContain(
             "ScrollViewer.AllowAutoHide=\"False\"",
             toolsControlContent,
             StringComparison.Ordinal);
@@ -322,6 +324,59 @@ public sealed class MainWindowAxamlTests
         Assert.DoesNotContain(
             "<Setter Property=\"MaxWidth\" Value=\"760\" />",
             sharedStylesContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainWindowView_EntityPaneTree_HasNoSurroundingScrollViewer()
+    {
+        // Issue #1064: the entity-pane TreeView carries the two-regime entity-card-tree wrapper,
+        // so the legacy surrounding ScrollViewer (H=Disabled) is removed and the tree's own inner
+        // scroller is the single scroller.
+        var mainWindowContent = ReadMainAppFile("MainWindow.axaml");
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-entity\"",
+            mainWindowContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<ScrollViewer Grid.Row=\"1\"",
+            mainWindowContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "HorizontalScrollBarVisibility=\"Disabled\"",
+            mainWindowContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatToolsDetail_Tree_InheritsScrollWrapperInsteadOfDisablingHScroll()
+    {
+        // Issue #1064: the tools-detail tree no longer sets inline ScrollViewer.* setters; it
+        // inherits the two-regime entity-card-tree wrapper (gaining the below-minimum scrollbar).
+        var toolsDetailContent = ReadAxaml("AgentChatToolsDetailControl.axaml");
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-sticky\"",
+            toolsDetailContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ScrollViewer.HorizontalScrollBarVisibility=\"Disabled\"",
+            toolsDetailContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityBrowserView_BrowserTree_HasEntityCardTreeWrapperClass()
+    {
+        // Issue #1064: the entity-browser tree carries the entity-card-tree class and therefore
+        // inherits the two-regime wrapper. (The surrounding ScrollViewer is retained here to keep
+        // its StickyScroll behavior; the inner wrapper alone fixes the horizontal overflow.)
+        var browserContent = ReadMainAppFile(Path.Combine("Templates", "EntityBrowserWorkspaceTabView.axaml"));
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-entity\"",
+            browserContent,
             StringComparison.Ordinal);
     }
 

@@ -714,6 +714,74 @@ public sealed class SharedStylesTests
     }
 
     [Fact]
+    public void EntityCardTree_Class_SetsAutoHScrollAndItemsPanelWrapper()
+    {
+        // Issue #1064: the consolidated TreeView.entity-card-tree style keeps H=Auto (so a
+        // horizontal scrollbar remains available below the minimum) and provides a single
+        // items-region wrapper instead of leaving the inner scroller at Avalonia's default.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree");
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.HorizontalScrollBarVisibility\" Value=\"Auto\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.VerticalScrollBarVisibility\" Value=\"Auto\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "<Setter Property=\"ScrollViewer.AllowAutoHide\" Value=\"False\" />",
+            treeViewStyle,
+            StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"ItemsPanel\">", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains("<ItemsPanelTemplate>", treeViewStyle, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTree_ItemsWrapper_HasMinWidthAndViewportMaxWidth()
+    {
+        // Issue #1064: two-regime wrapper — floors at MinWidth="160" (below-min scroll) and
+        // caps at MaxWidth bound to the inner scroller viewport (wrap + no overflow when wide).
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree");
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains(
+            "MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"",
+            treeViewStyle,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_StillMatchesEntityCardTreeWrapper()
+    {
+        // Issue #1064 regression guard: #1049's entity-card-tree-view keeps its own equivalent
+        // two-regime wrapper so consolidating #1064 does not regress the sibling style.
+        var styles = ReadSharedStylesText();
+        var treeViewStyle = ExtractStyle(styles, "TreeView.entity-card-tree-view");
+        Assert.Contains("MinWidth=\"160\"", treeViewStyle, StringComparison.Ordinal);
+        Assert.Contains(
+            "MaxWidth=\"{Binding $parent[ScrollViewer].Viewport.Width}\"",
+            treeViewStyle,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkspaceFieldRow_LabelColumn_IsNotFixedTwoHundredWide()
+    {
+        // Issue #1064 secondary: the field-row grids no longer hard-code a fixed 200px label
+        // column, so at the narrow regime the value column keeps room and the path wraps.
+        var repositoryRoot = FindRepositoryRoot();
+        var dataTemplatesPath = Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces",
+            "Templates",
+            "WorkspaceDataTemplates.axaml");
+        var dataTemplates = File.ReadAllText(dataTemplatesPath);
+        Assert.DoesNotContain("ColumnDefinitions=\"200,*\"", dataTemplates, StringComparison.Ordinal);
+        Assert.DoesNotContain("ColumnDefinitions=\"200,*,Auto\"", dataTemplates, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EntityCardTreeViewStyle_HorizontalScrollBar_OnlyWhenMinWidthHit_AndNotOverlapping()
     {
         var styles = ReadSharedStylesText();

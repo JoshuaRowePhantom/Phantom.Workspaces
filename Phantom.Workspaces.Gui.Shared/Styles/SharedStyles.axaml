@@ -262,6 +262,26 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- Issue #1064: any legacy `entity-card-tree` respects the card's hard minimum widths AND
+         stays reachable, mirroring the #1049 `entity-card-tree-view` wrapper. H=Auto keeps a
+         horizontal scrollbar available; a single items-region wrapper caps content to the inner
+         scroller's viewport (so it wraps and never overflows when wide) but floors at MinWidth=160
+         (so a horizontal scrollbar appears and the minimum-width card is scrollable when the
+         viewport is narrower than the minimum). The tree's own inner scroller supplies vertical
+         scrolling; no surrounding ScrollViewer is required. -->
+    <Style Selector="TreeView.entity-card-tree">
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate>
+                <StackPanel Orientation="Vertical"
+                            HorizontalAlignment="Stretch"
+                            MinWidth="160"
+                            MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+            </ItemsPanelTemplate>
+        </Setter>
+    </Style>
     <Style Selector="TreeView.entity-card-tree-view">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
