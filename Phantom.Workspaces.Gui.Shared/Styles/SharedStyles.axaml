@@ -218,9 +218,6 @@
     <Style Selector="Border.entity-card-shell-border.has-children">
         <Setter Property="CornerRadius" Value="6,6,0,0" />
     </Style>
-    <Style Selector="Border.entity-card-shell-border:pointerover">
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
-    </Style>
     <Style Selector="Button.entity-card-shell-footer">
         <Setter Property="Padding" Value="0,2" />
         <Setter Property="FontSize" Value="8" />
@@ -232,20 +229,17 @@
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.Border}" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
     </Style>
-    <Style Selector="Button.entity-card-shell-footer:pointerover">
-        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
-    </Style>
 
     <!-- Issue #1029: shared entity-card TreeViewItem template built on the reusable shell.
          Applies to both the legacy `entity-card-tree` class and the named `entity-card-tree-view`
          style so every entity tree gets the same chrome while EntityCardControl stays content-only. -->
     <Style Selector="TreeView.entity-card-tree TreeViewItem, TreeView.entity-card-tree-view TreeViewItem">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-        <Setter Property="MinWidth" Value="240" />
+        <Setter Property="MinWidth" Value="160" />
         <Setter Property="Template">
             <ControlTemplate>
                 <Grid RowDefinitions="Auto,*"
-                      ColumnDefinitions="Auto,*"
+                      ColumnDefinitions="20,*"
                       HorizontalAlignment="Stretch">
                     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
                                 Classes="entity-card-tree-item"
@@ -279,16 +273,36 @@
     <Style Selector="TreeView.entity-card-tree-view TreeViewItem:selected Border.entity-card-shell-border">
         <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
     </Style>
+    <!-- Issue #1045: recolour the upper shell border and the footer expander as one composite,
+         driven by the TreeViewItem container state so there is no seam between them. -->
+    <Style Selector="TreeView.entity-card-tree TreeViewItem:pointerover Border.entity-card-shell-border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem:pointerover Button.entity-card-shell-footer">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree-view TreeViewItem:pointerover Border.entity-card-shell-border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree-view TreeViewItem:pointerover Button.entity-card-shell-footer">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.ActiveBorder}" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree TreeViewItem:selected Button.entity-card-shell-footer">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
+    <Style Selector="TreeView.entity-card-tree-view TreeViewItem:selected Button.entity-card-shell-footer">
+        <Setter Property="BorderBrush" Value="{DynamicResource Theme.Surface.EntityCard.SelectedBorder}" />
+    </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer">
         <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
     </Style>
-    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky ContentPresenter.branch-header">
+    <Style Selector="TreeView.entity-card-tree.entity-card-tree-sticky StackPanel.entity-card-tree-item">
         <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
     </Style>
     <Style Selector="TreeView.entity-card-tree-view.entity-card-tree-sticky ScrollViewer">
         <Setter Property="controls:StickyScroll.IsEnabled" Value="True"/>
     </Style>
-    <Style Selector="TreeView.entity-card-tree-view.entity-card-tree-sticky ContentPresenter.branch-header">
+    <Style Selector="TreeView.entity-card-tree-view.entity-card-tree-sticky StackPanel.entity-card-tree-item">
         <Setter Property="controls:TreeSticky.AutoRowLevel" Value="True"/>
     </Style>
 
@@ -707,12 +721,12 @@
     </Style>
     <Style Selector="TextBlock.workspace-field-label">
         <Setter Property="Margin" Value="0,4,8,0" />
-        <Setter Property="MinWidth" Value="100" />
+        <Setter Property="MinWidth" Value="67" />
     </Style>
     <Style Selector="TextBox.workspace-field-value">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="TextWrapping" Value="Wrap" />
-        <Setter Property="MinWidth" Value="100" />
+        <Setter Property="MinWidth" Value="67" />
     </Style>
     <Style Selector="TextBlock.workspace-field-read-value">
         <Setter Property="HorizontalAlignment" Value="Stretch" />

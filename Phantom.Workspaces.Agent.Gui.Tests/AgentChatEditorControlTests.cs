@@ -281,6 +281,86 @@ public sealed class AgentChatEditorControlTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AgentChatEditor_NavigationTree_DoesNotDuplicateScrollViewerSettings()
+    {
+        // Issue #1045: ScrollViewer config is single-sourced from the shared entity-card-tree-view
+        // style; the NavigationTree must not redeclare it inline.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var treeStart = axamlContent.IndexOf("x:Name=\"NavigationTree\"", StringComparison.Ordinal);
+        Assert.True(treeStart >= 0);
+        var treeEnd = axamlContent.IndexOf(">", treeStart, StringComparison.Ordinal);
+        var navigationTree = axamlContent[treeStart..treeEnd];
+
+        Assert.DoesNotContain("ScrollViewer.HorizontalScrollBarVisibility", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("ScrollViewer.VerticalScrollBarVisibility", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("ScrollViewer.AllowAutoHide", navigationTree, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditor_NavigationTree_MinWidthIsReduced()
+    {
+        // Issue #1045: the NavigationTree MinWidth drops to 2/3 (240 -> 160).
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        var treeStart = axamlContent.IndexOf("x:Name=\"NavigationTree\"", StringComparison.Ordinal);
+        Assert.True(treeStart >= 0);
+        var treeEnd = axamlContent.IndexOf(">", treeStart, StringComparison.Ordinal);
+        var navigationTree = axamlContent[treeStart..treeEnd];
+
+        Assert.Contains("MinWidth=\"160\"", navigationTree, StringComparison.Ordinal);
+        Assert.DoesNotContain("MinWidth=\"240\"", navigationTree, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentNavigationHeaderTemplate_SummaryTextBlock_WrapsText()
+    {
+        // Issue #1045: the header/tool summary TextBlocks must wrap so long descriptions (e.g. the
+        // "github" MCP server description) no longer clip off the right edge.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+
+        var toolHeader = ExtractTemplate(axamlContent, "AgentToolHeaderTemplate");
+        var toolSummary = ExtractSummaryTextBlock(toolHeader);
+        Assert.Contains("TextWrapping=\"Wrap\"", toolSummary, StringComparison.Ordinal);
+
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+        var navSummary = ExtractSummaryTextBlock(navHeader);
+        Assert.Contains("TextWrapping=\"Wrap\"", navSummary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentNavigationHeaderTemplate_HeaderContent_StretchesToAvailableWidth()
+    {
+        // Issue #1045: the header content must stretch to the available tree width so its text wraps
+        // rather than overflowing.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", navHeader, StringComparison.Ordinal);
+
+        var toolHeader = ExtractTemplate(axamlContent, "AgentToolHeaderTemplate");
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", toolHeader, StringComparison.Ordinal);
+    }
+
+    private static string ExtractTemplate(string axamlContent, string templateKey)
+    {
+        var start = axamlContent.IndexOf($"x:Key=\"{templateKey}\"", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected template '{templateKey}' to exist.");
+        var end = axamlContent.IndexOf("</DataTemplate>", start, StringComparison.Ordinal);
+        Assert.True(end > start, $"Expected template '{templateKey}' to be closed.");
+        return axamlContent[start..end];
+    }
+
+    private static string ExtractSummaryTextBlock(string templateXaml)
+    {
+        var start = templateXaml.IndexOf("Text=\"{Binding Summary}\"", StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected a Summary TextBlock in the template.");
+        var end = templateXaml.IndexOf("/>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Expected the Summary TextBlock to be closed.");
+        return templateXaml[start..end];
+    }
+
     private static string ReadAxaml(string fileName)
     {
         var repositoryRoot = FindRepositoryRoot();

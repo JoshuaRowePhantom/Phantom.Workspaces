@@ -21,17 +21,20 @@
     <DataTemplate x:Key="AgentToolHeaderTemplate"
                   DataType="vm:AgentChatToolViewModel">
         <Grid ColumnDefinitions="Auto,*"
-              ColumnSpacing="6">
+              ColumnSpacing="6"
+              HorizontalAlignment="Stretch">
             <CheckBox IsChecked="{Binding IsEnabled, Mode=OneWay}"
                       Command="{Binding ToggleEnabledCommand}"
                       CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}"
                       VerticalAlignment="Center"/>
             <StackPanel Grid.Column="1"
+                        HorizontalAlignment="Stretch"
                         Spacing="2">
                 <TextBlock Text="{Binding Name}"
                            Classes="agent-tool-node-title"/>
                 <TextBlock Text="{Binding Summary}"
-                           Classes="muted"/>
+                           Classes="muted"
+                           TextWrapping="Wrap"/>
             </StackPanel>
         </Grid>
     </DataTemplate>
@@ -63,11 +66,13 @@
 
     <DataTemplate x:Key="AgentNavigationHeaderTemplate"
                   DataType="vm:AgentEditorNavigationItemViewModel">
-        <StackPanel>
+        <StackPanel HorizontalAlignment="Stretch">
             <ContentControl IsVisible="{Binding HasTool}"
+                            HorizontalAlignment="Stretch"
                             Content="{Binding Tool}"
                             ContentTemplate="{StaticResource AgentToolHeaderTemplate}"/>
             <StackPanel IsVisible="{Binding NotHasTool}"
+                        HorizontalAlignment="Stretch"
                         Spacing="2">
                 <StackPanel Orientation="Horizontal" Spacing="6">
                     <ProgressBar Classes="glyph-indicator pulsating-brain"
@@ -82,7 +87,8 @@
                                Classes="agent-tool-node-title"/>
                 </StackPanel>
                 <TextBlock Text="{Binding Summary}"
-                           Classes="muted"/>
+                           Classes="muted"
+                           TextWrapping="Wrap"/>
             </StackPanel>
         </StackPanel>
     </DataTemplate>

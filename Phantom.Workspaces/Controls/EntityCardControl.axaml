@@ -18,14 +18,14 @@
                             VerticalAlignment="Stretch" />
                     <StackPanel Grid.Column="1"
                                 Classes="workspace-entity-header-row"
-                                MinWidth="100"
+                                MinWidth="67"
                                 Margin="0,0,12,0">
                         <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
                         <TextBlock Text="{Binding EntityType}" Classes="muted" />
                     </StackPanel>
                     <WrapPanel Grid.Column="2"
                                Classes="workspace-entity-actions-row"
-                               MinWidth="100">
+                               MinWidth="67">
                         <ItemsControl IsVisible="{Binding HasBadges}"
                                       IsEnabled="{Binding AreBadgesEnabled}"
                                       ItemsSource="{Binding Badges.Badges}">

@@ -50,14 +50,6 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ScrollViewer.HorizontalScrollBarVisibility=\"Auto\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ScrollViewer.AllowAutoHide=\"False\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "x:Name=\"SplitterHost\"",
             editorControlContent,
             StringComparison.Ordinal);
@@ -338,8 +330,9 @@ public sealed class MainWindowAxamlTests
     {
         var sharedStylesContent = ReadSharedStylesFile();
 
+        // Issue #1045: the indent gutter is a fixed 20px column with the 2px rail centred within it.
         Assert.Contains(
-            "ColumnDefinitions=\"Auto,*\"",
+            "ColumnDefinitions=\"20,*\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -363,7 +356,7 @@ public sealed class MainWindowAxamlTests
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
-            "ColumnDefinitions=\"20,*\"",
+            "ColumnDefinitions=\"Auto,*\"",
             sharedStylesContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
