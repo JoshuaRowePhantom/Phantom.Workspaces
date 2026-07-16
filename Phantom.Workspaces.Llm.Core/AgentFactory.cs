@@ -133,6 +133,24 @@ public static class AgentFactory
     }
 
     /// <summary>
+    /// Extracts the agent's tools and tags each one with the <see cref="Core.Transport.ExecutorTarget"/>
+    /// execution class it must run in, based on the tool's <see cref="Tool.Kind"/>. Tagging happens at
+    /// construction time (from the static tool kind), not at call time: <c>mcp</c>/<c>function</c> tools
+    /// are tagged <see cref="Core.Transport.ExecutorTarget.AgentExecutor"/>, <c>workspace-gui</c>/
+    /// <c>workspace-entity</c> tools <see cref="Core.Transport.ExecutorTarget.GuiLocal"/>, and
+    /// <c>agent-session</c>/<c>workspace-agent-session</c> tools
+    /// <see cref="Core.Transport.ExecutorTarget.HostingInstance"/>.
+    /// </summary>
+    /// <param name="agent">The agent definition to extract and tag tools from.</param>
+    /// <returns>The agent's tools paired with their resolved execution class.</returns>
+    public static IReadOnlyList<(Tool Tool, Core.Transport.ExecutorTarget Target)> ExtractToolExecutorTargets(
+        AgentDefinition agent)
+    {
+        var tools = ExtractTools(agent) ?? [];
+        return [.. tools.Select(tool => (tool, Core.Transport.ExecutorTargetResolver.ForTool(tool)))];
+    }
+
+    /// <summary>
     /// Gets the system instructions from a PromptAgent.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract instructions from.</param>

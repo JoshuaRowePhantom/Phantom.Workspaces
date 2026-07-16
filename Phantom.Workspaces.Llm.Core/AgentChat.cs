@@ -2022,7 +2022,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             return new RuntimeContextProviderRegistration(
                 tool,
                 provider,
-                provider is null ? $"No tool provider is mapped for kind '{tool.Kind}'." : null);
+                provider is null ? $"No tool provider is mapped for kind '{tool.Kind}'." : null,
+                Core.Transport.ExecutorTargetResolver.ForTool(tool));
         }).ToArray();
 
         var registrations = await Task.WhenAll(providerTasks);
@@ -2161,7 +2162,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 isEnabled: true,
                 status: null);
 
-            var provider = new McpToolContextProvider(mcpTool, services?.LoggerFactory);
+            var provider = new McpToolContextProvider(
+                mcpTool,
+                services?.LoggerFactory,
+                Core.Transport.ExecutorTargetResolver.ForTool(mcpTool));
             this.RegisterOwnedResource(provider);
 
             var mcpTools = await AIContextProviderToolReader.GetToolsAsync(
@@ -2564,6 +2568,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private sealed record RuntimeContextProviderRegistration(
         CustomTool Tool,
         AIContextProvider? Provider,
-        string? ErrorMessage);
+        string? ErrorMessage,
+        Core.Transport.ExecutorTarget ExecutorTarget);
 
 }
