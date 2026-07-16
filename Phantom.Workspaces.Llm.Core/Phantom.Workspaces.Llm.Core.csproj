@@ -27,6 +27,7 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Interfaces\Phantom.Workspaces.Llm.Interfaces.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Transport\Phantom.Workspaces.Transport.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Remove="JsonSchemas\*.json" />
