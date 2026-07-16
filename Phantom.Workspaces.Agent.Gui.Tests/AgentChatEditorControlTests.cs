@@ -330,6 +330,57 @@ public sealed class AgentChatEditorControlTests
     }
 
     [Fact]
+    public void SubAgentItem_LastModified_RendersAgoLabel()
+    {
+        // Issue #1034: the sub-agent header template renders a relative "ago" label bound to
+        // LastUpdatedAt, positioned in the lower-right of the item.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+
+        Assert.Contains("controls:AgoTextBlock", navHeader, StringComparison.Ordinal);
+        Assert.Contains("Value=\"{Binding LastUpdatedAt}\"", navHeader, StringComparison.Ordinal);
+        Assert.Contains("VerticalAlignment=\"Bottom\"", navHeader, StringComparison.Ordinal);
+        Assert.Contains("HorizontalAlignment=\"Right\"", navHeader, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubAgentItem_WhenLastUpdatedNull_AgoLabelHidden()
+    {
+        // Issue #1034: the "ago" label is hidden when LastUpdatedAt is null.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+        var agoStart = navHeader.IndexOf("controls:AgoTextBlock", StringComparison.Ordinal);
+        Assert.True(agoStart >= 0);
+        var agoEnd = navHeader.IndexOf("/>", agoStart, StringComparison.Ordinal);
+        var agoLabel = navHeader[agoStart..agoEnd];
+
+        Assert.Contains(
+            "IsVisible=\"{Binding LastUpdatedAt, Converter={x:Static converters:NotNullConverter.Instance}}\"",
+            agoLabel,
+            StringComparison.Ordinal);
+    }
+
+    [PhantomAvaloniaFact]
+    public void SubAgentItem_AgoLabel_UsesDateTimeAgoConverter()
+    {
+        // Issue #1034: the "ago" label uses DateTimeAgoConverter (via the reusable AgoTextBlock
+        // control, whose Value setter delegates to DateTimeAgoConverter).
+        var converter = typeof(Phantom.Workspaces.Agent.Gui.Controls.AgoTextBlock)
+            .Assembly
+            .GetType("Phantom.Workspaces.Agent.Gui.Converters.DateTimeAgoConverter");
+        Assert.NotNull(converter);
+
+        var control = new Phantom.Workspaces.Agent.Gui.Controls.AgoTextBlock
+        {
+            Value = DateTime.UtcNow.AddHours(-2),
+        };
+
+        Assert.Equal("2 hours ago", control.Text);
+    }
+
+    [Fact]
     public void AgentNavigationHeaderTemplate_HeaderContent_StretchesToAvailableWidth()
     {
         // Issue #1045: the header content must stretch to the available tree width so its text wraps

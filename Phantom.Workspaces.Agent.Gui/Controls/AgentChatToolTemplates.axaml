@@ -1,6 +1,8 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
+                    xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
+                    xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
                     x:CompileBindings="False">
     <TreeDataTemplate x:Key="AgentNavigationTreeHeaderItemTemplate"
                       ItemsSource="{Binding Children}">
@@ -74,18 +76,32 @@
             <StackPanel IsVisible="{Binding NotHasTool}"
                         HorizontalAlignment="Stretch"
                         Spacing="2">
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <ProgressBar Classes="glyph-indicator pulsating-brain"
-                                 IsVisible="{Binding IsBrainVisible}"
-                                 IsIndeterminate="{Binding IsRunning}"
-                                 Opacity="{Binding StatusIconOpacity}"/>
-                    <ProgressBar Classes="running-indicator succeeded"
-                                 IsVisible="{Binding IsSucceeded}"/>
-                    <ProgressBar Classes="running-indicator failed"
-                                 IsVisible="{Binding IsFailed}"/>
-                    <TextBlock Text="{Binding Name}"
-                               Classes="agent-tool-node-title"/>
-                </StackPanel>
+                <Grid ColumnDefinitions="*,Auto"
+                      HorizontalAlignment="Stretch">
+                    <StackPanel Grid.Column="0"
+                                Orientation="Horizontal"
+                                Spacing="6">
+                        <ProgressBar Classes="glyph-indicator pulsating-brain"
+                                     IsVisible="{Binding IsBrainVisible}"
+                                     IsIndeterminate="{Binding IsRunning}"
+                                     Opacity="{Binding StatusIconOpacity}"/>
+                        <ProgressBar Classes="running-indicator succeeded"
+                                     IsVisible="{Binding IsSucceeded}"/>
+                        <ProgressBar Classes="running-indicator failed"
+                                     IsVisible="{Binding IsFailed}"/>
+                        <TextBlock Text="{Binding Name}"
+                                   Classes="agent-tool-node-title"/>
+                    </StackPanel>
+                    <!-- Issue #1034: sub-agent last-modified time as a relative "ago" label,
+                         positioned in the lower-right of the item. Hidden when LastUpdatedAt is null. -->
+                    <controls:AgoTextBlock Grid.Column="1"
+                                           Classes="muted"
+                                           VerticalAlignment="Bottom"
+                                           HorizontalAlignment="Right"
+                                           Margin="8,0,0,0"
+                                           Value="{Binding LastUpdatedAt}"
+                                           IsVisible="{Binding LastUpdatedAt, Converter={x:Static converters:NotNullConverter.Instance}}"/>
+                </Grid>
                 <TextBlock Text="{Binding Summary}"
                            Classes="muted"
                            TextWrapping="Wrap"/>
