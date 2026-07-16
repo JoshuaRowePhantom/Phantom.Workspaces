@@ -241,6 +241,20 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
+    public async Task SubAgentsNavItem_OnCreation_IsExpanded()
+    {
+        // Issue #1031: The Sub-agents nav item is expanded by default.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
+
+        Assert.True(subAgentsNav.IsExpanded);
+    }
+
+    [Fact]
     public async Task SubAgentNavItem_HasSubAgentsChild()
     {
         var chat = await CreateChatAsync();
@@ -418,8 +432,10 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task SubAgentsNavItem_AutoExpands_WhenFirstSubAgentAdded()
+    public async Task SubAgentsNavItem_StaysExpanded_WhenFirstSubAgentAdded()
     {
+        // Issue #1031: The Sub-agents node is expanded by default and stays expanded
+        // when the first sub-agent is added.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
@@ -427,7 +443,7 @@ public sealed class AgentViewModelEditorTreeTests
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
 
-        Assert.False(subAgentsNav.IsExpanded);
+        Assert.True(subAgentsNav.IsExpanded);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 

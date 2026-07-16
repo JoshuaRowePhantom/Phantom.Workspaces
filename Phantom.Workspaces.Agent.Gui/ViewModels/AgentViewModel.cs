@@ -115,7 +115,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             "Sub-agents",
             null,
             this.subAgentsContainerDetail,
-            []);
+            [],
+            isExpanded: true);
 
         var root = new AgentEditorNavigationItemViewModel(
             "chat",
@@ -737,10 +738,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             }
 
             this.UpdateSubAgentsLabel();
-            if (this.Target.Count == 1)
-            {
-                this.subAgentsNavItem.IsExpanded = true;
-            }
         }
 
         protected override void OnRemoveAt(int index, AgentEditorNavigationItemViewModel target)
