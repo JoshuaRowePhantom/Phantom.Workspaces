@@ -75,7 +75,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 }
                 else
                 {
-                    var effectiveServices = services ?? _services;
+                    var effectiveServices = WithSelfAsFactory(services ?? _services);
 
                     if (definition is not null)
                     {
@@ -151,13 +151,14 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 }
                 else
                 {
+                    var effectiveServices = WithSelfAsFactory(_services);
                     var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
                     {
                         AgentDefinition = null,
                         AgentSessionId = sessionId.Value,
-                        AgentServices = _services,
+                        AgentServices = effectiveServices,
                         ConfiguredStore = _store,
-                        ClientOverride = _services.ChatClientOverride,
+                        ClientOverride = effectiveServices.ChatClientOverride,
                         ForegroundScheduler = _foregroundScheduler,
                         CancellationToken = ct,
                     }, ct);
@@ -209,7 +210,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 }
             }, ct);
 
-            var effectiveServices = services ?? _services;
+            var effectiveServices = WithSelfAsFactory(services ?? _services);
             var chat = await CreateChatOnForegroundAsync(new InternalCreateAgentChatRequest
             {
                 AgentDefinition = definition,
@@ -234,6 +235,15 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
 
     private RunningAgentChatLease MakeLease(AgentSessionId sessionId, AgentChat agentChat)
         => new RunningAgentChatLease(sessionId, agentChat, () => ReleaseAsync(sessionId));
+
+    // Every chat this factory creates must be able to reach back to the factory so restore
+    // (AgentChat.RestoreSubAgentsAsync) and live sub-agent creation work. The factory *is* the
+    // IRunningAgentChatFactory, so it injects itself into the forwarded services. An
+    // intentionally-supplied factory is preserved. See issue #1036.
+    private AgentServices WithSelfAsFactory(AgentServices baseServices)
+        => baseServices.RunningAgentChatFactory is null
+            ? baseServices with { RunningAgentChatFactory = this }
+            : baseServices;
 
     private async ValueTask ReleaseAsync(AgentSessionId sessionId)
     {
