@@ -224,6 +224,28 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItems_WithNullEntry_DoesNotThrowAndRendersRealItems()
+    {
+        var realItem = new AgentChatRunningItem();
+        realItem.Items.Add(TextMessage(ChatRole.Assistant, "real running"));
+
+        // A null entry in the running-items source collection previously crashed the renderer with
+        // a NullReferenceException in RunningChatItemHtmlModel.Activate().
+        var running = new ObservableCollection<AgentChatRunningItem> { null!, realItem };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+
+        await model.HistoryLoaded;
+
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains(">real running<"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task HtmlEscape_EscapesMarkupInMessageText()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>

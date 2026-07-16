@@ -1085,7 +1085,7 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
 
     public bool IsInserted { get; set; }
 
-    public AgentChatRunningItem Source { get; private set; }
+    public AgentChatRunningItem? Source { get; private set; }
 
     /// <summary>The empty container element; messages are appended into it once it is activated.</summary>
     public string BuildHtml() => ChatOutputHtmlRenderer.RenderRunningItemContainer(this.ElementId);
@@ -1096,6 +1096,11 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
     /// </summary>
     public void Activate()
     {
+        if (this.Source is null)
+        {
+            return;
+        }
+
         this.transformer = new ChatMessageHtmlTransformer(
             this.Source.Items,
             this.messageSlots,
@@ -1110,12 +1115,12 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
             preloadedCount: 0);
     }
 
-    public void Update(AgentChatRunningItem source)
+    public void Update(AgentChatRunningItem? source)
     {
-        var previousItems = this.Source.Items;
+        var previousItems = this.Source?.Items;
         this.Source = source;
 
-        if (ReferenceEquals(previousItems, source.Items) || this.transformer is null)
+        if (ReferenceEquals(previousItems, source?.Items) || this.transformer is null)
         {
             return;
         }
@@ -1824,6 +1829,11 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
         foreach (var runningItem in this.runningItems)
         {
+            if (runningItem is null)
+            {
+                continue;
+            }
+
             if (this.runningItemHandlers.ContainsKey(runningItem))
             {
                 continue;
