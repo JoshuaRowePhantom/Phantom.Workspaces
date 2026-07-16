@@ -23,7 +23,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentChatConversationDetailViewModel conversationDetail;
     private readonly AgentChatDetailsViewModel chatDetailsDetail;
     private readonly AgentChatToolsDetailViewModel toolsDetail;
-    private readonly AgentChatPlaceholderDetailViewModel backgroundTasksDetail;
     private readonly SubAgentBrowserViewModel subAgentsBrowserDetail;
     private readonly SubAgentsContainerViewModel subAgentsContainerDetail;
     private readonly List<AgentViewModel> subAgentViewModels = [];
@@ -32,7 +31,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
-    private readonly AgentEditorNavigationItemViewModel backgroundTasksNavItem;
     private readonly AgentEditorNavigationItemViewModel subAgentsNavItem;
     private readonly ToolsCollectionTransformer toolsTransformer;
     private readonly SubAgentsCollectionTransformer subAgentsTransformer;
@@ -55,9 +53,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
         this.chatDetailsDetail = new AgentChatDetailsViewModel(this);
         this.toolsDetail = new AgentChatToolsDetailViewModel();
-        this.backgroundTasksDetail = new AgentChatPlaceholderDetailViewModel(
-            "Background tasks",
-            "Background task model coming later.");
         this.subAgentsBrowserDetail = new SubAgentBrowserViewModel(agentChat.SubAgents);
         this.subAgentsContainerDetail = new SubAgentsContainerViewModel(this.subAgentsBrowserDetail);
         this.SubAgentDisplays = new ReadOnlyObservableCollection<IRunningSubAgentDisplay>(this.subAgentDisplayItems);
@@ -90,7 +85,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.detailContentSlots.Add(new DetailContentSlot(this.conversationDetail) { IsVisible = true });
         this.detailContentSlots.Add(new DetailContentSlot(this.chatDetailsDetail));
         this.detailContentSlots.Add(new DetailContentSlot(this.toolsDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.backgroundTasksDetail));
         this.detailContentSlots.Add(new DetailContentSlot(this.subAgentsContainerDetail));
         this.DetailContentSlots = new ReadOnlyObservableCollection<DetailContentSlot>(this.detailContentSlots);
 
@@ -114,15 +108,6 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             [],
             isExpanded: true);
 
-        this.backgroundTasksNavItem = new AgentEditorNavigationItemViewModel(
-            "chat-background-tasks",
-            "Background tasks",
-            null,
-            "Planned background work",
-            null,
-            this.backgroundTasksDetail,
-            []);
-
         this.subAgentsNavItem = new AgentEditorNavigationItemViewModel(
             "chat-sub-agents",
             "Sub-agents",
@@ -139,7 +124,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             null,
             null,
             this.conversationDetail,
-            [this.chatDetailsNavItem, this.toolsNavItem, this.backgroundTasksNavItem, this.subAgentsNavItem],
+            [this.chatDetailsNavItem, this.toolsNavItem, this.subAgentsNavItem],
             isExpanded: false);
 
         this.EditorItems.Add(root);
