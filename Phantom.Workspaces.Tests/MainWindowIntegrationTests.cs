@@ -5557,7 +5557,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task SplitWorkspace_TwoPanesHorizontal_LeftPaneTabsNumberedFirst()
+    public async Task SplitWorkspace_TwoPanesHorizontal_EachWorkspaceNumberedFromOne()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -5627,10 +5627,21 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("split-h-b1", docsB[0].Id);
         Assert.Equal("split-h-b2", docsB[1].Id);
         
+        // Alt+N numbering is scoped to the active workspace. Pane B was selected last,
+        // so only its tabs are numbered (from 1); pane A's labels are cleared to null.
+        Assert.Null(docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("1", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+
+        // Switching to pane A renumbers it from 1 and clears pane B.
+        viewModel.SelectedWorkspacePane = paneA;
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
         Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
         Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", docsB[0].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("4", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -5704,10 +5715,21 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("split-v-b1", docsB[0].Id);
         Assert.Equal("split-v-b2", docsB[1].Id);
         
+        // Alt+N numbering is scoped to the active workspace. Pane B was selected last,
+        // so only its tabs are numbered (from 1); pane A's labels are cleared to null.
+        Assert.Null(docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("1", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+
+        // Switching to pane A renumbers it from 1 and clears pane B.
+        viewModel.SelectedWorkspacePane = paneA;
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
         Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
         Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", docsB[0].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("4", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -5792,13 +5814,22 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("split-3-b1", docB.Id);
         Assert.Equal("split-3-c1", docC.Id);
         
+        // Alt+N numbering is scoped to the active workspace. Pane C was selected last,
+        // so only its single tab is numbered; panes A and B are cleared.
+        Assert.Null(docA.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docB.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("1", docC.EffectiveTabHeader.AltShortcutLabel);
+
+        // Switching to pane A numbers it and clears the others.
+        viewModel.SelectedWorkspacePane = paneA;
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
         Assert.Equal("1", docA.EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("2", docB.EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", docC.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docB.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docC.EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
-    public async Task SplitWorkspace_DragReorderInSecondaryPane_GlobalLabelsCorrect()
+    public async Task SplitWorkspace_DragReorderInSecondaryPane_ScopedLabelsCorrect()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -5869,9 +5900,11 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("drag-sec-b2", docsB[0].Id);
         Assert.Equal("drag-sec-b1", docsB[1].Id);
         
-        Assert.Equal("1", docA1.EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("2", docsB[0].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", docsB[1].EffectiveTabHeader.AltShortcutLabel);
+        // Alt+N numbering is scoped to the active workspace (pane B). Pane A's tab is
+        // cleared; pane B's reordered tabs are renumbered from 1.
+        Assert.Null(docA1.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("1", docsB[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -5938,9 +5971,11 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("new-sec-a2", docsA[1].Id);
         Assert.Equal("new-sec-b1", docB1.Id);
         
-        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", docB1.EffectiveTabHeader.AltShortcutLabel);
+        // Alt+N numbering is scoped to the active workspace (pane B). Pane A's tabs are
+        // cleared; pane B's newly opened tab is numbered from 1.
+        Assert.Null(docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("1", docB1.EffectiveTabHeader.AltShortcutLabel);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
@@ -6011,8 +6046,142 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("close-prim-a2", docA2.Id);
         Assert.Equal("close-prim-b1", docB1.Id);
         
+        // Alt+N numbering is scoped to the active workspace (pane A, re-selected before the
+        // close). Pane A's remaining tab is numbered from 1; pane B's tab is cleared.
         Assert.Equal("1", docA2.EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("2", docB1.EffectiveTabHeader.AltShortcutLabel);
+        Assert.Null(docB1.EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task GoToTabAtIndex_TwoWorkspacesOpen_ActivatesActiveWorkspaceTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab070001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab070002-0000-4000-8000-000000000002");
+
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab070001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-scope-left"]],
+              "display-name": { "default": "Goto Scope Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab070002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "goto-scope-right"]],
+              "display-name": { "default": "Goto Scope Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "goto-scope-a1", Title = "A1" };
+        var tabA2 = new WebViewModel("https://a2.example.com") { Id = "goto-scope-a2", Title = "A2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "goto-scope-b1", Title = "B1" };
+        var tabB2 = new WebViewModel("https://b2.example.com") { Id = "goto-scope-b2", Title = "B2" };
+        await viewModel.OpenTabAsync(tabB1);
+        await viewModel.OpenTabAsync(tabB2);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        // Workspace B is active. Alt+2 must select B's second tab (scoped), not a global
+        // fourth tab.
+        viewModel.GoToTabAtIndexCommand.Execute("1");
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockB);
+        Assert.Equal("goto-scope-b2", (dockB!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task PropagateBadgeVisibility_AltOnly_ShowsBadgesOnlyOnActiveWorkspace()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ab080001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ab080002-0000-4000-8000-000000000002");
+
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ab080001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-scope-left"]],
+              "display-name": { "default": "Badge Scope Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ab080002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "badge-scope-right"]],
+              "display-name": { "default": "Badge Scope Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "badge-scope-a1", Title = "A1" };
+        await viewModel.OpenTabAsync(tabA1);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "badge-scope-b1", Title = "B1" };
+        await viewModel.OpenTabAsync(tabB1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        viewModel.IsShiftHeld = false;
+        viewModel.IsAltHeld = true;
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        var docA1 = GetPaneDocuments(paneA, dockA!).Single();
+        var docB1 = GetPaneDocuments(paneB, dockB!).Single();
+
+        // Only the active workspace (pane B) shows content badges.
+        Assert.False(docA1.EffectiveTabHeader.IsShortcutBadgeVisible);
+        Assert.True(docB1.EffectiveTabHeader.IsShortcutBadgeVisible);
+
+        // Switching to pane A moves the badges there.
+        viewModel.SelectedWorkspacePane = paneA;
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        Assert.True(docA1.EffectiveTabHeader.IsShortcutBadgeVisible);
+        Assert.False(docB1.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]

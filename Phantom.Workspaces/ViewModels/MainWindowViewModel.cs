@@ -413,6 +413,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (this.SetProperty(ref this.selectedWorkspacePane, value))
             {
                 this.RaisePropertyChanged(nameof(this.ActiveAgentViewModel));
+
+                // Alt+N numbering is scoped to the active workspace, so switching
+                // workspaces must renumber the newly active pane from 1 (clearing the
+                // old one) and re-target which pane shows the content badges.
+                this.RefreshActiveWorkspaceAltShortcutLabels();
+                this.PropagateBadgeVisibility(this.isAltHeld, this.isShiftHeld);
             }
         }
     }
@@ -1751,7 +1757,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void OnGoToTabAtIndex(int index)
     {
-        var match = FindTabByAltShortcutIndex(this.ComputeGlobalTabOrder(), index);
+        var match = FindTabByAltShortcutIndex(this.ComputeActiveWorkspaceTabOrder(), index);
         if (match is null)
         {
             return;
@@ -2365,12 +2371,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         NotifyCollectionChangedEventHandler handler = (_, e) =>
         {
             this.SyncPaneTabsFromDockChange(workspacePane, documentDock, e);
-            this.RefreshGlobalAltShortcutLabels();
+            this.RefreshActiveWorkspaceAltShortcutLabels();
         };
         collection.CollectionChanged += handler;
         this.innerDockSubscriptions[workspacePane.Id] = handler;
 
-        this.RefreshGlobalAltShortcutLabels();
+        this.RefreshActiveWorkspaceAltShortcutLabels();
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
@@ -2681,8 +2687,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private void RefreshWorkspacePaneAltShortcutLabels()
         => RefreshWorkspacePaneAltShortcutLabels(this.WorkspacePanes, this.dockFactory.GetPaneDocument);
 
-    private void RefreshGlobalAltShortcutLabels()
-        => AssignGlobalAltShortcutLabels(this.ComputeGlobalTabOrder());
+    private void RefreshActiveWorkspaceAltShortcutLabels()
+    {
+        // Clear content-tab labels on every workspace first so stale badges from a
+        // previously-active workspace do not linger once numbering is scoped to the
+        // currently active workspace.
+        foreach (var pane in this.WorkspacePanes)
+        {
+            foreach (var tab in pane.Tabs)
+            {
+                if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
+                {
+                    doc.EffectiveTabHeader.AltShortcutLabel = null;
+                }
+            }
+        }
+
+        AssignGlobalAltShortcutLabels(this.ComputeActiveWorkspaceTabOrder());
+    }
 
     /// <summary>
     /// Assigns sequential Alt-shortcut badge labels (1–9, then 0) to the documents in the
@@ -2747,36 +2769,36 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return order;
     }
 
-    private List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> ComputeGlobalTabOrder()
+    /// <summary>
+    /// Computes the Alt+N tab order scoped to the currently active workspace only: its
+    /// content tabs in left-to-right <see cref="WorkspacePaneViewModel.Tabs"/> order. Content
+    /// tabs in other (non-active) workspaces are intentionally excluded so each workspace
+    /// restarts numbering at 1. Returns an empty order when no eligible workspace is active.
+    /// </summary>
+    private List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> ComputeActiveWorkspaceTabOrder()
     {
-        var activePanes = this.WorkspacePanes
-            .Where(p => !p.Id.StartsWith("loading-workspace:", StringComparison.Ordinal)
-                     && p.ContentLayout is not null)
-            .ToList();
+        var pane = this.selectedWorkspacePane;
+        if (pane?.ContentLayout is null
+            || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
+        {
+            return new();
+        }
 
-        var nonDefaultPanes = activePanes
-            .Where(p => !string.Equals(p.Id, "default-workspace", StringComparison.Ordinal))
-            .ToList();
-
-        // When only the placeholder default workspace is open, its tabs are the ones that
-        // receive badges; otherwise badges span the real (non-default) workspace panes.
-        var eligiblePanes = nonDefaultPanes.Count == 0 && activePanes.Count == 1
-            ? activePanes
-            : nonDefaultPanes;
-
-        return ComputeGlobalTabOrder(eligiblePanes, this.dockFactory.GetDocumentForTab);
+        return ComputeGlobalTabOrder([pane], this.dockFactory.GetDocumentForTab);
     }
 
     private void PropagateBadgeVisibility(bool isAltHeld, bool isShiftHeld)
     {
-        // Content tabs: badge visible when Alt held WITHOUT Shift.
+        // Content tabs: badge visible when Alt held WITHOUT Shift, and only on the
+        // currently active workspace (Alt+N numbering is scoped to that workspace).
         var contentBadge = isAltHeld && !isShiftHeld;
         foreach (var pane in this.WorkspacePanes)
         {
+            var isActive = ReferenceEquals(pane, this.selectedWorkspacePane);
             foreach (var tab in pane.Tabs)
             {
                 if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = contentBadge;
+                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = isActive && contentBadge;
             }
         }
 
