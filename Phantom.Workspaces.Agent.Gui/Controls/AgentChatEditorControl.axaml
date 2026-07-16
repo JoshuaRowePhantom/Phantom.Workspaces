@@ -240,13 +240,19 @@
     <Border Classes="agent-pane">
         <Grid x:Name="EditorGrid">
             <Grid.ColumnDefinitions>
+                <!-- Issue #1051: MinWidth=160 (was 0) so a drag can never collapse the tree pane
+                     into the native output surface; relaxed to 0 by SetTreeCollapsed for the
+                     intentional programmatic full-collapse. -->
                 <ColumnDefinition Width="280"
-                                  MinWidth="0"
+                                  MinWidth="160"
                                   MaxWidth="480"/>
                 <ColumnDefinition Width="24"
                                   MinWidth="24"
                                   MaxWidth="24"/>
-                <ColumnDefinition Width="*"/>
+                <!-- Issue #1051: MinWidth=240 so a drag can never squeeze the native HTML output
+                     pane to ~0 and hide the splitter behind the WebView airspace. -->
+                <ColumnDefinition Width="*"
+                                  MinWidth="240"/>
             </Grid.ColumnDefinitions>
             <TreeView x:Name="NavigationTree"
                       ItemsSource="{Binding EditorItems}"

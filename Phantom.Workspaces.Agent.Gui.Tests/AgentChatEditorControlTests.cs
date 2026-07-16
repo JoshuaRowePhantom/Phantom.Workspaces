@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Phantom.Workspaces.Agent.Gui.Controls;
@@ -401,6 +402,148 @@ public sealed class AgentChatEditorControlTests
         var end = axamlContent.IndexOf("</DataTemplate>", start, StringComparison.Ordinal);
         Assert.True(end > start, $"Expected template '{templateKey}' to be closed.");
         return axamlContent[start..end];
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_TreeColumn_HasNonZeroMinWidth()
+    {
+        // Issue #1051: when the tree is expanded, column 0 has a MinWidth >= 160 so a drag cannot
+        // collapse the tree pane behind the native output surface.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        SetTreeCollapsed(control, false);
+
+        Assert.True(editorGrid.ColumnDefinitions[0].MinWidth >= 160);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_OutputColumn_HasMinWidth()
+    {
+        // Issue #1051: column 2 (HTML output) declares a positive MinWidth so a drag cannot
+        // squeeze the output pane to ~0.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+
+        Assert.True(editorGrid.ColumnDefinitions[2].MinWidth >= 240);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_DraggingSplitter_CannotShrinkTreeBelowMinWidth()
+    {
+        // Issue #1051: simulate an extreme leftward drag by forcing the tree column tiny; the
+        // Grid clamps its actual width to the column MinWidth.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        SetTreeCollapsed(control, false);
+        editorGrid.ColumnDefinitions[0].Width = new GridLength(2);
+
+        _ = ShowInWindow(control, 1000, 600);
+
+        Assert.True(editorGrid.ColumnDefinitions[0].ActualWidth >= 159.5);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_DraggingSplitter_CannotShrinkOutputBelowMinWidth()
+    {
+        // Issue #1051: simulate an extreme rightward drag by forcing the tree column to its max;
+        // the output column's actual width is clamped to its MinWidth.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        SetTreeCollapsed(control, false);
+        editorGrid.ColumnDefinitions[0].Width = new GridLength(480);
+
+        _ = ShowInWindow(control, 600, 600);
+
+        Assert.True(editorGrid.ColumnDefinitions[2].ActualWidth >= 239.5);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_SplitterHost_RemainsHitTestableAfterExtremeDrag()
+    {
+        // Issue #1051: after an extreme drag the splitter stays visible in its fixed 24px column
+        // with non-zero bounds (proxy for "still grabbable"; airspace overlap is a manual check).
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        var splitterHost = GetField<GridSplitter>(control, "SplitterHost");
+        SetTreeCollapsed(control, false);
+        editorGrid.ColumnDefinitions[0].Width = new GridLength(2);
+
+        _ = ShowInWindow(control, 1000, 600);
+
+        Assert.True(splitterHost.IsVisible);
+        Assert.True(splitterHost.Bounds.Width > 0);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_OutputPane_CanBeRestoredAfterShrinkToMinimum()
+    {
+        // Issue #1051: after shrinking the output to its minimum, a reverse drag re-enlarges it,
+        // proving the collapse is reversible.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        SetTreeCollapsed(control, false);
+        editorGrid.ColumnDefinitions[0].Width = new GridLength(480);
+
+        _ = ShowInWindow(control, 600, 600);
+        var shrunkOutput = editorGrid.ColumnDefinitions[2].ActualWidth;
+
+        editorGrid.ColumnDefinitions[0].Width = new GridLength(200);
+        editorGrid.InvalidateMeasure();
+        editorGrid.InvalidateArrange();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        var restoredOutput = editorGrid.ColumnDefinitions[2].ActualWidth;
+
+        Assert.True(restoredOutput > shrunkOutput);
+    }
+
+    private static Window ShowInWindow(Control content, double width, double height)
+    {
+        var window = new Window
+        {
+            Width = width,
+            Height = height,
+            Content = content,
+        };
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        return window;
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_SetTreeCollapsed_StillCollapsesTreeColumnToZero()
+    {
+        // Issue #1051: the programmatic collapse still drives column 0 to zero width by relaxing
+        // its MinWidth to 0 during collapse.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+
+        SetTreeCollapsed(control, true);
+
+        Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
+        Assert.Equal(0, editorGrid.ColumnDefinitions[0].MinWidth);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public void AgentChatEditorControl_TreeColumn_MinWidthRestoredOnExpand()
+    {
+        // Issue #1051: expanding restores the 160px floor so drag-clamping is active whenever the
+        // tree is shown.
+        var control = new AgentChatEditorControl();
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+
+        SetTreeCollapsed(control, true);
+        SetTreeCollapsed(control, false);
+
+        Assert.True(editorGrid.ColumnDefinitions[0].MinWidth >= 160);
+    }
+
+    private static void SetTreeCollapsed(AgentChatEditorControl control, bool collapsed)
+    {
+        var method = control.GetType().GetMethod(
+            "SetTreeCollapsed",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Could not find SetTreeCollapsed method.");
+        method.Invoke(control, [collapsed]);
     }
 
     private static string ExtractSummaryTextBlock(string templateXaml)

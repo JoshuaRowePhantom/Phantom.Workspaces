@@ -42,10 +42,6 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "MinWidth=\"0\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "MaxWidth=\"480\"",
             editorControlContent,
             StringComparison.Ordinal);

@@ -10,6 +10,7 @@ public partial class AgentChatEditorControl : UserControl
     private static readonly GridLength DefaultExpandedTreeWidth = new(280);
     private static readonly GridLength ExpandedSplitterWidth = new(24);
     private static readonly GridLength CollapsedWidth = new(0);
+    private const double ExpandedTreeMinWidth = 160;
     private GridLength expandedTreeWidth = DefaultExpandedTreeWidth;
     private AgentViewModel? subscribedViewModel;
     private LogWindow? logWindow;
@@ -116,11 +117,17 @@ public partial class AgentChatEditorControl : UserControl
                     this.expandedTreeWidth = this.EditorGrid.ColumnDefinitions[0].Width;
                 }
 
+                // Issue #1051: relax the tree column's drag-clamp floor so the intentional
+                // programmatic full-collapse can still drive the column to zero width.
+                this.EditorGrid.ColumnDefinitions[0].MinWidth = 0;
                 this.EditorGrid.ColumnDefinitions[0].Width = CollapsedWidth;
                 this.EditorGrid.ColumnDefinitions[1].Width = CollapsedWidth;
             }
             else
             {
+                // Issue #1051: restore the 160px floor so a drag can never collapse the tree
+                // pane (and hide the splitter behind the native output) while it is shown.
+                this.EditorGrid.ColumnDefinitions[0].MinWidth = ExpandedTreeMinWidth;
                 this.EditorGrid.ColumnDefinitions[0].Width = this.expandedTreeWidth.Value > 0 ? this.expandedTreeWidth : DefaultExpandedTreeWidth;
                 this.EditorGrid.ColumnDefinitions[1].Width = ExpandedSplitterWidth;
             }
