@@ -207,6 +207,73 @@ void OnEditorSelectionChanged(node) =>
 The **tree view keeps the navigation / tab-strip role**; selecting a node activates the
 corresponding cached document.
 
+### 3a. Content collection: ownership and availability
+
+**Where the collection lives (ownership).** The editor-level `AgentViewModel` owns the
+content collection — the direct successor to today's `detailContentSlots` /
+`DetailContentSlots` (`AgentViewModel.cs:31, 86-90, 260`). It is a single owned
+`ObservableCollection<AgentDetailDocumentItem>` exposed as
+`ReadOnlyObservableCollection<AgentDetailDocumentItem> AllDetailContents`. The **root**
+editor `AgentViewModel` (whose `AgentChatEditorControl.DataContext` is set) is the single
+owner whose `AllDetailContents` feeds the one `DocumentDock`. The `AgentDetailDockFactory`
+holds only the `Dictionary<AgentDetailDocumentItem, Document>` registry and the dock — it
+does not own the collection (mirroring `WorkspaceDockFactory`, where `WorkspacePaneViewModel.Tabs`
+owns the source and `documentsByTabId` is only a registry).
+
+**Element type.** A new small wrapper VM `AgentDetailDocumentItem`, one per nav node /
+detail slot, carrying: `Key` (stable, tree-unique id — drives `Document.Id` and node↔document
+lookup), `Title` (display title), `Content` (the actual detail VM the cached template's
+`ContentControl.Content` binds to), and `IsActive` (active-state mirror). This mirrors
+`WorkspaceTabViewModel` → `WorkspaceDocument` (`WorkspaceDocumentGenerator.cs:25-37`): the
+generator does `new Document()`, sets `doc.Id/Title/Context`, and registers
+`documentsByItem[item] = doc`; `ClearDocumentContainer` unregisters and drops the cached doc.
+
+**Projection, not the same object.** `EditorItems` is hierarchical and (for sub-agents)
+completion-filtered (`SubAgentsCollectionTransformer.RefreshVisibleChildren`, `:800-830`);
+`DocumentDock.ItemsSource` needs a flat, unfiltered list. These shapes are incompatible, so
+the tree and dock bind to **different** collections that share **one source of truth — the
+nav-node model**: the `TreeView.ItemsSource` binds `EditorItems`; the dock's `ItemsSource`
+binds the projected flat `AllDetailContents`. Selection maps 1:1 by content identity.
+
+**Flattening nested sub-agents at any depth.** Each `AgentViewModel` contributes its own
+fixed detail VMs (conversation, chat-details, tools, sub-agents-container) to its
+`allDetailContents` at construction. Sub-agents are nested `AgentViewModel`s, so the root's
+flat list is a recursive aggregate: `root.AllDetailContents = root's own items ⊕ each
+sub-agent's AllDetailContents` (observed). Because a sub-agent's collection already includes
+*its* sub-agents, arbitrary depth is handled with no special-casing. Sync is piggybacked on
+existing wiring:
+
+- **Add:** in `AddSubAgentSlotEager` (`:600-612`), append the sub-agent's `AllDetailContents`
+  and subscribe to its `CollectionChanged` for grand-child changes. Driven from
+  `OnSubAgentsCollectionChanged` (`:562-571`) on the UI thread; the lazy path already marshals
+  via `foregroundScheduler` (`:614-639`).
+- **Remove:** `SubAgentsCollectionTransformer.OnRemoveAt/OnRemoved` (`:777-781`) unsubscribe
+  and remove the departed sub-agent's items → the generator's `ClearDocumentContainer` drops
+  the cached documents (no leak).
+- **Complete:** hide-completed only re-projects the tree's *visible* children
+  (`RefreshVisibleChildren`, `:800-830`); it must NOT touch `AllDetailContents`, so a completed
+  sub-agent keeps cached documents and never blanks.
+
+**Keying.** Sub-agent children reuse fixed ids (`chat-details`, …), so keys are qualified by
+the owning agent (`sub-agent-{agentId}/chat-details`) to stay tree-unique. The node→document
+lookup keys off the item whose `Content` is reference-equal to the node's `DetailContent`
+(identity match — exactly today's `ReferenceEquals` test at `:299`, but selecting rather than
+toggling visibility).
+
+**Selection → active document.** The `SelectedEditorItem` setter (`:264-302`) drops the
+`ReferenceEquals` visibility loop (`:295-300`) and instead resolves the item whose `Content`
+matches the node's `DetailContent`, sets a bindable `SelectedDetailDocument`, and calls
+`factory.SetActiveDockable(factory.GetDocument(item))`. Preferred wiring binds the dock's
+active document to `SelectedDetailDocument`; the existing `OnEditorSelectionChanged`
+code-behind (`:72-80`) already funnels into `vm.SelectedEditorItem`.
+
+**Why the blank sub-agent panel is impossible.** Every node — including each sub-agent's
+`chat-details`/`chat-tools`/`chat-sub-agents` — has a first-class entry in the single shared
+`AllDetailContents`, contributed by the sub-agent's own `AgentViewModel` (the exact populated
+VMs, e.g. its `AgentChatDetailsViewModel`, that are never registered in the parent's
+`detailContentSlots` today). There is always a cached document to activate; no
+`DetailContentSlots`, no `ReferenceEquals`-against-parent-slots miss.
+
 ### 4. Deliberately skip `Dock.Serializer`
 
 This detail dock is ephemeral and fully derived from the editor tree, so it is never fed
