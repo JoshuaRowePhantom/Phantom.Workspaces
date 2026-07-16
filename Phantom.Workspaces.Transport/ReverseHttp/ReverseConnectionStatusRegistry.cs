@@ -13,7 +13,7 @@ public sealed class ReverseConnectionStatusRegistry
 
     public event EventHandler? ConnectionsChanged;
 
-    public void OnRegistered(string clientInstanceId, DateTimeOffset connectedAt)
+    public void OnRegistered(string clientInstanceId, DateTimeOffset connectedAt, string? announcedEndpoint = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(clientInstanceId);
 
@@ -22,6 +22,7 @@ public sealed class ReverseConnectionStatusRegistry
             ClientInstanceId = clientInstanceId,
             ConnectedAt = connectedAt,
             InFlightCount = 0,
+            AnnouncedEndpoint = announcedEndpoint,
         };
 
         this.RaiseConnectionsChanged();

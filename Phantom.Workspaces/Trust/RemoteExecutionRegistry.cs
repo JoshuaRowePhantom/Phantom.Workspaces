@@ -2,14 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.Trust;
 
 /// <summary>
 /// An in-memory registry of <see cref="RemoteTrustedExecutor"/> instances keyed by client instance
 /// id (a user-computer-profile entity id). Supports both explicit registration and automatic
-/// synchronisation from a <see cref="ReverseExecutionRegistry"/>: when a connecting instance
-/// announces an HTTP endpoint in its <c>register</c> frame, the registry creates a
+/// synchronisation from a <see cref="ReverseConnectionStatusRegistry"/>: when a connecting instance
+/// announces an HTTP endpoint in its registration, the registry creates a
 /// <see cref="RemoteTrustedExecutor"/> for it; when the instance disconnects, the auto-synced
 /// executor is removed. Manually-registered executors are not affected by auto-sync.
 /// </summary>
@@ -22,28 +23,28 @@ public sealed class RemoteExecutionRegistry : IDisposable
     private readonly HashSet<string> syncedInstanceIds = new(StringComparer.Ordinal);
 
     private readonly object gate = new();
-    private ReverseExecutionRegistry? reverseRegistry;
+    private ReverseConnectionStatusRegistry? statusRegistry;
 
     /// <summary>Raised whenever the set of registered remote executors changes.</summary>
     public event EventHandler? ExecutorsChanged;
 
     /// <summary>
-    /// Subscribes to <paramref name="reverseRegistry"/> and automatically registers or removes
+    /// Subscribes to <paramref name="statusRegistry"/> and automatically registers or removes
     /// remote executors as connections with announced endpoints come and go. Call this once; calling
     /// it a second time replaces the previous subscription.
     /// </summary>
-    public void SyncFrom(ReverseExecutionRegistry reverseRegistry)
+    public void SyncFrom(ReverseConnectionStatusRegistry statusRegistry)
     {
-        ArgumentNullException.ThrowIfNull(reverseRegistry);
+        ArgumentNullException.ThrowIfNull(statusRegistry);
 
-        if (this.reverseRegistry is not null)
+        if (this.statusRegistry is not null)
         {
-            this.reverseRegistry.ConnectionsChanged -= this.OnReverseConnectionsChanged;
+            this.statusRegistry.ConnectionsChanged -= this.OnReverseConnectionsChanged;
         }
 
-        this.reverseRegistry = reverseRegistry;
-        this.reverseRegistry.ConnectionsChanged += this.OnReverseConnectionsChanged;
-        this.ApplyReverseSnapshot(reverseRegistry);
+        this.statusRegistry = statusRegistry;
+        this.statusRegistry.ConnectionsChanged += this.OnReverseConnectionsChanged;
+        this.ApplyReverseSnapshot(statusRegistry);
     }
 
     /// <summary>
@@ -110,13 +111,13 @@ public sealed class RemoteExecutionRegistry : IDisposable
 
     private void OnReverseConnectionsChanged(object? sender, EventArgs e)
     {
-        if (this.reverseRegistry is { } registry)
+        if (this.statusRegistry is { } registry)
         {
             this.ApplyReverseSnapshot(registry);
         }
     }
 
-    private void ApplyReverseSnapshot(ReverseExecutionRegistry registry)
+    private void ApplyReverseSnapshot(ReverseConnectionStatusRegistry registry)
     {
         var instances = registry.GetConnectedInstances();
         var nowConnectedWithEndpoint = new HashSet<string>(StringComparer.Ordinal);
@@ -165,10 +166,10 @@ public sealed class RemoteExecutionRegistry : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
-        if (this.reverseRegistry is not null)
+        if (this.statusRegistry is not null)
         {
-            this.reverseRegistry.ConnectionsChanged -= this.OnReverseConnectionsChanged;
-            this.reverseRegistry = null;
+            this.statusRegistry.ConnectionsChanged -= this.OnReverseConnectionsChanged;
+            this.statusRegistry = null;
         }
     }
 }

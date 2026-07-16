@@ -1,10 +1,5 @@
 using System;
-using System.Collections.Generic;
-using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.AI;
-using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Trust;
 using Xunit;
 
@@ -79,13 +74,13 @@ public sealed class RemoteExecutionRegistryTests
     }
 
     [Fact]
-    public void SyncFromReverseRegistry_RegistersExecutorWhenEndpointAnnounced()
+    public void SyncFromStatusRegistry_RegistersExecutorWhenEndpointAnnounced()
     {
-        var reverseRegistry = new ReverseExecutionRegistry();
+        var statusRegistry = new ReverseConnectionStatusRegistry();
         var registry = new RemoteExecutionRegistry();
-        registry.SyncFrom(reverseRegistry);
+        registry.SyncFrom(statusRegistry);
 
-        reverseRegistry.Register(new FakeConnectionWithEndpoint("computer-a", "https://computer-a.example/"));
+        statusRegistry.OnRegistered("computer-a", DateTimeOffset.UnixEpoch, "https://computer-a.example/");
 
         Assert.True(registry.IsRegistered("computer-a"));
         Assert.True(registry.TryGetExecutor("computer-a", out var executor));
@@ -93,111 +88,55 @@ public sealed class RemoteExecutionRegistryTests
     }
 
     [Fact]
-    public void SyncFromReverseRegistry_DoesNotRegister_WhenNoEndpointAnnounced()
+    public void SyncFromStatusRegistry_DoesNotRegister_WhenNoEndpointAnnounced()
     {
-        var reverseRegistry = new ReverseExecutionRegistry();
+        var statusRegistry = new ReverseConnectionStatusRegistry();
         var registry = new RemoteExecutionRegistry();
-        registry.SyncFrom(reverseRegistry);
+        registry.SyncFrom(statusRegistry);
 
-        reverseRegistry.Register(new FakeConnectionNoEndpoint("computer-a"));
+        statusRegistry.OnRegistered("computer-a", DateTimeOffset.UnixEpoch);
 
         Assert.False(registry.IsRegistered("computer-a"));
     }
 
     [Fact]
-    public void SyncFromReverseRegistry_RemovesExecutorWhenConnectionDisconnects()
+    public void SyncFromStatusRegistry_RemovesExecutorWhenConnectionDisconnects()
     {
-        var reverseRegistry = new ReverseExecutionRegistry();
+        var statusRegistry = new ReverseConnectionStatusRegistry();
         var registry = new RemoteExecutionRegistry();
-        registry.SyncFrom(reverseRegistry);
+        registry.SyncFrom(statusRegistry);
 
-        var connection = new FakeConnectionWithEndpoint("computer-a", "https://computer-a.example/");
-        reverseRegistry.Register(connection);
+        statusRegistry.OnRegistered("computer-a", DateTimeOffset.UnixEpoch, "https://computer-a.example/");
         Assert.True(registry.IsRegistered("computer-a"));
 
-        reverseRegistry.Unregister(connection);
+        statusRegistry.OnUnregistered("computer-a");
 
         Assert.False(registry.IsRegistered("computer-a"));
     }
 
     [Fact]
-    public void SyncFromReverseRegistry_DoesNotRemoveManuallyRegisteredExecutor()
+    public void SyncFromStatusRegistry_DoesNotRemoveManuallyRegisteredExecutor()
     {
-        var reverseRegistry = new ReverseExecutionRegistry();
+        var statusRegistry = new ReverseConnectionStatusRegistry();
         var registry = new RemoteExecutionRegistry();
         registry.Register("computer-a", "https://computer-a.example/");
-        registry.SyncFrom(reverseRegistry);
+        registry.SyncFrom(statusRegistry);
 
-        // Sync from an empty reverse registry — manually registered executor must survive.
+        // Sync from an empty status registry — manually registered executor must survive.
         Assert.True(registry.IsRegistered("computer-a"));
     }
 
     [Fact]
-    public void Dispose_UnsubscribesFromReverseRegistry()
+    public void Dispose_UnsubscribesFromStatusRegistry()
     {
-        var reverseRegistry = new ReverseExecutionRegistry();
+        var statusRegistry = new ReverseConnectionStatusRegistry();
         var registry = new RemoteExecutionRegistry();
-        registry.SyncFrom(reverseRegistry);
+        registry.SyncFrom(statusRegistry);
         registry.Dispose();
 
-        // After disposal, reverse registry changes should not affect the registry.
-        reverseRegistry.Register(new FakeConnectionWithEndpoint("computer-a", "https://computer-a.example/"));
+        // After disposal, status registry changes should not affect the registry.
+        statusRegistry.OnRegistered("computer-a", DateTimeOffset.UnixEpoch, "https://computer-a.example/");
 
         Assert.False(registry.IsRegistered("computer-a"));
-    }
-
-    private sealed class FakeConnectionWithEndpoint : IReverseConnection
-    {
-        public FakeConnectionWithEndpoint(string clientInstanceId, string endpoint)
-        {
-            this.ClientInstanceId = clientInstanceId;
-            this.AnnouncedEndpoint = endpoint;
-        }
-
-        public string ClientInstanceId { get; }
-        public string? AnnouncedEndpoint { get; }
-        public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UnixEpoch;
-        public int InFlightCount => 0;
-
-        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-
-        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-
-        public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
-            RemoteAgentRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            await Task.Yield();
-            yield break;
-        }
-    }
-
-    private sealed class FakeConnectionNoEndpoint : IReverseConnection
-    {
-        public FakeConnectionNoEndpoint(string clientInstanceId)
-        {
-            this.ClientInstanceId = clientInstanceId;
-        }
-
-        public string ClientInstanceId { get; }
-        public string? AnnouncedEndpoint => null;
-        public DateTimeOffset ConnectedAt { get; } = DateTimeOffset.UnixEpoch;
-        public int InFlightCount => 0;
-
-        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-
-        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-
-        public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
-            RemoteAgentRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            await Task.Yield();
-            yield break;
-        }
     }
 }

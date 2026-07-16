@@ -6,7 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Server;
-using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
 namespace Phantom.Workspaces.Services;
@@ -14,22 +14,22 @@ namespace Phantom.Workspaces.Services;
 /// <summary>
 /// Manages the ASP.NET Core web server lifecycle for the Phantom.Workspaces GUI application.
 /// When <see cref="RemoteHostingSettings.Enabled"/> is true, hosts the web data-access and
-/// agent execution endpoints (including reverse-execution) on the configured listen URL.
+/// agent execution endpoints (including the transport reverse-relay hub) on the configured listen URL.
 /// </summary>
 public sealed class WorkspacesWebHost : IAsyncDisposable
 {
-    private readonly ReverseExecutionRegistry reverseExecutionRegistry;
+    private readonly ReverseConnectionStatusRegistry statusRegistry;
     private WebApplication? application;
     private Task? runTask;
     private CancellationTokenSource? cancellationTokenSource;
 
-    public WorkspacesWebHost(ReverseExecutionRegistry reverseExecutionRegistry)
+    public WorkspacesWebHost(ReverseConnectionStatusRegistry statusRegistry)
     {
-        this.reverseExecutionRegistry = reverseExecutionRegistry ?? throw new ArgumentNullException(nameof(reverseExecutionRegistry));
+        this.statusRegistry = statusRegistry ?? throw new ArgumentNullException(nameof(statusRegistry));
     }
 
-    /// <summary>The reverse-execution registry (always available; inbound connections only work when hosting is enabled).</summary>
-    public ReverseExecutionRegistry ReverseExecutionRegistry => this.reverseExecutionRegistry;
+    /// <summary>The transport-layer connection-status registry fed by inbound reverse registrations.</summary>
+    public ReverseConnectionStatusRegistry ConnectionStatusRegistry => this.statusRegistry;
 
     /// <summary>Whether the web server is currently running.</summary>
     public bool IsRunning => this.application is not null && this.runTask is not null;
@@ -58,14 +58,14 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         var builder = WebApplication.CreateBuilder(["--urls", remoteHostingSettings.ListenUrl]);
 
         builder.Services.AddSingleton(dataAccessLayer);
-        builder.Services.AddSingleton(this.reverseExecutionRegistry);
 
         this.application = builder.Build();
         this.application.UseWebSockets();
         this.application.MapGet("/", () => $"Phantom.Workspaces ({typeof(WorkspacesWebHost).Namespace})");
         this.application.MapWebDataAccessEndpoints();
         this.application.MapAgentEndpoints();
-        this.application.MapReverseEndpoints(this.reverseExecutionRegistry);
+        var serverTransportFactory = new ReverseHttpServerTransportFactory(this.statusRegistry);
+        this.application.MapTransportReverseEndpoints(serverTransportFactory, this.statusRegistry);
 
         this.ListenUrl = remoteHostingSettings.ListenUrl;
         this.runTask = this.application.RunAsync();

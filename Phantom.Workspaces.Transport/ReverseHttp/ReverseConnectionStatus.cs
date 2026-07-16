@@ -11,4 +11,11 @@ public sealed record ReverseConnectionStatus
     public DateTimeOffset ConnectedAt { get; init; }
 
     public int InFlightCount { get; init; }
+
+    /// <summary>
+    /// The direct HTTP endpoint the client announced at registration, or null when it registered
+    /// only for hub-relayed reverse execution. Consumed by <c>RemoteExecutionRegistry</c> to build a
+    /// direct <c>RemoteTrustedExecutor</c> for announced instances.
+    /// </summary>
+    public string? AnnouncedEndpoint { get; init; }
 }

@@ -36,7 +36,7 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
             var entityId = ReadEntityId(request);
             this.registrations[entityId] = channel;
             this.inFlightCounts[entityId] = 0;
-            this.statusRegistry?.OnRegistered(entityId, DateTimeOffset.UtcNow);
+            this.statusRegistry?.OnRegistered(entityId, DateTimeOffset.UtcNow, ReadAnnouncedEndpoint(request));
             return new RegistrationLease(this, entityId, channel);
         }
 
@@ -103,6 +103,12 @@ public sealed class ReverseHttpServerTransportFactory : ITransportListener
 
         return entityId;
     }
+
+    private static string? ReadAnnouncedEndpoint(JsonElement request)
+        => request.TryGetProperty("announced-endpoint", out var endpointProperty)
+            && endpointProperty.GetString() is { Length: > 0 } endpoint
+            ? endpoint
+            : null;
 
     private sealed class RegistrationLease(
         ReverseHttpServerTransportFactory factory,

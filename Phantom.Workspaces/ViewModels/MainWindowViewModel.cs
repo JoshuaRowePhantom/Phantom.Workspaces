@@ -58,7 +58,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly ShortcutManager shortcutManager = new();
     private EntityClickShortcutHandler? entityClickShortcutHandler;
     private OpenAgentSessionShortcutHandler? openAgentSessionShortcutHandler;
-    private readonly Llm.Trust.ReverseExecutionRegistry reverseExecutionRegistry = new();
     private ViewDefinitionViewModel selectedTopLevelView = EmptyView;
     private WorkspacePaneViewModel selectedWorkspacePane;
     private string stickyParentContextText = string.Empty;
@@ -748,14 +747,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var reverseExecutionRegistry = this.reverseExecutionRegistry;
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();
-        this.webHost = new WorkspacesWebHost(reverseExecutionRegistry);
+        this.webHost = new WorkspacesWebHost(composition.ConnectionStatusRegistry);
         this.ConnectionStatus = new ConnectionStatusViewModel(
             composition.ConnectionStatusRegistry,
             action => Dispatcher.UIThread.Post(action));
