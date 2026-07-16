@@ -14,8 +14,7 @@ public sealed record ReverseConnectionStatus
 
     /// <summary>
     /// The direct HTTP endpoint the client announced at registration, or null when it registered
-    /// only for hub-relayed reverse execution. Consumed by <c>RemoteExecutionRegistry</c> to build a
-    /// direct <c>RemoteTrustedExecutor</c> for announced instances.
+    /// only for hub-relayed reverse execution.
     /// </summary>
     public string? AnnouncedEndpoint { get; init; }
 }

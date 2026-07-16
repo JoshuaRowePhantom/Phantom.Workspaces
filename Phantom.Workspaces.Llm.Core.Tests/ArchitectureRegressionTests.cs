@@ -1,5 +1,7 @@
 using System.Linq;
+using Phantom.Workspaces.Llm.Core.Transport;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Web.Server;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -51,5 +53,28 @@ public sealed class ArchitectureRegressionTests
         Assert.NotNull(assembly.GetType("Phantom.Workspaces.Llm.Trust.ITrustedExecutor"));
         Assert.NotNull(assembly.GetType("Phantom.Workspaces.Llm.Trust.ITrustedExecutorSelector"));
         Assert.NotNull(assembly.GetType("Phantom.Workspaces.Llm.Trust.LocalTrustedExecutor"));
+    }
+
+    [Fact]
+    public void Production_RetainsTransportTrustedExecutor()
+    {
+        // The transport-backed remote executor is the production remote path after the cutover.
+        Assert.NotNull(
+            typeof(TransportTrustedExecutor).Assembly.GetType(
+                "Phantom.Workspaces.Llm.Core.Transport.TransportTrustedExecutor"));
+    }
+
+    [Fact]
+    public void WebServer_NoLongerHosts_StreamEndpoints()
+    {
+        // The web-forward stream endpoint (server side of the deleted WebRemoteStreamClient) is gone.
+        var webServerAssembly = typeof(AgentRespondHandler).Assembly;
+
+        var stillPresent = webServerAssembly.GetTypes()
+            .Where(type => type.Name == "StreamEndpointRouteBuilderExtensions")
+            .Select(type => type.FullName)
+            .ToArray();
+
+        Assert.Empty(stillPresent);
     }
 }

@@ -43,7 +43,6 @@ app.MapWebDataAccessEndpoints();
 app.MapAgentEndpoints();
 app.MapTransportReverseEndpoints(reverseTransportServerFactory, reverseConnectionStatusRegistry);
 app.Services.GetRequiredService<HttpServerTransportFactory>().Map(app);
-app.MapStreamEndpoints();
 app.MapWorkspaceToolEndpoints();
 app.MapAgentPersistenceEndpoints();
 

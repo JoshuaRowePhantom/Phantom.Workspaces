@@ -3,8 +3,8 @@ using Microsoft.Extensions.AI;
 namespace Phantom.Workspaces.Llm.Trust;
 
 /// <summary>
-/// The request contract for remote agent execution. Sent by the Workspaces remoting client
-/// (<c>WebRemoteChatClient</c>) to a remote host's <c>POST /agent/respond</c> endpoint.
+/// The request contract for remote agent execution. Sent by the Workspaces remoting client to a
+/// remote host's <c>POST /agent/respond</c> endpoint.
 /// </summary>
 public sealed record RemoteAgentRequest
 {
