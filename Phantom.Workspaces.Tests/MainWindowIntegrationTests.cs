@@ -5648,6 +5648,313 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(docs[1], documentDock.ActiveDockable);
     }
 
+    #region Issue #1067 — indexing derives from Dock VisibleDockables (visual order)
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AltN_IndexesFromActiveWorkspaceDockVisibleDockables()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "avd-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "avd-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "avd-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Reorder the active workspace's content DocumentDock VisibleDockables (drag = Remove + Insert).
+        var visibleDockables = documentDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docC = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "avd-c");
+        visibleDockables.RemoveAt(visibleDockables.IndexOf(docC));
+        visibleDockables.Insert(0, docC);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal(new[] { "avd-c", "avd-a", "avd-b" }, docs.Select(d => d.Id).ToArray());
+
+        // Alt+1/2/3 resolve strictly from the VisibleDockables order: index i activates docs[i].
+        for (var i = 0; i < docs.Count; i++)
+        {
+            viewModel.GoToTabAtIndexCommand.Execute(i.ToString());
+            Assert.Equal(docs[i], documentDock.ActiveDockable);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AltShiftN_IndexesFromWorkspaceTabHostVisibleDockables()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ac010001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ac010001-0000-4000-8000-000000000002");
+        var workspaceCId = new EntityId("ac010001-0000-4000-8000-000000000003");
+
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ac010001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "ws-host-a"]],
+              "display-name": { "default": "WS Host A" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ac010001-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "ws-host-b"]],
+              "display-name": { "default": "WS Host B" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceCId,
+            """
+            {
+              "entity-id": "ac010001-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "ws-host-c"]],
+              "display-name": { "default": "WS Host C" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceCId });
+
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        Assert.NotNull(workspacesDock);
+
+        // Reorder the workspace-tab host dock's VisibleDockables (drag = Remove + Insert): move C first.
+        var visibleDockables = workspacesDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var paneDocC = visibleDockables!.OfType<WorkspacePaneDocument>().First(d => d.Id == workspaceCId.ToString());
+        visibleDockables.RemoveAt(visibleDockables.IndexOf(paneDocC));
+        visibleDockables.Insert(0, paneDocC);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var paneDocs = workspacesDock.VisibleDockables!.OfType<WorkspacePaneDocument>().ToList();
+        Assert.Equal(
+            new[] { workspaceCId.ToString(), workspaceAId.ToString(), workspaceBId.ToString() },
+            paneDocs.Select(d => d.Id).ToArray());
+
+        // WorkspacePanes (the Alt+Shift+N index source) was re-derived to match the visual order.
+        Assert.Equal(
+            new[] { workspaceCId.ToString(), workspaceAId.ToString(), workspaceBId.ToString() },
+            viewModel.WorkspacePanes.Select(p => p.Id).ToArray());
+
+        // Alt+Shift+1/2/3 select the pane at the corresponding visual position.
+        for (var i = 0; i < paneDocs.Count; i++)
+        {
+            viewModel.GoToWorkspacePaneAtIndexCommand.Execute(i.ToString());
+            Assert.Equal(paneDocs[i].WorkspacePane, viewModel.SelectedWorkspacePane);
+        }
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task BadgeLabels_DeriveFromDockVisibleDockablesOrder()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "bl-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "bl-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "bl-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Move the middle tab (B) to the end via a Move — badge labels must follow VisibleDockables.
+        var visibleDockables = documentDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docB = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "bl-b");
+        visibleDockables.Move(visibleDockables.IndexOf(docB), visibleDockables.Count - 1);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal(new[] { "bl-a", "bl-c", "bl-b" }, docs.Select(d => d.Id).ToArray());
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task Indexing_DoesNotConsultInternalTabsList()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "ncl-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "ncl-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "ncl-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var pane = viewModel.SelectedWorkspacePane!;
+        // Internal Tabs list begins in insertion order A, B, C.
+        Assert.Equal(new[] { "ncl-a", "ncl-b", "ncl-c" }, pane.Tabs.Select(t => t.Id).ToArray());
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Reorder ONLY the dock's VisibleDockables (never touching pane.Tabs directly): C to front.
+        var visibleDockables = documentDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docC = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "ncl-c");
+        visibleDockables.RemoveAt(visibleDockables.IndexOf(docC));
+        visibleDockables.Insert(0, docC);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        // Alt+1 resolves the tab that is visually first (C) — NOT pane.Tabs' original first element (A).
+        // The Dock's VisibleDockables order is authoritative; the internal list is re-derived from it.
+        viewModel.GoToTabAtIndexCommand.Execute("0");
+        var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("ncl-c", docs[0].Id);
+        Assert.Equal(docs[0], documentDock.ActiveDockable);
+        Assert.Equal(new[] { "ncl-c", "ncl-a", "ncl-b" }, pane.Tabs.Select(t => t.Id).ToArray());
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AltShortcut_AfterReorder_ActivatesDockableAtNewPosition()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "anp-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "anp-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "anp-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Drag A to the last position (Remove + Insert) => visual order B, C, A.
+        var visibleDockables = documentDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docA = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "anp-a");
+        visibleDockables.RemoveAt(visibleDockables.IndexOf(docA));
+        visibleDockables.Insert(visibleDockables.Count, docA);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal(new[] { "anp-b", "anp-c", "anp-a" }, docs.Select(d => d.Id).ToArray());
+
+        // Alt+3 now activates A, which moved to visual position 3 (index 2).
+        viewModel.GoToTabAtIndexCommand.Execute("2");
+        Assert.Equal(docs[2], documentDock.ActiveDockable);
+        Assert.Equal("anp-a", ((WorkspaceDocument)documentDock.ActiveDockable!).Id);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task SplitWorkspace_ContentBadges_FollowVisibleDockablesAcrossStrips()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceAId = new EntityId("ac020001-0000-4000-8000-000000000001");
+        var workspaceBId = new EntityId("ac020002-0000-4000-8000-000000000002");
+
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            {
+              "entity-id": "ac020001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-badges-left"]],
+              "display-name": { "default": "Split Badges Left" },
+              "regions": []
+            }
+            """);
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            {
+              "entity-id": "ac020002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "split-badges-right"]],
+              "display-name": { "default": "Split Badges Right" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneA = viewModel.WorkspacePanes.First(p => p.Id == workspaceAId.ToString());
+        var paneB = viewModel.WorkspacePanes.First(p => p.Id == workspaceBId.ToString());
+
+        await CloseDefaultPaneTabsAsync(viewModel, paneA, paneB);
+
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabA1 = new WebViewModel("https://a1.example.com") { Id = "sb-a1", Title = "A1" };
+        var tabA2 = new WebViewModel("https://a2.example.com") { Id = "sb-a2", Title = "A2" };
+        var tabA3 = new WebViewModel("https://a3.example.com") { Id = "sb-a3", Title = "A3" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+        await viewModel.OpenTabAsync(tabA3);
+
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabB1 = new WebViewModel("https://b1.example.com") { Id = "sb-b1", Title = "B1" };
+        var tabB2 = new WebViewModel("https://b2.example.com") { Id = "sb-b2", Title = "B2" };
+        await viewModel.OpenTabAsync(tabB1);
+        await viewModel.OpenTabAsync(tabB2);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var dockA = FindDocumentDockIn(paneA.ContentLayout!);
+        var dockB = FindDocumentDockIn(paneB.ContentLayout!);
+        Assert.NotNull(dockA);
+        Assert.NotNull(dockB);
+
+        // Reorder pane A's content strip VisibleDockables while pane A is the active workspace,
+        // proving content badges follow each strip's VisibleDockables order in a split layout.
+        viewModel.SelectedWorkspacePane = paneA;
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var visibleA = dockA!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleA);
+        var docA3 = visibleA!.OfType<WorkspaceDocument>().First(d => d.Id == "sb-a3");
+        visibleA.RemoveAt(visibleA.IndexOf(docA3));
+        visibleA.Insert(0, docA3);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var docsA = GetPaneDocuments(paneA, dockA);
+        Assert.Equal(new[] { "sb-a3", "sb-a1", "sb-a2" }, docsA.Select(d => d.Id).ToArray());
+        Assert.Equal("1", docsA[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docsA[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docsA[2].EffectiveTabHeader.AltShortcutLabel);
+
+        // The non-active strip (pane B) is not numbered while pane A is active.
+        var docsB = GetPaneDocuments(paneB, dockB!);
+        Assert.All(docsB, d => Assert.Null(d.EffectiveTabHeader.AltShortcutLabel));
+
+        // Alt+1 activates the content tab now first in pane A's VisibleDockables (A3).
+        viewModel.GoToTabAtIndexCommand.Execute("0");
+        Assert.Equal(docsA[0], dockA.ActiveDockable);
+    }
+
+    #endregion
+
     [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_TwoPanesHorizontal_EachWorkspaceNumberedFromOne()
     {

@@ -145,6 +145,8 @@ public class WorkspaceDockFactory : Factory
         base.OnDockableClosed(dockable);
         if (dockable is WorkspaceDocument { TabViewModel: { } tabVm })
             mainWindowViewModel.OnDockableTabClosed(tabVm);
+        else if (dockable is WorkspacePaneDocument paneDoc)
+            mainWindowViewModel.OnWorkspacePaneDockableClosed(paneDoc);
     }
 
     public override void InitLayout(IDockable layout)

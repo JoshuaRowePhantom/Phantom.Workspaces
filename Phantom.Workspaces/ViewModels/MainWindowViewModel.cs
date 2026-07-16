@@ -828,20 +828,104 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    private async void OnWorkspacesDockCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+    private void OnWorkspacesDockCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        // Handle removed workspace documents
-        if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove && e.OldItems is not null)
+        // Re-derive the ORDER of WorkspacePanes from the workspace-tab host dock's VisibleDockables
+        // for every structural change — including the Remove + Add pair that Dock.Avalonia's live
+        // drag-reorder emits instead of a Move — so the Alt+Shift+N workspace-pane badges (and the
+        // OnGoToWorkspacePaneAtIndex numbering, which read WorkspacePanes) always reflect the current
+        // visual order. This mirrors the content-tab SyncPaneTabsFromDockChange (Option A) fix.
+        //
+        // This handler never removes panes: closes are handled exclusively by
+        // RemoveWorkspacePaneAsync (via CloseWorkspaceCommand) and by
+        // WorkspaceDockFactory.OnDockableClosed -> OnWorkspacePaneDockableClosed (the Dock close
+        // button / CloseDockable), so a reorder Remove can never be mistaken for a close.
+        if (this.suppressWorkspaceDockOrderSync)
         {
-            foreach (var item in e.OldItems)
-            {
-                if (item is WorkspacePaneDocument workspacePaneDoc)
-                {
-                    await this.RemoveWorkspacePaneAsync(workspacePaneDoc.WorkspacePane);
-                }
-            }
+            return;
+        }
+
+        if (e.Action is System.Collections.Specialized.NotifyCollectionChangedAction.Add
+            or System.Collections.Specialized.NotifyCollectionChangedAction.Remove
+            or System.Collections.Specialized.NotifyCollectionChangedAction.Move
+            or System.Collections.Specialized.NotifyCollectionChangedAction.Replace
+            or System.Collections.Specialized.NotifyCollectionChangedAction.Reset)
+        {
+            this.SyncWorkspacePanesOrderFromDock();
         }
     }
+
+    /// <summary>
+    /// Set while this view-model is programmatically reordering <see cref="WorkspacePanes"/> to
+    /// match the workspace-tab host dock. The Dock library reflects those moves back onto
+    /// <c>VisibleDockables</c>, which would re-enter <see cref="OnWorkspacesDockCollectionChanged"/>;
+    /// the guard makes that reentrant call a no-op so the sync cannot recurse.
+    /// </summary>
+    private bool suppressWorkspaceDockOrderSync;
+
+    private void RunSuppressingWorkspaceDockOrderSync(Action mutation)
+    {
+        var previous = this.suppressWorkspaceDockOrderSync;
+        this.suppressWorkspaceDockOrderSync = true;
+        try
+        {
+            mutation();
+        }
+        finally
+        {
+            this.suppressWorkspaceDockOrderSync = previous;
+        }
+    }
+
+    /// <summary>
+    /// Reorders <see cref="WorkspacePanes"/> to match the current visual order of the workspace-tab
+    /// host dock's <c>VisibleDockables</c> (the root <c>WorkspacesPaneDock</c>). Uses index-based
+    /// moves and only reorders panes present in both collections, so it is membership-safe and
+    /// idempotent. Refreshes the Alt+Shift+N badge labels afterwards.
+    /// </summary>
+    private void SyncWorkspacePanesOrderFromDock()
+    {
+        if (this.Layout is null)
+        {
+            return;
+        }
+
+        var host = this.FindDocumentDock(this.Layout);
+        if (host?.VisibleDockables is null)
+        {
+            return;
+        }
+
+        var newOrder = host.VisibleDockables
+            .OfType<WorkspacePaneDocument>()
+            .Select(d => d.WorkspacePane)
+            .ToList();
+
+        this.RunSuppressingWorkspaceDockOrderSync(() =>
+        {
+            for (var targetIndex = 0; targetIndex < newOrder.Count; targetIndex++)
+            {
+                var pane = newOrder[targetIndex];
+                var currentIndex = this.WorkspacePanes.IndexOf(pane);
+                if (currentIndex >= 0 && currentIndex != targetIndex)
+                {
+                    this.WorkspacePanes.Move(currentIndex, targetIndex);
+                }
+            }
+        });
+
+        this.RefreshWorkspacePaneAltShortcutLabels();
+    }
+
+    /// <summary>
+    /// Handles a workspace pane closed through the Dock UI (the tab close button, routed through
+    /// <see cref="WorkspaceDockFactory.OnDockableClosed"/> / <c>CloseDockable</c>). Removing the
+    /// dockable from <c>VisibleDockables</c> does not propagate back to the <see cref="WorkspacePanes"/>
+    /// <c>ItemsSource</c>, so the pane must be removed here explicitly. Idempotent: no-op if the pane
+    /// was already removed (e.g. via <see cref="CloseWorkspaceCommand"/>).
+    /// </summary>
+    internal void OnWorkspacePaneDockableClosed(WorkspacePaneDocument paneDoc)
+        => _ = this.RemoveWorkspacePaneAsync(paneDoc.WorkspacePane);
 
     private async Task InitializeProfileAsync()
     {
