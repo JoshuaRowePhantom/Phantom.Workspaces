@@ -154,10 +154,10 @@ public sealed class InputQueueViewModel : ViewModelBase
             return false;
         }
 
+        // Ctrl+Shift+Q always stages the new queue in the Held state so the user can configure,
+        // reorder, or release it before any work is dispatched (issue #1070).
         var queue = this.agentChat.QueueManager.CreateInputQueue(
-            immediacy: this.InputQueues.All(q => q.IsHeld)
-                ? AgentInputQueueImmediacy.Held
-                : AgentInputQueueImmediacy.Queue);
+            immediacy: AgentInputQueueImmediacy.Held);
         return this.DefaultComposer.Submit(queue);
     }
 
