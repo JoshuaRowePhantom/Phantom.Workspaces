@@ -13,8 +13,6 @@ var builder = WebApplication.CreateBuilder(args);
 var dataAccessLayer = await WebServerDataAccessLayerFactory.CreateDefaultAsync();
 builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 
-var reverseExecutionRegistry = new ReverseExecutionRegistry();
-builder.Services.AddSingleton(reverseExecutionRegistry);
 var transportRegistry = new TransportRegistry();
 transportRegistry.Register(new ReverseHttpServerTransportFactory());
 builder.Services.AddSingleton(transportRegistry);
@@ -43,7 +41,6 @@ app.UseWebSockets();
 app.MapGet("/", () => $"Phantom.Workspaces.Web.Server ({typeof(WebServerMarker).Namespace})");
 app.MapWebDataAccessEndpoints();
 app.MapAgentEndpoints();
-app.MapReverseEndpoints(reverseExecutionRegistry);
 app.MapTransportReverseEndpoints(reverseTransportServerFactory, reverseConnectionStatusRegistry);
 app.Services.GetRequiredService<HttpServerTransportFactory>().Map(app);
 app.MapStreamEndpoints();
