@@ -152,9 +152,18 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
-    internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
+    internal static Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
+        => CreateAsync(request, onConstructed: null);
+
+    // The onConstructed hook runs on the construction (foreground) context after the chat is
+    // constructed but before InitializeAsync, so callers (tests) can observe running-item
+    // mutations that occur during initialization (issue #1068).
+    internal static async Task<AgentChat> CreateAsync(
+        InternalCreateAgentChatRequest request,
+        Action<AgentChat>? onConstructed)
     {
        var chat = new AgentChat(request);
+       onConstructed?.Invoke(chat);
        await chat.InitializeAsync();
        return chat;
     }
@@ -338,8 +347,20 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        this.StartProcessingLoop();
 
-       await this.InitializeMcpToolsAsync(this.request.CancellationToken);
+       await this.RunOnForegroundAsync(
+           () => this.InitializeMcpToolsAsync(this.request.CancellationToken));
     }
+
+    // Binds the continuation chain of the supplied action to the foreground scheduler, mirroring
+    // StartProcessingLoop's Task.Factory.StartNew(..., foregroundScheduler) pattern so that
+    // running-item mutations performed by the action are serialized with the processing loop and
+    // never mutate the non-thread-safe running-item collections concurrently (issue #1068).
+    private Task RunOnForegroundAsync(Func<Task> action) =>
+        Task.Factory.StartNew(
+            action,
+            this.cts.Token,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler).Unwrap();
 
     /// <summary>
     /// Fired when the active streaming turn finishes.

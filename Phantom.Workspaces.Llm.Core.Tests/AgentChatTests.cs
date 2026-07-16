@@ -1536,6 +1536,146 @@ public sealed class AgentChatTests
             "run to complete after releasing the second stream");
     }
 
+    private const string ScriptedToolsetAgentDefinitionJson =
+        """
+        {
+          "kind": "prompt",
+          "name": "echo-agent",
+          "model": {
+            "id": "echo",
+            "provider": "echo",
+            "apiType": "Echo"
+          },
+          "tools": [
+            { "kind": "scripted_kind", "description": "Scripted toolset" }
+          ]
+        }
+        """;
+
+    private static DeterministicTestChatClient CreateEchoClient()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        return client;
+    }
+
+    // Starts creation of a chat whose only toolset is backed by the supplied provider, returning the
+    // in-flight creation task together with the constructed chat instance (captured via the
+    // onConstructed hook before InitializeAsync runs) so a test can interact with the chat while
+    // tool initialization is still in progress.
+    private static (Task<AgentChat> CreateTask, AgentChat Chat) StartChatWithScriptedToolset(
+        AIContextProvider provider,
+        IChatClient? client = null)
+    {
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "scripted_kind",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(provider));
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(ScriptedToolsetAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client ?? new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+            AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
+        };
+
+        AgentChat? captured = null;
+        var task = AgentChat.CreateAsync(request, c => captured = c);
+        return (task, captured!);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WithQueuedInputBeforeReady_LeavesNoOrphanRunningItem()
+    {
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        // Enqueue user input while tool initialization is still gated (i.e. before "ready").
+        await invoked.Task;
+        chat.EnqueueUserMessage("early");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "queued message to be answered before tool init completes");
+
+        release.TrySetResult();
+        await createTask;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "all running items to clear with no orphan");
+
+        Assert.Empty(chat.RunningItems);
+        Assert.Contains(chat.History, item => item.Role == ChatRole.Assistant);
+    }
+
+    [Fact]
+    public async Task InitializeMcpTools_WhileProcessingQueuedInput_DoesNotRaceRunningItems()
+    {
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        await invoked.Task;
+        chat.EnqueueUserMessage("ping");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "queued run to complete during gated tool init");
+
+        release.TrySetResult();
+
+        // Completes without a concurrent-mutation exception and leaves no leftover running item.
+        await createTask;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "running items to drain");
+
+        Assert.Empty(chat.RunningItems);
+        Assert.Contains(chat.Tools, root => root.Kind == "scripted_kind");
+    }
+
+    [Fact]
+    public async Task IsChatRunning_WhenRunningItemsEmptied_BecomesFalse()
+    {
+        // AgentViewModel.IsChatRunning is derived purely from RunningItems.Count > 0, so the
+        // indicator turns off exactly when the running-item collection is cleared.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "answer")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = CreateChat(client);
+
+        bool IsChatRunning() => chat.RunningItems.Count > 0;
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "run to start");
+        Assert.True(IsChatRunning());
+
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to finish");
+        Assert.False(IsChatRunning());
+    }
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 

@@ -1,6 +1,8 @@
 using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using System.Collections.Concurrent;
+using System.Collections.Specialized;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -50,6 +52,121 @@ public sealed class AgentChatForegroundContextTests
         });
         stream.Complete();
         return client;
+    }
+
+    private const string ScriptedToolsetAgentDefinitionJson =
+        """
+        {
+          "kind": "prompt",
+          "name": "echo-agent",
+          "model": {
+            "id": "echo",
+            "provider": "echo",
+            "apiType": "Echo"
+          },
+          "tools": [
+            { "kind": "scripted_kind", "description": "Scripted toolset" }
+          ]
+        }
+        """;
+
+    private static InternalCreateAgentChatRequest CreateRequestWithToolset(
+        TaskScheduler? foregroundScheduler,
+        AIContextProvider provider,
+        DeterministicTestChatClient? client = null)
+    {
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "scripted_kind",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(provider));
+        return new()
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(ScriptedToolsetAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client ?? CreateCompletedEchoClient(),
+            DisplayNameOverride = "foreground-context-toolset-chat",
+            ForegroundScheduler = foregroundScheduler,
+            AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
+        };
+    }
+
+    [Fact]
+    public async Task InitializeMcpTools_RunsRunningItemMutationsOnForegroundScheduler()
+    {
+        // All CreateRunningItem/UpdateRunningItem/CompleteRunningItem calls made while a toolset
+        // loads must be observed on the foreground scheduler (the pump thread), not thread-pool
+        // threads (issue #1068).
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        var provider = new ScriptedToolsetContextProvider(tools: [new WebSearchTool()]);
+
+        var mutationThreads = new ConcurrentQueue<int>();
+        var chat = await pump.PostAsync(() => AgentChat.CreateAsync(
+            CreateRequestWithToolset(scheduler, provider),
+            onConstructed: c => ((INotifyCollectionChanged)c.RunningItems).CollectionChanged +=
+                (_, _) => mutationThreads.Enqueue(Environment.CurrentManagedThreadId)));
+        try
+        {
+            Assert.NotEmpty(mutationThreads);
+            Assert.All(mutationThreads, threadId => Assert.Equal(pump.ThreadId, threadId));
+            Assert.Empty(chat.RunningItems);
+        }
+        finally
+        {
+            await chat.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task RunningItems_AreNeverMutatedOffForegroundScheduler_DuringInit()
+    {
+        // With overlapping processing-loop and tool-init activity, every mutation of RunningItems
+        // must occur on the foreground scheduler (issue #1068): a gated toolset load overlaps the
+        // loop processing a message enqueued before initialization finished.
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+
+        var mutationThreads = new ConcurrentQueue<int>();
+        AgentChat? captured = null;
+        var createTask = pump.PostAsync(() => AgentChat.CreateAsync(
+            CreateRequestWithToolset(scheduler, provider),
+            onConstructed: c =>
+            {
+                captured = c;
+                ((INotifyCollectionChanged)c.RunningItems).CollectionChanged +=
+                    (_, _) => mutationThreads.Enqueue(Environment.CurrentManagedThreadId);
+            }));
+
+        await invoked.Task;
+        var chat = captured!;
+        pump.Context.Post(_ => chat.EnqueueUserMessage("ping"), null);
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "queued message to be answered while tool init is gated");
+
+        release.TrySetResult();
+        await createTask;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "all running items to clear");
+
+        try
+        {
+            Assert.NotEmpty(mutationThreads);
+            Assert.All(mutationThreads, threadId => Assert.Equal(pump.ThreadId, threadId));
+        }
+        finally
+        {
+            await chat.DisposeAsync();
+        }
     }
 
     [Fact]
