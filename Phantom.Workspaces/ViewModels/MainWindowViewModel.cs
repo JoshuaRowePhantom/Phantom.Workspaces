@@ -2145,7 +2145,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 // WorkspaceDocument at the correct dock position automatically.
                 var paneInsertIndex = sourceTabIndex + 1;
                 if (paneInsertIndex > targetPane.Tabs.Count) paneInsertIndex = targetPane.Tabs.Count;
-                targetPane.Tabs.Insert(paneInsertIndex, tab);
+                this.RunSuppressingDockOrderSync(() => targetPane.Tabs.Insert(paneInsertIndex, tab));
                 var newDocument = this.dockFactory.GetDocumentForTab(tab.Id);
                 if (focus)
                 {
@@ -2231,7 +2231,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Insert new tab at the same position; ItemsSource creates a new WorkspaceDocument automatically.
         if (paneIndex >= 0 && paneIndex <= pane.Tabs.Count)
-            pane.Tabs.Insert(paneIndex, newTab);
+            this.RunSuppressingDockOrderSync(() => pane.Tabs.Insert(paneIndex, newTab));
         else
             pane.Tabs.Add(newTab);
 
@@ -2595,26 +2595,58 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     /// <summary>
-    /// Synchronizes <see cref="WorkspacePaneViewModel.Tabs"/> when the dock model fires a
-    /// <see cref="INotifyCollectionChanged"/> event on <c>VisibleDockables</c>.
-    /// Handles user-initiated closes (Remove) and drag-reorders (Reset/Move).
-    /// Add events are ignored because <see cref="MainWindowViewModel"/> manages adds explicitly.
+    /// Synchronizes the ORDER of <see cref="WorkspacePaneViewModel.Tabs"/> when the dock model
+    /// fires a <see cref="INotifyCollectionChanged"/> event on <c>VisibleDockables</c>.
+    /// Disposal and tab removal on close/float are handled exclusively by OnDockableTabClosed;
+    /// this method never adds or removes tabs. It re-derives the visual ORDER for every
+    /// structural change — including the Add + Remove pair that Dock.Avalonia's live drag-reorder
+    /// emits instead of a <see cref="NotifyCollectionChangedAction.Move"/> — so Alt+N indexing and
+    /// the numbered tab badges (which read <see cref="WorkspacePaneViewModel.Tabs"/>) always
+    /// reflect the current visual order. <see cref="SyncPaneTabsOrderFromDock"/> only reorders
+    /// tabs present in both collections, so it is membership-safe and idempotent for every action.
     /// </summary>
     private void SyncPaneTabsFromDockChange(
         WorkspacePaneViewModel workspacePane,
         IDocumentDock documentDock,
         NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action == NotifyCollectionChangedAction.Remove)
-        {
-            // Remove events fire for both close and float. Disposal and tab removal are
-            // handled exclusively by OnDockableTabClosed (called from WorkspaceDockFactory
-            // .OnDockableClosed, which is only invoked by CloseDockable, never FloatDockable).
-        }
-        else if (e.Action is NotifyCollectionChangedAction.Move
+        if (this.suppressDockOrderSync) return;
+
+        if (e.Action is NotifyCollectionChangedAction.Add
+            or NotifyCollectionChangedAction.Remove
+            or NotifyCollectionChangedAction.Move
+            or NotifyCollectionChangedAction.Replace
             or NotifyCollectionChangedAction.Reset)
         {
             SyncPaneTabsOrderFromDock(workspacePane, documentDock);
+        }
+    }
+
+    /// <summary>
+    /// Set while this view-model is programmatically inserting a tab into a pane's
+    /// <see cref="WorkspacePaneViewModel.Tabs"/> collection at a specific index. The Dock library
+    /// reacts synchronously by <b>appending</b> the generated document to the end of
+    /// <c>VisibleDockables</c> — it does not honour the insert index (see #1065). Without this
+    /// guard, the reentrant dock-order back-sync in <see cref="SyncPaneTabsFromDockChange"/> would
+    /// observe that appended order and overwrite the correct, app-authored <c>Tabs</c> order.
+    /// Suppressing the back-sync for the duration of the programmatic insert keeps <c>Tabs</c>
+    /// authoritative for app-driven inserts, while user drag-reorders (which mutate
+    /// <c>VisibleDockables</c> directly, outside any <c>Tabs</c> mutation) still sync back so the
+    /// Alt+N badges follow the new visual order.
+    /// </summary>
+    private bool suppressDockOrderSync;
+
+    private void RunSuppressingDockOrderSync(Action mutation)
+    {
+        var previous = this.suppressDockOrderSync;
+        this.suppressDockOrderSync = true;
+        try
+        {
+            mutation();
+        }
+        finally
+        {
+            this.suppressDockOrderSync = previous;
         }
     }
 

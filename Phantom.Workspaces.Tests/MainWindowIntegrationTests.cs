@@ -5576,6 +5576,79 @@ public sealed class MainWindowIntegrationTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AltN_AfterDragReorderViaRemoveAndInsert_ReflectsVisualOrder()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "ri-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "ri-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "ri-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Dock.Avalonia's live drag-reorder does NOT emit a Move; it removes the dragged
+        // dockable and re-inserts it at the drop position, firing a Remove then an Add.
+        var visibleDockables = documentDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docC = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "ri-c");
+        visibleDockables.RemoveAt(visibleDockables.IndexOf(docC));
+        visibleDockables.Insert(0, docC);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("ri-c", docs[0].Id);
+        Assert.Equal("ri-a", docs[1].Id);
+        Assert.Equal("ri-b", docs[2].Id);
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task AltN_AfterInsertToRight_ReflectsVisualOrder()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "ir-a", Title = "Tab A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "ir-b", Title = "Tab B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "ir-c", Title = "Tab C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Drag the first tab (A) one position to the right via the Remove + Insert pair.
+        var visibleDockables = documentDock!.VisibleDockables as System.Collections.ObjectModel.ObservableCollection<IDockable>;
+        Assert.NotNull(visibleDockables);
+        var docA = visibleDockables!.OfType<WorkspaceDocument>().First(d => d.Id == "ir-a");
+        visibleDockables.RemoveAt(visibleDockables.IndexOf(docA));
+        visibleDockables.Insert(1, docA);
+
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+
+        var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("ir-b", docs[0].Id);
+        Assert.Equal("ir-a", docs[1].Id);
+        Assert.Equal("ir-c", docs[2].Id);
+        Assert.Equal("1", docs[0].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("2", docs[1].EffectiveTabHeader.AltShortcutLabel);
+        Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
+
+        // Alt+2 must now activate the tab that is visually second (A), not the stale Tabs order.
+        viewModel.GoToTabAtIndexCommand.Execute("1");
+        Assert.Equal(docs[1], documentDock.ActiveDockable);
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_TwoPanesHorizontal_EachWorkspaceNumberedFromOne()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
