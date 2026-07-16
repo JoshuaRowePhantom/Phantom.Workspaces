@@ -12,4 +12,10 @@ public sealed record SlashCommandResult
     
     /// <summary>Optional role hint for how the status message should be rendered.</summary>
     public ChatRole? Role { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/> (the default), the status message is displayed as a transient
+    /// inline notification rather than being persisted to the conversation history.
+    /// </summary>
+    public bool IsTransient { get; init; } = true;
 }

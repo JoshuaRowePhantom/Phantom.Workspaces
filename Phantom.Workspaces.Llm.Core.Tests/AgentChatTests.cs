@@ -2018,4 +2018,39 @@ public sealed class AgentChatTests
         Assert.Contains("Provider communication failed", errorContent.Message);
     }
 
+    [Fact]
+    public void RaiseTransientNotification_WithText_DoesNotModifyHistory()
+    {
+        var chat = CreateChat();
+        var received = new List<string>();
+        chat.TransientNotification += (_, text) => received.Add(text);
+
+        chat.RaiseTransientNotification("hello");
+
+        Assert.Empty(chat.History);
+        Assert.Single(received);
+        Assert.Equal("hello", received[0]);
+    }
+
+    [Fact]
+    public void RaiseTransientNotification_WithWhitespace_IsNoop()
+    {
+        var chat = CreateChat();
+        var received = new List<string>();
+        chat.TransientNotification += (_, text) => received.Add(text);
+
+        chat.RaiseTransientNotification(string.Empty);
+        chat.RaiseTransientNotification("   ");
+
+        Assert.Empty(received);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public void SlashCommandResult_StatusMessage_IsTransientByDefault()
+    {
+        var result = new Phantom.Workspaces.Llm.SlashCommands.SlashCommandResult { StatusMessage = "x" };
+        Assert.True(result.IsTransient);
+    }
+
 }

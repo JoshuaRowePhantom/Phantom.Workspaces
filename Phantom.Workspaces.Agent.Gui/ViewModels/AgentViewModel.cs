@@ -431,7 +431,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             result = new SlashCommandResult
             {
                 StatusMessage = $"Command /{commandName} failed: {exception.Message}",
+                IsTransient = false,
             };
+        }
+
+        // Transient results are displayed as a one-off inline notification rather than
+        // being persisted into conversation history.
+        if (result.IsTransient)
+        {
+            this.agentChat.RaiseTransientNotification(result.StatusMessage);
+            return;
         }
 
         // Show the status message as a system note in the chat history so the user

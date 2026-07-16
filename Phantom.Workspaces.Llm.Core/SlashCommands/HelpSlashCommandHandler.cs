@@ -75,7 +75,8 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
         return new SlashCommandResult 
         { 
             StatusMessage = string.Join('\n', lines),
-            Role = AgentChatHistoryItem.HelpChatRole
+            Role = AgentChatHistoryItem.HelpChatRole,
+            IsTransient = false,
         };
     }
 
@@ -89,7 +90,7 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
 
         if (handler is null)
         {
-            return new SlashCommandResult { StatusMessage = $"Unknown command: /{commandName}" };
+            return new SlashCommandResult { StatusMessage = $"Unknown command: /{commandName}", IsTransient = false };
         }
 
         var body = await handler.GetHelpAsync(context, string.Empty, cancellationToken);
@@ -97,7 +98,8 @@ public sealed class HelpSlashCommandHandler : ISlashCommandHandler
         return new SlashCommandResult 
         { 
             StatusMessage = $"{usage}{body}",
-            Role = AgentChatHistoryItem.HelpChatRole
+            Role = AgentChatHistoryItem.HelpChatRole,
+            IsTransient = false,
         };
     }
 }

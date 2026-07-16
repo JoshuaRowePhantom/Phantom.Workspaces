@@ -353,6 +353,12 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
+
+    /// <summary>
+    /// Raised when a slash command or the host wants to display a one-off status message
+    /// in the chat area without persisting it to conversation history.
+    /// </summary>
+    public event EventHandler<string>? TransientNotification;
     
     /// <summary>
     /// Fired when the completion state of this agent changes.
@@ -636,6 +642,20 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
+    }
+
+    /// <summary>
+    /// Fires <see cref="TransientNotification"/> without touching <see cref="History"/>.
+    /// Used for slash-command status messages that should be shown as one-off inline notifications.
+    /// </summary>
+    public void RaiseTransientNotification(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        this.TransientNotification?.Invoke(this, text);
     }
 
     /// <summary>
