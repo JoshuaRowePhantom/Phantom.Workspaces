@@ -42,6 +42,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Task<EntityBroker> entityBrokerTask;
     private readonly WorkspacesConfiguration? configuration;
     private WorkspacesWebHost? webHost;
+    private Services.WorkspacesTransportComposition? transportComposition;
     private Services.DevTunnel.IDevTunnelHostService? devTunnelHostService;
     private Task? devTunnelHostStartTask;
     private EntityBroker? entityBroker;
@@ -740,9 +741,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         var reverseExecutionRegistry = this.reverseExecutionRegistry;
+        var composition = new Services.WorkspacesTransportComposition(
+            this.entityBroker!.EntityRepository.DataAccessLayer,
+            this.entityBroker.EntityRepository.WorkspaceEntitySession);
+        this.transportComposition = composition;
         this.webHost = new WorkspacesWebHost(reverseExecutionRegistry);
         this.ConnectionStatus = new ConnectionStatusViewModel(
-            reverseExecutionRegistry,
+            composition.ConnectionStatusRegistry,
             action => Dispatcher.UIThread.Post(action));
 
         if (this.configuration.RemoteHosting.Enabled && this.entityBroker is not null)
@@ -4288,6 +4293,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (this.webHost is not null)
         {
             await this.webHost.DisposeAsync();
+        }
+
+        if (this.transportComposition is not null)
+        {
+            await this.transportComposition.DisposeAsync();
         }
 
         foreach (var pane in this.WorkspacePanes)
