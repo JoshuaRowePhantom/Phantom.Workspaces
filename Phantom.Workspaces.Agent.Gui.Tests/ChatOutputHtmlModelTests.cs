@@ -246,6 +246,38 @@ public sealed class ChatOutputHtmlModelTests
     }
 
     [PhantomAvaloniaFact(Timeout = 15_000)]
+    public async Task RunningItem_ReplacingNullEntryWithRealItem_ActivatesAndRendersMessages()
+    {
+        // The running item starts as a null placeholder, so its model's Activate() no-ops and no
+        // transformer is built. When the entry is later replaced with a real item, Update() must
+        // recover by activating, otherwise streamed messages are silently dropped forever.
+        var running = new ObservableCollection<AgentChatRunningItem> { null! };
+        var sink = new RecordingSink();
+
+        using var model = new ChatOutputHtmlModel(
+            new ObservableCollection<AgentChatHistoryItem>(),
+            running,
+            () => true,
+            sink);
+
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        var realItem = new AgentChatRunningItem();
+        realItem.Items.Add(TextMessage(ChatRole.Assistant, "recovered"));
+        running[0] = realItem;
+
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains(">recovered<"));
+
+        sink.Clear();
+
+        // Subsequent streaming into the now-activated item must also render.
+        realItem.Items.Add(TextMessage(ChatRole.Assistant, "streamed"));
+
+        Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains(">streamed<"));
+    }
+
+    [PhantomAvaloniaFact(Timeout = 15_000)]
     public async Task HtmlEscape_EscapesMarkupInMessageText()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>

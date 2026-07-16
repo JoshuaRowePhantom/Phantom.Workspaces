@@ -1120,7 +1120,20 @@ internal sealed class RunningChatItemHtmlModel : IDisposable
         var previousItems = this.Source?.Items;
         this.Source = source;
 
-        if (ReferenceEquals(previousItems, source?.Items) || this.transformer is null)
+        if (this.transformer is null)
+        {
+            // Recover from a deferred activation: if the item was inserted while its source was
+            // null (so Activate() no-opped), build the transformer now that a valid source has
+            // arrived. Otherwise streaming updates would be silently dropped forever.
+            if (this.IsInserted && source is not null)
+            {
+                this.Activate();
+            }
+
+            return;
+        }
+
+        if (ReferenceEquals(previousItems, source?.Items))
         {
             return;
         }
