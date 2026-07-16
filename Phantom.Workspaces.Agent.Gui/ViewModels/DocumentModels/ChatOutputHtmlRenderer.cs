@@ -328,6 +328,41 @@ internal static class ChatOutputHtmlRenderer
         return builder.ToString();
     }
 
+    /// <summary>
+    /// Renders a breadcrumb bar of ancestor links for a sub-agent view, root-first. Each entry is a
+    /// <c>chat-jump-link</c> button carrying <c>data-navigate-agent-id</c> so the existing JS click
+    /// handler dispatches navigation. Returns <see cref="string.Empty"/> when <paramref name="ancestors"/>
+    /// is empty (i.e. root agent — no ancestors to display).
+    /// </summary>
+    public static string RenderAncestorLinks(IReadOnlyList<AncestorLinkHtmlModel> ancestors)
+    {
+        if (ancestors.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+        sb.Append("<div class=\"chat-ancestor-breadcrumb\">");
+        for (var i = 0; i < ancestors.Count; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(" &rsaquo; ");
+            }
+
+            var a = ancestors[i];
+            var label = a.IsRoot ? a.DisplayName + " (root)"
+                : a.IsCurrent ? a.DisplayName + " (current)"
+                : a.DisplayName;
+            sb.Append("<button class=\"chat-jump-link\" data-navigate-agent-id=\"")
+                .Append(HtmlEscape(a.AgentId)).Append("\">")
+                .Append(HtmlEscape(label)).Append("</button>");
+        }
+
+        sb.Append("</div>");
+        return sb.ToString();
+    }
+
 
     public static string RenderRunningItemContainer(string runningItemId)
         => $"<div class=\"chat-running-item\" id=\"{runningItemId}\"><div class=\"chat-running-contents\" id=\"{RunningItemContentsId(runningItemId)}\"></div></div>";
@@ -849,3 +884,8 @@ internal static class ChatOutputHtmlRenderer
         }
     }
 }
+
+/// <summary>
+/// Immutable model for a single ancestor entry in the breadcrumb bar.
+/// </summary>
+internal sealed record AncestorLinkHtmlModel(string AgentId, string DisplayName, bool IsRoot, bool IsCurrent);

@@ -602,6 +602,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
         var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler);
+        // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
+        // (issue #1046): the parent can resolve its own children, and if the target is above this
+        // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
+        subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
@@ -636,6 +640,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void NavigateToSubAgent(string agentId)
     {
+        // If the target is this agent itself, show the conversation view (navigate to self/root).
+        if (string.Equals(agentId, this.agentChat.AgentId, StringComparison.Ordinal))
+        {
+            if (this.EditorItems.Count > 0)
+            {
+                this.SelectedEditorItem = this.EditorItems[0];
+            }
+
+            return;
+        }
+
         // Select the "Sub-agents" group node in the editor tree so the container is shown,
         // then tell the container to display the requested sub-agent.
         if (this.EditorItems.Count == 0)

@@ -220,6 +220,89 @@ public sealed class AgentChatOutputJumpLinkTests
         Assert.Contains("navigateToAgent", html, StringComparison.Ordinal);
     }
 
+    // ── Issue #1046: ancestor breadcrumb link tests ─────────────────────────
+
+    [Fact]
+    public void RenderAncestorLinks_NestedSubAgent_RendersParentAndGrandparentLinks()
+    {
+        var ancestors = new List<AncestorLinkHtmlModel>
+        {
+            new("root-id", "RootAgent", IsRoot: true, IsCurrent: false),
+            new("mid-id", "MidAgent", IsRoot: false, IsCurrent: false),
+            new("cur-id", "CurrentAgent", IsRoot: false, IsCurrent: true),
+        };
+
+        var html = ChatOutputHtmlRenderer.RenderAncestorLinks(ancestors);
+
+        Assert.Contains("data-navigate-agent-id=\"root-id\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-navigate-agent-id=\"mid-id\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-navigate-agent-id=\"cur-id\"", html, StringComparison.Ordinal);
+        Assert.Contains("RootAgent", html, StringComparison.Ordinal);
+        Assert.Contains("MidAgent", html, StringComparison.Ordinal);
+        Assert.Contains("CurrentAgent", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderAncestorLinks_RootAgent_RendersNoAncestorLinks()
+    {
+        var html = ChatOutputHtmlRenderer.RenderAncestorLinks(new List<AncestorLinkHtmlModel>());
+
+        Assert.Equal(string.Empty, html);
+    }
+
+    [Fact]
+    public void RenderAncestorLinks_ReusesNavigateAgentIdMarker()
+    {
+        var ancestors = new List<AncestorLinkHtmlModel>
+        {
+            new("root-id", "Root", IsRoot: true, IsCurrent: false),
+            new("cur-id", "Current", IsRoot: false, IsCurrent: true),
+        };
+
+        var html = ChatOutputHtmlRenderer.RenderAncestorLinks(ancestors);
+
+        // Same convention as child jump links.
+        Assert.Contains("data-navigate-agent-id", html, StringComparison.Ordinal);
+        Assert.Contains("chat-jump-link", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderAncestorLinks_OrdersBreadcrumbRootToCurrent()
+    {
+        var ancestors = new List<AncestorLinkHtmlModel>
+        {
+            new("root-id", "RootAgent", IsRoot: true, IsCurrent: false),
+            new("mid-id", "MidAgent", IsRoot: false, IsCurrent: false),
+            new("cur-id", "CurrentAgent", IsRoot: false, IsCurrent: true),
+        };
+
+        var html = ChatOutputHtmlRenderer.RenderAncestorLinks(ancestors);
+
+        Assert.Contains("(root)", html, StringComparison.Ordinal);
+        Assert.Contains("(current)", html, StringComparison.Ordinal);
+
+        // Root appears before current.
+        var rootIndex = html.IndexOf("(root)", StringComparison.Ordinal);
+        var currentIndex = html.IndexOf("(current)", StringComparison.Ordinal);
+        Assert.True(rootIndex < currentIndex);
+    }
+
+    [Fact]
+    public void RenderAncestorLinks_EscapesAgentIdAndDisplayName()
+    {
+        var ancestors = new List<AncestorLinkHtmlModel>
+        {
+            new("id<\"x\">", "Name<\"y\">", IsRoot: true, IsCurrent: true),
+        };
+
+        var html = ChatOutputHtmlRenderer.RenderAncestorLinks(ancestors);
+
+        Assert.DoesNotContain("id<\"x\">", html, StringComparison.Ordinal);
+        Assert.Contains("id&lt;&quot;x&quot;&gt;", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("Name<\"y\">", html, StringComparison.Ordinal);
+        Assert.Contains("Name&lt;&quot;y&quot;&gt;", html, StringComparison.Ordinal);
+    }
+
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     private sealed record Operation(string Kind, string Path, ChatOutputUpdateLocation Location, string Content);

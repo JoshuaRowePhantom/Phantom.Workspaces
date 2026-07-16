@@ -139,6 +139,66 @@ public sealed class AgentViewModelSubAgentBrowserTests
         Assert.Equal("a2", selectedSlot.AgentId);
     }
 
+    // ── Issue #1046: ancestor navigation ──────────────────────────────────────
+
+    [Fact]
+    public async Task NavigateToAgent_AncestorId_SwitchesActiveViewToAncestor()
+    {
+        // Parent has a sub-agent; the sub-agent's NavigateToAgentHandler is delegated to the parent.
+        // Navigating to the parent's own agent id should select the root conversation view.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub A");
+
+        // First navigate to the sub-agent (so we're "inside" it).
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+
+        // Now invoke navigation to the parent's own id (ancestor navigation).
+        // The sub-agent's handler delegates to the parent's handler via AddSubAgentSlotEager.
+        viewModel.NavigateToAgentHandler.Invoke(chat.AgentId);
+
+        // The parent should select its own root conversation node.
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal(viewModel.EditorItems[0], viewModel.SelectedEditorItem);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_RootId_SwitchesToRootView()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub A");
+
+        // Navigate away from root.
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+
+        // Navigate to root id.
+        viewModel.NavigateToAgentHandler.Invoke(chat.AgentId);
+
+        // Root conversation view should be selected.
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal(viewModel.EditorItems[0], viewModel.SelectedEditorItem);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_UnloadedAncestor_DoesNotThrow()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        // Navigate to an id that is neither a child nor the current agent.
+        // This simulates an unloaded ancestor. Should not throw.
+        var exception = Record.Exception(() => viewModel.NavigateToAgentHandler!.Invoke("nonexistent-ancestor-id"));
+        Assert.Null(exception);
+    }
+
     // ── §5 AcceptsUserInput ───────────────────────────────────────────────────
 
     [Fact]

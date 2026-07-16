@@ -419,6 +419,29 @@
     .running-subagent-row[data-depth="5"] {
       padding-left: 7.5em;
     }
+
+    /* ancestor breadcrumb (issue #1046) ------------------------------------- */
+
+    .chat-ancestor-breadcrumb {
+      padding: 0.3em 0.5em;
+      font-size: 0.85em;
+      opacity: 0.8;
+      margin-bottom: 0.5em;
+    }
+
+    .chat-ancestor-breadcrumb .chat-jump-link {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--chat-link-color, #4078c0);
+      text-decoration: underline;
+      padding: 0 0.2em;
+      font-size: inherit;
+    }
+
+    .chat-ancestor-breadcrumb .chat-jump-link:hover {
+      opacity: 0.8;
+    }
   </style>
 </head>
 <body>

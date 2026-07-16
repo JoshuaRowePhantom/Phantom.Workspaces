@@ -474,12 +474,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     /// </summary>
     private static IReadOnlyList<IRunningSubAgent> BuildAncestors(AgentChat agentChat)
     {
+        const int maxDepth = 64;
         var chain = new List<IRunningSubAgent>();
         AgentChat? current = agentChat;
-        while (current is not null)
+        var depth = 0;
+        while (current is not null && depth < maxDepth)
         {
             chain.Add(current);
             current = current.ParentAgent;
+            depth++;
         }
 
         chain.Reverse();

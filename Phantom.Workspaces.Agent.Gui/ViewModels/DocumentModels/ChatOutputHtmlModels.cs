@@ -1372,6 +1372,29 @@ public sealed class ChatOutputHtmlModel : IDisposable
             this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink);
         }
 
+        // Emit the always-present ancestor breadcrumb for non-root agents (issue #1046).
+        // BuildAncestors includes the current agent, so a root agent yields a single-entry
+        // chain (just itself); only emit when there is at least one real ancestor above it.
+        if (ancestors is { Count: > 1 })
+        {
+            var ancestorModels = new List<AncestorLinkHtmlModel>(ancestors.Count);
+            for (var i = 0; i < ancestors.Count; i++)
+            {
+                var a = ancestors[i];
+                ancestorModels.Add(new AncestorLinkHtmlModel(
+                    a.AgentId,
+                    a.DisplayName,
+                    IsRoot: i == 0,
+                    IsCurrent: i == ancestors.Count - 1));
+            }
+
+            var breadcrumbHtml = ChatOutputHtmlRenderer.RenderAncestorLinks(ancestorModels);
+            if (!string.IsNullOrEmpty(breadcrumbHtml))
+            {
+                sink.UpdateContent(ChatOutputHtmlRenderer.HistoryContainerId, ChatOutputUpdateLocation.Prepend, breadcrumbHtml);
+            }
+        }
+
         if (runningItems is INotifyCollectionChanged runningChanged)
         {
             runningChanged.CollectionChanged += this.OnRunningCollectionChanged;
