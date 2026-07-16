@@ -869,12 +869,13 @@ public sealed class SharedStylesTests
     [Fact]
     public void EntityCardTreeViewStyle_PointerOver_RecoloursBothBorderAndFooter()
     {
-        // Issue #1045: the item's :pointerover recolours both the shell border and the footer.
+        // Issue #1048: hover is now scoped to the StackPanel.entity-card-tree-item:pointerover,
+        // not TreeViewItem:pointerover. Both border and footer are still recoloured (preserves #1045).
         var styles = ReadSharedStylesText();
 
         var borderRule = ExtractStyle(
             styles,
-            "TreeView.entity-card-tree-view TreeViewItem:pointerover Border.entity-card-shell-border");
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
         Assert.Contains(
             "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
             borderRule,
@@ -882,7 +883,7 @@ public sealed class SharedStylesTests
 
         var footerRule = ExtractStyle(
             styles,
-            "TreeView.entity-card-tree-view TreeViewItem:pointerover Button.entity-card-shell-footer");
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Button.entity-card-shell-footer");
         Assert.Contains(
             "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
             footerRule,
@@ -902,12 +903,13 @@ public sealed class SharedStylesTests
     [Fact]
     public void EntityCardTreeViewStyle_Selected_RecoloursBothBorderAndFooter()
     {
-        // Issue #1045: the item's :selected recolours both the shell border and the footer gold.
+        // Issue #1048: selection is now scoped to the StackPanel.entity-card-tree-item.selected class,
+        // not TreeViewItem:selected. Both border and footer are still recoloured (preserves #1045).
         var styles = ReadSharedStylesText();
 
         var borderRule = ExtractStyle(
             styles,
-            "TreeView.entity-card-tree-view TreeViewItem:selected Border.entity-card-shell-border");
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item.selected Border.entity-card-shell-border");
         Assert.Contains(
             "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
             borderRule,
@@ -915,11 +917,178 @@ public sealed class SharedStylesTests
 
         var footerRule = ExtractStyle(
             styles,
-            "TreeView.entity-card-tree-view TreeViewItem:selected Button.entity-card-shell-footer");
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item.selected Button.entity-card-shell-footer");
         Assert.Contains(
             "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
             footerRule,
             StringComparison.Ordinal);
+    }
+
+    // Issue #1048 — new tests -----------------------------------------------------------------------
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOverHighlight_ScopedToOwnHeaderStackPanel()
+    {
+        // The blue ActiveBorder recolour selectors are keyed off StackPanel.entity-card-tree-item:pointerover
+        // (not TreeViewItem:pointerover), so hover cannot propagate to ancestor/descendant items.
+        var styles = ReadSharedStylesText();
+
+        var borderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
+            borderRule,
+            StringComparison.Ordinal);
+
+        var treeViewBorderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.ActiveBorder}\" />",
+            treeViewBorderRule,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOver_NoTreeViewItemPointerOverDescendantSelector()
+    {
+        // The old TreeViewItem:pointerover descendant selectors must be gone to prevent regression.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Button.entity-card-shell-footer",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_PointerOver_StillRecoloursBothBorderAndFooter()
+    {
+        // Preserves #1045: both the shell border AND the footer are recoloured to ActiveBorder
+        // under the new scoped selector (hovering header or footer recolours both).
+        var styles = ReadSharedStylesText();
+
+        // entity-card-tree variant
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item:pointerover Button.entity-card-shell-footer");
+
+        // entity-card-tree-view variant
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Border.entity-card-shell-border");
+        _ = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item:pointerover Button.entity-card-shell-footer");
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_SelectedHighlight_ScopedToOwnHeaderStackPanelClass()
+    {
+        // The gold SelectedBorder recolour is keyed off StackPanel.entity-card-tree-item.selected
+        // and the template binds Classes.selected to the container IsSelected.
+        var styles = ReadSharedStylesText();
+
+        // Template must bind Classes.selected
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("Classes.selected=", template, StringComparison.Ordinal);
+
+        // Selection selectors for both tree class variants
+        var borderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree StackPanel.entity-card-tree-item.selected Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
+            borderRule,
+            StringComparison.Ordinal);
+
+        var treeViewBorderRule = ExtractStyle(
+            styles,
+            "TreeView.entity-card-tree-view StackPanel.entity-card-tree-item.selected Border.entity-card-shell-border");
+        Assert.Contains(
+            "<Setter Property=\"BorderBrush\" Value=\"{DynamicResource Theme.Surface.EntityCard.SelectedBorder}\" />",
+            treeViewBorderRule,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeViewStyle_Selected_NoTreeViewItemSelectedDescendantSelector()
+    {
+        // The old TreeViewItem:selected descendant selectors must be gone.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:selected Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TreeViewItem:selected Button.entity-card-shell-footer",
+            styles,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_HoverChildItem_DoesNotHighlightParentBorder()
+    {
+        // Selector-scope proxy: because the hover selector is keyed off
+        // StackPanel.entity-card-tree-item:pointerover (not TreeViewItem:pointerover),
+        // a child's header hover cannot propagate to the parent's StackPanel — the parent's
+        // StackPanel is a sibling of the ItemsPresenter containing the child, not an ancestor.
+        var styles = ReadSharedStylesText();
+
+        // The selector uses StackPanel.entity-card-tree-item:pointerover, not TreeViewItem:pointerover.
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+
+        // And the template places ItemsPresenter as a sibling of the StackPanel, not a descendant.
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("StackPanel Grid.Row=\"0\"", template, StringComparison.Ordinal);
+        Assert.Contains("ItemsPresenter Grid.Column=\"1\" Grid.Row=\"1\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_HoverParentHeader_DoesNotHighlightChildBorders()
+    {
+        // Selector-scope proxy: the hover selector descends from StackPanel.entity-card-tree-item:pointerover,
+        // not TreeViewItem:pointerover. The StackPanel is in grid row 0, and children are in
+        // the row-1 ItemsPresenter (a sibling), so the descendant combinator cannot reach child borders.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:pointerover Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("ItemsPresenter Grid.Column=\"1\" Grid.Row=\"1\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardTreeView_SelectParent_DoesNotHighlightChildBorders()
+    {
+        // Selector-scope proxy: the selection selector uses StackPanel.entity-card-tree-item.selected,
+        // not TreeViewItem:selected. Classes.selected is bound to the container's IsSelected via
+        // the template, so only THIS item's StackPanel gets the .selected class — child StackPanels
+        // in the row-1 ItemsPresenter do not inherit it.
+        var styles = ReadSharedStylesText();
+
+        Assert.DoesNotContain(
+            "TreeViewItem:selected Border.entity-card-shell-border",
+            styles,
+            StringComparison.Ordinal);
+
+        var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
+        Assert.Contains("Classes.selected=", template, StringComparison.Ordinal);
     }
 
     [Fact]
