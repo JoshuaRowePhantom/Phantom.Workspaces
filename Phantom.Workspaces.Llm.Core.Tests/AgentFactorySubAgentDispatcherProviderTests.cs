@@ -45,11 +45,13 @@ public sealed class AgentFactorySubAgentDispatcherProviderTests
             }
             """);
 
-        // The dispatcher branch is recognised but not yet wired up: it throws a distinct
-        // NotSupportedException rather than the InvalidOperationException used for unknown
-        // providers. Reaching this exception proves the discriminator routed to the branch.
-        var exception = Assert.Throws<NotSupportedException>(() => AgentFactory.CreateChatClient(agent));
+        // The dispatcher branch is now fully wired: constructing without SubAgentDispatcherDependencies
+        // throws a distinct InvalidOperationException naming the required dependencies (proving the
+        // discriminator routed to the dispatcher branch), rather than the "Unknown or unsupported
+        // provider" error used for unrecognised providers.
+        var exception = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateChatClient(agent));
         Assert.Contains("sub-agent-dispatcher", exception.Message);
+        Assert.Contains("SubAgentDispatcherDependencies", exception.Message);
     }
 
     [Fact]

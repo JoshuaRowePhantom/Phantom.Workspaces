@@ -205,7 +205,8 @@ public static class AgentFactory
         AgentServices? services,
         AgentInputQueueManager? queueManager = null,
         IApiKeyResolver? apiKeyResolver = null,
-        ISubAgentChatRegistry? subAgentChatRegistry = null)
+        ISubAgentChatRegistry? subAgentChatRegistry = null,
+        SubAgentDispatcherDependencies? dispatcherDependencies = null)
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
 
@@ -244,7 +245,7 @@ public static class AgentFactory
             "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
             "openai" or "azure-openai" => CreateGitHubCopilotByokResult(provider, model, services, queueManager, resolver, subAgentChatRegistry),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
-            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(),
+            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(services, dispatcherDependencies),
             _ => throw new InvalidOperationException(
                 $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, sub-agent-dispatcher, ollama, openai, azure-openai"),
         };
@@ -270,6 +271,7 @@ public static class AgentFactory
         AgentInputQueueManager? queueManager = null,
         IApiKeyResolver? apiKeyResolver = null,
         ISubAgentChatRegistry? subAgentChatRegistry = null,
+        SubAgentDispatcherDependencies? dispatcherDependencies = null,
         CancellationToken cancellationToken = default)
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
@@ -304,22 +306,53 @@ public static class AgentFactory
             "github-copilot" => await CreateGitHubCopilotResultAsync(model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "openai" or "azure-openai" => await CreateGitHubCopilotByokResultAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
-            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(),
+            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(services, dispatcherDependencies),
             _ => throw new InvalidOperationException(
                 $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, sub-agent-dispatcher, ollama, openai, azure-openai"),
         };
     }
 
-    // Recognises the "sub-agent-dispatcher" provider discriminator and routes it to the
-    // dispatcher branch. The full wiring (constructing SubAgentDispatcherChatClient with its
-    // dispatcher entity name, extracted AgentDefinitionTool list, and SubAgentDispatcherOptions)
-    // is completed in the AgentFactory integration commit; this skeleton exists so the provider
-    // switch resolves the discriminator distinctly from an unknown/unsupported provider.
-    private static ChatClientResult CreateSubAgentDispatcherResult()
+    // Constructs the SubAgentDispatcherChatClient for the "sub-agent-dispatcher" provider from the
+    // supplied dependencies. The dispatcher entity name, resolved AgentDefinitionTool list and
+    // embeddings/data-access services are threaded in via SubAgentDispatcherDependencies because
+    // AgentServices (in Llm.Interfaces) cannot reference the Data.Core types these require. The
+    // running-agent-chat factory falls back to AgentServices.RunningAgentChatFactory when it is not
+    // supplied explicitly.
+    private static ChatClientResult CreateSubAgentDispatcherResult(
+        AgentServices? services,
+        SubAgentDispatcherDependencies? dependencies)
     {
-        throw new NotSupportedException(
-            "The 'sub-agent-dispatcher' provider is recognised but not yet wired up. "
-            + "SubAgentDispatcherChatClient construction is completed by the AgentFactory integration commit.");
+        if (dependencies is null)
+        {
+            throw new InvalidOperationException(
+                "The 'sub-agent-dispatcher' provider requires SubAgentDispatcherDependencies to construct "
+                + "its SubAgentDispatcherChatClient. Supply them via the dispatcherDependencies parameter.");
+        }
+
+        var factory = dependencies.RunningAgentChatFactory
+            ?? services?.RunningAgentChatFactory as IRunningAgentChatFactory
+            ?? throw new InvalidOperationException(
+                "The 'sub-agent-dispatcher' provider requires an IRunningAgentChatFactory, supplied either in "
+                + "SubAgentDispatcherDependencies or via AgentServices.RunningAgentChatFactory.");
+
+        var dataAccessLayer = dependencies.DataAccessLayer
+            ?? throw new InvalidOperationException(
+                "The 'sub-agent-dispatcher' provider requires an IDataAccessLayer in SubAgentDispatcherDependencies.");
+
+        var options = new SubAgentDispatcherOptions
+        {
+            AgentDefinitionTools = dependencies.AgentDefinitionTools,
+        };
+
+        var client = new SubAgentDispatcherChatClient(
+            factory,
+            dependencies.EmbeddingsProvider,
+            dataAccessLayer,
+            dependencies.DispatcherEntityName,
+            options,
+            subAgentServices: services);
+
+        return new ChatClientResult(client, "Sub-agent dispatcher");
     }
 
     // Wraps the inner client with ToolResultSteeringMiddleware when a queue manager is provided.

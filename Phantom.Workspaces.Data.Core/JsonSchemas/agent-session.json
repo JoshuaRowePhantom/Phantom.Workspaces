@@ -27,12 +27,12 @@
       "description": "Entity ID of the user-computer-profile hosting this agent session."
     },
     "agent-definition-reference": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "string"
-      },
-      "description": "Entity-name reference to the agent-definition this session runs, used to reconstruct the definition when the session is resumed."
+      "$ref": "core.json#/$defs/entity-reference",
+      "x-entity-types": [
+        "agent-manifest",
+        "agent-definition"
+      ],
+      "description": "Reference to the agent-manifest or agent-definition this session runs, used to reconstruct the definition when the session is resumed. Accepts either an entity-name (array of strings) or an entity-id (uuid string)."
     },
     "parameter-values": {
       "type": "object",

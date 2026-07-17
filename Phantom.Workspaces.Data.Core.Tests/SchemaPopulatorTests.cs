@@ -151,6 +151,7 @@ public sealed class SchemaPopulatorTests
             ["defaults", "agent-manifests", "workspaces"],
             ["defaults", "agent-manifests", "github-copilot"],
             ["defaults", "agent-manifests", "github-models"],
+            ["defaults", "agent-manifests", "sub-agent-dispatcher"],
             ["defaults", "profiles", "default"],
             ["schedule", "every-day-at-09"],
         ];
