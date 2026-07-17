@@ -197,6 +197,41 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
     }
 
+    [AvaloniaFact]
+    public void ConfigurationPersistenceService_GetDefaultLogDirectoryPath_IsSiblingOfConfigFile()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), "phantom-config-dir", "config.json");
+
+        var logDirectory = ConfigurationPersistenceService.GetDefaultLogDirectoryPath(configPath);
+
+        Assert.Equal(
+            Path.Combine(Path.GetTempPath(), "phantom-config-dir", "logs"),
+            logDirectory);
+    }
+
+    [AvaloniaFact]
+    public async Task ConfigurationPersistenceService_RoundTripsLogDirectory_Setting()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            LogDirectory = Path.Combine(Path.GetTempPath(), "phantom-custom-logs"),
+        };
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Equal(configuration.LogDirectory, reloaded.LogDirectory);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
     private static string CreateTempConfigPath()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{System.Guid.NewGuid():N}");

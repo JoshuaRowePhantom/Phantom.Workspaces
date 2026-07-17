@@ -3,9 +3,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Server;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
@@ -45,6 +47,19 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         RemoteHostingSettings remoteHostingSettings,
         IDataAccessLayer dataAccessLayer,
         CancellationToken cancellationToken = default)
+        => await this.StartAsync(remoteHostingSettings, dataAccessLayer, logDirectoryProvider: null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// Starts the web server using the supplied configuration and data-access layer, registering the
+    /// #1086 rolling file logging provider against the single <paramref name="logDirectoryProvider"/>
+    /// directory (handed in from the config-resolved path — the host never computes its own). Does
+    /// nothing if hosting is not enabled or the server is already running.
+    /// </summary>
+    public async Task StartAsync(
+        RemoteHostingSettings remoteHostingSettings,
+        IDataAccessLayer dataAccessLayer,
+        ILogDirectoryProvider? logDirectoryProvider,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(remoteHostingSettings);
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
@@ -56,6 +71,13 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
 
         this.cancellationTokenSource = new CancellationTokenSource();
         var builder = WebApplication.CreateBuilder(["--urls", remoteHostingSettings.ListenUrl]);
+
+        if (logDirectoryProvider is not null)
+        {
+            builder.Logging.AddProvider(new RollingFileLoggerProvider(
+                logDirectoryProvider.LogDirectory,
+                LoggingBootstrap.DefaultRetention));
+        }
 
         builder.Services.AddSingleton(dataAccessLayer);
 

@@ -75,6 +75,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private RunningAgentBrainViewModel? runningAgentBrain;
     private UsageTrackerViewModel? usageTracker;
     private Services.UsageMetricsService? usageMetricsService;
+    private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
+    private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -93,6 +95,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ApplicationServices? applicationServices = null)
     {
         var services = applicationServices ?? CreateDefaultApplicationServices();
+        this.loggerFactory = services.LoggerFactory
+            ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
+        this.logDirectoryProvider = services.LogDirectoryProvider;
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
@@ -762,7 +767,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.webHost.StartAsync(
                 this.configuration.RemoteHosting,
-                this.entityBroker.EntityRepository.DataAccessLayer);
+                this.entityBroker.EntityRepository.DataAccessLayer,
+                this.logDirectoryProvider);
             this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
             this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
         }
