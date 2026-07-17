@@ -19,10 +19,61 @@
     },
     "manifest": {
       "$ref": "https://phantom-workspaces/schemas/agent-manifest.json"
+    },
+    "agent-type": {
+      "type": "string",
+      "description": "Discriminator for specialised agent-manifest variants. Set to \"sub-agent-dispatcher\" for dispatcher manifests."
+    },
+    "tools": {
+      "type": "array",
+      "description": "Tool entries used by sub-agent-dispatcher manifests in place of the manifest.template.tools path.",
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/agentDefinitionTool"
+          }
+        ]
+      }
     }
   },
   "required": [
     "entity-types",
     "manifest"
-  ]
+  ],
+  "$defs": {
+    "agentDefinitionTool": {
+      "type": "object",
+      "description": "A named sub-agent that the dispatcher can instantiate.",
+      "required": [
+        "kind",
+        "name",
+        "description"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "agent-definition"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "definition": {
+          "$ref": "https://phantom-workspaces/schemas/agent-definition.json",
+          "description": "Inline agent definition. Mutually exclusive with manifest-reference."
+        },
+        "manifest-reference": {
+          "$ref": "core.json#/$defs/entity-reference",
+          "x-entity-types": [
+            "agent-manifest"
+          ],
+          "description": "Entity reference to an existing agent-manifest entity. Mutually exclusive with definition."
+        }
+      }
+    }
+  }
 }

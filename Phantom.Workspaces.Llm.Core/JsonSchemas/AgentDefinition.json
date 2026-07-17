@@ -134,6 +134,9 @@
           },
           {
             "$ref": "#/$defs/tool"
+          },
+          {
+            "$ref": "#/$defs/agentDefinitionTool"
           }
         ]
       }
@@ -269,6 +272,55 @@
           }
         }
       }
+    },
+    "agentDefinitionTool": {
+      "type": "object",
+      "description": "A named sub-agent that a dispatcher can instantiate.",
+      "required": [
+        "kind",
+        "name",
+        "description"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "agent-definition"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "definition": {
+          "$ref": "https://phantom-workspaces/schemas/agent-definition.json",
+          "description": "Inline agent definition. Mutually exclusive with manifest-reference."
+        },
+        "manifest-reference": {
+          "$ref": "#/$defs/entityReference",
+          "x-entity-types": [
+            "agent-manifest"
+          ],
+          "description": "Entity reference to an existing agent-manifest entity. Mutually exclusive with definition."
+        }
+      }
+    },
+    "entityReference": {
+      "description": "A reference to a workspace entity, either by entity id (uuid) or by entity name (path components). Mirrors core.json#/$defs/entity-reference for standalone evaluation.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      ]
     }
   }
 }
