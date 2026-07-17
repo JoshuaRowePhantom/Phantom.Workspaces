@@ -50,7 +50,10 @@ public sealed class AgentSessionShortcutContext
             dataAccessLayer,
             ToolsetFactory.CreateWorkspaceGuiToolsetFactory(
                 workspaceGuiContextProvider,
-                ToolsetFactory.CreateDefaultToolsetFactory()));
+                ToolsetFactory.CreateCurrentSessionToolsetFactory(
+                    dataAccessLayer,
+                    await this.BuildCurrentSessionContextAsync(dataAccessLayer),
+                    ToolsetFactory.CreateDefaultToolsetFactory())));
 
         // Materialize a user-account entity the first time a Copilot session resolves a GitHub
         // token (issue #1047). Without this the upsert service is orphaned and no account entity
@@ -67,6 +70,49 @@ public sealed class AgentSessionShortcutContext
             ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
             AccountUpsertService = accountUpsertService,
         };
+    }
+
+    private async Task<CurrentSessionContext> BuildCurrentSessionContextAsync(
+        IDataAccessLayer dataAccessLayer)
+    {
+        var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
+        var userEntityName = new EntityName("users", "username", executionContext.UserName);
+        var computerEntityName = new EntityName("computers", "hostname", executionContext.ComputerName);
+        var profileEntityName = new EntityName(
+            "computer-user-profiles",
+            "users", "username", executionContext.UserName,
+            "computers", "hostname", executionContext.EffectiveComputerName);
+
+        var userComputerProfile = await ResolveEntityAsync(dataAccessLayer, profileEntityName);
+        var user = await ResolveEntityAsync(dataAccessLayer, userEntityName);
+        var computer = await ResolveEntityAsync(dataAccessLayer, computerEntityName);
+
+        return new CurrentSessionContext
+        {
+            AgentSessionId = string.Empty,
+            UserComputerProfile = userComputerProfile,
+            User = user,
+            Computer = computer,
+        };
+    }
+
+    private static async Task<EntitySnapshot?> ResolveEntityAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityName entityName)
+    {
+        var getResult = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest { EntityName = entityName },
+                ],
+            },
+            System.Threading.CancellationToken.None);
+
+        return getResult.Batches
+            .SelectMany(static batch => batch.Entities)
+            .FirstOrDefault(static entity => entity.Data is not null);
     }
 
     private IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)

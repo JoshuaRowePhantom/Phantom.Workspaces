@@ -94,6 +94,9 @@ public sealed class CurrentSessionContextProvider : AIContextProvider
             var agentSession = await this.ResolveAgentSessionAsync(cancellationToken);
             var userComputerProfile = includeProfile ? this.currentSessionContext.UserComputerProfile : null;
             var user = includeProfile ? this.currentSessionContext.User : null;
+            var computer = includeProfile
+                ? await this.ResolveComputerAsync(userComputerProfile, cancellationToken)
+                : null;
             var agentDefinition = includeDefinition
                 ? await this.ResolveAgentDefinitionAsync(cancellationToken)
                 : null;
@@ -104,6 +107,7 @@ public sealed class CurrentSessionContextProvider : AIContextProvider
                     agent_session = ToSerializableEntity(agentSession),
                     user_computer_profile = ToSerializableEntity(userComputerProfile),
                     user = ToSerializableEntity(user),
+                    computer = ToSerializableEntity(computer),
                     agent_definition = ToSerializableEntity(agentDefinition),
                 });
         }
@@ -144,6 +148,58 @@ public sealed class CurrentSessionContextProvider : AIContextProvider
             return queryResult.Batches
                 .SelectMany(static batch => batch.Entities)
                 .FirstOrDefault(static entity => entity.Data is not null);
+        }
+
+        private async Task<EntitySnapshot?> ResolveComputerAsync(
+            EntitySnapshot? userComputerProfile,
+            CancellationToken cancellationToken)
+        {
+            if (this.currentSessionContext.Computer is EntitySnapshot computer)
+            {
+                return computer;
+            }
+
+            if (!TryReadEntityNameReference(userComputerProfile, "computer-reference", out var computerReference))
+            {
+                return null;
+            }
+
+            var getResult = await this.dataAccessLayer.GetAsync(
+                new GetRequest
+                {
+                    Entities =
+                    [
+                        new GetEntityRequest { EntityName = computerReference },
+                    ],
+                },
+                cancellationToken);
+
+            return getResult.Batches
+                .SelectMany(static batch => batch.Entities)
+                .FirstOrDefault(static entity => entity.Data is not null);
+        }
+
+        private static bool TryReadEntityNameReference(
+            EntitySnapshot? entity,
+            string fieldName,
+            out EntityName entityName)
+        {
+            entityName = default;
+            if (entity?.Data is not JsonElement data
+                || data.ValueKind != JsonValueKind.Object
+                || !data.TryGetProperty(fieldName, out var referenceElement))
+            {
+                return false;
+            }
+
+            if (referenceElement.TryReadEntityName() is not EntityName resolved
+                || resolved == EntityName.Root)
+            {
+                return false;
+            }
+
+            entityName = resolved;
+            return true;
         }
 
         private async Task<EntitySnapshot?> ResolveAgentDefinitionAsync(CancellationToken cancellationToken)

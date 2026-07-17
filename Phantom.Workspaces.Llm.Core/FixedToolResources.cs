@@ -16,6 +16,9 @@ public static class FixedToolResources
     /// <summary>The workspace GUI toolset name (open/close panes and tabs, invoke entity shortcuts).</summary>
     public const string WorkspaceGui = "workspace-gui";
 
+    /// <summary>The current-session context toolset name (reports the running session's user, computer, and profile).</summary>
+    public const string CurrentSession = "current-session";
+
     /// <summary>The filesystem toolset name.</summary>
     public const string Filesystem = "filesystem";
 
@@ -36,6 +39,7 @@ public static class FixedToolResources
     [
         WorkspaceEntity,
         WorkspaceGui,
+        CurrentSession,
         Filesystem,
         WebSearch,
         WebRequest,
