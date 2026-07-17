@@ -24,22 +24,33 @@ public static class AgentChatSummaryExtractor
         for (var ri = runningItems.Count - 1; ri >= 0; ri--)
         {
             var runningItem = runningItems[ri];
+            if (runningItem?.Items is null)
+            {
+                continue;
+            }
+
             for (var ii = runningItem.Items.Count - 1; ii >= 0; ii--)
             {
                 var item = runningItem.Items[ii];
-
-                if (textSummary is null)
+                if (item is null)
                 {
-                    var text = string.Concat(item.Contents.OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
+                    continue;
+                }
+
+                var contents = item.Contents;
+
+                if (textSummary is null && contents is not null)
+                {
+                    var text = string.Concat(contents.OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
                     if (!string.IsNullOrEmpty(text))
                     {
                         textSummary = TruncateAtWordBoundary(text, MaxChars);
                     }
                 }
 
-                if (toolSummary is null)
+                if (toolSummary is null && contents is not null)
                 {
-                    var toolCall = item.Contents.OfType<FunctionCallContent>().FirstOrDefault();
+                    var toolCall = contents.OfType<FunctionCallContent>().FirstOrDefault();
                     if (toolCall is not null)
                     {
                         toolSummary = toolCall.Name;
@@ -60,10 +71,16 @@ public static class AgentChatSummaryExtractor
             for (var i = history.Count - 1; i >= 0; i--)
             {
                 var item = history[i];
+                if (item is null)
+                {
+                    continue;
+                }
+
+                var contents = item.Contents;
 
                 if (item.Role == ChatRole.Assistant)
                 {
-                    var text = string.Concat(item.Contents.OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
+                    var text = string.Concat((contents ?? []).OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
                     if (!string.IsNullOrEmpty(text))
                     {
                         textSummary = TruncateAtWordBoundary(text, MaxChars);
@@ -73,7 +90,7 @@ public static class AgentChatSummaryExtractor
 
                 if (item.Role == ChatRole.User && userFallback is null)
                 {
-                    var text = string.Concat(item.Contents.OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
+                    var text = string.Concat((contents ?? []).OfType<TextContent>().Select(c => c.Text ?? string.Empty)).Trim();
                     if (!string.IsNullOrEmpty(text))
                     {
                         userFallback = TruncateAtWordBoundary(text, MaxChars);
@@ -90,7 +107,7 @@ public static class AgentChatSummaryExtractor
             var lastUserIndex = -1;
             for (var i = history.Count - 1; i >= 0; i--)
             {
-                if (history[i].Role == ChatRole.User)
+                if (history[i]?.Role == ChatRole.User)
                 {
                     lastUserIndex = i;
                     break;
@@ -101,7 +118,7 @@ public static class AgentChatSummaryExtractor
             {
                 for (var i = history.Count - 1; i > lastUserIndex; i--)
                 {
-                    var toolCall = history[i].Contents.OfType<FunctionCallContent>().FirstOrDefault();
+                    var toolCall = (history[i]?.Contents ?? []).OfType<FunctionCallContent>().FirstOrDefault();
                     if (toolCall is not null)
                     {
                         toolSummary = toolCall.Name;

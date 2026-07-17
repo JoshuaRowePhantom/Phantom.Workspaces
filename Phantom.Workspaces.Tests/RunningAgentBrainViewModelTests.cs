@@ -9,6 +9,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
+using Phantom.Workspaces.Testing.Gui;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -775,7 +776,7 @@ public sealed class RunningAgentBrainViewModelTests
         vm.Dispose();
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task CreateAgentHandler_WhenTabMatches_UpdatesRowIsThinkingFromAgent()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
@@ -807,7 +808,7 @@ public sealed class RunningAgentBrainViewModelTests
         vm.Dispose();
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task CreateAgentHandler_WhenAgentRaisesFromNonUiThread_MarshalsThroughDispatch()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(

@@ -22,7 +22,7 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
     {
         if (Interlocked.CompareExchange(ref _disposed, 1, 0) == 0)
         {
-            _ = _onDispose();
+            ObserveDisposal(_onDispose());
         }
     }
 
@@ -35,5 +35,31 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
 
         GC.SuppressFinalize(this);
         return _onDispose();
+    }
+
+    // Ensures the fire-and-forget disposal launched from the finalizer can never leave an
+    // unobserved Task exception behind (which would be rethrown by the finalizer thread and
+    // crash the process). The exception is observed and swallowed.
+    private static void ObserveDisposal(ValueTask disposeTask)
+    {
+        if (disposeTask.IsCompletedSuccessfully)
+        {
+            return;
+        }
+
+        _ = AwaitAndSwallowAsync(disposeTask);
+
+        static async Task AwaitAndSwallowAsync(ValueTask task)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch
+            {
+                // Intentionally swallowed: nothing can meaningfully handle a disposal fault raised
+                // during finalization, and letting it escape would crash the finalizer thread.
+            }
+        }
     }
 }

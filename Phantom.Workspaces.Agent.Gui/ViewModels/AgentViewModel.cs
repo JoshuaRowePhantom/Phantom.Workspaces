@@ -557,7 +557,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     }
 
     private void OnRunningItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => this.RaisePropertyChanged(nameof(this.IsChatRunning));
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            this.RaisePropertyChanged(nameof(this.IsChatRunning));
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() => this.RaisePropertyChanged(nameof(this.IsChatRunning)));
+    }
 
     private void OnSubAgentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {

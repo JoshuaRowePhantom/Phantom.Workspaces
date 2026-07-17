@@ -40,7 +40,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.True(statusLine.HasProvider);
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task IsThinking_FollowsRunningItems()
     {
         using var loggerFactory = new ObservableLoggerFactory();

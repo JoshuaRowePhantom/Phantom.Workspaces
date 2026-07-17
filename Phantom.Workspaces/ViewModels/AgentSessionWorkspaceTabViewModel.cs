@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Gui.Shared.Utilities;
@@ -29,13 +30,18 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
-    private readonly AsyncDisposableCollection leaseDisposables = new();
+    private readonly AsyncDisposableCollection leaseDisposables;
     private RunningAgentChatLease? lease;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
 
     public AgentSessionWorkspaceTabViewModel()
     {
+        this.leaseDisposables = new AsyncDisposableCollection(this.OnLeaseDisposeError);
     }
+
+    private void OnLeaseDisposeError(Exception ex)
+        => this.loggerFactory?.CreateLogger<AgentSessionWorkspaceTabViewModel>()
+            .LogError(ex, "Error disposing agent session lease.");
 
     public AgentTabState State
     {

@@ -1,16 +1,103 @@
+using System;
+using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using AgentSchema;
+using Avalonia.Threading;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
+using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.Utilities;
+using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class AgentSessionWorkspaceTabIntegrationTests
 {
+    [PhantomAvaloniaFact(Timeout = 30_000)]
+    public async Task OnAgentPropertyChanged_DuringDisposal_DoesNotThrowOnConcurrentHistory()
+    {
+        // Issue #1084: closing an agent session tab while the agent is producing output disposes the
+        // chat, whose process loop drain creates a running item that synchronously fans out through
+        // AgentViewModel.OnRunningItemsCollectionChanged → OnAgentPropertyChanged → ExtractRunning
+        // over the live (concurrently-mutating) History/RunningItems collections. Previously this
+        // threw a NullReferenceException that, because disposal was fire-and-forget, escaped
+        // unobserved and crashed the process via the finalizer. The teardown must now complete
+        // without throwing and without producing an unobserved Task exception.
+        var unobserved = new List<Exception>();
+        void OnUnobserved(object? _, UnobservedTaskExceptionEventArgs e)
+        {
+            lock (unobserved)
+            {
+                unobserved.Add(e.Exception);
+            }
+
+            e.SetObserved();
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            var client = new DeterministicTestChatClient();
+            var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentDefinition = CreateAgentDefinition(),
+                AgentServices = new AgentServices { ChatClientOverride = client },
+            });
+            var loggerFactory = new ObservableLoggerFactory();
+            var agentViewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+            var tab = new AgentSessionWorkspaceTabViewModel
+            {
+                Id = "agent-tab-teardown",
+                Title = "Agent",
+            };
+            tab.SetReady(agentViewModel, loggerFactory);
+
+            // Start a turn so the process loop is running (running items present, history mutating).
+            chat.EnqueueUserMessage("hello");
+            using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await client.WaitForRequestAsync(requestTimeout.Token);
+
+            // Dispose the chat while the agent view-model is still wired: cancelling the in-flight
+            // turn drains the loop, which fires running-item CollectionChanged notifications that
+            // are marshaled back to this UI thread and drive ExtractRunning concurrently with the
+            // background-thread history mutation.
+            var exception = await Record.ExceptionAsync(async () =>
+            {
+                await chat.DisposeAsync();
+                Dispatcher.UIThread.RunJobs();
+                await tab.DisposeAsync();
+            });
+
+            Assert.Null(exception);
+
+            loggerFactory.Dispose();
+
+            // Force finalization so any unobserved faulted Task would surface here.
+            Dispatcher.UIThread.RunJobs();
+            for (var i = 0; i < 5; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+
+            Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+
+        lock (unobserved)
+        {
+            Assert.Empty(unobserved);
+        }
+    }
+
     [Fact]
     public async Task RenameSession_UpdatesEntityDisplayName_AndTabTitle()
     {

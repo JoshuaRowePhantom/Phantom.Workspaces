@@ -147,6 +147,55 @@ public sealed class AgentChatSummaryExtractorTests
     }
 
     [Fact]
+    public void ExtractRunning_HistoryContainsNullItem_DoesNotThrow()
+    {
+        // A torn/transient element observed mid-mutation during teardown can be null (issue #1084).
+        var history = new List<AgentChatHistoryItem>
+        {
+            UserItem("hello"),
+            null!,
+            AssistantItem("I will help you"),
+        };
+        var runningItems = new List<AgentChatRunningItem>();
+
+        var exception = Record.Exception(() => AgentChatSummaryExtractor.ExtractRunning(history, runningItems));
+
+        Assert.Null(exception);
+        var (textSummary, _) = AgentChatSummaryExtractor.ExtractRunning(history, runningItems);
+        Assert.Equal("I will help you", textSummary);
+    }
+
+    [Fact]
+    public void ExtractRunning_HistoryItemWithNullContents_DoesNotThrow()
+    {
+        // A partially-built history item can have null Contents (issue #1084, lines 33/66).
+        var history = new List<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.User, Contents = null! },
+            new() { Role = ChatRole.Assistant, Contents = null! },
+        };
+        var runningItems = new List<AgentChatRunningItem>();
+
+        var exception = Record.Exception(() => AgentChatSummaryExtractor.ExtractRunning(history, runningItems));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public void ExtractRunning_RunningItemWithNullContents_DoesNotThrow()
+    {
+        // A running item containing a partially-built entry with null Contents must not throw.
+        var runningItem = new AgentChatRunningItem();
+        runningItem.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = null! });
+        var history = new List<AgentChatHistoryItem> { UserItem("hello") };
+        var runningItems = new List<AgentChatRunningItem> { runningItem };
+
+        var exception = Record.Exception(() => AgentChatSummaryExtractor.ExtractRunning(history, runningItems));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
     public void TruncateAtWordBoundary_WithTextExactlyAtMax_ReturnsUnchanged()
     {
         var text = new string('a', 100);

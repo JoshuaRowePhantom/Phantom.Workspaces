@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
+using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
@@ -265,7 +266,7 @@ public sealed class ToolVisualizationTests
         Assert.Equal("doing a thing", statusLine.IntentDisplay);
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task AgentChatStatusLineViewModel_IntentDisplay_ClearedWhenThinkingStops()
     {
         using var loggerFactory = new ObservableLoggerFactory();

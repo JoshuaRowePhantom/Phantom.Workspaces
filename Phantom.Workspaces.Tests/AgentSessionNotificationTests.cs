@@ -7,6 +7,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -101,7 +102,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentGoesIdle_PostsNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -140,7 +141,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentIsActiveTab_NotificationStillPassedToService()
     {
         // INotificationService.Notify is always called — it is the service's responsibility
@@ -182,7 +183,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentStartsNewRun_PostsRunningNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -245,7 +246,7 @@ public sealed class AgentSessionNotificationTests
         await WaitForRunningItemsEmptyAsync(agentChat);
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentGoesIdle_TabDescriptorHasTabTitleFromViewModelTitle()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -284,7 +285,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [PhantomAvaloniaFact]
     public async Task Notify_SetsWorkspaceId_FromWorkspacePaneId()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
