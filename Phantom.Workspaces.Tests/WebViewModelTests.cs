@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Reflection;
@@ -193,7 +194,7 @@ public sealed class WebViewModelTests
 
     // --- OpenExternalEntityShortcutHandler: default key → display name, title not fixed ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_DefaultKey_TitleIsDisplayName_AndBrowserCanOverride()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -218,7 +219,7 @@ public sealed class WebViewModelTests
 
     // --- OpenExternalEntityShortcutHandler: named key → key name as title, title fixed ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWebTab_NamedKey_TitleIsKeyName_AndBrowserCannotOverride()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -243,7 +244,7 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: explicit title from JSON wins and is pinned ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_ExplicitTitle_IsUsedAndPinned()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -300,7 +301,7 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: no explicit title + default key → display name, not pinned ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_DefaultKey_TitleIsDisplayName_NotFixed()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -356,7 +357,7 @@ public sealed class WebViewModelTests
 
     // --- Workspace restore: no explicit title + named key → key name, pinned ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceRestore_NoExplicitTitle_NamedKey_TitleIsKeyName_Fixed()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -412,7 +413,7 @@ public sealed class WebViewModelTests
 
     // --- DuplicateBrowserTabCommand ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_OpensNewTabAtSameUrl()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -431,7 +432,7 @@ public sealed class WebViewModelTests
         Assert.NotNull(duplicate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithWebViewModel_InsertsNewTabAfterSource()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -456,7 +457,7 @@ public sealed class WebViewModelTests
         Assert.Equal(indexA + 1, indexDup);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNonBrowserTab_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -475,7 +476,7 @@ public sealed class WebViewModelTests
         Assert.Equal(tabCountBeforeDuplicate, tabs3.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithNoActiveTab_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -488,7 +489,7 @@ public sealed class WebViewModelTests
         Assert.Empty(viewModel.SelectedWorkspacePane.Tabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DuplicateBrowserTab_WithEmptyUrl_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -504,7 +505,7 @@ public sealed class WebViewModelTests
 
     // --- RaiseOpenNewWindow: new tab insertion position ---
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RaiseOpenNewWindow_InsertsNewTabImmediatelyRightOfSourceTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();

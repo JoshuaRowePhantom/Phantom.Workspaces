@@ -8,8 +8,15 @@ using Avalonia.Styling;
 using Avalonia.Themes.Fluent;
 using Dock.Avalonia.Themes.Fluent;
 using Phantom.Workspaces.Templates;
+using Xunit;
 
 [assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Tests.AvaloniaTestAppBuilder))]
+
+// Serialize headless Avalonia tests: the stock Avalonia.Headless.XUnit harness dispatches every
+// test on a single dispatch thread and Avalonia does not support concurrent execution against a
+// shared application. This assembly already uses PerTest isolation (the supported default), so no
+// AvaloniaTestIsolation attribute is needed. See issue #1101.
+[assembly: CollectionBehavior(DisableTestParallelization = true, MaxParallelThreads = 1)]
 
 namespace Phantom.Workspaces.Tests;
 

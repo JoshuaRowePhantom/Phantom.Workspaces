@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.ComponentModel;
 using System.Linq;
@@ -32,7 +33,7 @@ public sealed class WorkspacePaneViewModelTests
         Assert.Single(pane.Tabs);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityWorkspaceTabViewModel_UsesEntityCardNodeWithDeleteCommand()
     {
         var deleteInvocations = 0;

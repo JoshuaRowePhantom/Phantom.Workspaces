@@ -23,7 +23,7 @@ public sealed class MainWindowUsageTrackerTests
             new WorkspacesConfiguration { SkipStartupWorkspace = true });
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_UsageTrackerPanel_Hidden_WhenTopRightLabelNull()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -55,7 +55,7 @@ public sealed class MainWindowUsageTrackerTests
     }
 
     
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_ExposesUsageTracker()
     {
         await using var viewModel = CreateTestMainWindowViewModel();

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Linq;
@@ -84,7 +85,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         };
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectRepositoryPathField()
     {
         var vm = CreateViewModel("""
@@ -103,7 +104,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectTargetBranchField()
     {
         var vm = CreateViewModel("""
@@ -122,7 +123,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_WhenPathMissing_DoesNotThrow()
     {
         var vm = CreateViewModel("""
@@ -140,7 +141,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMainWhenBranchExists()
     {
         this.InitRepoWithBranch("main");
@@ -162,7 +163,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMasterWhenMainAbsent()
     {
         this.InitRepoWithBranch("master");
@@ -184,7 +185,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchReadFromEntityDataWhenPresent()
     {
         var vm = CreateViewModel("""
@@ -203,7 +204,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 60_000)]
+    [AvaloniaFact(Timeout = 60_000)]
     public async Task TargetBranch_Set_TriggersCommitListRefreshAndClearsPreviousCommits()
     {
         // Use no valid repo path so RefreshAsync completes quickly.
@@ -243,7 +244,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task DisposeAsyncStopsWatcher()
     {
         this.InitRepoWithBranch("main");
@@ -279,7 +280,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         _ = refreshCountBeforeDispose;
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileList_SelectFile_DiffViewUpdatesToSelectedFile()
     {
         this.InitRepoWithBranch("main");
@@ -324,7 +325,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileList_SelectSecondFile_DiffViewChanges()
     {
         this.InitRepoWithBranch("main");
@@ -380,7 +381,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileList_NoFileSelected_DiffViewShowsAllFiles()
     {
         this.InitRepoWithBranch("main");
@@ -430,7 +431,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_SelectCommit_FileListUpdates()
     {
         this.InitRepoWithBranch("main");
@@ -483,7 +484,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_SelectMultipleCommits_FileListShowsUnion()
     {
         this.InitRepoWithBranch("main");
@@ -535,7 +536,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_DeselectAll_FileListShowsAllCommits()
     {
         this.InitRepoWithBranch("main");
@@ -591,7 +592,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_SelectionChange_DiffViewUpdates()
     {
         this.InitRepoWithBranch("main");
@@ -642,7 +643,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_ShowsDate_FormattedCorrectly()
     {
         this.InitRepoWithBranch("main");
@@ -681,7 +682,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_ShortSha_DisplayedInColumn()
     {
         this.InitRepoWithBranch("main");
@@ -723,7 +724,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_AuthorColumn_Displayed()
     {
         this.InitRepoWithBranch("main");
@@ -796,7 +797,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         Assert.Equal(authorDate, commit.AuthorDate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task RebuildFileDiffsAsync_DeletedFile_DoesNotThrow()
     {
         this.InitRepoWithBranch("main");
@@ -848,7 +849,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task RebuildFileDiffsAsync_AddedFile_DoesNotThrow()
     {
         this.InitRepoWithBranch("main");
@@ -899,7 +900,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task RebuildFileDiffsAsync_UnmatchedPath_ProcessesOtherFiles()
     {
         this.InitRepoWithBranch("main");
@@ -955,7 +956,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitListHeader_ShowsBranchName()
     {
         this.InitRepoWithBranch("main");
@@ -979,7 +980,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitListHeader_UpdatesWhenBranchChanges()
     {
         this.InitRepoWithBranch("main");
@@ -1007,7 +1008,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileListHeader_SingleCommit_ShowsSha()
     {
         this.InitRepoWithBranch("main");
@@ -1052,7 +1053,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileListHeader_MultipleCommits_ShowsGenericLabel()
     {
         this.InitRepoWithBranch("main");
@@ -1101,7 +1102,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileListHeader_NoSelection_ShowsPlaceholder()
     {
         this.InitRepoWithBranch("main");
@@ -1127,7 +1128,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task BranchDropdown_PopulatedWithRepoBranches_LoadsAllBranches()
     {
         this.InitRepoWithBranch("main");
@@ -1162,7 +1163,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task BranchDropdown_SelectBranch_UpdatesTargetBranchAndCommitList()
     {
         var vm = CreateViewModel("""
@@ -1199,7 +1200,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_FullFileToggle_TriggersRebuild()
     {
         this.InitRepoWithBranch("main");
@@ -1249,7 +1250,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_FullFileTrue_UsesLargeContextLines()
     {
         this.InitRepoWithBranch("main");
@@ -1306,7 +1307,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_FullFileFalse_UsesConfiguredContextLines()
     {
         this.InitRepoWithBranch("main");
@@ -1361,7 +1362,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_TriggersRebuild()
     {
         this.InitRepoWithBranch("main");
@@ -1418,7 +1419,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_Zero_ShowsOnlyChangedLines()
     {
         this.InitRepoWithBranch("main");
@@ -1474,7 +1475,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_LargeValue_ShowsExtendedContext()
     {
         this.InitRepoWithBranch("main");
@@ -1535,7 +1536,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task SideBySide_WhenToggled_TriggersRebuildFileDiffs()
     {
         this.InitRepoWithBranch("main");
@@ -1587,7 +1588,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task SideBySide_WhenToggled_PreservesExistingFileDiffContent()
     {
         this.InitRepoWithBranch("main");

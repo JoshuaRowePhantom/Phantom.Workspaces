@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -16,7 +17,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ShortcutManagerTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Shortcut_OperatorEquality_MatchesByValue()
     {
         var openShortcutByValue = new Shortcut("Open", "↗");
@@ -25,7 +26,7 @@ public sealed class ShortcutManagerTests
         Assert.False(openShortcutByValue != Shortcut.Open);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GetShortcutsForAsync_ReturnsOpen_WhenAHandlerApplies()
     {
         var shortcutManager = new ShortcutManager();
@@ -41,7 +42,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal("↗", openShortcut.Label);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task HandleShortcutAsync_StopsAfterFirstSuccessfulHandler()
     {
         var first = new TestShortcutHandler(shouldApply: true, handleResult: true);
@@ -60,7 +61,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal(0, second.HandleCallCount);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewEntityViewModel_PopulatesShortcuts_AfterInitializeAsync()
     {
         var shortcutManager = new ShortcutManager();
@@ -84,7 +85,7 @@ public sealed class ShortcutManagerTests
         Assert.Same(shortcutManager, shortcutViewModel.ShortcutManager);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ViewEntityViewModel_InitializeAsync_WithAsyncHandler_DoesNotDeadlock()
     {
         var shortcutManager = new ShortcutManager();
@@ -102,7 +103,7 @@ public sealed class ShortcutManagerTests
         Assert.Contains(viewEntity.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewEntityViewModel_ProvidesSharedEntityCardNode_WithJsonAndDeleteActions()
     {
         var shortcutManager = new ShortcutManager();
@@ -122,7 +123,7 @@ public sealed class ShortcutManagerTests
         Assert.True(cardNode.Card.ShowDeleteButton);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewEntityViewModel_EntityCardNode_UsesShortcutButtonsWhenAvailable()
     {
         var shortcutManager = new ShortcutManager();
@@ -150,7 +151,7 @@ public sealed class ShortcutManagerTests
         Assert.False(cardNode.Card.ShowDeleteButton);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityShortcutViewModel_HandleAsync_UsesShortcutManager()
     {
         var handler = new TestShortcutHandler(shouldApply: true, handleResult: true);
@@ -171,7 +172,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal(1, handler.HandleCallCount);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GetShortcutsForAsync_ReturnsDelete_WhenDeleteHandlerApplies()
     {
         var shortcutManager = new ShortcutManager();
@@ -185,7 +186,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal(Shortcut.Delete, deleteShortcut);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task HandleShortcutAsync_TogglesJsonShortcutVisibility()
     {
         var shortcutManager = new ShortcutManager();
@@ -200,7 +201,7 @@ public sealed class ShortcutManagerTests
         Assert.True(entity.IsRawJsonVisible);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GetShortcutsForAsync_GitWorktreeEntity_IncludesReviewShortcut()
     {
         var shortcutManager = new ShortcutManager();
@@ -214,7 +215,7 @@ public sealed class ShortcutManagerTests
         Assert.Contains(shortcuts, s => s == Shortcut.Review);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GetShortcutsForAsync_NonGitWorktreeEntity_DoesNotIncludeReviewShortcut()
     {
         var shortcutManager = new ShortcutManager();
@@ -228,7 +229,7 @@ public sealed class ShortcutManagerTests
         Assert.DoesNotContain(shortcuts, s => s == Shortcut.Review);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GetShortcutsForAsync_WithAsyncHandler_DoesNotBlockCallingThread()
     {
         var shortcutManager = new ShortcutManager();
@@ -242,7 +243,7 @@ public sealed class ShortcutManagerTests
         Assert.Contains(Shortcut.Open, shortcuts);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task PopulateShortcutsAsync_ClearsAndRepopulates_WhenCalledTwice()
     {
         var shortcutManager = new ShortcutManager();
@@ -269,7 +270,7 @@ public sealed class ShortcutManagerTests
         Assert.Equal([Shortcut.Open, Shortcut.Delete], shortcuts.Select(shortcut => shortcut.Shortcut).ToArray());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PopulateShortcutsAsync_WithAsyncHandler_DoesNotBlockCallingThread()
     {
         var shortcutManager = new ShortcutManager();
@@ -283,7 +284,7 @@ public sealed class ShortcutManagerTests
         Assert.Contains(shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HandleShortcutAsync_ReviewOnGitWorktree_OpensReviewTab()
     {
         var shortcutManager = new ShortcutManager();

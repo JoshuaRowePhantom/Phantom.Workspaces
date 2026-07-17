@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class CrashDialogTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CrashDialog_ShowsExceptionText()
     {
         var exception = new InvalidOperationException("Something went wrong");
@@ -21,7 +21,7 @@ public sealed class CrashDialogTests
         Assert.Equal(exception.ToString(), dialog.ExceptionTextBox.Text);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CrashDialog_NullException_ShowsFallbackText()
     {
         var dialog = new CrashDialog(null, isTerminating: false);
@@ -29,7 +29,7 @@ public sealed class CrashDialogTests
         Assert.Equal("No exception details available.", dialog.ExceptionTextBox.Text);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CrashDialog_WhenTerminating_UpdatesTitle()
     {
         var dialog = new CrashDialog(new Exception("fatal"), isTerminating: true);
@@ -39,7 +39,7 @@ public sealed class CrashDialogTests
 
     // ── Issue #609: OnReportClick URL truncation tests ─────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_WhenApiSucceeds_OpensIssueBrowserUrl()
     {
         // This test verifies the eventual implementation will open a short issue URL
@@ -52,7 +52,7 @@ public sealed class CrashDialogTests
         Assert.NotNull(dialog);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_WhenApiSucceeds_IncludesFullStackTrace()
     {
         // This test verifies the eventual API implementation will include full stack trace
@@ -64,7 +64,7 @@ public sealed class CrashDialogTests
         Assert.NotNull(dialog);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_WhenNotAuthenticated_FallsBackToTruncatedUrl()
     {
         // Current implementation always uses truncated URL
@@ -74,7 +74,7 @@ public sealed class CrashDialogTests
         Assert.NotNull(dialog);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_WhenApiFails_FallsBackToTruncatedUrl()
     {
         // Current implementation always uses truncated URL
@@ -84,7 +84,7 @@ public sealed class CrashDialogTests
         Assert.NotNull(dialog);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_FallbackUrl_DoesNotExceed2048Chars()
     {
         // Create an exception with a very deep stack trace (simulating a real crash scenario)
@@ -129,7 +129,7 @@ public sealed class CrashDialogTests
         DeepRecursiveMethod(depth - 1);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_WithLongException_FallbackBodyTruncatedWithNote()
     {
         // Create an exception with a very deep stack trace
@@ -162,7 +162,7 @@ public sealed class CrashDialogTests
         Assert.Contains("Copy button", bodyText, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_WithShortException_FallbackBodyNotTruncated()
     {
         var exception = new Exception("Short");
@@ -183,7 +183,7 @@ public sealed class CrashDialogTests
         Assert.DoesNotContain("truncated", bodyText, StringComparison.OrdinalIgnoreCase);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnReportClick_DoesNotThrow_WhenLauncherFails()
     {
         // The implementation doesn't throw - it just discards the result
@@ -198,7 +198,7 @@ public sealed class CrashDialogTests
 
 public sealed class UnhandledExceptionHandlerTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnUnobservedTaskException_SetsObserved()
     {
         UnhandledExceptionHandler._dialogActive = 0;
@@ -216,7 +216,7 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OnDispatcherUnhandledException_SetsHandled()
     {
         UnhandledExceptionHandler._dialogActive = 0;
@@ -235,7 +235,7 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ShowOrDiscard_WhenNoDialogActive_SetsDialogActiveFlag()
     {
         UnhandledExceptionHandler._dialogActive = 0;
@@ -250,7 +250,7 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ShowOrDiscard_WhenDialogAlreadyActive_Discards()
     {
         var factoryCalled = 0;

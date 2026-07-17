@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading;
@@ -10,7 +11,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrowserWorkspaceTabViewModelTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_TracksParentChildMetadataAndExpansion()
     {
         var broker = await CreateBrokerAsync();
@@ -104,7 +105,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_FolderItem_ExpandsViaItemToggleCommand()
     {
         var broker = await CreateBrokerAsync();
@@ -183,7 +184,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -255,7 +256,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsLocalizedMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -327,7 +328,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_UsesJsonSchemaFieldEditor_ForSchemaField()
     {
         var broker = await CreateBrokerAsync();
@@ -400,7 +401,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     // Regression test for #644: when many SubscribeChildPathAsync completions fire concurrent
     // RebuildTreeAsync() calls, the coalescing loop must ensure all entities become visible
     // without a test-host timeout caused by N×M parallel rebuilds.
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_CoalescesRebuildRequests_WhenManySubscriptionsComplete()
     {
         var broker = await CreateBrokerAsync();
@@ -463,7 +464,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task DisposeAsync_DuringRebuild_DoesNotHang()
     {
         var broker = await CreateBrokerAsync();
@@ -517,7 +518,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         // If we reach here and the dispatcher drains cleanly after this test completes, the fix works.
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task DisposeAsync_UnsubscribesCollectionChangedEvents()
     {
         var broker = await CreateBrokerAsync();

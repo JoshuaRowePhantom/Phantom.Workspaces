@@ -36,7 +36,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class MainWindowIntegrationTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TrustedExecutor_Production_UsesTransportFactoryRegistry()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -54,7 +54,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(transport);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ThemeResources_UseFontFamilyType()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -64,7 +64,7 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<FontFamily>(fontFamilyResource);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_InitializesWithExpectedPipeline()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -76,7 +76,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEmpty(snapshots);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_SeedsGithubModelsAgentManifest()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -91,7 +91,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("GitHub Models Workspace Assistant", ReadDefaultDisplayName(githubModelsSnapshot.Value.Data));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_SeedsWorkspacesAgentManifestDisplayName()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -106,7 +106,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("Workspaces Assistant", ReadDefaultDisplayName(workspacesSnapshot.Value.Data));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_SeedsMainViewWithGitWorkspacesSubView()
     {
         var repository = await EntityRepository.CreateAsync(CreateInMemoryRepositorySource());
@@ -128,7 +128,7 @@ public sealed class MainWindowIntegrationTests
             && id[1].GetString() == "git-workspaces");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_ThemeSelectionIsDataDriven()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -138,7 +138,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("light", viewModel.SelectedThemeName);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SelectedThemeName_SetToLight_PersistsAcrossViewModelInstances()
     {
         var profilePath = CreateTempProfileStorePath();
@@ -161,7 +161,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_InitializeAsync_ReplacesDefaultAndLoadingWorkspacePanes()
     {
         await using var viewModel = CreateTestMainWindowViewModel(
@@ -175,7 +175,7 @@ public sealed class MainWindowIntegrationTests
                 || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WhenAlreadyOpening_SecondRequestIsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -213,7 +213,7 @@ public sealed class MainWindowIntegrationTests
             pane => pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithExternalEntityTab_PopulatesTabAsynchronously()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -289,7 +289,7 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateTabFromEntityAsync_ExternalEntityNonDefaultUrlKey_SetsTitleToUrlKeyAndFixesTitle()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -368,7 +368,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("docs", webVm.Title);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_CloseWhileTabsLoading_DoesNotCrash()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -449,7 +449,7 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_SessionsView_GetEntitySubViewsIncludeAgentManifestEntities()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -474,7 +474,7 @@ public sealed class MainWindowIntegrationTests
             static entity => string.Equals(entity.EntityType, "view", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ViewEntityViewModel_TraversedEntitiesCollapsed_WhenDispositionIsCollapsed()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -567,7 +567,7 @@ public sealed class MainWindowIntegrationTests
             e => e.Entity.EntityId == relatedId);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_ConstructsWithoutTemplateCastErrors()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -577,7 +577,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEmpty(window.DataTemplates);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePane_DoesNotInjectFallbackCenterRegion_WhenWorkspaceHasNoRegions()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -627,7 +627,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Single(workspacePane!.Tabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_LocalEchoDefinition_CreatesAgentSessionTab()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
@@ -675,7 +675,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(launchpadTab.CanStart);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentManifestShortcutHandler_LocalEchoManifest_CreatesAgentSessionTab()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
@@ -725,7 +725,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(sessionTab2.Agent);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentManifestShortcutHandler_ManifestWithParameters_ShowsLaunchpadNotAutoStarted()
     {
         var fixedCurrentTime = new DateTimeOffset(2026, 06, 12, 9, 23, 45, TimeSpan.Zero);
@@ -779,7 +779,7 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain(viewModel.SelectedWorkspacePane.Tabs, static t => t is AgentSessionWorkspaceTabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentManifestLaunchpad_StartSessionWithParameters_CreatesAgentChatOnUIThread()
     {
         // Enforcement test for issue #909: the launchpad previously wrapped AgentChat creation in
@@ -843,7 +843,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(sessionTab.Agent);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_CreatesAgentChatOnUIThread()
     {
         // Enforcement test for issue #909: the loaded-session path (shortcut handler →
@@ -891,7 +891,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(sessionTab.Lease);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -944,7 +944,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(sessionTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePaneAsync_WithAgentSessionTab_CreatesAgentSessionWorkspaceTabViewModel()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1041,7 +1041,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(agentSessionTab.Agent);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspacePaneAsync_WithAgentSessionTabButMissingDefinition_FallsBackToEntityWorkspaceTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1148,7 +1148,7 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<AgentSessionWorkspaceTabViewModel>(agentTab);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseActiveTabCommand_WithTwoTabs_ClosesActiveTabAndLeavesOther()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1171,7 +1171,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(remaining!, doc => doc.Id == "tab-a");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabForwardCommand_WithThreeTabs_WrapsAroundForward()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1203,7 +1203,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(startIndex, dockables.IndexOf(documentDock.ActiveDockable!));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabBackwardCommand_WithThreeTabs_WrapsAroundBackward()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1235,7 +1235,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(startIndex, dockables.IndexOf(documentDock.ActiveDockable!));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CycleTabForwardCommand_WithSingleTab_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1271,7 +1271,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("tab-a-single", documentDock.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_WithThreeTabs_ActivatesCorrectTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1292,7 +1292,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_WithIndexOutOfRange_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1312,7 +1312,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(activeBefore, documentDock.ActiveDockable);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithMultiplePanes_ActivatesCorrectPane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1359,7 +1359,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithIndexOutOfRange_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1372,7 +1372,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(selectedBefore, viewModel.SelectedWorkspacePane);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithTwoPanes_ActivatesCorrectDockDocument()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1422,7 +1422,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(viewModel.WorkspacePanes[1].Id, activePaneDoc!.WorkspacePane.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WithTwoPanes_ActivatesFirstPane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1472,7 +1472,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(viewModel.WorkspacePanes[0].Id, activePaneDoc!.WorkspacePane.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInTargetPaneHasUnreadNotification_MarksNotificationRead()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1552,7 +1552,7 @@ public sealed class MainWindowIntegrationTests
             "Expected notification for tabB to be marked read after switching back to pane B");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToWorkspacePaneAtIndexCommand_WhenActiveTabInCurrentPaneHasUnreadNotification_OnlyMarksTargetPaneTabRead()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1627,7 +1627,7 @@ public sealed class MainWindowIntegrationTests
             "Pane A's tab notification should remain unread after switching away.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithFocusedTabId_ActivatesFocusedTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1687,7 +1687,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("tab-second", contentDock!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithAbsentFocusedTabId_DoesNotCrash()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1738,7 +1738,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(contentDock!.ActiveDockable);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNonMatchingFocusedTabId_DoesNotCrash()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1790,7 +1790,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(contentDock!.ActiveDockable);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateAgentSessionEntityAsync_WithOwningProfileEntityId_StoresOwningProfileEntityIdInData()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1829,7 +1829,7 @@ public sealed class MainWindowIntegrationTests
             && string.Equals(idElement.GetString(), localProfileEntityId.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithLocalProfileOwner_RoutesToLocalExecutorSuccessfully()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1881,7 +1881,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Ready, agentTab.State);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithNoOwningProfile_DefaultsToLocalExecution()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1933,7 +1933,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Ready, agentTab2.State);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_WithRemoteProfileOwner_SetsFailedWhenNoConnectionAvailable()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -1982,7 +1982,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Failed, agentTab3.State);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_UsesEntityIdAsTabId()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2031,7 +2031,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(expectedTabId, tab.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_SameEntityOpenedTwice_DeduplicatesTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2088,7 +2088,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Single(agentSessionTabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_Handle_WithRunningAgentChatTable_AcrossTwoWorkspacePanes_SharesAgentChat()
     {
         var runningAgentChatTable = CreateTestRunningAgentChatTable();
@@ -2171,7 +2171,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_WhenAgentChatIsInNonSelectedPane_OpensTabInAgentChatPane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2278,7 +2278,7 @@ public sealed class MainWindowIntegrationTests
             doc => doc.Id == $"web-{testUrl}");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_WhenAgentChatIsInSelectedPane_OpensTabInSamePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2371,7 +2371,7 @@ public sealed class MainWindowIntegrationTests
             doc => doc.Id == $"web-{testUrl}");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenUrlHandler_InsertsNewTabAfterAgentSessionTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2449,7 +2449,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── Float-tab disposal guard (issue #635) ─────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task FloatDockable_AgentSessionTab_DoesNotDisposeOrRemoveTabFromPane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2512,7 +2512,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Ready, agentTab.State);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseDockable_AfterFloat_DisposesTabAndRemovesFromPane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2578,7 +2578,7 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseDockable_FromMainDock_DisposesTabExactlyOnce()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2654,7 +2654,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── Dock-layout save / restore (issue #561) ──────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThenWriteBack_DockLayoutJsonContainsDockTabDescriptor()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2682,7 +2682,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("descriptor-test.example.com", layoutJson, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThenWriteBack_DockLayoutDoesNotContainTabViewModelData()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2711,7 +2711,7 @@ public sealed class MainWindowIntegrationTests
         Assert.DoesNotContain("EffectiveTabHeader", layoutJson, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithSavedDockLayout_RestoresTabsFromDescriptors()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2759,7 +2759,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEmpty(restoredPane!.Tabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_FallsBackToTabsArray_WhenDockLayoutAbsent()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -2813,7 +2813,7 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<WebViewModel>(tabDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_RestoresFromDockLayout_WhenPresent()
     {
         // Arrange: capture a real dock-layout JSON from an open tab, then open a new
@@ -2864,7 +2864,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(restoredPane.Tabs, t => t is WebViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_WhenDockLayoutRestoreCompletes_SignalsPanePopulated()
     {
         // Verifies the Populated task completes successfully for the happy path
@@ -2909,7 +2909,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotEmpty(restoredPane!.Tabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_WhenNoDockLayoutAndNoTabs_SignalsPanePopulatedAfterDefaultTabAdd()
     {
         // Verifies the default-tab fallback path signals completion
@@ -2939,7 +2939,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(pane.Tabs, t => t is EntityWorkspaceTabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WaitForPanePopulatedAsync_WhenPopulateHangs_ThrowsTimeoutExceptionWithDiagnostics()
     {
         // Verifies the timeout diagnostic message includes pane ID and Tabs.Count
@@ -2968,7 +2968,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("Tabs.Count=0", exception.Message);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PopulateWorkspacePaneTabsAsync_WhenDockLayoutRestoreThrows_SurfacesExceptionOnPanePopulatedTask()
     {
         // Verifies that exceptions thrown during PopulateWorkspacePaneTabsAsync are propagated
@@ -3004,7 +3004,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("Simulated populate failure", exception.Message);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WriteBackWorkspaceTabs_IsNotCalledOnDockLayoutChange()
     {
         // After the fix, pane.Tabs.CollectionChanged is NOT subscribed for write-back.
@@ -3041,7 +3041,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(beforeJson, afterJson);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SaveWorkspaceLayoutAsync_PersistsDockLayoutWithDescriptors()
     {
         // Explicit WriteBackWorkspaceTabs persists dock-layout JSON that contains
@@ -3090,7 +3090,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("save-layout-test.example.com", dockLayoutJson, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DockLayoutRoundTrip_PreservesSplitPositionsAndDescriptors()
     {
         // Verify serialize → deserialize round-trip: the Descriptor survives and the
@@ -3458,7 +3458,7 @@ public sealed class MainWindowIntegrationTests
         await Dispatcher.UIThread.InvokeAsync(() => { });
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_CalledTwice_CurrentViewPopulationContainsEntitiesOnce()
     {
         // Regression for issue #104: concurrent ApplySelectedViewAsync invocations must not
@@ -3489,7 +3489,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(distinctIds, agentManifestEntities.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_EachCall_CreatesNewCurrentViewPopulationInstance()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3507,7 +3507,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotSame(firstPopulation, viewModel.CurrentViewPopulation);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_PreviousPopulationDisposed_ItsEntitiesNotModifiedAfterSwap()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3535,7 +3535,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(countAfterFirstRun, firstPopulation.Entities.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_ViewSwitchedTwice_CurrentViewPopulationReflectsSecondView()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3567,7 +3567,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotSame(populationAfterFirst, viewModel.CurrentViewPopulation);
     }
 
-    [PhantomAvaloniaStaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_ContentLevelDocumentTabStrip_HasHeaderTemplate_AfterTabOpened()
     {
         // Regression test for #88: the content-level DocumentTabStrip must have HeaderTemplate
@@ -3751,7 +3751,7 @@ public sealed class MainWindowIntegrationTests
         return defaultValueElement.GetString();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ExistingTab_PushesNavigationEntry()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3775,7 +3775,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("nav-push-b", documentDock.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavigateBack_AfterMultipleToolDrivenNavigations_TraversesAllEntries()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3803,7 +3803,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("multi-nav-a", documentDock.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithMultipleBrowserTabs_TabsAppearInDeclarationOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3876,7 +3876,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(["tab-order-a", "tab-order-b", "tab-order-c"], tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithUnresolvableMiddleTab_SkipsNullAndPreservesOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3950,7 +3950,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(["null-order-a", "null-order-c"], tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_ActivatesFirstContentTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -3981,7 +3981,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_UpdatesSelectedWorkspacePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4038,7 +4038,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(pane2, viewModel.SelectedWorkspacePane);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocument_ThenAltBadge_ActivatesTabInPaneByGlobalBadge()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4145,7 +4145,7 @@ public sealed class MainWindowIntegrationTests
         _ => throw new ArgumentOutOfRangeException(nameof(badge), badge, "Unexpected Alt badge label."),
     };
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_PushesNavigationEntry()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4222,7 +4222,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("adc-nav-tab-a", documentDockA!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnActiveDockableChanged_WithWorkspacePaneDocumentWithActiveTab_WhenNavigatingViaHistory_DoesNotPushExtraEntry()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4301,7 +4301,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("adc-nav-guard-tab-b", GetDocumentDock(viewModel)?.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt1_WithShellTabActive_ActivatesFirstContentTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4332,7 +4332,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_Alt0_ActivatesTenthContentTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4362,7 +4362,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltDigit_WithIndexOutOfRange_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4393,7 +4393,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShift1_ActivatesFirstWorkspacePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4449,7 +4449,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShift2_ActivatesSecondWorkspacePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4502,7 +4502,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_AltShiftDigit_WithIndexOutOfRange_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4526,7 +4526,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithDefaultRelationship_OpensDefaultWorkspace()
     {
         await using var viewModel = CreateTestMainWindowViewModel(
@@ -4575,7 +4575,7 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InitializeAsync_WithNoDefaultRelationship_OpensGettingStartedWorkspace()
     {
         await using var viewModel = CreateTestMainWindowViewModel(
@@ -4587,7 +4587,7 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseLastWorkspace_WithDefaultRelationship_OpensDefaultWorkspaceInsteadOfGettingStarted()
     {
         await using var viewModel = CreateTestMainWindowViewModel(
@@ -4677,7 +4677,7 @@ public sealed class MainWindowIntegrationTests
             failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavigatePreviousNotificationCommand_NavigatesToUnreadTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4698,7 +4698,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("nav-prev-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_NavigatesToUnreadTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4719,7 +4719,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("nav-next-a", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4778,7 +4778,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPaneWithWorkspaceIdHint_SwitchesWorkspacePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4838,7 +4838,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF7_NavigatesToPreviousNotification()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4870,7 +4870,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF8_NavigatesToNextNotification()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -4902,7 +4902,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF7_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F7 is intercepted in the tunnel phase (e.Handled = true),
@@ -4938,7 +4938,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_CtrlF8_IsHandledInTunnelPhase()
     {
         // Verifies that Ctrl+F8 is intercepted in the tunnel phase (e.Handled = true),
@@ -4973,7 +4973,7 @@ public sealed class MainWindowIntegrationTests
 
 
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_WithNotificationBellRingingStyle_DoesNotThrowOnLayout()
     {
         // Regression test for #143: bell animation used string-valued RenderTransform KeyFrame
@@ -5022,7 +5022,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(raised);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyDown_LeftAlt_SetsIsAltHeld()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5041,7 +5041,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyUp_LeftAlt_ClearsIsAltHeld()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5061,7 +5061,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndexCommand_Execute_DoesNotClearIsAltHeld()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5101,7 +5101,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(raised);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_AltOnly_ContentTabBadgesVisible()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5119,7 +5119,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_AltOnly_PaneTabBadgesHidden()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5147,7 +5147,7 @@ public sealed class MainWindowIntegrationTests
         Assert.False(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_AltAndShift_ContentTabBadgesHidden()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5165,7 +5165,7 @@ public sealed class MainWindowIntegrationTests
         Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_AltAndShift_PaneTabBadgesVisible()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5194,7 +5194,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_ShiftOnly_AllBadgesHidden()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5212,7 +5212,7 @@ public sealed class MainWindowIntegrationTests
         Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_NeitherModifier_AllBadgesHidden()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5230,7 +5230,7 @@ public sealed class MainWindowIntegrationTests
         Assert.False(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task IsShiftHeldChanged_TriggersPropagate_PaneTabsUpdated()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5263,7 +5263,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task IsAltHeldChanged_TriggersPropagate_ContentTabsUpdated()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5285,7 +5285,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(doc.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_ThreeTabs_AssignsCorrectAltShortcutLabels()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5307,7 +5307,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseTab_ByIndex_RefreshesAltShortcutLabels()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5335,7 +5335,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── Alt+Shift+N shortcut numbers — workspace pane label tests (#773) ─────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RefreshWorkspacePaneAltShortcutLabels_InitialState_LabelsAssigned()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5383,7 +5383,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RefreshWorkspacePaneAltShortcutLabels_OnPaneAdded_LabelsUpdated()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5436,7 +5436,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RefreshWorkspacePaneAltShortcutLabels_OnPaneRemoved_LabelsRenumbered()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5509,7 +5509,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("2", paneDocs[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DragReorder_WithinSinglePane_LabelsUpdateToReflectNewOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5542,7 +5542,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task DragReorder_ThreeTabs_MoveMiddleToFirst_LabelsCorrect()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5575,7 +5575,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AltN_AfterDragReorderViaRemoveAndInsert_ReflectsVisualOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5610,7 +5610,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AltN_AfterInsertToRight_ReflectsVisualOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5650,7 +5650,7 @@ public sealed class MainWindowIntegrationTests
 
     #region Issue #1067 — indexing derives from Dock VisibleDockables (visual order)
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AltN_IndexesFromActiveWorkspaceDockVisibleDockables()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5686,7 +5686,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AltShiftN_IndexesFromWorkspaceTabHostVisibleDockables()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5762,7 +5762,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task BadgeLabels_DeriveFromDockVisibleDockablesOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5793,7 +5793,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("3", docs[2].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Indexing_DoesNotConsultInternalTabsList()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5831,7 +5831,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(new[] { "ncl-c", "ncl-a", "ncl-b" }, pane.Tabs.Select(t => t.Id).ToArray());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AltShortcut_AfterReorder_ActivatesDockableAtNewPosition()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5865,7 +5865,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("anp-a", ((WorkspaceDocument)documentDock.ActiveDockable!).Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_ContentBadges_FollowVisibleDockablesAcrossStrips()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -5955,7 +5955,7 @@ public sealed class MainWindowIntegrationTests
 
     #endregion
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_TwoPanesHorizontal_EachWorkspaceNumberedFromOne()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6043,7 +6043,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_TwoPanesVertical_TopPaneTabsNumberedFirst()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6131,7 +6131,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_ThreePanes_OrderIsLeftToRightTopToBottom()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6227,7 +6227,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(docC.EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_DragReorderInSecondaryPane_ScopedLabelsCorrect()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6306,7 +6306,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("2", docsB[1].EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_NewTabOpenedInSecondaryPane_ReceivesCorrectLabel()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6377,7 +6377,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("1", docB1.EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SplitWorkspace_TabClosedFromPrimaryPane_SecondaryPaneLabelsRenumbered()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6451,7 +6451,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(docB1.EffectiveTabHeader.AltShortcutLabel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task GoToTabAtIndex_TwoWorkspacesOpen_ActivatesActiveWorkspaceTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6514,7 +6514,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("goto-scope-b2", (dockB!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task PropagateBadgeVisibility_AltOnly_ShowsBadgesOnlyOnActiveWorkspace()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6583,7 +6583,7 @@ public sealed class MainWindowIntegrationTests
         Assert.False(docB1.EffectiveTabHeader.IsShortcutBadgeVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScroll()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6613,7 +6613,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_TogglesAgentAutoScrollTwice()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6642,7 +6642,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_IsHandledInTunnelPhase()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6681,7 +6681,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_KeyPress_ScrollLock_WithNoAgentTab_IsNoOp()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6717,7 +6717,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── WebViewModel and AgentSessionTab accelerator-key wiring ─────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_WebViewModel_AltKeyStateChanged_SetsIsAltHeld()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6731,7 +6731,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_WebViewModel_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6751,7 +6751,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("wv-goto-a", documentDock!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_AgentSessionTab_AltKeyStateChanged_SetsIsAltHeld()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6765,7 +6765,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(viewModel.IsAltHeld);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabAsync_AgentSessionTab_GoToTabAtIndexRequested_ExecutesGoToTabCommand()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6785,7 +6785,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("agent-goto-a", documentDock!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_ShowsRelatedEntityNestedUnderWorkspace()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6866,7 +6866,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(workspaceIndex + 1, noteIndex);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplySelectedViewAsync_WorkspacesView_WorkspaceWithNoRelatedEntities_ShowsWorkspaceFlatOnly()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6910,7 +6910,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── Single-window guard tests (issue #240) ────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnOpenScheduledTasksClicked_WhenWindowAlreadyOpen_DoesNotOpenSecondWindow()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6934,7 +6934,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(existingDialog, trackingField.GetValue(mainWindow));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnOpenScheduledTasksClicked_TrackingField_InitiallyNull()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6947,7 +6947,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(trackingField!.GetValue(mainWindow));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_RunVsCodeTunnelTool_IsRegistered()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6963,7 +6963,7 @@ public sealed class MainWindowIntegrationTests
 
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_GitWorkspaceDiscoveryTool_IsRegistered()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -6978,7 +6978,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(host.TryGetTool("git-workspace-discovery", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_WorkspaceWithChildren_ShowsExpandAffordance()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7047,7 +7047,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(workspaceVm.HasTraversedChildren);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindowViewModel_ToggleExpand_DoesNotRebuildPopulation()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7177,7 +7177,7 @@ public sealed class MainWindowIntegrationTests
         });
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_CreatesTwoTabsWithSameAgentChat()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7264,7 +7264,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentSessionWorkspaceTabViewModel_DisposeWithLease_ReleasesChat_OnLastDispose()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7365,7 +7365,7 @@ public sealed class MainWindowIntegrationTests
         await probe2.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentChatTable_Refresh_DoesNotThrow_WhenSessionRemovedConcurrently()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7447,7 +7447,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Empty(table.RunningSessions);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_WithRunningAgentTab_IsAnyRunning()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7493,7 +7493,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(brain.IsAnyRunning);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_WithRunningAgentTab_HasRowWithWorkspaceAndTabTitles()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7560,7 +7560,7 @@ public sealed class MainWindowIntegrationTests
         Assert.True(row.HasOpenTab);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_Activate_FocusesTab()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7623,7 +7623,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentTab.Id, activeDoc!.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningAgentBrain_RowActivateCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -7716,7 +7716,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentTab.Id, (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ActivateTabById_WhenWorkspacePaneNotInWorkspacePanes_OpensWorkspaceAndActivatesTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7784,7 +7784,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── PopulateWorkspacePaneTabsAsync — new tabs[] format ───────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithTopLevelTabsArray_PopulatesPaneTabsInSavedOrder()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7846,7 +7846,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(["tabs-arr-a", "tabs-arr-b", "tabs-arr-c"], tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithLegacyRegions_FlattensToSingleDock()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7922,7 +7922,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains("legacy-tab-right", tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNoTabsAndNoRegions_OpensDefaultEntityTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7960,7 +7960,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(defaultTab);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithTopLevelTabsAndActiveTabId_ActivatesSpecifiedTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8012,7 +8012,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── CreateWorkspaceContentLayout — ItemsSource wiring ────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_SetsItemsSourceToPaneTabs()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8050,7 +8050,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(workspacePane.Tabs, itemsSourceDock!.ItemsSource);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_AddingTabToPaneTabs_CreatesWorkspaceDocumentInDock()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8098,7 +8098,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Same(newTab, doc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CreateWorkspaceContentLayout_RemovingTabFromPaneTabs_RemovesWorkspaceDocumentFromDock()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8125,7 +8125,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Null(docAfterRemoval);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_SlashCommandContext_WithLocalSession_ExecuteAutoResume_UpdatesEntityWithTrustedExecutorDot()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8186,7 +8186,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(TrustProfile.LocalClientInstance, executorEl.GetString());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TryBuildAgent_SlashCommandContext_WithAutoResumeAlreadyEnabled_ExecuteAutoResume_RemovesAutoResume()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8247,7 +8247,7 @@ public sealed class MainWindowIntegrationTests
         Assert.False(updatedData.TryGetProperty("auto-resume", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TryStartAutoResumeAsync_WithMatchingLocalSession_AcquiresLeaseAndEnqueuesResumePrompt()
     {
         var table = CreateTestRunningAgentChatTable();
@@ -8366,7 +8366,7 @@ public sealed class MainWindowIntegrationTests
 
     // ── Tab close MRU navigation tests (#828) ──────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseTab_ActiveTab_NavigatesToMostRecentlyUsedTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8394,7 +8394,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("mru-a", documentDock!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseTab_NonActiveTab_DoesNotChangeActiveTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8420,7 +8420,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("mru-non-active-b", documentDock!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseTab_LastTabInPane_NoNavigation()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8435,7 +8435,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Empty(viewModel.SelectedWorkspacePane!.Tabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseTabById_ActiveTab_NavigatesToMostRecentlyUsedTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -8463,7 +8463,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("mru-byid-a", documentDock!.ActiveDockable?.Id);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnDockableTabClosed_ActiveTab_NavigatesToMostRecentlyUsedTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();

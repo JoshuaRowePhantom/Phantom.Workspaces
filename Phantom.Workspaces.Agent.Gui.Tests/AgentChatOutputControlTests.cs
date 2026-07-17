@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -63,7 +64,7 @@ public sealed class AgentChatOutputControlTests
         Assert.DoesNotContain("DetailsGutter.init", html, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_RaisesUrlNavigationRequested()
     {
         // Verify that when the browser posts an "openUrl" JSON message, the control
@@ -84,7 +85,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("https://example.com", receivedUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_WithEmptyUrl_DoesNotRaiseEvent()
     {
         var control = new AgentChatOutputControl();
@@ -100,7 +101,7 @@ public sealed class AgentChatOutputControlTests
         Assert.False(raised);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_OpenUrlMessage_WithNullOpenUrlHandler_DoesNotThrow()
     {
         // Verify that when an openUrl message is received and the subscribed ViewModel
@@ -128,7 +129,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("https://example.com", receivedUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OpenUrlMessage_WithNoViewModel_DoesNotThrow()
     {
         // Verify that when an openUrl message is received and no ViewModel is subscribed
@@ -146,7 +147,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("https://example.com", receivedUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_UnknownMessageType_DoesNotThrow()
     {
         var control = new AgentChatOutputControl();
@@ -158,7 +159,7 @@ public sealed class AgentChatOutputControlTests
         browser.FireMessage("""{"type":"unknownType","data":"anything"}""");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ActualThemeVariantChanged_PostsThemeCommandToBrowser()
     {
         // Verify that when the actual theme variant changes, the control re-posts a "theme"
@@ -218,7 +219,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(0, readyCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_OnBrowserReady_PostsThemeCommand()
     {
         var control = new AgentChatOutputControl();
@@ -243,7 +244,7 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'theme' command to be posted when the browser reports ready.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_SpuriousReload_PostsThemeCommandAgain()
     {
         // Verify that a spontaneous reload (Ready firing without HtmlShell being reassigned)
@@ -332,7 +333,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("}</style></head>", result, StringComparison.OrdinalIgnoreCase);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AttachOutputModel_HtmlShellAlreadyContainsInjectedThemeStyle()
     {
         // Verify that HtmlShell is set with the theme <style> block baked in before Ready fires
@@ -362,7 +363,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("<style>:root{", browser.HtmlShell, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_AfterHtmlShellSet_StillPostsThemeCommand()
     {
         // Even after the theme is baked into HtmlShell, OnBrowserReady must still post
@@ -452,7 +453,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, browser.BatchCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_InitialHistoryWithMessages_UsesOneBatch()
     {
         // Verify that when OnBrowserReady fires with existing history, the entire initial
@@ -498,7 +499,7 @@ public sealed class AgentChatOutputControlTests
             "Expected at least one 'update' command for the initial history items.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_IncrementalMessageAfterInitial_DoesNotStartNewBatch()
     {
         // Verify that messages appended after the initial load are not batched —
@@ -533,7 +534,7 @@ public sealed class AgentChatOutputControlTests
         Assert.True(browser.PostedMessages.Count > 0, "Expected incremental update messages.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollsToBottom_AfterInitialContentLoad()
     {
         // Arrange: attach a view model with existing history, then trigger OnBrowserReady.
@@ -573,7 +574,7 @@ public sealed class AgentChatOutputControlTests
             "Expected a 'scroll' command to be posted after the initial content load.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_WhenHistoryPopulatedAfterBrowserReady_RendersPersistedMessages()
     {
         // #1009: the WebView can report Ready before persistence finishes loading history. The
@@ -611,7 +612,7 @@ public sealed class AgentChatOutputControlTests
         Assert.True(CountUpdateCommands(browser) > 0, "Expected persisted history to be rendered after HistoryPopulated completed.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_WhenHistoryAlreadyPopulated_RendersHistoryImmediately()
     {
         // #1009 regression guard: when history is already loaded, the deferred-await path must not
@@ -633,7 +634,7 @@ public sealed class AgentChatOutputControlTests
         Assert.True(CountUpdateCommands(browser) > 0, "Expected already-loaded history to be rendered immediately.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_HistoryLoadedTask_DoesNotCompleteBeforeHistoryPopulated()
     {
         // #1009: HistoryLoaded must not complete until history has actually been populated and
@@ -690,7 +691,7 @@ public sealed class AgentChatOutputControlTests
             }
         });
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_SetsAutoScrollEnabled_AfterInitialContentLoad()
     {
         // Arrange: attach a view model with AutoScrollEnabled = false, then trigger OnBrowserReady.
@@ -712,7 +713,7 @@ public sealed class AgentChatOutputControlTests
         Assert.True(viewModel.AutoScrollEnabled, "AutoScrollEnabled must be true after OnBrowserReady.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_DoesNotDoubleScroll_WhenSettingAutoScrollEnabled()
     {
         // Arrange: attach a view model with history so Phase B delivers a scroll.
@@ -752,7 +753,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, scrollCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OnBrowserReady_ScrollIsPostedAfterAllBatchMessages()
     {
         // Verify that the "scroll" command appears in PostedMessages AFTER all "update" messages.
@@ -805,7 +806,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AutoScrollEnabled_SetToTrue_PostsScrollCommandToBrowser()
     {
         // Arrange: attach a view model, then disable auto-scroll and clear messages so we
@@ -848,7 +849,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AutoScrollEnabled_SetToFalse_DoesNotPostScrollCommand()
     {
         // Arrange: attach a view model (AutoScrollEnabled starts true after OnBrowserReady).
@@ -888,7 +889,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Trait("Category", "SlowLayout")]
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AutoScrollEnabled_SetToTrue_WhenSuppressed_DoesNotPostScrollCommand()
     {
         // Arrange: attach a view model, disable auto-scroll, and clear messages.
@@ -930,7 +931,7 @@ public sealed class AgentChatOutputControlTests
             "Expected no 'scroll' command when AutoScrollEnabled is re-enabled via SetAutoScrollFromPage (atBottom suppression).");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void InspectMessage_ForDiagnosticContent_OpensUnifiedInspector()
     {
         // Verify that an "inspect" message from the browser raises InspectorRequested on the
@@ -949,7 +950,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal("diag-0", receivedContentId);
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_500ItemHistory_BrowserReceivesMultipleBatches()
     {
         // Control with a 500-item history receives multiple history batches, not one giant batch.
@@ -985,7 +986,7 @@ public sealed class AgentChatOutputControlTests
             $"Expected at least 4 batches for 500 history items (Phase A + 3 history chunks), got {browser.BatchCount}.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_AllPostMessageCallsAreOnUIThread()
     {
         // All PostMessageToJavaScript calls must arrive on the Avalonia UI thread,
@@ -1020,7 +1021,7 @@ public sealed class AgentChatOutputControlTests
             "All PostMessageToJavaScript calls must be on the UI thread.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_ScrollsToBottomAfterFirstChunk()
     {
         // Auto-scroll is enabled from the start. ScrollToBottom() is called when the model
@@ -1064,7 +1065,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, scrollCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_DisposingControlDuringBackgroundLoad_DoesNotCrash()
     {
         // Disposing the control (via DataContext = null) while the background history-loading task
@@ -1099,7 +1100,7 @@ public sealed class AgentChatOutputControlTests
         await historyLoaded;
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public async Task OnBrowserReady_RunningItemsDeliveredSynchronouslyInInitialBatch()
     {
         // The Phase-A BeginBatch/EndBatch (running-items) completes synchronously within
@@ -1195,7 +1196,7 @@ public sealed class AgentChatOutputControlTests
         Assert.Equal(1, readyCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_DetachReattach_RebuildsOutputModel()
     {
         // Regression for issue #904: detaching disposes the output model; reattaching re-runs
@@ -1229,7 +1230,7 @@ public sealed class AgentChatOutputControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_DetachReattach_LiveHistoryAddPostsUpdate()
     {
         // Regression for issue #904 at the message level: after a detach/reattach cycle, a live
@@ -1280,7 +1281,7 @@ public sealed class AgentChatOutputControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutputControl_ChatCreatedOnBackgroundThread_LiveTurnPostsOnUIThread()
     {
         // Regression for issue #908: production sessions (loaded and freshly launched) create their

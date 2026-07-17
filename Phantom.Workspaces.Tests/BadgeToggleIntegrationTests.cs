@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class BadgeToggleIntegrationTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_AppliesInterest()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -39,7 +39,7 @@ public sealed class BadgeToggleIntegrationTests
             && types.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && type.GetString() == "actionable"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_WhenUpdateFails_ThrowsException()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -70,7 +70,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.NotNull(exception);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_RemovesExistingInterest()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -107,7 +107,7 @@ public sealed class BadgeToggleIntegrationTests
             && types.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && type.GetString() == "actionable"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityListNodeViewModel_BadgeCommand_CanExecute_WhenEntityExists()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -139,7 +139,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.True(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_BadgeCommand_CannotExecute_WhenEntityIsNull()
     {
         // Create a card node without an entity (display-only node)
@@ -164,7 +164,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.False(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityCardViewModel_ToggleInterestCommand_WhenToggleFails_PropagatesException()
     {
         var ct = TestContext.Current.CancellationToken;

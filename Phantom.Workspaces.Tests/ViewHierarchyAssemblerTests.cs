@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Linq;
@@ -13,7 +14,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ViewHierarchyAssemblerTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AssembleAsync_NestsRelatedMembersUnderDedupedContextualParent()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -68,7 +69,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal([member1Id, member2Id], memberIds.OrderBy(id => id.Value).ToHashSet());
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AssembleAsync_WithoutEntityTypeViews_ProducesFlatChildlessNodes()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -113,7 +114,7 @@ public sealed class ViewHierarchyAssemblerTests
             "traverse-relationships must include an entry with relationship-type-ids containing 'related'");
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AssembleAsync_WithCollapsedDisposition_SetsIsExpandedFalseOnRootNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -165,7 +166,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.False(workspaceNode.IsExpanded);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AssembleAsync_WithoutDisposition_DefaultsToIsExpandedTrue()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -214,7 +215,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.True(taskNode.IsExpanded);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithRelatedEntity_RendersEntityAsChild()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -264,7 +265,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(noteId, childNode.Entity!.EntityId);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_WorkspaceWithNoRelatedEntities_RendersFlat()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -396,7 +397,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(entities[3].EntityId, single.ChildEntityId);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_UsesAncestorRelationshipAsGroupNode()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -453,7 +454,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.All(groupNode.Children, static child => Assert.False(child.IsAncestorGroup));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task PullRequestsView_ShowsPullRequestsGroupedUnderRepository()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -548,7 +549,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(pr3Id, child.Entity!.EntityId);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task PullRequestsView_ShowsEmptyRepositoryNode_WhenNoPrsExist()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -581,7 +582,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Empty(repoNode.Children);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task PullRequestsView_ShowsPullRequestsFromMultipleProviders()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -691,7 +692,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Contains("repository", parentEntityTypeNameValues, StringComparer.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task PullRequestsView_GroupsPullRequestsByRepositoryField()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -770,7 +771,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(pr2Id, repoBChild.Entity!.EntityId);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task PullRequestsView_PullRequestWithNoRepository_RendersUngrouped()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -819,7 +820,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Empty(prNode.Children);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_Roots_SortedByDisplayName()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -837,7 +838,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(["Alpha", "Bravo", "Charlie"], sortedNames);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_Roots_SortIsCaseInsensitive()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -855,7 +856,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(["alpha", "Beta", "gamma"], sortedNames);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_Roots_FallsBackToNameSegments_WhenNoDisplayName()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -872,7 +873,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal([aId, zId], sortedIds);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_TraversedChildren_SortedByDisplayName()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -910,7 +911,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(["Apple", "Mango", "Zebra"], childNames);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_GroupByParent_ChildrenSortedByDisplayName()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -964,7 +965,7 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.Equal(["Alpha PR", "Zulu PR"], childNames);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ViewHierarchyAssembler_AncestorGroups_SortedByDisplayName()
     {
         var ct = TestContext.Current.CancellationToken;

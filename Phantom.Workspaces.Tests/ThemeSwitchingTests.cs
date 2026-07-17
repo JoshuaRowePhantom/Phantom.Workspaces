@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -37,7 +38,7 @@ public sealed class ThemeSwitchingTests
         "Theme.Class.accent.Foreground",
     ];
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ApplyThemeResources_AfterFix_DoesNotWriteThemeVariantKeysToFlatDictionary()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -52,7 +53,7 @@ public sealed class ThemeSwitchingTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotificationsPopup_SwitchToLightTheme_PanelBackgroundUpdatesToLightValue()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -63,7 +64,7 @@ public sealed class ThemeSwitchingTests
         AssertBrushColor("Theme.Surface.Popup.Background", ThemeVariant.Light, "#FFFFFF");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotificationsPopup_SwitchToDarkTheme_PanelBackgroundUpdatesToDarkValue()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -74,7 +75,7 @@ public sealed class ThemeSwitchingTests
         AssertBrushColor("Theme.Surface.Popup.Background", ThemeVariant.Dark, "#2C2C2C");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavStackPopup_SwitchToLightTheme_PanelBackgroundUpdatesToLightValue()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -85,7 +86,7 @@ public sealed class ThemeSwitchingTests
         AssertBrushColor("Theme.Surface.Popup.Border", ThemeVariant.Light, "#CCCCCC");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavStackPopup_SwitchToDarkTheme_PanelBackgroundUpdatesToDarkValue()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -96,7 +97,7 @@ public sealed class ThemeSwitchingTests
         AssertBrushColor("Theme.Surface.Popup.Border", ThemeVariant.Dark, "#3A3A3A");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotificationsPopup_ThemeSwitchedWhileOpen_PanelAppearanceUpdatesWithoutReopening()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -114,7 +115,7 @@ public sealed class ThemeSwitchingTests
         Assert.Equal(ThemeVariant.Light, Application.Current!.RequestedThemeVariant);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ThemeSwitch_RequestedThemeVariant_ChangesResourceResolution()
     {
         await using var viewModel = CreateTestMainWindowViewModel();

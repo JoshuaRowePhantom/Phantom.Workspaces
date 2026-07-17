@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 
@@ -7,7 +8,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityRepositoryTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task TryGetEntityByName_FindsSeededMainView()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -24,7 +25,7 @@ public sealed class EntityRepositoryTests
         Assert.NotNull(mainView);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ExportEntitySnapshotsAsync_ReturnsLatestEntityVersion()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -65,7 +66,7 @@ public sealed class EntityRepositoryTests
         Assert.Contains("Version 2", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task CreateAsync_InitializesWorkspaceEntitySessionDiscoveryEntities()
     {
         var repository = await EntityRepository.CreateAsync(new UnknownRepositorySource());

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Text.Json;
@@ -14,7 +15,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
 {
     // ---- ShouldApplyTo -----------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_LocalEntityWithPath_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -31,7 +32,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_RemoteEntityWithTunnel_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -107,7 +108,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         Assert.True(result);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_CodeNotFound_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -133,7 +134,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             && notification.Description.Contains("PATH", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithoutPath_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -152,7 +153,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
 
     // ---- Handle ------------------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_RunsCodeWithPath()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -182,7 +183,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         Assert.Contains("/test/repo", receivedArguments);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_CodeNotFound_ShowsNotification()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -204,7 +205,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             && notification.Description.Contains("code", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_RemoteEntityWithoutTunnel_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

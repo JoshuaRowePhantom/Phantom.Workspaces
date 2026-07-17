@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -22,7 +23,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspaceGuiContextProviderTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceList_ReturnsAllWorkspacePanes_WithCorrectIsSelectedFlag()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -72,7 +73,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(paneB.GetProperty("is_selected").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithNoWorkspaceEntityId_ReturnsTabsForSelectedPane()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -95,7 +96,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains("tablist-tab-b", tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithNoWorkspaceEntityId_MarksActiveTabCorrectly()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -122,7 +123,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(listedTabA.GetProperty("is_active").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithWorkspaceEntityId_ReturnsTabsForThatPane()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -165,7 +166,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains("specific-pane-tab", tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithUnknownWorkspaceEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -183,7 +184,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── workspace_close tests ─────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_ExistingPane_RemovesPaneAndReturnsClosed()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -217,7 +218,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal(initialCount - 1, viewModel.WorkspacePanes.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_UnknownPaneId_NoOpReturnsClosed()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -235,7 +236,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal(initialCount, viewModel.WorkspacePanes.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_DefaultPlaceholderPane_NoOpReturnsClosed()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -273,7 +274,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal(initialCount, viewModel.WorkspacePanes.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_MissingWorkspaceEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -290,7 +291,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── tab_close tests ───────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabClose_ExistingTab_ClosesTabAndReturnsClosedTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -317,7 +318,7 @@ public sealed class WorkspaceGuiContextProviderTests
             d => d.Id == "close-tab-existing");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabClose_UnknownTabId_ReturnsClosedFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -333,7 +334,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.GetProperty("closed").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabClose_MissingTabId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -350,7 +351,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── entity_invoke_shortcut tests ──────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_EntityFound_ValidShortcut_ReturnsHandled()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -383,7 +384,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_EntityNotFound_ReturnsHandledFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -404,7 +405,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.GetProperty("handled").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_UnknownShortcut_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -426,7 +427,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains("Review", errorElement.GetString(), StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_MissingEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -442,7 +443,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_Review_OnGitWorktreeEntity_ReturnsHandledTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -474,7 +475,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.GetProperty("handled").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_Review_OnNonGitWorktreeEntity_ReturnsHandledFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -508,7 +509,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── ProvideAIContextAsync instructions tests ──────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ProvideAIContextAsync_InstructionsEntityPresent_LoadsInstructions()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -542,7 +543,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── open_tab tests ────────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_OpensEntityTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -579,7 +580,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.IsType<EntityWorkspaceTabViewModel>(entityDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_DuplicateActivatesExisting()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -616,7 +617,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Single(entityTabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_InvalidGuid_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -633,7 +634,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_MissingEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -649,7 +650,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Url_OpensWebViewTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -675,7 +676,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.IsType<WebViewModel>(webDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Url_WithTitle_SetsTitle()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -704,7 +705,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal("My Custom Title", webDoc.TabViewModel!.Title);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Url_FocusFalse_TabAddedNotFocused()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -736,7 +737,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains(newTabId, tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_OpensShellTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -769,7 +770,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.IsType<ShellTabViewModel>(shellDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_WithArguments_PassedToSession()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -812,7 +813,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal("/home/user", capturedWorkingDirectory);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_WithTitle_SetsTitle()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -848,7 +849,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal("My Shell Tab", shellDoc.TabViewModel!.Title);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_UnknownTarget_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -864,7 +865,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_MissingTarget_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

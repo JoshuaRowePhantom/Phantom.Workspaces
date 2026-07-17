@@ -7,21 +7,21 @@ namespace Phantom.Workspaces.Tests.Updates;
 
 public sealed class TrayIconImageFactoryTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Create_WithoutUpdate_ReturnsIcon()
     {
         var icon = TrayIconImageFactory.Create(updateAvailable: false);
         Assert.NotNull(icon);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Create_WithUpdate_ReturnsIcon()
     {
         var icon = TrayIconImageFactory.Create(updateAvailable: true);
         Assert.NotNull(icon);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Render_WithoutUpdate_ReturnsReadableStreamAtPositionZero()
     {
         using var stream = TrayIconImageFactory.Render(updateAvailable: false);
@@ -30,7 +30,7 @@ public sealed class TrayIconImageFactoryTests
         Assert.Equal(0, stream.Position);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Render_WithUpdate_ReturnsReadableStreamAtPositionZero()
     {
         using var stream = TrayIconImageFactory.Render(updateAvailable: true);
@@ -39,7 +39,7 @@ public sealed class TrayIconImageFactoryTests
         Assert.Equal(0, stream.Position);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Render_UpdateAvailable_DifferentBytesFromNoUpdate()
     {
         using var withoutUpdate = TrayIconImageFactory.Render(updateAvailable: false);
@@ -47,7 +47,7 @@ public sealed class TrayIconImageFactoryTests
         Assert.NotEqual(withoutUpdate.ToArray(), withUpdate.ToArray());
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void RenderPixelBuffer_WithoutUpdate_TopLeftPixelIsTransparent()
     {
         var pixels = TrayIconImageFactory.RenderPixelBuffer(updateAvailable: false);
@@ -55,7 +55,7 @@ public sealed class TrayIconImageFactoryTests
         Assert.Equal(0, pixels[3]);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ComputedEmojiFontSize_ScaledToFillIcon()
     {
         // The auto-scaled font size must be larger than the original hardcoded 18,
@@ -64,7 +64,7 @@ public sealed class TrayIconImageFactoryTests
             $"Expected auto-scaled font size > 18 to fill icon, got {TrayIconImageFactory.ComputedEmojiFontSize:F1}");
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void RenderPixelBuffer_BrainGlyphOccupiesLargeFractionOfIcon()
     {
         var pixels = TrayIconImageFactory.RenderPixelBuffer(updateAvailable: false);

@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class StickyScrollTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ModeledEntityCardTemplate_ApplyLayer_MakesParentHeaderDrawAboveChildHeader()
     {
         var parentBranchHeader = new Border { Width = 220, Height = 40 };
@@ -66,7 +66,7 @@ public sealed class StickyScrollTests
         window.Close();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void DrawOrderComparator_UsesSiblingOrder_WhenZIndexIsEqual()
     {
         var first = new Border { Width = 100, Height = 40 };
@@ -92,7 +92,7 @@ public sealed class StickyScrollTests
         window.Close();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void LayerHelpers_ApplyLayer_MakesStickyDrawAboveNonSticky()
     {
         using var host = CreateHost();
@@ -108,7 +108,7 @@ public sealed class StickyScrollTests
         Assert.True(IsDrawnAbove(host.StickyHeader, host.NonStickyHeader, host.ScrollViewer));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void LayerHelpers_ResetLayer_ClearsZIndex_AndPinnedClass()
     {
         using var host = CreateHost();

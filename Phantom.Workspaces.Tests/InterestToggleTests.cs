@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Linq;
@@ -11,7 +12,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class InterestToggleTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ToggleAsync_AddsThenRemovesTheInterestRelationship()
     {
         var ct = TestContext.Current.CancellationToken;

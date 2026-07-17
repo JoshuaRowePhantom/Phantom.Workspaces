@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -18,7 +19,7 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class InterestViewQueryTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task WorkstreamsView_AssemblesHierarchy_OfAssignedTasksRelatedMembersAndContextualParents()
     {
         var dataAccessLayer = (await EntityRepository.CreateAsync(new UnknownRepositorySource())).DataAccessLayer;
@@ -333,7 +334,7 @@ public sealed class InterestViewQueryTests
             """);
 
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task InboxView_PopulatesViewModels_WithCurrentUsersActionableItems()
     {
         var dataAccessLayer = (await EntityRepository.CreateAsync(new UnknownRepositorySource())).DataAccessLayer;

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Tests;
@@ -18,7 +19,7 @@ public sealed class ProfileStoreTests
         Assert.Equal("#CCCCCC", ProfileThemeSettings.Light.Surfaces.Popup.Border);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GetOrInitializeProfileAsync_DefaultsThemeAndDebugging()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -50,7 +51,7 @@ public sealed class ProfileStoreTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SetThemeAndDebuggingAsync_PreserveEachOther()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -120,7 +121,7 @@ public sealed class ProfileStoreTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SetThemeAsync_SwitchToLight_PopupColorsUpdateToLightValues()
     {
         var ct = TestContext.Current.CancellationToken;

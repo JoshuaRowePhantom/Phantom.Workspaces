@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class UsageTrackerControlTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageTrackerControl_Instantiates_WithEmptyAccounts()
     {
         var metrics = new UsageMetrics();
@@ -36,7 +36,7 @@ public sealed class UsageTrackerControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageTrackerControl_RendersAccountCard()
     {
         var metrics = new UsageMetrics();
@@ -87,7 +87,7 @@ public sealed class UsageTrackerControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageTrackerControl_HyperlinkButton_HasCorrectUrl()
     {
         var metrics = new UsageMetrics();

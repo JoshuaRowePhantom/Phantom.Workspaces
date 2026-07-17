@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
@@ -18,7 +19,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class AgentSessionWorkspaceTabIntegrationTests
 {
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public async Task OnAgentPropertyChanged_DuringDisposal_DoesNotThrowOnConcurrentHistory()
     {
         // Issue #1084: closing an agent session tab while the agent is producing output disposes the

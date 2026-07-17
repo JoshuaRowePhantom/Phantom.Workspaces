@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -55,7 +56,7 @@ public sealed class ChatOutputHtmlModelTests
     private static AgentChatHistoryItem TextMessage(ChatRole role, string text)
         => new() { Role = role, Contents = [new TextContent(text)] };
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task InitialHistory_EmitsSinglePrependBlob_IntoHistoryContainer()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -79,7 +80,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.True(sink.ScrollCount >= 1);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AddingMessage_InsertsAfterPreviousMessageElement()
     {
         var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.User, "first") };
@@ -96,7 +97,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">second<", operation.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task StreamingUpdate_WhenLeadingContentUnchanged_OnlyEmitsForChangedContent()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -121,7 +122,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">appended<", operation.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task StreamingUpdate_WhenLastContentChanges_ReplacesThatContentById()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -145,7 +146,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("partial complete", operation.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RemovingMessage_EmitsRemoveByElementId()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -165,7 +166,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(1), operation.Path);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ReasoningHidden_DoesNotRenderReasoningContent_UntilToggledOn()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -192,7 +193,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains("thinking"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_RendersContainerThenAppendsMessagesIntoIt()
     {
         var runningItem = new AgentChatRunningItem();
@@ -223,7 +224,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">working<", operations[1].Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItems_WithNullEntry_DoesNotThrowAndRendersRealItems()
     {
         var realItem = new AgentChatRunningItem();
@@ -245,7 +246,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains(">real running<"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_ReplacingNullEntryWithRealItem_ActivatesAndRendersMessages()
     {
         // The running item starts as a null placeholder, so its model's Activate() no-ops and no
@@ -277,7 +278,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, operation => operation.Content.Contains(">streamed<"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HtmlEscape_EscapesMarkupInMessageText()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -328,7 +329,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("let x = 1;", html);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Update_EmitsNoOperations_WhenSourceIsReferenceEqual()
     {
         var item = TextMessage(ChatRole.Assistant, "hello");
@@ -344,7 +345,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Empty(sink.ContentOperations);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Update_EmitsOperations_WhenSourceDiffers()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -381,7 +382,7 @@ public sealed class ChatOutputHtmlModelTests
         // since the attribute now intentionally embeds the original markdown.
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_StreamingUpdate_EmitsNoHtmlOps_WhenItemsAreReferenceEqual()
     {
         var item = TextMessage(ChatRole.Assistant, "hello");
@@ -405,7 +406,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Empty(sink.ContentOperations);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_StreamingUpdate_EmitsHtmlOps_WhenItemContentChanges()
     {
         var runningItem = new AgentChatRunningItem();
@@ -444,7 +445,7 @@ public sealed class ChatOutputHtmlModelTests
     private static AgentChatHistoryItem ToolCallMessage(string toolName, string callId = "call-1")
         => new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent(callId, toolName)] };
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task SingleToolCallMessage_IsInsertedStandalone_WithoutGroupWrapper()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -464,7 +465,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("chat-message", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TwoConsecutiveToolCalls_AreGroupedIntoSingleDetailsElement()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -502,7 +503,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("read_file", summaryOp.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ThreeConsecutiveToolCalls_GroupIsExtendedInPlace()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -532,7 +533,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("3 calls", summaryOp.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TextThenToolCall_ToolCallIsStandalone_NoGroupWrapper()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -551,7 +552,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("chat-tool-group-body", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolCallThenText_TextInsertsAfterToolCallMessage()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -571,7 +572,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">done<", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ConsecutiveToolCallsThenText_TextAnchorsAfterGroupElement()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -596,7 +597,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Content-level tool-group tests (issue #154) ────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MessageWithSingleFunctionCall_RendersToolGroupItem_NoOuterWrapper()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -616,7 +617,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("chat-tool-group-wrapper", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MessageWithMultipleFunctionCalls_RendersOuterToolGroupWrapper()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -641,7 +642,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("2 calls", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MessageWithFunctionCallAndMatchingResult_ResultNestedInsideCallItem()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -666,7 +667,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("chat-tool-result", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MessageWithFunctionResultOnly_NoMatchingCall_RenderedStandalone()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -719,7 +720,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Cross-message tool-result injection tests (issue #154 bug fix) ────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolResultMessage_CrossMessage_MatchedByCallId_InjectedIntoCallItem()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -754,7 +755,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain(contentOps, op => op.Content.Contains("tool result:"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolResultMessage_CrossMessage_Unmatched_RenderedStandalone()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -774,7 +775,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("chat-tool-group-wrapper", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolResultMessage_CrossMessage_DoesNotTriggerMessageLevelGroup()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -808,7 +809,7 @@ public sealed class ChatOutputHtmlModelTests
     private static AgentChatHistoryItem ToolResultMessage(string callId)
         => new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent(callId, "result")] };
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TwoToolCallBatches_SeparatedByResults_AreGroupedTogether()
     {
         // Arrange: batch 1
@@ -851,7 +852,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("2 calls", summaryOp!.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ThreeToolCallBatches_SeparatedByResults_AllInSameGroup()
     {
         // Arrange: batch 1 + batch 2 (already grouped)
@@ -891,7 +892,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("3 calls", summaryOp!.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolCallBatch_AfterNonToolMessage_IsStandalone_EvenWithResults()
     {
         // A text reply followed by results and then a new tool-call batch:
@@ -958,7 +959,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Running-item insertion-point reliability tests (issue #222) ───────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_Activate_EmitsContainerInsertBeforeMessageAppend()
     {
         var runningItem = new AgentChatRunningItem();
@@ -990,7 +991,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">hello<", ops[1].Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_StreamingChunksContinueAfterToolCallResultInsertion()
     {
         var runningItem = new AgentChatRunningItem();
@@ -1028,7 +1029,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(ops, op => op.Content.Contains(">done<"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_WhenInsertionFailed_NotifyInsertionFailed_ReInsertsAndRestoresStreaming()
     {
         var runningItem = new AgentChatRunningItem();
@@ -1065,7 +1066,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(streamOps, op => op.Content.Contains(">recovered stream<"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_InspectMessage_HandledByBridge()
     {
         // The rendered HTML for each content block must contain data-inspect-target so that the
@@ -1219,7 +1220,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.True(plan.Slots[1].Model.ProducesNoVisibleContent);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task LiveTransformer_ToolCallsSeparatedByEmptyMessage_CoalesceIntoOneGroup()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -1246,7 +1247,7 @@ public sealed class ChatOutputHtmlModelTests
                 && op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task LiveTransformer_NonDisplayedInterveningItem_ProducesNoDomElement()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -1795,7 +1796,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── ChatOutputHtmlModel three-phase async init tests (issue #631) ──────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_500Items_DeliversSinkCallsIn3Batches()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -1808,7 +1809,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(3, sink.BatchCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_200Items_DeliversSinkCallsIn1Batch()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -1821,7 +1822,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(1, sink.BatchCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_201Items_DeliversSinkCallsIn2Batches()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -1834,7 +1835,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(2, sink.BatchCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_0Items_NoHistorySinkCalls()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>();
@@ -1847,7 +1848,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Empty(sink.ContentOperations);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_OlderChunk_PrependedIntoHistoryContainer()
     {
         // 400 items → 2 chunks, newest chunk delivered first; the older chunk is then prepended
@@ -1872,7 +1873,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">item 0<", ops[1].Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_ScrollToBottom_CalledExactlyOnce()
     {
         // 400 items → 2 chunks. ScrollToBottom must be called exactly once (after the newest chunk).
@@ -1886,7 +1887,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(1, sink.ScrollCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_EmptyHistory_ScrollToBottomNotCalled()
     {
         var sink = new RecordingSink();
@@ -1900,7 +1901,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(0, sink.ScrollCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_CollectionChangedWhileLoading_IsBuffered()
     {
         // Start with empty history so there are no initial chunks.
@@ -1923,7 +1924,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, op => op.Content?.Contains("buffered-item") == true);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_CollectionChangedAfterLoading_IsProcessedImmediately()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>();
@@ -1940,7 +1941,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, op => op.Content?.Contains("live-item") == true);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_NoBufferedEventsAreDroppedOrReplayedTwice()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>();
@@ -1963,7 +1964,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(1, contentOps.Count(op => op.Content?.Contains("item-2") == true));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_ItemIdsAreAssignedInIndexOrder()
     {
         // 400 items → 2 chunks. Element ids derive from the global history index: items[0] gets
@@ -1986,7 +1987,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(0)}\"", ops[1].Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentChatOutput_Diagnostic_DiagnosticContentRendered()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2011,7 +2012,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── HistoryLoad tests (issue #893) ──────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_AllChunksTargetHistoryContainer_WithPrependLocation()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2030,7 +2031,7 @@ public sealed class ChatOutputHtmlModelTests
         });
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_NewestChunkInsertedFirst()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2045,7 +2046,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain(">item 399<", ops[1].Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_ScrollCalledAfterNewestChunkOnly()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2066,7 +2067,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.True(scrollIndex < secondUpdate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_500Items_AllMessageIdsPresentInSinkOutput()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2083,7 +2084,7 @@ public sealed class ChatOutputHtmlModelTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_EmptyHistory_EmitsNoChunkOps()
     {
         var sink = new RecordingSink();
@@ -2097,7 +2098,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_CancellationMidLoad_DoesNotPublishPartialSlotsOrCallMap()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2116,7 +2117,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain(sink.Operations, op => op.Path == ChatOutputHtmlRenderer.HistoryContainerId);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_CancellationAfterChunkGeneration_DoesNotWaitForUiDispatch()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2146,7 +2147,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Running-item structure tests (issue #893) ───────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_Container_AppendsToRunningItemsContainer()
     {
         var running = new ObservableCollection<AgentChatRunningItem>();
@@ -2168,7 +2169,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemContentsId(ChatOutputHtmlRenderer.RunningItemId(0))}\"", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_InnerTransformer_FirstMessage_AppendsToRunContentsId()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2192,7 +2193,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">streamed<", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_InnerTransformer_UsesRunningMessageIds()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2214,7 +2215,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain("id=\"history-", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_InnerTransformer_SecondMessage_InsertsAfterFirstRunningMessage()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2238,7 +2239,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(">second<", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_ReInsert_TargetsRunningItemsContainer()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2260,7 +2261,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.RunningItemId(0)}\"", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_Update_ReplacesContentsDiv_NotRunWrapper()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2290,7 +2291,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(ops, op => op.Content.Contains(">new stream<"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task RunningItem_Removal_RemovesRunWrapperAndDisposesInnerTransformer()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2320,7 +2321,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Regression tests for the redesign's bug classes (issue #893) ────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Regression_BugA_ToolGroupPromotion_UsesHistoryIndex_NotLocalIndex()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2342,7 +2343,7 @@ public sealed class ChatOutputHtmlModelTests
             op.Content.Contains($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(0)}\""));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Regression_BugB_NoInsertAfterDivs_EmittedAnywhere()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>(
@@ -2365,7 +2366,7 @@ public sealed class ChatOutputHtmlModelTests
             op.Path.Contains("insert-after") || op.Content.Contains("insert-after"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Regression_BugD_OnInsert_UsesContainerPath_NotLoadAfterHardcode()
     {
         var runningItem = new AgentChatRunningItem();
@@ -2388,7 +2389,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.DoesNotContain(sink.Operations, o => o.Path == "load-after");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Regression_BugE_CrossChunkToolResult_MatchesCall()
     {
         // The call lands in the older chunk while its result lands in the newer chunk.
@@ -2431,7 +2432,7 @@ public sealed class ChatOutputHtmlModelTests
     private static AgentChatHistoryItem DiagnosticMessage(string text)
         => new() { Role = AgentChatHistoryItem.DiagnosticChatRole, Contents = [new TextContent(text)] };
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UserMessage_AddedWhileRunningItemActive_InsertsIntoHistoryDom()
     {
         var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "earlier answer") };
@@ -2453,7 +2454,7 @@ public sealed class ChatOutputHtmlModelTests
             o.Path.Contains("insert-after") || o.Content.Contains("insert-after"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UserMessage_AddedAfterRunningItemCompletes_InsertsIntoHistoryDom()
     {
         var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "earlier answer") };
@@ -2475,7 +2476,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("sent after completion", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UserMessage_AddedToHistory_AnchorsAfterLastTopLevelHistoryElement()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2519,7 +2520,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("first live message", op.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Reload_HistoryWithToolResultOnlyTail_RendersAllMessagesIncludingUserMessage()
     {
         // Simulates a WebView reload: a fresh model renders the full history, including a user
@@ -2546,7 +2547,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Buffered history events replayed at Phase C (issue #901, Fix A) ────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryReplaceDuringLoading_IsAppliedAfterPhaseC()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2564,7 +2565,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, op => op.Content.Contains("replaced-content"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryRemoveDuringLoading_IsAppliedAfterPhaseC()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2583,7 +2584,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.Operations, op => op.Kind == "remove" && op.Path == ChatOutputHtmlRenderer.MessageId(1));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryInsertAtMiddleDuringLoading_IsAppliedAfterPhaseC()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2603,7 +2604,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryTailAddDuringLoading_IsAppliedAfterPhaseC_ExactlyOnce()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2622,7 +2623,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task StreamingUserMessageThenAgentReply_DuringPhaseB_BothVisibleAfterPhaseC()
     {
         // 250 items → two Phase B chunks. During loading, a user message is appended, an
@@ -2644,7 +2645,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains(sink.ContentOperations, op => op.Content.Contains("full streamed reply"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UserMessage_AddedWhileRunningItemActive_DuringHistoryLoading_AppearsAfterPhaseC()
     {
         var history = new ObservableCollection<AgentChatHistoryItem> { TextMessage(ChatRole.Assistant, "earlier answer") };
@@ -2665,7 +2666,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── History-side NotifyInsertionFailed recovery (issue #901, Fix B) ────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotifyInsertionFailed_WithHistoryId_ReInsertsAffectedSlot()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2694,7 +2695,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(2), slot3Op.Path);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotifyInsertionFailed_WithFirstHistoryId_ReAppendsIntoHistoryContainer()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2713,7 +2714,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Equal(ChatOutputHtmlRenderer.HistoryContainerId, op.Path);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotifyInsertionFailed_WithToolGroupId_ReInsertsAffectedGroup()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2740,7 +2741,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ToolGroupId(1)}\"", promoteOp.Content);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NotifyInsertionFailed_WithUnknownId_EmitsNothing()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2758,7 +2759,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Empty(sink.Operations);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryAdd_WhenPreviousElementMissingFromDom_RecoversViaNotifyInsertionFailed()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2790,7 +2791,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Tests for issue #957: diagnostics always visible ────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatMessageHtmlModel_Constructor_DoesNotAcceptIsDiagnosticsVisibleParameter()
     {
         // This test verifies that ChatMessageHtmlModel constructor signature no longer accepts
@@ -2816,7 +2817,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.NotEmpty(sink.ContentOperations);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutputHtmlModel_DiagnosticMessages_AlwaysRendered()
     {
         // Verifies that diagnostic messages are always rendered unconditionally
@@ -2859,7 +2860,7 @@ public sealed class ChatOutputHtmlModelTests
         public CyclicPayload Self => this;
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task HistoryLoad_WithToolCallContainingNonSerializableArguments_CompletesAndRendersOtherMessages()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -2902,7 +2903,7 @@ public sealed class ChatOutputHtmlModelTests
 
     // ── Issue #1042: streaming summary-replace retains expand/collapse toggle ──
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolCallGroupHtmlModel_SummaryReplaceOnAppend_RetainsExpandCollapseToggle()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>

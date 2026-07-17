@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -14,7 +15,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class StartAgentSessionFromEntityShortcutHandlerTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasPathField_ReturnsTrue()
     {
         var handler = CreateHandler();
@@ -26,7 +27,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.True(result);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasHomeDirectoryField_ReturnsTrue()
     {
         var handler = CreateHandler();
@@ -38,7 +39,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.True(result);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ShouldApplyTo_WhenShortcutIsStartAgentSessionAndEntityHasNeitherField_ReturnsFalse()
     {
         var handler = CreateHandler();
@@ -50,7 +51,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.False(result);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ShouldApplyTo_WhenShortcutIsNotStartAgentSession_ReturnsFalse()
     {
         var handler = CreateHandler();
@@ -62,7 +63,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.False(result);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ShouldApplyTo_WhenEntityDataIsNull_ReturnsFalse()
     {
         var handler = CreateHandler();
@@ -80,7 +81,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.False(result);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task Handle_WhenEntityHasPathField_OpensStartAgentSessionTab()
     {
         var handler = CreateHandler();
@@ -93,7 +94,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         Assert.True(handled);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task Handle_WhenEntityHasHomeDirectoryField_OpensStartAgentSessionTab()
     {
         var handler = CreateHandler();

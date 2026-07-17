@@ -11,7 +11,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class UsageProgressBarStylesTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageProgressBar_YellowFill_ForUsedPortion()
     {
         var sharedStyles = LoadSharedStyles();
@@ -38,7 +38,7 @@ public sealed class UsageProgressBarStylesTests
         Assert.Equal(Color.FromRgb(0xFF, 0xDD, 0x00), brush.Color);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageProgressBar_GreenFill_ForRemainingPortion()
     {
         var sharedStyles = LoadSharedStyles();
@@ -65,7 +65,7 @@ public sealed class UsageProgressBarStylesTests
         Assert.Equal(Color.FromRgb(0x90, 0xEE, 0x90), brush.Color);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageProgressBar_BlackText_Overlay()
     {
         var sharedStyles = LoadSharedStyles();
@@ -91,7 +91,7 @@ public sealed class UsageProgressBarStylesTests
         Assert.Equal(Colors.Black, brush.Color);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageProgressBar_FullConsumption_AllYellow()
     {
         var sharedStyles = LoadSharedStyles();
@@ -124,7 +124,7 @@ public sealed class UsageProgressBarStylesTests
         Assert.True(remainingBorder.Bounds.Width == 0 || !remainingBorder.IsVisible);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageProgressBar_ZeroValue_ShowsDash()
     {
         var sharedStyles = LoadSharedStyles();
@@ -147,7 +147,7 @@ public sealed class UsageProgressBarStylesTests
         Assert.Equal("—", textBlock.Text);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void UsageProgressBar_NullData_ShowsGreyBar()
     {
         var sharedStyles = LoadSharedStyles();

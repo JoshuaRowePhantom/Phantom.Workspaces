@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using AgentSchema;
 using Avalonia.Input;
 using Microsoft.Extensions.AI;
@@ -276,7 +277,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("/working-directory", composer.InputText);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task HandleInputKey_AcceptingCompletion_SetsNewText()
     {
         await using var chat = await CreateChatAsync();
@@ -293,7 +294,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal("/working-directory", newText);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task HandleInputKey_AcceptingCompletion_MovesCursorToEnd()
     {
         await using var chat = await CreateChatAsync();

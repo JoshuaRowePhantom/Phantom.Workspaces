@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using Avalonia;
 using Phantom.Workspaces.ViewModels;
 
@@ -7,7 +8,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListViewModelTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_OrdersByOrderAndPreservesHierarchyLevel()
     {
         var list = new EntityListViewModel();
@@ -37,7 +38,7 @@ public sealed class EntityListViewModelTests
         Assert.True(list.Items[0].IsExpanded);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void TreeNode_CornerRadiusAndVisibility_TrackChildExpansionState()
     {
         var parent = new EntityListNodeViewModel(
@@ -63,7 +64,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▴", parent.ExpandArrow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_ToggleExpandCommand_TogglesExpansionState()
     {
         var parent = new EntityListNodeViewModel(
@@ -98,7 +99,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▾", parent.ExpandArrow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_ToggleExpandCommand_DisabledWhenNoChildren()
     {
         var node = new EntityListNodeViewModel(
@@ -111,7 +112,7 @@ public sealed class EntityListViewModelTests
         Assert.False(node.ToggleExpandCommand.CanExecute(null));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_SetChildren_EnablesToggleExpandCommand()
     {
         var parent = new EntityListNodeViewModel(
@@ -137,7 +138,7 @@ public sealed class EntityListViewModelTests
         Assert.True(parent.ToggleExpandCommand.CanExecute(null));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_PreservesIsExpandedState_WhenKeyUnchanged()
     {
         var list = new EntityListViewModel();
@@ -177,7 +178,7 @@ public sealed class EntityListViewModelTests
         Assert.True(list.Items[0].IsExpanded);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_AddsNewItem_WithoutAffectingExisting()
     {
         var list = new EntityListViewModel();
@@ -216,7 +217,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("[\"b\"]", list.Items[1].ItemKey);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_RemovesItem_LeavingOthersUntouched()
     {
         var list = new EntityListViewModel();
@@ -254,7 +255,7 @@ public sealed class EntityListViewModelTests
         Assert.Same(instanceA, list.Items[0]);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_MovesItemToCorrectPosition_WhenOrderChanges()
     {
         var list = new EntityListViewModel();

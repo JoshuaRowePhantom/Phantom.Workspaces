@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.Tests.Updates;
 
 public sealed class TrayIconControllerTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void Constructor_HidesUpdateNowAndShowsUpToDateStatus()
     {
         var controller = new FakeUpdateController { RunningVersion = "1.0.0" };
@@ -22,7 +22,7 @@ public sealed class TrayIconControllerTests
         Assert.Contains("1.0.0", tray.StatusItem.Header);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void UpdateAvailable_ShowsUpdateNowStatusAndToast()
     {
         var controller = new FakeUpdateController { RunningVersion = "1.0.0" };
@@ -36,7 +36,7 @@ public sealed class TrayIconControllerTests
         Assert.Contains("1.2.0", notification.Message);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void CheckForUpdatesItem_InvokesControllerCheck()
     {
         var controller = new FakeUpdateController();
@@ -47,7 +47,7 @@ public sealed class TrayIconControllerTests
         Assert.Equal(1, controller.CheckCount);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void UpdateNowItem_InvokesDownloadInstall()
     {
         var controller = new FakeUpdateController();
@@ -58,7 +58,7 @@ public sealed class TrayIconControllerTests
         Assert.Equal(1, controller.InstallCount);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void RunAtStartupItem_TogglesController()
     {
         var controller = new FakeUpdateController();

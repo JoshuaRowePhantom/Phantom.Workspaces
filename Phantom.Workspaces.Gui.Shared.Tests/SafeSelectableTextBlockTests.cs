@@ -9,7 +9,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class SafeSelectableTextBlockTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SafeSelectableTextBlock_MeasureOverride_ZeroWidth_ReturnsSizeEmpty()
     {
         // Issue #394: measuring with Size(0,0) must not trigger catastrophic TextLineImpl allocation.
@@ -20,7 +20,7 @@ public sealed class SafeSelectableTextBlockTests
         Assert.Equal(new Size(0, 0), block.DesiredSize);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SafeSelectableTextBlock_MeasureOverride_NonZeroWidth_DelegatesToBase()
     {
         var block = new SafeSelectableTextBlock { Text = "Hello, world!", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
@@ -31,7 +31,7 @@ public sealed class SafeSelectableTextBlockTests
         Assert.True(block.DesiredSize.Height > 0, "Expected non-zero desired height when measured with real constraint.");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SafeSelectableTextBlock_MeasureOverride_ZeroWidth_ThenRealWidth_ProducesCorrectLayout()
     {
         var block = new SafeSelectableTextBlock { Text = "Hello, world!", TextWrapping = Avalonia.Media.TextWrapping.Wrap };

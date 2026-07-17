@@ -554,7 +554,7 @@ public sealed class TabHeaderViewModelTests
 
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -565,7 +565,7 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -578,7 +578,7 @@ public sealed class TabHeaderViewModelTests
 
     // ── DockDataTemplates — DataTemplate presence for Dock header scope (#775) ─
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void DockDataTemplates_HasDataTemplateFor_TabHeaderViewModel()
     {
         var templates = new DockDataTemplates();
@@ -589,7 +589,7 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void DockDataTemplates_HasDataTemplateFor_AgentRunningIndicatorTabHeaderItemViewModel()
     {
         var templates = new DockDataTemplates();
@@ -600,7 +600,7 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void DockDataTemplates_HasDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
     {
         var templates = new DockDataTemplates();
@@ -613,7 +613,7 @@ public sealed class TabHeaderViewModelTests
 
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
     {
         var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
@@ -627,7 +627,7 @@ public sealed class TabHeaderViewModelTests
         Assert.Contains("pulsating-brain", progressBar.Classes);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void NotificationIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
     {
         var viewModel = new NotificationIndicatorTabHeaderItemViewModel();

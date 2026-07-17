@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Threading;
@@ -33,7 +34,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ChangedEventFiredAfterFileModification()
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,7 +49,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         Assert.True(fired);
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ChangedEventDebouncedOnRapidWrites()
     {
         var count = 0;
@@ -76,7 +77,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         Assert.Equal(1, Volatile.Read(ref count));
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task DisposeUnsubscribesWatcher()
     {
         var refreshCount = 0;
@@ -95,7 +96,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         Assert.Equal(0, Volatile.Read(ref refreshCount));
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ChangedEventRaisedOnUIThread()
     {
         var onUiThread = false;

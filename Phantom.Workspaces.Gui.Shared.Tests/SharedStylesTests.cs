@@ -18,7 +18,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 [Collection("Avalonia")]
 public sealed class SharedStylesTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ThemeClassFontWeightResources_AreTypedFontWeightValues()
     {
         var sharedStyles = LoadSharedStyles();
@@ -37,7 +37,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TextBlockClassStyles_WithFontWeightSetters_DoNotUseStringValues()
     {
         var sharedStyles = LoadSharedStyles();
@@ -59,7 +59,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void SimpleClassStyles_CanAttachToResolvedControlTypes()
     {
         var sharedStyles = LoadSharedStyles();
@@ -131,7 +131,7 @@ public sealed class SharedStylesTests
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CopyableTextBox_InnerLeftContent_UsesTemplateSetter()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -187,7 +187,7 @@ public sealed class SharedStylesTests
         Assert.Contains("<SolidColorBrush x:Key=\"Theme.Surface.EntityCard.SelectedBorder\">#2B67D1</SolidColorBrush>", lightTheme, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void StatusThemeResources_AreSolidColorBrushes()
     {
         // Theme.Status.* resources were moved to theme dictionaries (Dark.axaml and Light.axaml)
@@ -212,7 +212,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatStatusLineResources_Resolve()
     {
         var statusLineStyles = LoadAgentChatStatusLineStyles();
@@ -235,7 +235,7 @@ public sealed class SharedStylesTests
         _ = Assert.IsType<Thickness>(padding);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AltIndexBadge_DefaultOpacity_Is0()
     {
         // Issue #505: badges must be invisible (opacity 0) when Alt is not held.
@@ -254,7 +254,7 @@ public sealed class SharedStylesTests
         Assert.Equal(0.0, border.Opacity);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AltIndexBadge_WhenAltHeld_OpacityIsOne()
     {
         // Issue #349: the alt-held override must still raise opacity to 1.
@@ -274,7 +274,7 @@ public sealed class SharedStylesTests
         Assert.Equal(1.0, border.Opacity);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SharedStyles_QueueStatusStyles_DoNotReferenceSubmitStatusOption()
     {
         // Issue #253: SubmitStatusOption no longer exists on any ViewModel.
@@ -291,7 +291,7 @@ public sealed class SharedStylesTests
         Assert.DoesNotContain("SubmitStatusOption", content, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SharedStyles_QueueImmediacyOptionPill_UsesOptionBrushBindings()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -425,7 +425,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_Shortcuts_HiddenByDefault()
     {
         var sharedStyles = LoadSharedStyles();
@@ -447,7 +447,7 @@ public sealed class SharedStylesTests
         Assert.Equal(0.0, shortcutButton.Opacity);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_Shortcuts_VisibleOnPointerOver()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -468,7 +468,7 @@ public sealed class SharedStylesTests
         Assert.Contains("1", styleBlock, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_Shortcuts_VisibleOnFocusWithin()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -489,7 +489,7 @@ public sealed class SharedStylesTests
         Assert.Contains("1", styleBlock, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_Shortcuts_HaveOpacityTransition()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -511,7 +511,7 @@ public sealed class SharedStylesTests
         Assert.Contains("Property=\"Opacity\"", styleBlock, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_JsonButton_DefaultOpacity_IsZero()
     {
         // Issue #810: JSON button should be hidden by default like other shortcut buttons
@@ -534,7 +534,7 @@ public sealed class SharedStylesTests
         Assert.Equal(0.0, jsonButton.Opacity);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_JsonButton_OnPointerOver_OpacityIsOne()
     {
         // Issue #810: JSON button should fade in on pointer over
@@ -556,7 +556,7 @@ public sealed class SharedStylesTests
         Assert.Contains("1", styleBlock, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_JsonButton_OnFocusWithin_OpacityIsOne()
     {
         // Issue #810: JSON button should fade in on focus within
@@ -578,7 +578,7 @@ public sealed class SharedStylesTests
         Assert.Contains("1", styleBlock, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCard_JsonButton_HasOpacityTransition()
     {
         // Issue #810: JSON button should have smooth fade-in transition
@@ -822,7 +822,7 @@ public sealed class SharedStylesTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardShellTemplate_AppliedToContentControl_RendersSameBorder()
     {
         var sharedStyles = LoadSharedStyles();
@@ -845,7 +845,7 @@ public sealed class SharedStylesTests
         Assert.Equal(new CornerRadius(6), shellBorder!.CornerRadius);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardShell_AppliedToSingleEntityHost_ProducesSameBorderAsTreeCard()
     {
         // Issue #1066: the single-entity host carries the same entity-card-shell class as the tree
@@ -871,7 +871,7 @@ public sealed class SharedStylesTests
         Assert.Equal(new CornerRadius(6), shellBorder!.CornerRadius);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardShell_WhenHasChildren_SingleEntityFooterIsVisible()
     {
         // Issue #1066: the shell footer expand button visibility binds to HasChildren for the
@@ -1616,7 +1616,7 @@ public sealed class SharedStylesTests
             count,
             nested);
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_AttachedScrollProperties_FlowToInnerScrollViewer()
     {
         // The ScrollViewer.* attached properties set on TreeView.entity-card-tree flow to the
@@ -1627,7 +1627,7 @@ public sealed class SharedStylesTests
         Assert.False(p.Inner.AllowAutoHide);
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_ViewportWiderThanMin_CapsToViewport_Wraps_NoHScroll()
     {
         // Regime 1: viewport 800 >= 160 => the wrapper/extent cap to the viewport, the path wraps
@@ -1644,7 +1644,7 @@ public sealed class SharedStylesTests
         Assert.False(p.HScroll, "no horizontal scrollbar expected when viewport >= min");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_ViewportNarrowerThanMin_ShowsHScrollbar_AndIsReachable()
     {
         // Regime 2: viewport 120 < 160 => wrapper clamps to MinWidth=160 > viewport, extent exceeds
@@ -1669,7 +1669,7 @@ public sealed class SharedStylesTests
         Assert.True(p.Inner.Offset.X > 0, $"scrolled horizontally to X={p.Inner.Offset.X}");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_NestedItem_WrapsWithinWrapperWidth()
     {
         // A nested (indented) TreeViewItem arranges within the wrapper width, confirming
@@ -1686,7 +1686,7 @@ public sealed class SharedStylesTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_ManyItems_InnerScroller_ProvidesVerticalScroll()
     {
         // With items exceeding the height and no outer scroller, the inner scroller supplies
@@ -1701,7 +1701,7 @@ public sealed class SharedStylesTests
         Assert.False(p.HScroll, "no horizontal scrollbar in wide-viewport vertical-scroll case");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_WrapperMaxWidth_ResolvesToInnerScrollerViewport()
     {
         // The wrapper's resolved MaxWidth equals the inner scroller's Viewport.Width (gutter
@@ -1712,7 +1712,7 @@ public sealed class SharedStylesTests
         Assert.True(p.Wrapper.MaxWidth < 800, $"MaxWidth excludes gutter, ={p.Wrapper.MaxWidth}");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_SoftLabel_NarrowViewport_WrapsAtMin_AndScrolls()
     {
         // Soft-label card: at viewport 120 (< min) the value column is not starved, so the path
@@ -1727,7 +1727,7 @@ public sealed class SharedStylesTests
         Assert.True(p.Path.Bounds.Height > 30, $"path wraps at 160, height={p.Path.Bounds.Height}");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTree_DefaultInnerAutoScroll_OverflowsAndDoesNotWrap()
     {
         // Regression guard: the legacy entity-card-tree with NO items-region wrapper (default Auto
@@ -1746,7 +1746,7 @@ public sealed class SharedStylesTests
         Assert.True(p.Path.Bounds.Height < 30, $"path stays a single line (does not wrap): {p.Path.Bounds.Height}");
     }
 
-    [PhantomAvaloniaFact(Timeout = 30_000)]
+    [AvaloniaFact(Timeout = 30_000)]
     public void EntityCardTreeView_StillMatchesEntityCardTree_TwoRegime()
     {
         // Guard that #1049's entity-card-tree-view and #1064's entity-card-tree produce the SAME

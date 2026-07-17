@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Collections.Generic;
 using System.Reflection;
 using Microsoft.Extensions.AI;
@@ -266,7 +267,7 @@ public sealed class ToolVisualizationTests
         Assert.Equal("doing a thing", statusLine.IntentDisplay);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AgentChatStatusLineViewModel_IntentDisplay_ClearedWhenThinkingStops()
     {
         using var loggerFactory = new ObservableLoggerFactory();

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
@@ -12,7 +13,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeViewTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GitWorktreeView_GroupsByUserComputerProfile()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -54,7 +55,7 @@ public sealed class GitWorktreeViewTests
         Assert.Contains(worktree2Id, profile2ChildIds);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GitWorktreeView_SingleProfile_NoUngroupedWorktrees()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -80,7 +81,7 @@ public sealed class GitWorktreeViewTests
         Assert.Equal(3, profileNode.Children.Count);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task GitWorktreeView_WorktreeWithNoProfile_AppearsAtRoot()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -32,7 +33,7 @@ public sealed class ToolCallGroupViewModelTests
         return new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = contents };
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolCallGroup_MixedTools_HeaderListsUniqueToolNames()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -64,7 +65,7 @@ public sealed class ToolCallGroupViewModelTests
             summaryHtml.IndexOf("workspaces_entity_get", System.StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolCallGroup_HomogeneousTools_HeaderShowsToolName()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -92,7 +93,7 @@ public sealed class ToolCallGroupViewModelTests
         Assert.DoesNotContain("tool call:", summaryHtml);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolCallGroup_MultiCall_RendersGroupWithChildren()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>

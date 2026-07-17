@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Linq;
@@ -84,7 +85,7 @@ public sealed class AgentChatEditorControlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_ConversationSlot_FillsAvailableHeight()
     {
         // Issue #764: Verify that the ContentControl for the conversation slot receives a
@@ -363,7 +364,7 @@ public sealed class AgentChatEditorControlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SubAgentItem_AgoLabel_UsesDateTimeAgoConverter()
     {
         // Issue #1034: the "ago" label uses DateTimeAgoConverter (via the reusable AgoTextBlock
@@ -404,7 +405,7 @@ public sealed class AgentChatEditorControlTests
         return axamlContent[start..end];
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_TreeColumn_HasNonZeroMinWidth()
     {
         // Issue #1051: when the tree is expanded, column 0 has a MinWidth >= 160 so a drag cannot
@@ -416,7 +417,7 @@ public sealed class AgentChatEditorControlTests
         Assert.True(editorGrid.ColumnDefinitions[0].MinWidth >= 160);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_OutputColumn_HasMinWidth()
     {
         // Issue #1051: column 2 (HTML output) declares a positive MinWidth so a drag cannot
@@ -427,7 +428,7 @@ public sealed class AgentChatEditorControlTests
         Assert.True(editorGrid.ColumnDefinitions[2].MinWidth >= 240);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_DraggingSplitter_CannotShrinkTreeBelowMinWidth()
     {
         // Issue #1051: simulate an extreme leftward drag by forcing the tree column tiny; the
@@ -442,7 +443,7 @@ public sealed class AgentChatEditorControlTests
         Assert.True(editorGrid.ColumnDefinitions[0].ActualWidth >= 159.5);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_DraggingSplitter_CannotShrinkOutputBelowMinWidth()
     {
         // Issue #1051: simulate an extreme rightward drag by forcing the tree column to its max;
@@ -457,7 +458,7 @@ public sealed class AgentChatEditorControlTests
         Assert.True(editorGrid.ColumnDefinitions[2].ActualWidth >= 239.5);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_SplitterHost_RemainsHitTestableAfterExtremeDrag()
     {
         // Issue #1051: after an extreme drag the splitter stays visible in its fixed 24px column
@@ -474,7 +475,7 @@ public sealed class AgentChatEditorControlTests
         Assert.True(splitterHost.Bounds.Width > 0);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_OutputPane_CanBeRestoredAfterShrinkToMinimum()
     {
         // Issue #1051: after shrinking the output to its minimum, a reverse drag re-enlarges it,
@@ -509,7 +510,7 @@ public sealed class AgentChatEditorControlTests
         return window;
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_SetTreeCollapsed_StillCollapsesTreeColumnToZero()
     {
         // Issue #1051: the programmatic collapse still drives column 0 to zero width by relaxing
@@ -523,7 +524,7 @@ public sealed class AgentChatEditorControlTests
         Assert.Equal(0, editorGrid.ColumnDefinitions[0].MinWidth);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_TreeColumn_MinWidthRestoredOnExpand()
     {
         // Issue #1051: expanding restores the 160px floor so drag-clamping is active whenever the

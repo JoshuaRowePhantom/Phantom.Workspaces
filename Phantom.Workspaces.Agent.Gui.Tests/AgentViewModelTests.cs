@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.ComponentModel;
 using System.Threading.Tasks;
 using AgentSchema;
@@ -16,7 +17,7 @@ public sealed class AgentViewModelTests
     // background process-loop thread (including during AgentChat.DisposeAsync draining). The
     // handler must not read UI-affine collections off-thread; it must marshal the resulting
     // IsChatRunning property change to the UI thread.
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task OnRunningItemsCollectionChanged_RaisedOnBackgroundThread_MarshalsToUiThread()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(

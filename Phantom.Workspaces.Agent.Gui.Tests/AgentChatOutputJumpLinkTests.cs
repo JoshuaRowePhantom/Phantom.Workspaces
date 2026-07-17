@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -65,7 +66,7 @@ public sealed class AgentChatOutputJumpLinkTests
 
     // ── ChatOutputHtmlModel (jump-link via resolveSubAgentId) ───────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task JumpLink_Present_WhenContentHasParentToolCallId()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -99,7 +100,7 @@ public sealed class AgentChatOutputJumpLinkTests
         Assert.Contains("→ Open sub-agent", content.Content, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task JumpLink_Absent_WhenContentHasNoParentToolCallId()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -123,7 +124,7 @@ public sealed class AgentChatOutputJumpLinkTests
         Assert.DoesNotContain("data-navigate-agent-id", content.Content, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task JumpLink_Absent_WhenResolverReturnsNull()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -158,7 +159,7 @@ public sealed class AgentChatOutputJumpLinkTests
 
     // ── AgentChatOutputControl (navigateToAgent bridge) ─────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_NavigateToAgentMessage_RaisesNavigateToAgentRequested()
     {
         var control = new AgentChatOutputControl();
@@ -175,7 +176,7 @@ public sealed class AgentChatOutputJumpLinkTests
         Assert.Equal("agent-xyz", receivedAgentId);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatOutputControl_NavigateToAgentMessage_WithEmptyAgentId_DoesNotRaiseEvent()
     {
         var control = new AgentChatOutputControl();
@@ -191,7 +192,7 @@ public sealed class AgentChatOutputJumpLinkTests
         Assert.False(raised);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void JumpLink_NavigatesToCorrectSubAgent_OnClick()
     {
         var control = new AgentChatOutputControl();

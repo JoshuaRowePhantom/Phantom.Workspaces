@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Text.Json;
@@ -13,7 +14,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
 {
     // ---- ShouldApplyTo -----------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_VsCodeWebShortcut_PathExists_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -28,7 +29,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_VsCodeWebShortcut_NoPath_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -45,7 +46,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
 
     // ---- Handle ------------------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenInVsCodeWeb_LocalMachineWithTunnel_OpensWebViewTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -125,7 +126,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         Assert.Contains("%2Flocal%2Frepo", openedTab.AddressBarUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenInVsCodeWeb_RemoteMachineWithTunnel_OpensWebViewTab()
     {
         // Note: Comprehensive testing of remote entity scenarios (with profile/tunnel lookups)
@@ -211,7 +212,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         Assert.Contains("%2Flocal%2Frepo", openedTab.AddressBarUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenInVsCodeWeb_NoTunnelEntity_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -266,7 +267,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         Assert.False(handled);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenInVsCodeWeb_UrlFormat_AppendsFolderParam()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -337,7 +338,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         Assert.StartsWith("https://vscode.dev/tunnel/test-tunnel?folder=", capturedUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenInVsCodeWeb_TabTitle_IncludesEntityName()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -408,7 +409,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         Assert.Equal("VS Code Web — My Test Repo", capturedTitle);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenInVsCodeWeb_PathEncoded_CorrectlyInUrl()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

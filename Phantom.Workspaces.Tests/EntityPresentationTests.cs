@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
@@ -8,7 +9,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityPresentationTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void IsEntityType_ReturnsTrue_WhenMatchingTypeIsPresent()
     {
         var snapshot = CreateSnapshot(
@@ -25,7 +26,7 @@ public sealed class EntityPresentationTests
         Assert.False(EntityPresentation.IsEntityType(snapshot, "agent-session"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SubscribedEntityViewModel_IsEntityType_UsesTypeMembershipCheck()
     {
         var snapshot = CreateSnapshot(
@@ -44,7 +45,7 @@ public sealed class EntityPresentationTests
         Assert.False(entity.IsEntityType("agent-session"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void GetDisplayItems_ReturnsInlineMarkdownBody_ForNoteContent()
     {
         var snapshot = CreateSnapshot(
@@ -70,7 +71,7 @@ public sealed class EntityPresentationTests
         Assert.Contains("This is the body.", item.Text, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void GetDisplayItems_ReturnsEmpty_WhenNoteHasNoContent()
     {
         var snapshot = CreateSnapshot(

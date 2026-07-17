@@ -31,7 +31,7 @@ public sealed class WorkspaceTabItemControlTests
         return (window, progressBar);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceTabItemControl_Always_ProgressBarHasRunningIndicatorAgentClass()
     {
         var (window, progressBar) = ShowControlInWindow(isRunning: false);
@@ -45,7 +45,7 @@ public sealed class WorkspaceTabItemControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceTabItemControl_WhenIsRunningIsTrue_ProgressBarIsIndeterminate()
     {
         var (window, progressBar) = ShowControlInWindow(isRunning: true);
@@ -59,7 +59,7 @@ public sealed class WorkspaceTabItemControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceTabItemControl_WhenIsRunningIsTrue_ShowsBrainGlyph()
     {
         var (window, progressBar) = ShowControlInWindow(isRunning: true);
@@ -75,7 +75,7 @@ public sealed class WorkspaceTabItemControlTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceTabItemControl_WhenIsRunningIsFalse_ProgressBarIsNotIndeterminate()
     {
         var (window, progressBar) = ShowControlInWindow(isRunning: false);

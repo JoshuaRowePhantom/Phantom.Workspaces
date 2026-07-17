@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -237,7 +238,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_NavigationPane_StartsCollapsed()
     {
         // Issue #24: the editor navigation pane should start collapsed when an agent chat view
@@ -496,7 +497,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_CanCollapseAndUncollapseNavigationPane()
     {
         var control = new AgentChatEditorControl();
@@ -610,7 +611,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EditorControl_InterruptGesture_MatchesCtrlBreak_NotPlainCancel()
     {
         // Issue #21: Windows delivers the Pause/Break key as Key.Cancel (VK_CANCEL) whenever Ctrl is
@@ -630,7 +631,7 @@ public sealed class MainWindowAxamlTests
         Assert.False(new KeyGesture(Key.Cancel).Matches(ctrlBreak));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EditorControl_UnholdGesture_MatchesCtrlShiftBreak()
     {
         // Issue #21: Ctrl+Shift+Break likewise arrives as Key.Cancel + Control + Shift, so the unhold
@@ -854,7 +855,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void Application_RequestedThemeVariantChanged_ActualThemeVariantChangedEventFires()
     {
         var app = Application.Current ?? throw new InvalidOperationException("Application.Current is null");
@@ -868,7 +869,7 @@ public sealed class MainWindowAxamlTests
         Assert.Equal(1, eventCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void App_DefaultRequestedThemeVariant_FollowsOperatingSystemTheme()
     {
         var appContent = ReadAgentGuiFile("App.axaml");

@@ -26,7 +26,7 @@ public sealed class AgentGuiMainWindowIntegrationTests
             }
             """);
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task AgentGuiMainWindow_Constructs_WithExpectedChildDataContexts()
     {
         var parseResult = new AgentDefinitionParseResult(

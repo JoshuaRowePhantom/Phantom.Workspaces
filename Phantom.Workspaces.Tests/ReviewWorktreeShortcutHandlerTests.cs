@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Text.Json;
@@ -43,7 +44,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         Assert.False(await handler.ShouldApplyTo(vm, Shortcut.Review, entity));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensGitWorktreeReviewTabWithCorrectId()
     {
         await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
@@ -68,7 +69,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await reviewTab.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_DeduplicatesTabWhenAlreadyOpen()
     {
         await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
@@ -93,7 +94,7 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await reviewTabs[0].DisposeAsync();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_WhenRepositoryPathMissing_StillOpensTabWithEmptyPath()
     {
         await using var vm = new MainWindowViewModel(new UnknownRepositorySource());

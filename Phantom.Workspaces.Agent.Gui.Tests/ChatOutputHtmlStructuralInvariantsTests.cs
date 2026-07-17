@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
@@ -95,7 +96,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         return (sink, model);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_NoOperationTargetsRemovedShellIds()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();
@@ -112,7 +113,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_NoOperationReplacesPersistentContainers()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();
@@ -135,7 +136,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_EveryEmittedIdUsesApprovedNamespace()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();
@@ -163,7 +164,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_GroupedMessagesRetainDiffTargetIds()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -198,7 +199,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
             op.Content.Contains("tool_b_renamed"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutput_GroupedToolCallHistoryItem_RendersCopyAndInspectTargetsOnToolBlocks()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -220,7 +221,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         Assert.Contains("data-inspect-target", resultBlock);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ChatOutput_GroupedToolBlocks_MatchParityWithGenericMessageBlockGutters()
     {
         var history = new ObservableCollection<AgentChatHistoryItem>
@@ -259,7 +260,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         return html.Substring(start, end - start + 1);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task LiveAndPlan_ToolCallsAcrossNonDisplayedItem_ProduceIdenticalGrouping()
     {
         AgentChatHistoryItem EmptyMessage() => new() { Role = ChatRole.Assistant, Contents = [] };
@@ -312,7 +313,7 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         Assert.Null(root.FindById(ChatOutputHtmlRenderer.MessageId(1)));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Invariants_NoDuplicateIdsInRepresentativeDom()
     {
         var (sink, model) = await RunRepresentativeScenarioAsync();

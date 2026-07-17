@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using Phantom.Workspaces.Gui.Shared.Controls;
@@ -14,7 +15,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 /// </summary>
 public sealed class ControllableWebViewAutoFlushTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ControllableWebView_AutoBatch_FlushesAfterTimer()
     {
         var testBrowser = new TestControllableBrowser();
@@ -33,7 +34,7 @@ public sealed class ControllableWebViewAutoFlushTests
         Assert.Contains("message2", call, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ControllableWebView_AutoBatch_ImmediateFlushOnExplicitEndBatch()
     {
         var testBrowser = new TestControllableBrowser();
@@ -50,7 +51,7 @@ public sealed class ControllableWebViewAutoFlushTests
         Assert.Contains("message1", call, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ControllableWebView_RenderGating_WaitsForAck()
     {
         var testBrowser = new TestControllableBrowser();
@@ -68,7 +69,7 @@ public sealed class ControllableWebViewAutoFlushTests
         Assert.Single(testBrowser.InvokeScriptCalls);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ControllableWebView_RenderGating_FlushesQueuedBatchAfterAck()
     {
         var testBrowser = new TestControllableBrowser();

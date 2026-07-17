@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,7 +13,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityClickShortcutHandlerTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task Handle_ConfiguredEntityType_InvokesOpenViaManager()
     {
         var openRecorder = new RecordingOpenHandler();
@@ -31,7 +32,7 @@ public sealed class EntityClickShortcutHandlerTests
         Assert.Same(workspace, openRecorder.LastEntity);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task Handle_NonConfiguredEntityType_DoesNothing()
     {
         var openRecorder = new RecordingOpenHandler();
@@ -48,7 +49,7 @@ public sealed class EntityClickShortcutHandlerTests
         Assert.Equal(0, openRecorder.HandleCallCount);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ShouldApplyTo_MatchesOnlyConfiguredTypes()
     {
         var shortcutManager = new ShortcutManager();
@@ -59,7 +60,7 @@ public sealed class EntityClickShortcutHandlerTests
         Assert.False(await clickHandler.ShouldApplyTo(mainWindowViewModel, Shortcut.Open, CreateEntity("note")));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task UnregisteredClickHandler_ContributesNoShortcutButton()
     {
         // The production wiring keeps the click handler out of the manager, so it never affects the

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Reflection;
 using AgentSchema;
 using Microsoft.Extensions.AI;
@@ -40,7 +41,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.True(statusLine.HasProvider);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task IsThinking_FollowsRunningItems()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -60,7 +61,7 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.False(statusLine.IsThinking);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task TokensDisplay_FormatsOnlyWhenBothTotalsArePresent()
     {
         using var loggerFactory = new ObservableLoggerFactory();

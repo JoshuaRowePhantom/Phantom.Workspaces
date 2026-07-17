@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -776,7 +777,7 @@ public sealed class RunningAgentBrainViewModelTests
         vm.Dispose();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task CreateAgentHandler_WhenTabMatches_UpdatesRowIsThinkingFromAgent()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
@@ -808,7 +809,7 @@ public sealed class RunningAgentBrainViewModelTests
         vm.Dispose();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task CreateAgentHandler_WhenAgentRaisesFromNonUiThread_MarshalsThroughDispatch()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(

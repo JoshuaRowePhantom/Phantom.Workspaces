@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Specialized;
 using System.Linq;
@@ -102,7 +103,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentGoesIdle_PostsNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -141,7 +142,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentIsActiveTab_NotificationStillPassedToService()
     {
         // INotificationService.Notify is always called — it is the service's responsibility
@@ -183,7 +184,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentStartsNewRun_PostsRunningNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -246,7 +247,7 @@ public sealed class AgentSessionNotificationTests
         await WaitForRunningItemsEmptyAsync(agentChat);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentGoesIdle_TabDescriptorHasTabTitleFromViewModelTitle()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
@@ -285,7 +286,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task Notify_SetsWorkspaceId_FromWorkspacePaneId()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
