@@ -35,6 +35,18 @@ $dotnetArgs = @(
     $solutionPath,
     '--no-restore',
     '--nologo',
+    # Serialize the whole solution test run onto a single MSBuild node (issue #1101). `dotnet test`
+    # on a solution invokes each test project's VSTest target as part of a parallel MSBuild graph, so
+    # by default many test hosts run at once (observed 18 concurrent testhost.exe, with the three
+    # headless suites overlapping). The headless Avalonia suites drive the stock single-thread
+    # HeadlessUnitTestSession and, under that oversubscribed load, intermittently hit the cross-thread
+    # construction race (DefaultRenderLoop.Add -> Dispatcher.VerifyAccess during
+    # EnsureIsolatedApplication). Avalonia documents that concurrent execution against a shared
+    # headless application is unsupported, so parallelism must be disabled at the run level — the
+    # per-assembly CollectionBehavior only serializes tests WITHIN one assembly, not across assemblies
+    # or against machine load. -maxcpucount:1 forces MSBuild to build and run one project at a time,
+    # guaranteeing a single test host at any moment.
+    '-maxcpucount:1',
     '-v',
     'minimal',
     '--logger',
