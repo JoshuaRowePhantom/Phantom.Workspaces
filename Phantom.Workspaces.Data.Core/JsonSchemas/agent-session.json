@@ -34,6 +34,20 @@
       ],
       "description": "Reference to the agent-manifest or agent-definition this session runs, used to reconstruct the definition when the session is resumed. Accepts either an entity-name (array of strings) or an entity-id (uuid string)."
     },
+    "parent-agent-session-ids": {
+      "type": "array",
+      "description": "Entity references to the parent agent sessions of this session. Set on sub-agent sessions to reference the dispatcher's own agent-session entity, so sub-agents are excluded from the top-level sessions view. When absent or empty, the session is a top-level session.",
+      "items": {
+        "$ref": "core.json#/$defs/entity-reference",
+        "x-entity-types": [
+          "agent-session"
+        ]
+      }
+    },
+    "sub-agent-description": {
+      "type": "string",
+      "description": "Human-readable description of a sub-agent session, persisted by the sub-agent dispatcher so the dispatcher can reconstruct its in-memory sub-agent list after a restart."
+    },
     "parameter-values": {
       "type": "object",
       "description": "Parameter values supplied when this session was created. Keyed by parameter name; all values are strings. The well-known key `working-directory` (kind: string) sets the working directory forwarded to the agent process; supported by the `github-copilot` and `workspaces` manifests.",

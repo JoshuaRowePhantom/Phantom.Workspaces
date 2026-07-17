@@ -1,5 +1,6 @@
 using System.Collections.Specialized;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Vector;
@@ -29,6 +30,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
 
     private readonly Dictionary<string, DispatchedSubAgent> _subAgents = new(StringComparer.Ordinal);
     private string? _mostRecentlyDispatchedId;
+    private EntityId? _dispatcherEntityId;
     private bool _disposed;
 
     public SubAgentDispatcherChatClient(
@@ -71,6 +73,11 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
     public IReadOnlyList<SubAgentDescriptor> ActiveSubAgents =>
         _subAgents.Values
             .Select(static subAgent => new SubAgentDescriptor(subAgent.Id, subAgent.Description))
+            .ToArray();
+
+    internal IReadOnlyList<(string Id, string Description, DateTimeOffset LastUpdated)> GetSubAgentSnapshotsForTest() =>
+        _subAgents.Values
+            .Select(static subAgent => (subAgent.Id, subAgent.Description, subAgent.LastUpdated))
             .ToArray();
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -232,6 +239,9 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             _subAgents[id] = dispatched;
             _mostRecentlyDispatchedId = id;
 
+            // Persist the sub-agent as a child entity of the dispatcher so it survives restart.
+            await PersistSubAgentAsync(dispatched, lease.SessionId, cancellationToken);
+
             yield return new ChatResponseUpdate(ChatRole.Assistant, $"Created sub-agent \"{id}\".\n");
 
             // Handle cancellation
@@ -271,6 +281,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
 
         // Emit new history items
         dispatched.LastUpdated = _timeProvider.GetUtcNow();
+        await PersistSubAgentAsync(dispatched, lease.SessionId, cancellationToken);
         for (var i = dispatched.DispatchHistoryIndex; i < lease.AgentChat.History.Count; i++)
         {
             var historyItem = lease.AgentChat.History[i];
@@ -397,11 +408,202 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
 
         // Emit new history items
         targetAgent.LastUpdated = _timeProvider.GetUtcNow();
+        await PersistSubAgentAsync(targetAgent, lease.SessionId, cancellationToken);
         for (var i = targetAgent.DispatchHistoryIndex; i < lease.AgentChat.History.Count; i++)
         {
             var historyItem = lease.AgentChat.History[i];
             yield return new ChatResponseUpdate(historyItem.Role, historyItem.Contents.ToList());
         }
+    }
+
+    /// <summary>
+    /// Reconstructs the in-memory <see cref="_subAgents"/> dictionary after a process restart by
+    /// querying the data access layer for all persisted child entities of the dispatcher's name
+    /// prefix and re-leasing each sub-agent session from the running-agent-chat factory. The
+    /// sub-agent <see cref="DispatchedSubAgent.Description"/> and
+    /// <see cref="DispatchedSubAgent.LastUpdated"/> are restored from the persisted entity.
+    /// </summary>
+    public async Task RestoreSubAgentsAsync(CancellationToken cancellationToken = default)
+    {
+        var getResult = await _dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = _dispatcherEntityName,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+            },
+            cancellationToken);
+
+        foreach (var batch in getResult.Batches)
+        {
+            foreach (var snapshot in batch.Entities)
+            {
+                if (snapshot.Data is not { } data
+                    || !TryReadPersistedSubAgent(data, out var id, out var description, out var sessionId))
+                {
+                    continue;
+                }
+
+                if (_subAgents.ContainsKey(id))
+                {
+                    continue;
+                }
+
+                var lease = await _runningAgentChatFactory.GetAsync(new AgentSessionId(sessionId), cancellationToken);
+
+                var embeddings = await _embeddingsProvider.ComputeAsync(
+                    [new EmbeddingInput { EntityId = snapshot.EntityId, Text = description }],
+                    cancellationToken);
+
+                var lastUpdated = snapshot.ModifiedTime.DateTime;
+                _subAgents[id] = new DispatchedSubAgent
+                {
+                    Id = id,
+                    Description = description,
+                    DescriptionEmbedding = embeddings[0].Values,
+                    EntityId = snapshot.EntityId,
+                    Lease = lease,
+                    LastUpdated = lastUpdated,
+                    DispatchHistoryIndex = lease.AgentChat.History.Count,
+                };
+
+                if (_mostRecentlyDispatchedId is null
+                    || lastUpdated >= _subAgents[_mostRecentlyDispatchedId].LastUpdated)
+                {
+                    _mostRecentlyDispatchedId = id;
+                }
+            }
+        }
+    }
+
+    private static bool TryReadPersistedSubAgent(
+        JsonElement data,
+        out string id,
+        out string description,
+        out string sessionId)
+    {
+        id = string.Empty;
+        description = string.Empty;
+        sessionId = string.Empty;
+
+        if (!data.TryGetProperty("agent-session-id", out var sessionIdElement)
+            || sessionIdElement.ValueKind != JsonValueKind.String
+            || !data.TryGetProperty("sub-agent-description", out var descriptionElement)
+            || descriptionElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        sessionId = sessionIdElement.GetString() ?? string.Empty;
+        description = descriptionElement.GetString() ?? string.Empty;
+
+        if (data.TryGetProperty("display-name", out var displayName)
+            && displayName.ValueKind == JsonValueKind.Object
+            && displayName.TryGetProperty("default", out var displayDefault)
+            && displayDefault.ValueKind == JsonValueKind.String)
+        {
+            id = displayDefault.GetString() ?? string.Empty;
+        }
+
+        if (string.IsNullOrEmpty(id)
+            && data.TryGetProperty("names", out var names)
+            && names.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var name in names.EnumerateArray())
+            {
+                if (name.ValueKind == JsonValueKind.Array && name.GetArrayLength() > 0)
+                {
+                    id = name[name.GetArrayLength() - 1].GetString() ?? string.Empty;
+                    break;
+                }
+            }
+        }
+
+        return !string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(sessionId);
+    }
+
+    private async Task PersistSubAgentAsync(
+        DispatchedSubAgent dispatched,
+        AgentSessionId sessionId,
+        CancellationToken cancellationToken)
+    {
+        var entityName = SubAgentEntityNaming.AppendSubAgentId(_dispatcherEntityName, dispatched.Id);
+        var dispatcherEntityId = await ResolveDispatcherEntityIdAsync(cancellationToken);
+
+        ConcurrencyTag? currentTag = null;
+        var currentResult = await _dataAccessLayer.GetAsync(
+            new GetRequest { Entities = [new GetEntityRequest { EntityId = dispatched.EntityId }] },
+            cancellationToken);
+        foreach (var batch in currentResult.Batches)
+        {
+            foreach (var entity in batch.Entities)
+            {
+                currentTag = entity.ConcurrencyTag;
+            }
+        }
+
+        var data = new Dictionary<string, object?>
+        {
+            ["entity-id"] = dispatched.EntityId.ToString(),
+            ["entity-types"] = new[] { "entity", "agent-session" },
+            ["names"] = new[] { entityName.Components },
+            ["display-name"] = new Dictionary<string, object?> { ["default"] = dispatched.Id },
+            ["agent-session-id"] = sessionId.Value,
+            ["sub-agent-description"] = dispatched.Description,
+            ["parent-agent-session-ids"] = new[] { (dispatcherEntityId ?? new EntityId(Guid.Empty)).ToString() },
+        };
+
+        var element = JsonSerializer.SerializeToElement(data);
+
+        await _dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown
+                    {
+                        Text = $"Persist sub-agent '{dispatched.Id}' under dispatcher session (issue #1027).",
+                    },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = dispatched.EntityId,
+                        ConcurrencyTag = currentTag,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = element,
+                    },
+                ],
+            },
+            cancellationToken);
+    }
+
+    private async Task<EntityId?> ResolveDispatcherEntityIdAsync(CancellationToken cancellationToken)
+    {
+        if (_dispatcherEntityId is { } cached)
+        {
+            return cached;
+        }
+
+        var getResult = await _dataAccessLayer.GetAsync(
+            new GetRequest { Entities = [new GetEntityRequest { EntityName = _dispatcherEntityName }] },
+            cancellationToken);
+
+        foreach (var batch in getResult.Batches)
+        {
+            foreach (var entity in batch.Entities)
+            {
+                _dispatcherEntityId = entity.EntityId;
+            }
+        }
+
+        return _dispatcherEntityId;
     }
 
     private string ComputeSubAgentId(CreateSubAgentInstruction create)
