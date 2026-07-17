@@ -105,7 +105,7 @@ public sealed class AgentSessionShortcutContext
         SubscribedEntityViewModel agentDefinitionEntity,
         string agentSessionId,
         IReadOnlyDictionary<string, string>? parameterValues = null,
-        EntityId? owningProfileEntityId = null)
+        EntityId? hostProfileEntityId = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var sessionObjectSimpleName = CreateSessionObjectSimpleName(
@@ -122,7 +122,7 @@ public sealed class AgentSessionShortcutContext
             agentSessionId,
             agentSessionNames,
             parameterValues,
-            owningProfileEntityId);
+            hostProfileEntityId);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {
@@ -256,7 +256,7 @@ public sealed class AgentSessionShortcutContext
         string agentSessionId,
         IReadOnlyCollection<EntityName> agentSessionNames,
         IReadOnlyDictionary<string, string>? parameterValues = null,
-        EntityId? owningProfileEntityId = null)
+        EntityId? hostProfileEntityId = null)
     {
         var entityId = new EntityId();
         var namesJson = string.Join(
@@ -266,8 +266,8 @@ public sealed class AgentSessionShortcutContext
         var parameterValuesPart = parameterValues is { Count: > 0 }
             ? $",\n  \"parameter-values\": {System.Text.Json.JsonSerializer.Serialize(parameterValues)}"
             : string.Empty;
-        var owningProfilePart = owningProfileEntityId is { } profileId && profileId != default
-            ? $",\n  \"owning-profile-entity-id\": \"{profileId}\""
+        var hostProfilePart = hostProfileEntityId is { } profileId && profileId != default
+            ? $",\n  \"host-profile-entity-id\": \"{profileId}\""
             : string.Empty;
         using var agentSessionDocument = JsonDocument.Parse(
             $$"""
@@ -277,7 +277,7 @@ public sealed class AgentSessionShortcutContext
               "names": [{{namesJson}}],
               "display-name": { "default": "{{agentDisplayName}} session" },
               "agent-source-entity-id": "{{agentDefinitionEntityId}}",
-              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}{{owningProfilePart}}
+              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}{{hostProfilePart}}
             }
             """);
         return agentSessionDocument.RootElement.Clone();

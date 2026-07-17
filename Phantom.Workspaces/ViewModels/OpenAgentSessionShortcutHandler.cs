@@ -269,10 +269,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
-        var targetClientInstance = owningProfileEntityId != default
-            && owningProfileEntityId != localProfileEntityId
-            ? owningProfileEntityId.ToString()
+        var hostProfileEntityId = ReadHostProfileEntityId(agentSessionEntityData);
+        var targetClientInstance = hostProfileEntityId != default
+            && hostProfileEntityId != localProfileEntityId
+            ? hostProfileEntityId.ToString()
             : TrustProfile.LocalClientInstance;
         var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
 
@@ -410,13 +410,18 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         });
     }
 
-    private static EntityId ReadOwningProfileEntityId(JsonElement entityData)
+    private static EntityId ReadHostProfileEntityId(JsonElement entityData)
     {
-        if (entityData.TryGetProperty("owning-profile-entity-id", out var element)
-            && element.ValueKind == JsonValueKind.String
-            && Guid.TryParse(element.GetString(), out var guid))
+        // Prefer the schema-canonical field; fall back to the legacy alias so sessions persisted
+        // before the field name was unified still route to the correct hosting profile.
+        foreach (var propertyName in new[] { "host-profile-entity-id", "owning-profile-entity-id" })
         {
-            return new EntityId(guid);
+            if (entityData.TryGetProperty(propertyName, out var element)
+                && element.ValueKind == JsonValueKind.String
+                && Guid.TryParse(element.GetString(), out var guid))
+            {
+                return new EntityId(guid);
+            }
         }
 
         return default;

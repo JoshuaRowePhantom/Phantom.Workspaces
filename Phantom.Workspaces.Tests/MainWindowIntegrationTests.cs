@@ -1791,7 +1791,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task CreateAgentSessionEntityAsync_WithOwningProfileEntityId_StoresOwningProfileEntityIdInData()
+    public async Task CreateAgentSessionEntityAsync_WithHostProfileEntityId_StoresHostProfileEntityIdInData()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -1821,11 +1821,11 @@ public sealed class MainWindowIntegrationTests
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var createdSession = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-            viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: localProfileEntityId);
+            viewModel, agentDefinitionEntity, agentSessionId, hostProfileEntityId: localProfileEntityId);
 
         Assert.NotNull(createdSession);
         Assert.True(createdSession!.Data is JsonElement data
-            && data.TryGetProperty("owning-profile-entity-id", out var idElement)
+            && data.TryGetProperty("host-profile-entity-id", out var idElement)
             && string.Equals(idElement.GetString(), localProfileEntityId.ToString(), StringComparison.OrdinalIgnoreCase));
     }
 
@@ -1860,7 +1860,7 @@ public sealed class MainWindowIntegrationTests
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-            viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: localProfileEntityId);
+            viewModel, agentDefinitionEntity, agentSessionId, hostProfileEntityId: localProfileEntityId);
         Assert.NotNull(agentSessionEntity);
 
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
@@ -1965,7 +1965,7 @@ public sealed class MainWindowIntegrationTests
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-            viewModel, agentDefinitionEntity, agentSessionId, owningProfileEntityId: remoteProfileEntityId);
+            viewModel, agentDefinitionEntity, agentSessionId, hostProfileEntityId: remoteProfileEntityId);
         Assert.NotNull(agentSessionEntity);
 
         // No remote executor configured → no reverse connection available for the remote profile
@@ -1980,6 +1980,121 @@ public sealed class MainWindowIntegrationTests
         var agentTab3 = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
         await WaitForAgentReadyAsync(agentTab3);
         Assert.Equal(AgentTabState.Failed, agentTab3.State);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_WhenSessionRecordsHostProfileEntityId_RoutesToRemoteTarget()
+    {
+        // A session recording its host under the schema-canonical host-profile-entity-id (distinct
+        // from the running instance's local profile) must take the remote branch. With no remote
+        // executor available this surfaces as Failed rather than silently running in-process locally.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionId = new EntityId("aa050001-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa050001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "host-profile-echo"]],
+              "display-name": { "default": "Host Profile Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "host-profile-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var remoteProfileEntityId = new EntityId(Guid.NewGuid());
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId, hostProfileEntityId: remoteProfileEntityId);
+        Assert.NotNull(agentSessionEntity);
+
+        // The session must actually persist the canonical field the router reads.
+        Assert.True(agentSessionEntity!.Data is JsonElement sessionData
+            && sessionData.TryGetProperty("host-profile-entity-id", out var hostIdElement)
+            && string.Equals(hostIdElement.GetString(), remoteProfileEntityId.ToString(), StringComparison.OrdinalIgnoreCase));
+
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            new DeferredTrustedExecutorSelector(),
+            CreateTestRunningAgentChatTable());
+
+        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.Equal(AgentTabState.Failed, agentTab.State);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryBuildAgent_WhenSessionRecordsLegacyOwningProfileEntityId_StillRoutesToRemoteTarget()
+    {
+        // Sessions persisted before the field name was unified carry only owning-profile-entity-id.
+        // The router must still resolve them via the legacy alias and route to the remote target.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionId = new EntityId("aa060001-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentDefinitionId,
+            """
+            {
+              "entity-id": "aa060001-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "legacy-owner-echo"]],
+              "display-name": { "default": "Legacy Owner Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "legacy-owner-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var remoteProfileEntityId = new EntityId(Guid.NewGuid());
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntityId = new EntityId(Guid.NewGuid());
+        var legacyAgentSessionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            agentSessionEntityId,
+            $$"""
+            {
+              "entity-id": "{{agentSessionEntityId}}",
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "agent-sessions", "legacy-{{agentSessionId}}"]],
+              "display-name": { "default": "Legacy Owner Echo session" },
+              "agent-source-entity-id": "{{agentDefinitionId}}",
+              "agent-session-id": "{{agentSessionId}}",
+              "owning-profile-entity-id": "{{remoteProfileEntityId}}"
+            }
+            """);
+        Assert.NotNull(legacyAgentSessionEntity);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            new DeferredTrustedExecutorSelector(),
+            CreateTestRunningAgentChatTable());
+
+        await openAgentSessionShortcutHandler.Handle(viewModel, Shortcut.Open, legacyAgentSessionEntity!);
+
+        var agentTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(agentTab);
+        Assert.Equal(AgentTabState.Failed, agentTab.State);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
