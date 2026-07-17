@@ -254,9 +254,20 @@ public sealed class UsageMetricsService : IAsyncDisposable
 
                     await Task.CompletedTask;
                 }).ConfigureAwait(false);
+
+                this.logger.LogInformation(
+                    "Usage account {UserName} ({Provider}) added/updated with {MetricCount} metrics.",
+                    discovered.UserName,
+                    discovered.ProviderUri,
+                    metrics.Count);
             }
             else
             {
+                this.logger.LogWarning(
+                    "Usage metrics empty for account {UserName} ({Provider}); skipping account registration.",
+                    discovered.UserName,
+                    discovered.ProviderUri);
+
                 // Remove account if it was visible - must marshal to foreground
                 if (isCurrentlyVisible)
                 {

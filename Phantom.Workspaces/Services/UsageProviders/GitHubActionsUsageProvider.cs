@@ -71,7 +71,19 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
+            this.logger.LogWarning(
+                "GitHub Actions usage provider returned {StatusCode} for {Endpoint}; returning empty metrics.",
+                (int)response.StatusCode,
+                $"https://api.github.com/users/{account.UserName}/settings/billing/actions");
             return [];
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            this.logger.LogError(
+                "GitHub Actions usage provider returned non-success {StatusCode} for {Endpoint}.",
+                (int)response.StatusCode,
+                $"https://api.github.com/users/{account.UserName}/settings/billing/actions");
         }
 
         response.EnsureSuccessStatusCode();

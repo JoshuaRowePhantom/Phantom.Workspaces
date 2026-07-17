@@ -95,6 +95,23 @@ public sealed class GitHubActionsUsageProviderTests
     }
 
     [Fact]
+    public async Task GetMetricsAsync_WhenNotFound_LogsWarningWithStatusAndEndpoint()
+    {
+        var logger = new TestLogger<GitHubActionsUsageProvider>();
+        var provider = new GitHubActionsUsageProvider(
+            MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
+            () => "fake-token",
+            logger);
+
+        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Contains("404", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("settings/billing/actions", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("alice", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetMetricsAsync_OnFirstUnauthorized_RetriesWithRefreshedToken()
     {
         var callCount = 0;

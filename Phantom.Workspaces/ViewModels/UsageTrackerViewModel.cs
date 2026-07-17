@@ -4,6 +4,8 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Models;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -20,6 +22,7 @@ namespace Phantom.Workspaces.ViewModels;
 internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly UsageMetrics usageMetrics;
+    private readonly ILogger<UsageTrackerViewModel> logger;
     private string? topRightLabel;
     private bool isOpen;
     private IReadOnlyList<UsageAccount> accounts;
@@ -32,9 +35,10 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public UsageTrackerViewModel(UsageMetrics usageMetrics)
+    public UsageTrackerViewModel(UsageMetrics usageMetrics, ILogger<UsageTrackerViewModel>? logger = null)
     {
         this.usageMetrics = usageMetrics;
+        this.logger = logger ?? NullLogger<UsageTrackerViewModel>.Instance;
         this.accounts = [.. usageMetrics.Accounts];
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
 
@@ -213,9 +217,14 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
         if (allAccounts.Count == 0)
         {
+            this.logger.LogDebug("Usage panel hidden: no accounts.");
             this.TopRightLabel = null;
             return;
         }
+
+        this.logger.LogInformation(
+            "Usage panel shown for {AccountCount} account(s).",
+            allAccounts.Count);
 
         // Find the metric with the most recent non-null LastUpdatedAt across all accounts
         UsageMetric? mostRecentMetric = null;

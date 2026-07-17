@@ -10,6 +10,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -696,20 +697,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
         var metrics = new Models.UsageMetrics(foregroundScheduler);
-        var vm = new UsageTrackerViewModel(metrics);
+        var vm = new UsageTrackerViewModel(
+            metrics,
+            this.loggerFactory.CreateLogger<UsageTrackerViewModel>());
         this.UsageTracker = vm;
 
         var providers = new List<Services.UsageProviders.IUsageProvider>
         {
-            new Services.UsageProviders.GitHubCopilotUsageProvider(new HttpClient()),
-            new Services.UsageProviders.GitHubActionsUsageProvider(new HttpClient()),
+            new Services.UsageProviders.GitHubCopilotUsageProvider(
+                new HttpClient(),
+                this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubCopilotUsageProvider>()),
+            new Services.UsageProviders.GitHubActionsUsageProvider(
+                new HttpClient(),
+                this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubActionsUsageProvider>()),
         };
         this.usageMetricsService = new Services.UsageMetricsService(
             dataAccessLayer,
             metrics,
             providers,
             TimeProvider.System,
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<Services.UsageMetricsService>.Instance);
+            this.loggerFactory.CreateLogger<Services.UsageMetricsService>());
         await this.usageMetricsService.StartAsync(CancellationToken.None);
     }
 

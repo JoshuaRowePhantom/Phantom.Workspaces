@@ -100,6 +100,38 @@ public sealed class GitHubCopilotUsageProviderTests
     }
 
     [Fact]
+    public async Task GetMetricsAsync_WhenNotFound_LogsWarningWithStatusAndEndpoint()
+    {
+        var logger = new TestLogger<GitHubCopilotUsageProvider>();
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
+            () => "fake-token",
+            logger);
+
+        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Contains("404", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("copilot/billing/usage", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenNonSuccess_LogsErrorWithStatus()
+    {
+        var logger = new TestLogger<GitHubCopilotUsageProvider>();
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.InternalServerError, string.Empty),
+            () => "fake-token",
+            logger);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => provider.GetMetricsAsync(TestAccount, CancellationToken.None));
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+        Assert.Contains("500", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task GetMetricsAsync_OnFirstUnauthorized_RetriesWithRefreshedToken()
     {
         var callCount = 0;

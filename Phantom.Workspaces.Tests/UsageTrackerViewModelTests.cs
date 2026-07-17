@@ -17,6 +17,44 @@ public sealed class UsageTrackerViewModelTests
         Thread.CurrentThread.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
     }
     [Fact]
+    public void RecomputeTopRightLabel_WhenNoAccounts_LogsHiddenReason()
+    {
+        var metrics = new UsageMetrics();
+        var logger = new TestLogger<UsageTrackerViewModel>();
+        using var vm = new UsageTrackerViewModel(metrics, logger);
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Message.Contains("hidden", StringComparison.OrdinalIgnoreCase)
+                && e.Message.Contains("no accounts", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RecomputeTopRightLabel_WhenAccountsExist_LogsPanelShown()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "GitHub", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 1m,
+            QuantityTotal = 5m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "minutes",
+        });
+        metrics.Accounts.Add(account);
+
+        var logger = new TestLogger<UsageTrackerViewModel>();
+        using var vm = new UsageTrackerViewModel(metrics, logger);
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                && e.Message.Contains("shown", StringComparison.OrdinalIgnoreCase)
+                && e.Message.Contains("1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void TopRightLabel_IsNull_WhenNoAccounts()
     {
         var metrics = new UsageMetrics();

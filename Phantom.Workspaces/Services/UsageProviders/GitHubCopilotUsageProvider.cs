@@ -68,7 +68,19 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
+            this.logger.LogWarning(
+                "GitHub Copilot usage provider returned {StatusCode} for {Endpoint}; returning empty metrics.",
+                (int)response.StatusCode,
+                "https://api.github.com/copilot/billing/usage");
             return [];
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            this.logger.LogError(
+                "GitHub Copilot usage provider returned non-success {StatusCode} for {Endpoint}.",
+                (int)response.StatusCode,
+                "https://api.github.com/copilot/billing/usage");
         }
 
         response.EnsureSuccessStatusCode();
