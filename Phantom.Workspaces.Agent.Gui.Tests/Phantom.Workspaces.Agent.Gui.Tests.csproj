@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Avalonia.Headless" />
     <PackageReference Include="Avalonia.Headless.XUnit" />
+    <PackageReference Include="Dock.Avalonia.Themes.Fluent" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="Moq" />
     <PackageReference Include="xunit.v3" />

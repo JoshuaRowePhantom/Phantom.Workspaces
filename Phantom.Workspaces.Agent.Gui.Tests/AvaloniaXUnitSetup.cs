@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Themes.Fluent;
+using Dock.Avalonia.Themes.Fluent;
 using Xunit;
 
 [assembly: AvaloniaTestApplication(typeof(Phantom.Workspaces.Agent.Gui.Tests.AvaloniaTestAppBuilder))]
@@ -38,6 +39,10 @@ public static class AvaloniaTestAppBuilder
             // AgentChatOutputControl.BuildThemeVariables() can complete synchronously
             // on the Avalonia dispatcher thread without deadlocking.
             Styles.Add(new FluentTheme());
+            // Issue #1035: the agent-chat detail region hosts a Dock.Avalonia DocumentDock, so the
+            // Dock Fluent theme (with cached document content, matching App.axaml) must be present
+            // for the control to instantiate and render its cached detail documents under test.
+            Styles.Add(new DockFluentTheme { CacheDocumentTabContent = true });
         }
     }
 }

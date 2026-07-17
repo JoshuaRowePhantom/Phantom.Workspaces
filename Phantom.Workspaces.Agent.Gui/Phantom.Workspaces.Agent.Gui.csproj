@@ -13,6 +13,12 @@
 
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />
+    <!-- Issue #1035: the agent-chat detail region is hosted in a locked, tab-strip-less
+         Dock.Avalonia DocumentDock (cache-N/show-one) built with the thread-agnostic Dock.Model.Mvvm
+         model so the shared detail-content collection can mutate off the UI thread when sub-agents
+         are added on a background scheduler. -->
+    <PackageReference Include="Dock.Avalonia" />
+    <PackageReference Include="Dock.Model.Mvvm" />
     <PackageReference Include="Markdig.Signed" />
     <PackageReference Include="System.CommandLine" />
     <!-- Referenced unconditionally so restore is configuration-independent and the

@@ -205,6 +205,10 @@ public sealed class AgentViewModelNavigationTests
         Assert.Same(viewModel.SubAgentsContainer, viewModel.SelectedEditorDetailContent);
         // The container should not be showing the browser.
         Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+        // Issue #1035: the active detail document renders the sub-agents container.
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(viewModel.SubAgentsContainer, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
     }
 
     [Fact]

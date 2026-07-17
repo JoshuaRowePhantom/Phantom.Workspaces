@@ -3,10 +3,17 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Threading;
+using Avalonia.VisualTree;
+using AgentSchema;
+using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.Controls;
+using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Llm;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -33,39 +40,63 @@ public sealed class AgentChatEditorControlTests
     }
 
     [Fact]
-    public void DetailContentSlots_ItemsPanel_IsPanel_NotStackPanel()
+    public void AgentChatEditorControl_DetailRegion_UsesLockedDockControl()
     {
-        // Issue #764: The ItemsControl for DetailContentSlots must use Panel (base Panel, not
-        // StackPanel) as its items panel. StackPanel measures children with infinite height,
-        // causing the AgentChatOutputControl (WebView host) to report DesiredSize = 0 and
-        // collapse the entire control. Panel provides finite constraints and allows items to
-        // fill the available space.
+        // Issue #1035: the detail region is a locked, ItemsSource-bound Dock.Avalonia DockControl
+        // (cache-N/show-one) rather than the old IsVisible deck. Docking is fully disabled.
         var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
 
         Assert.Contains(
-            "ItemsSource=\"{Binding DetailContentSlots}\"",
+            "<dock:DockControl",
             axamlContent,
             StringComparison.Ordinal);
 
         Assert.Contains(
-            "<ItemsControl.ItemsPanel>",
+            "Layout=\"{Binding DetailLayout}\"",
             axamlContent,
             StringComparison.Ordinal);
 
-        Assert.Contains(
-            "<ItemsPanelTemplate>",
-            axamlContent,
-            StringComparison.Ordinal);
-
-        Assert.Contains(
-            "<Panel/>",
-            axamlContent,
-            StringComparison.Ordinal);
-
+        // The old IsVisible deck (DetailContentSlots ItemsControl) must be gone.
         Assert.DoesNotContain(
-            "<StackPanel/>",
+            "{Binding DetailContentSlots}",
             axamlContent,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_DetailDock_LocksDockableCapabilities()
+    {
+        // Issue #1035: the dock must be locked so the user cannot close/float/drag the detail region.
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "IsDockingEnabled=\"False\"",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "EnableManagedWindowLayer=\"False\"",
+            axamlContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_DetailDock_HidesTabStrip()
+    {
+        // Issue #1035: the document tab strip is hidden via the scoped resource so only the active
+        // detail content is shown (single-node detail region, no tabs).
+        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "DockDocumentControlTabStripVisible",
+            axamlContent,
+            StringComparison.Ordinal);
+
+        var keyStart = axamlContent.IndexOf("DockDocumentControlTabStripVisible", StringComparison.Ordinal);
+        var elementEnd = axamlContent.IndexOf("</x:Boolean>", keyStart, StringComparison.Ordinal);
+        Assert.True(elementEnd > keyStart);
+        var element = axamlContent.Substring(keyStart, elementEnd - keyStart);
+        Assert.Contains("False", element, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -86,42 +117,22 @@ public sealed class AgentChatEditorControlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void AgentChatEditorControl_ConversationSlot_FillsAvailableHeight()
+    public void AgentChatEditorControl_DetailRegion_HostsDockControlInColumn2()
     {
-        // Issue #764: Verify that the ContentControl for the conversation slot receives a
-        // non-zero finite height constraint during measure. When ItemsControl defaults to
-        // StackPanel, children are measured with infinite height, causing WebView to collapse
-        // to zero. With Panel as the items panel, children receive the finite constraint from
-        // the parent and can render properly.
+        // Issue #1035: the detail region (Grid.Column=2) is a Dock.Avalonia DockControl, replacing
+        // the old DetailContentSlots ItemsControl deck.
         var control = new AgentChatEditorControl();
 
-        // Navigate to the EditorGrid (Grid.Column="2") which contains the ItemsControl
         var editorGrid = GetField<Grid>(control, "EditorGrid");
         Assert.NotNull(editorGrid);
 
-        // Find the ItemsControl for DetailContentSlots in column 2
-        var detailPanel = editorGrid.Children
-            .OfType<Panel>()
-            .FirstOrDefault(p => Grid.GetColumn(p) == 2);
-        Assert.NotNull(detailPanel);
+        var dockControl = editorGrid.Children
+            .OfType<Dock.Avalonia.Controls.DockControl>()
+            .FirstOrDefault(d => Grid.GetColumn(d) == 2);
+        Assert.NotNull(dockControl);
 
-        var itemsControl = detailPanel.Children.OfType<ItemsControl>().FirstOrDefault();
-        Assert.NotNull(itemsControl);
-
-        // Verify that the ItemsPanel is Panel (or subclass), not StackPanel
-        var itemsPresenterProperty = typeof(ItemsControl)
-            .GetProperty("ItemsPanel", BindingFlags.Instance | BindingFlags.Public);
-        Assert.NotNull(itemsPresenterProperty);
-
-        var itemsPanelTemplate = itemsPresenterProperty.GetValue(itemsControl) as ITemplate<Panel>;
-        Assert.NotNull(itemsPanelTemplate);
-
-        var panel = itemsPanelTemplate.Build();
-        Assert.NotNull(panel);
-
-        // The panel must be base Panel, not StackPanel
-        Assert.IsType<Panel>(panel);
-        Assert.IsNotType<StackPanel>(panel);
+        // Docking is fully disabled so the detail region stays locked.
+        Assert.False(dockControl!.IsDockingEnabled);
     }
 
     [Fact]
@@ -536,6 +547,66 @@ public sealed class AgentChatEditorControlTests
         SetTreeCollapsed(control, false);
 
         Assert.True(editorGrid.ColumnDefinitions[0].MinWidth >= 160);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AgentChatEditorControl_SubAgentChatDetailChild_RendersNonBlankDetail()
+    {
+        // Issue #1035 render regression: selecting a sub-agent's own chat-details child node must
+        // render the sub-agent's populated AgentChatDetailsViewModel through the locked DockControl —
+        // i.e. the detail region is NOT blank (the original bug), and it shows the SUB-AGENT's session.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var subChatDetails = subAgentNavItem.Children.Single(c => c.Id == "chat-details");
+        var details = (AgentChatDetailsViewModel)subChatDetails.DetailContent!;
+
+        viewModel.SelectedEditorItem = subChatDetails;
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        // The chat-details template renders a read-only TextBox bound to the sub-agent's session id.
+        var renderedTexts = control.GetVisualDescendants()
+            .OfType<TextBox>()
+            .Select(tb => tb.Text)
+            .ToList();
+        Assert.Contains(details.AgentSessionId, renderedTexts);
+    }
+
+    private static Task<AgentChat> CreateAgentChatAsync()
+        => AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                    """
+                    {
+                      "kind": "prompt",
+                      "name": "test-agent",
+                      "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+                      "tools": []
+                    }
+                    """),
+            });
+
+    private static async Task AddSubAgentAsync(AgentChat chat, string agentId, string displayName)
+    {
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            $$"""
+            {
+              "kind": "prompt",
+              "name": "{{displayName}}",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """);
+        await chat.GetOrCreateAsync(agentId, definition, $"tool-call-{agentId}");
     }
 
     private static void SetTreeCollapsed(AgentChatEditorControl control, bool collapsed)

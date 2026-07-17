@@ -28,7 +28,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
-    private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
+    private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
+    private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentDetailSubscriptions = new();
     private readonly ObservableCollection<AgentEditorNavigationItemViewModel> subAgentAllChildren = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
@@ -41,6 +42,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private bool showChatInputHelpText = true;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
+    private readonly string detailKeyPrefix = System.Guid.NewGuid().ToString("N");
+    private readonly AgentDetailDockFactory detailDockFactory;
+    private AgentDetailDocumentItem? selectedDetailItem;
 
     public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null, AgentViewModel? parentAgentViewModel = null)
     {
@@ -86,12 +90,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
         ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
 
-        // Create detail content slots.
-        this.detailContentSlots.Add(new DetailContentSlot(this.conversationDetail) { IsVisible = true });
-        this.detailContentSlots.Add(new DetailContentSlot(this.chatDetailsDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.toolsDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.subAgentsContainerDetail));
-        this.DetailContentSlots = new ReadOnlyObservableCollection<DetailContentSlot>(this.detailContentSlots);
+        // Build the flat detail-content collection (one item per nav node's DetailContent) and the
+        // locked, tab-strip-less DocumentDock that hosts them (issue #1035). Every node — including
+        // each sub-agent child — contributes a first-class cached document, so no detail panel is
+        // ever blank. Sub-agents append their own items recursively (see AddSubAgentSlotEager).
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/conversation", "Chat", this.conversationDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-details", "Chat details", this.chatDetailsDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-tools", "Tools", this.toolsDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-sub-agents", "Sub-agents", this.subAgentsContainerDetail));
+        this.AllDetailContents = new ReadOnlyObservableCollection<AgentDetailDocumentItem>(this.allDetailContents);
+        this.detailDockFactory = new AgentDetailDockFactory(this.allDetailContents);
 
         // Build fixed navigation items once.
         this.chatDetailsNavItem = new AgentEditorNavigationItemViewModel(
@@ -270,7 +278,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
 
-    public ReadOnlyObservableCollection<DetailContentSlot> DetailContentSlots { get; }
+    public ReadOnlyObservableCollection<AgentDetailDocumentItem> AllDetailContents { get; }
+
+    /// <summary>
+    /// The root Dock layout bound to the detail region's <c>DockControl.Layout</c> (issue #1035).
+    /// Hosts the locked, tab-strip-less <see cref="AgentDetailDocumentDock"/> whose cached documents
+    /// are generated from <see cref="AllDetailContents"/>.
+    /// </summary>
+    public Dock.Model.Controls.IRootDock DetailLayout => this.detailDockFactory.Layout;
+
+    /// <summary>The cached detail document currently active in the detail dock, or null.</summary>
+    public AgentDetailDocument? SelectedDetailDocument => this.detailDockFactory.GetDocument(this.selectedDetailItem);
+
+    /// <summary>Test/host seam: the factory that owns the detail dock and its document registry.</summary>
+    internal AgentDetailDockFactory DetailDockFactory => this.detailDockFactory;
 
     public bool IsChatRunning => this.RunningItems.Count > 0;
 
@@ -305,12 +326,23 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 }
             }
 
-            // Update detail content slot visibility.
-            var selected = value?.DetailContent;
-            foreach (var slot in this.detailContentSlots)
+            // Activate the cached detail document whose content matches the selected node
+            // (issue #1035). Replaces the old ReferenceEquals slot-visibility toggle; every node —
+            // including sub-agent children — resolves to a first-class document, so nothing blanks.
+            var selectedContent = value?.DetailContent;
+            AgentDetailDocumentItem? item = null;
+            foreach (var candidate in this.allDetailContents)
             {
-                slot.IsVisible = ReferenceEquals(slot.Content, selected);
+                if (ReferenceEquals(candidate.Content, selectedContent))
+                {
+                    item = candidate;
+                    break;
+                }
             }
+
+            this.selectedDetailItem = item;
+            this.detailDockFactory.SetActiveDetail(item);
+            this.RaisePropertyChanged(nameof(this.SelectedDetailDocument));
         }
     }
 
@@ -527,6 +559,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.toolsTransformer.Dispose();
         this.subAgentsTransformer.Dispose();
+        foreach (var (subAgentViewModel, handler) in this.subAgentDetailSubscriptions)
+        {
+            ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged -= handler;
+        }
+        this.subAgentDetailSubscriptions.Clear();
         this.InputQueue?.Dispose();
         this.conversationDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
@@ -594,6 +631,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.AddSubAgentSlot(subAgent);
             }
         }
+
+        if (e.OldItems is not null)
+        {
+            foreach (IRunningSubAgent subAgent in e.OldItems)
+            {
+                this.RemoveSubAgentDetailContents(subAgent.AgentId);
+            }
+        }
     }
 
     private void AddSubAgentSlot(IRunningSubAgent subAgent)
@@ -633,8 +678,71 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
         subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
+        // Recursively aggregate the sub-agent's flat detail-content collection into this agent's
+        // collection so every sub-agent node (and its descendants) has a first-class cached document
+        // in the root dock (issue #1035). The sub-agent's collection already includes its own
+        // sub-agents, so arbitrary nesting depth is handled without special-casing.
+        this.AppendSubAgentDetailContents(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
+    }
+
+    private void AppendSubAgentDetailContents(AgentViewModel subAgentViewModel)
+    {
+        foreach (var item in subAgentViewModel.AllDetailContents)
+        {
+            if (!this.allDetailContents.Contains(item))
+            {
+                this.allDetailContents.Add(item);
+            }
+        }
+
+        NotifyCollectionChangedEventHandler handler = (_, e) => this.OnSubAgentDetailContentsChanged(e);
+        ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged += handler;
+        this.subAgentDetailSubscriptions[subAgentViewModel] = handler;
+    }
+
+    private void OnSubAgentDetailContentsChanged(NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (AgentDetailDocumentItem item in e.NewItems)
+            {
+                if (!this.allDetailContents.Contains(item))
+                {
+                    this.allDetailContents.Add(item);
+                }
+            }
+        }
+
+        if (e.OldItems is not null)
+        {
+            foreach (AgentDetailDocumentItem item in e.OldItems)
+            {
+                this.allDetailContents.Remove(item);
+            }
+        }
+    }
+
+    private void RemoveSubAgentDetailContents(string agentId)
+    {
+        var subAgentViewModel = this.subAgentViewModels
+            .FirstOrDefault(vm => string.Equals(vm.agentChat.AgentId, agentId, StringComparison.Ordinal));
+        if (subAgentViewModel is null)
+        {
+            return;
+        }
+
+        if (this.subAgentDetailSubscriptions.TryGetValue(subAgentViewModel, out var handler))
+        {
+            ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged -= handler;
+            this.subAgentDetailSubscriptions.Remove(subAgentViewModel);
+        }
+
+        foreach (var item in subAgentViewModel.AllDetailContents)
+        {
+            this.allDetailContents.Remove(item);
+        }
     }
 
     private void AddSubAgentSlotLazy(SubAgent stub)

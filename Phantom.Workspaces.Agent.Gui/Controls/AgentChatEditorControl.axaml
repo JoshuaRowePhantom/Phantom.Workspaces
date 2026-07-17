@@ -3,6 +3,7 @@
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
              xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
+             xmlns:dock="using:Dock.Avalonia.Controls"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatEditorControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel">
@@ -284,21 +285,25 @@
                           Grid.Column="1"
                           Click="OnTreeCollapseToggleClicked"
                           Content="◀"/>
-            <Panel Grid.Column="2">
-                <ItemsControl ItemsSource="{Binding DetailContentSlots}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <Panel/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="vm:DetailContentSlot">
-                            <ContentControl Content="{Binding Content}"
-                                            IsVisible="{Binding IsVisible}"/>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </Panel>
+            <!-- Issue #1035: the detail region is a locked, tab-strip-less Dock.Avalonia
+                 DocumentDock (cache-N/show-one). Every nav node's DetailContent —
+                 including every sub-agent child — is a first-class cached Document, so the panel is
+                 never blank. Docking is fully disabled (IsDockingEnabled=False), the floating-window
+                 layer is off, and the tab strip is hidden via the scoped DockDocumentControlTabStripVisible
+                 resource. Tree selection drives the active document via AgentViewModel.SelectedEditorItem. -->
+            <dock:DockControl Grid.Column="2"
+                              Layout="{Binding DetailLayout}"
+                              IsDockingEnabled="False"
+                              EnableManagedWindowLayer="False">
+                <dock:DockControl.Resources>
+                    <x:Boolean x:Key="DockDocumentControlTabStripVisible">False</x:Boolean>
+                </dock:DockControl.Resources>
+                <dock:DockControl.DataTemplates>
+                    <DataTemplate DataType="vm:AgentDetailDocument">
+                        <ContentControl Content="{Binding DetailContent}"/>
+                    </DataTemplate>
+                </dock:DockControl.DataTemplates>
+            </dock:DockControl>
         </Grid>
     </Border>
 </UserControl>

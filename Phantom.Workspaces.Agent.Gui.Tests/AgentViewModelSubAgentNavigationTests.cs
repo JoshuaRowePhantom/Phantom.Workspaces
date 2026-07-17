@@ -106,7 +106,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     }
 
     [Fact]
-    public async Task SubAgentsContainerSlot_IsVisible_WhenSubAgentNavItemSelected()
+    public async Task SubAgentsContainerDocument_IsActive_WhenSubAgentNavItemSelected()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
@@ -120,9 +120,10 @@ public sealed class AgentViewModelSubAgentNavigationTests
 
         viewModel.SelectedEditorItem = subAgentNavItem;
 
-        var containerSlot = viewModel.DetailContentSlots.Single(s => 
-            ReferenceEquals(s.Content, viewModel.SubAgentsContainer));
-        Assert.True(containerSlot.IsVisible);
+        // Issue #1035: selecting the sub-agent node activates the cached sub-agents-container document.
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(viewModel.SubAgentsContainer, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
     }
 
     [Fact]
@@ -169,6 +170,182 @@ public sealed class AgentViewModelSubAgentNavigationTests
 
         Assert.NotNull(viewModel.SelectedEditorItem);
         Assert.Equal(viewModel.EditorItems[0], viewModel.SelectedEditorItem);
+    }
+
+    [Fact]
+    public async Task SelectSubAgentChatDetailsChild_RendersNonBlankDetail()
+    {
+        // Issue #1035 regression: selecting a sub-agent's own chat-details child node must resolve
+        // to a real cached document (never blank).
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var subChatDetails = subAgentNavItem.Children.Single(c => c.Id == "chat-details");
+
+        viewModel.SelectedEditorItem = subChatDetails;
+
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(subChatDetails.DetailContent, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.IsType<AgentChatDetailsViewModel>(viewModel.SelectedDetailDocument.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
+    }
+
+    [Fact]
+    public async Task SubAgentChatDetails_ShowsSubAgentModelAndSession_NotParent()
+    {
+        // Issue #1035 regression: the sub-agent's chat-details detail describes the SUB-AGENT, not
+        // the parent — its backing AgentViewModel is the sub-agent's own view-model.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var subChatDetails = subAgentNavItem.Children.Single(c => c.Id == "chat-details");
+
+        viewModel.SelectedEditorItem = subChatDetails;
+
+        var details = Assert.IsType<AgentChatDetailsViewModel>(viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(childVm, details.Agent);
+
+        // It must NOT be the parent's own chat-details detail.
+        var parentChatDetails = root.Children.Single(c => c.Id == "chat-details");
+        Assert.NotSame(parentChatDetails.DetailContent, viewModel.SelectedDetailDocument.DetailContent);
+    }
+
+    [Fact]
+    public async Task SelectSubAgentToolsChild_RendersNonBlankDetail()
+    {
+        // Issue #1035 regression: selecting a sub-agent's own tools child node resolves to a cached document.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var subTools = subAgentNavItem.Children.Single(c => c.Id == "chat-tools");
+
+        viewModel.SelectedEditorItem = subTools;
+
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(subTools.DetailContent, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
+    }
+
+    [Fact]
+    public async Task ActiveDetailDocument_Tracks_TreeSelection()
+    {
+        // Issue #1035: the dock's active document always follows the selected nav node.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var subChatDetails = subAgentNavItem.Children.Single(c => c.Id == "chat-details");
+
+        foreach (var node in new[]
+        {
+            root,
+            root.Children.Single(c => c.Id == "chat-details"),
+            root.Children.Single(c => c.Id == "chat-tools"),
+            subChatDetails,
+        })
+        {
+            viewModel.SelectedEditorItem = node;
+            var active = viewModel.DetailDockFactory.ActiveDocument;
+            Assert.NotNull(active);
+            Assert.Same(node.DetailContent, active!.DetailContent);
+        }
+    }
+
+    [Fact]
+    public async Task AgentViewModel_SubAgentAdded_AppendsDocumentToSharedCollection()
+    {
+        // Issue #1035: adding a sub-agent appends its detail items to the shared AllDetailContents,
+        // each with a generated cached document.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        var beforeCount = viewModel.AllDetailContents.Count;
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        Assert.True(viewModel.AllDetailContents.Count > beforeCount);
+
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+        foreach (var item in childVm.AllDetailContents)
+        {
+            Assert.Contains(item, viewModel.AllDetailContents);
+            Assert.NotNull(viewModel.DetailDockFactory.GetDocument(item));
+        }
+    }
+
+    [Fact]
+    public async Task AllDetailContents_Flattens_NestedSubAgentDetailVMs()
+    {
+        // Issue #1035: arbitrarily nested sub-agent detail VMs are flattened into the root collection.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+
+        // Add a grandchild sub-agent beneath the first sub-agent.
+        var childChat = (AgentChat)viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").RunningSubAgent;
+        await AddSubAgentAsync(childChat, "a1-1", "Grandchild Agent");
+
+        var grandchildVm = childVm.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1-1").SubAgentViewModel;
+
+        foreach (var item in grandchildVm.AllDetailContents)
+        {
+            Assert.Contains(item, viewModel.AllDetailContents);
+        }
+    }
+
+    [Fact]
+    public async Task AgentViewModel_SubAgentCompleted_UpdatesCollectionWithoutBlankPanel()
+    {
+        // Issue #1035: after a sub-agent completes, its chat-details child still resolves to a document.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var subChatDetails = subAgentNavItem.Children.Single(c => c.Id == "chat-details");
+
+        // Completing hides the node from the (HideCompletedAgents) tree, but its cached document
+        // must survive so re-selecting it never renders blank.
+        ((AgentChat)chat.SubAgents.Single(s => s.AgentId == "a1"))
+            .SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        viewModel.SelectedEditorItem = subChatDetails;
+
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(subChatDetails.DetailContent, viewModel.SelectedDetailDocument!.DetailContent);
     }
 
     private static AgentDefinition CreateAgentDefinition()

@@ -350,85 +350,105 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task DetailContentSlots_AllFixedSlotsPresent_OnConstruction()
+    public async Task AllDetailContents_AllFixedItemsPresent_OnConstruction()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
-        // Issue #819 removed Diagnostics; issue #1030 removed Background tasks. Count is now 4.
-        Assert.Equal(4, viewModel.DetailContentSlots.Count);
+        // Issue #1035: the flat detail-content collection carries one item per fixed nav node
+        // (conversation, chat-details, chat-tools, chat-sub-agents). Count is 4.
+        Assert.Equal(4, viewModel.AllDetailContents.Count);
     }
 
     [Fact]
-    public async Task DetailContentSlots_OnlySelectedSlotVisible()
+    public async Task EveryNavNodeDetail_HasGeneratedDocument()
+    {
+        // Issue #1035: each fixed nav node's DetailContent resolves to exactly one cached document.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        foreach (var nav in new[] { root }.Concat(root.Children))
+        {
+            var item = viewModel.AllDetailContents.SingleOrDefault(
+                i => ReferenceEquals(i.Content, nav.DetailContent));
+            Assert.NotNull(item);
+            Assert.NotNull(viewModel.DetailDockFactory.GetDocument(item));
+        }
+    }
+
+    [Fact]
+    public async Task SelectNode_ActivatesMatchingDocument()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
-        // Issue #819: Use chat-details instead of removed chat-diagnostics
         var chatDetailsNav = root.Children.First(c => c.Id == "chat-details");
 
         viewModel.SelectedEditorItem = chatDetailsNav;
 
-        var visibleSlots = viewModel.DetailContentSlots.Where(s => s.IsVisible).ToList();
-        var slot = Assert.Single(visibleSlots);
-        Assert.Same(chatDetailsNav.DetailContent, slot.Content);
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(chatDetailsNav.DetailContent, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
     }
 
     [Fact]
-    public async Task DetailContentSlots_ConversationSlot_RemainsAlive_AfterNavigation()
+    public async Task DetailDocument_ConversationRemainsCached_AfterNavigation()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
-        var conversationSlot = viewModel.DetailContentSlots
-            .First(s => s.Content is AgentChatConversationDetailViewModel);
-        var conversationContent = conversationSlot.Content;
+        var conversationItem = viewModel.AllDetailContents
+            .First(i => i.Content is AgentChatConversationDetailViewModel);
+        var conversationDoc = viewModel.DetailDockFactory.GetDocument(conversationItem);
+        Assert.NotNull(conversationDoc);
 
         viewModel.SelectedEditorItem = root.Children.First(c => c.Id == "chat-details");
         viewModel.SelectedEditorItem = root;
 
-        Assert.Same(conversationContent, conversationSlot.Content);
+        // Same cached Document instance survives navigating away and back (content cached).
+        Assert.Same(conversationDoc, viewModel.DetailDockFactory.GetDocument(conversationItem));
     }
 
     [Fact]
-    public async Task DetailContentSlots_VisibilityToggles_ContentIdentityStable()
+    public async Task DetailDocument_Reused_AcrossSelectionSwitches()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
         var root = Assert.Single(viewModel.EditorItems);
-        var slotContents = viewModel.DetailContentSlots.Select(s => s.Content).ToArray();
+        var items = viewModel.AllDetailContents.ToArray();
+        var docsBefore = items.Select(i => viewModel.DetailDockFactory.GetDocument(i)).ToArray();
 
         viewModel.SelectedEditorItem = root.Children.First(c => c.Id == "chat-details");
         viewModel.SelectedEditorItem = root.Children.First(c => c.Id == "chat-tools");
         viewModel.SelectedEditorItem = root;
 
-        var slotContentsAfter = viewModel.DetailContentSlots.Select(s => s.Content).ToArray();
-
-        for (int i = 0; i < slotContents.Length; i++)
+        var docsAfter = items.Select(i => viewModel.DetailDockFactory.GetDocument(i)).ToArray();
+        for (int i = 0; i < docsBefore.Length; i++)
         {
-            Assert.Same(slotContents[i], slotContentsAfter[i]);
+            Assert.Same(docsBefore[i], docsAfter[i]);
         }
     }
 
     [Fact]
-    public async Task DetailContentSlots_ConversationSlotVisible_OnConstruction()
+    public async Task ConversationDocument_Active_OnConstruction()
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
 
-        var conversationSlot = viewModel.DetailContentSlots
-            .First(s => s.Content is AgentChatConversationDetailViewModel);
-
-        Assert.True(conversationSlot.IsVisible);
+        // The conversation node is selected by default, so its cached document is active.
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.IsType<AgentChatConversationDetailViewModel>(viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
     }
 
     [Fact]
