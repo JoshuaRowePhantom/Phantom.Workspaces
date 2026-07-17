@@ -1,7 +1,13 @@
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -43,6 +49,50 @@ public sealed class EntityCardFieldBuildingTests
         Assert.True(markdownEditor.IsReadMode);
         Assert.True(markdownEditor.ShowMarkdownReadMode);
         Assert.Contains("Body text here.", markdownEditor.TextContent, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public async Task MarkdownMimeAttachment_ReadMode_RendersMarkdownNotRawSource()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "c0d1e2f3-7a8b-4c9d-9e0f-6a7b8c9d0e1f",
+              "entity-types": ["entity", "note"],
+              "names": [["views", "sessions", "notes", "agent-manifests"]],
+              "display-name": { "default": "Agent Manifests" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Agent Manifests\n\nBody text here." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "note");
+        var contentEditor = fieldEditors.Single(editor => editor.FieldName == "content");
+        var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentEditor);
+        var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
+
+        var templates = new WorkspaceDataTemplates();
+        var template = templates.Cast<IDataTemplate>().First(t => t.Match(markdownEditor));
+        var control = template.Build(markdownEditor);
+        control!.DataContext = markdownEditor;
+        Dispatcher.UIThread.RunJobs();
+
+        var views = control.GetSelfAndLogicalDescendants()
+            .OfType<WorkspaceMarkdownView>()
+            .ToList();
+
+        Assert.NotEmpty(views);
+        Assert.All(views, view => Assert.Equal(markdownEditor.TextContent, view.Markdown));
     }
 
     [AvaloniaFact]

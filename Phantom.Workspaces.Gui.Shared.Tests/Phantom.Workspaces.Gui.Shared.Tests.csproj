@@ -10,6 +10,8 @@
     <PackageReference Include="Avalonia.Headless.XUnit" />
     <PackageReference Include="Avalonia.Markup.Xaml.Loader" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
+    <PackageReference Include="Markdown.Avalonia.Tight" />
+    <PackageReference Include="Markdown.Avalonia.SyntaxHigh" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="VtNetCore" />
     <PackageReference Include="xunit.v3" />

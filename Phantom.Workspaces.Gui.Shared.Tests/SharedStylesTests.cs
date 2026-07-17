@@ -11,6 +11,7 @@ using Avalonia.VisualTree;
 using System.Reflection;
 using System.Text.RegularExpressions;
 
+using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
@@ -356,6 +357,25 @@ public sealed class SharedStylesTests
         var end = stylesContent.IndexOf("</Style>", start, StringComparison.Ordinal);
         Assert.True(end > start, $"Expected style selector '{selector}' to be closed.");
         return stylesContent[start..(end + "</Style>".Length)];
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SharedStyles_WorkspaceMarkdownViewer_TargetsMarkdownRenderer()
+    {
+        var styles = LoadSharedStyles();
+
+        var markdownStyle = styles
+            .OfType<Style>()
+            .First(s => s.Selector?.ToString() == "Control.workspace-markdown-viewer");
+
+        var view = new WorkspaceMarkdownView();
+        view.Classes.Add("workspace-markdown-viewer");
+
+        // The shared style targets the markdown viewer class, and the shared control really is the
+        // free Markdown.Avalonia renderer (not a raw-text fallback).
+        Assert.NotNull(markdownStyle);
+        Assert.Contains("workspace-markdown-viewer", view.Classes);
+        Assert.IsAssignableFrom<Markdown.Avalonia.MarkdownScrollViewer>(view.Renderer);
     }
 
     private static Avalonia.Styling.Styles LoadSharedStyles()

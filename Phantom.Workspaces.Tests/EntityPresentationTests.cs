@@ -1,6 +1,12 @@
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -9,6 +15,21 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityPresentationTests
 {
+    [AvaloniaFact]
+    public void EntityDisplayItemTemplate_NoteMarkdownContent_UsesMarkdownRenderer()
+    {
+        var viewModel = new EntityDisplayItemViewModel("# Agent Manifests\n\nThis is the body.");
+
+        var templates = new WorkspaceDataTemplates();
+        var template = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        var control = template.Build(viewModel);
+        control!.DataContext = viewModel;
+        Dispatcher.UIThread.RunJobs();
+
+        var view = Assert.IsType<WorkspaceMarkdownView>(control);
+        Assert.Equal(viewModel.Text, view.Markdown);
+    }
+
     [AvaloniaFact]
     public void IsEntityType_ReturnsTrue_WhenMatchingTypeIsPresent()
     {

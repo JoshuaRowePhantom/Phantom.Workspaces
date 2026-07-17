@@ -1,4 +1,10 @@
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
+using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using System.Globalization;
 
@@ -141,6 +147,27 @@ public sealed class EntityFieldEditorViewModelTests
         Assert.Contains(Environment.NewLine + "  \"type\": \"object\"", editor.JsonText, StringComparison.Ordinal);
         Assert.StartsWith("```json", editor.MarkdownText, StringComparison.Ordinal);
         Assert.EndsWith("```", editor.MarkdownText, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact]
+    public void JsonSchemaFieldEditor_ReadMode_RendersMarkdownDocumentation()
+    {
+        var editor = new JsonSchemaFieldEditorViewModel(
+            "schema",
+            "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}");
+
+        var templates = new WorkspaceDataTemplates();
+        var template = templates.Cast<IDataTemplate>().First(t => t.Match(editor));
+        var control = template.Build(editor);
+        control!.DataContext = editor;
+        Dispatcher.UIThread.RunJobs();
+
+        var view = control.GetSelfAndLogicalDescendants()
+            .OfType<WorkspaceMarkdownView>()
+            .Single();
+
+        Assert.Equal(editor.MarkdownText, view.Markdown);
+        Assert.True(editor.IsReadMode);
     }
 
     [AvaloniaFact]

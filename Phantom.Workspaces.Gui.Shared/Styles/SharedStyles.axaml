@@ -2,6 +2,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
         x:CompileBindings="False">
+    <!-- Free, MIT-licensed Markdown.Avalonia renderer theme + syntax-highlight appendix used by
+         WorkspaceMarkdownView. Kept here (not App.axaml) so the Markdown.Avalonia assemblies stay
+         referenced only by this shared assembly, keeping their root 'Markdown' namespace out of the
+         application's global namespace. -->
+    <StyleInclude Source="avares://Markdown.Avalonia/StyleCollections/MarkdownStyleFluentTheme.axaml" />
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    <StyleInclude Source="avares://Markdown.Avalonia.SyntaxHigh/StyleCollections/AppendixOfFluentTheme.axaml" />
     <Styles.Resources>
         <!-- Default theme fallbacks for apps that do not inject profile resources. -->
         <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
@@ -782,10 +789,6 @@
     </Style>
     <Style Selector="Control.workspace-markdown-viewer">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-    </Style>
-    <Style Selector="Control.workspace-markdown-viewer /template/ ScrollViewer">
-        <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
-        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
     <Style Selector="Control.workspace-markdown-editor">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
