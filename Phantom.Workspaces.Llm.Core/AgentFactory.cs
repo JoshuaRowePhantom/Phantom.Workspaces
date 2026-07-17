@@ -350,7 +350,8 @@ public static class AgentFactory
             dataAccessLayer,
             dependencies.DispatcherEntityName,
             options,
-            subAgentServices: services);
+            subAgentServices: services,
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
 
         return new ChatClientResult(client, "Sub-agent dispatcher");
     }

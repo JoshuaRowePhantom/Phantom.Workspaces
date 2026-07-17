@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Vector;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -12,7 +13,7 @@ namespace Phantom.Workspaces.Llm;
 /// prefixes. Sub-agents are created on demand from <see cref="SubAgentDispatcherOptions.AgentDefinitionTools"/>
 /// and routed to either by exact id match or fuzzy embedding-based matching.
 /// </summary>
-public sealed class SubAgentDispatcherChatClient : IChatClient
+public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatcherCommandClient
 {
     private const int MaxTruncatedPromptLength = 40;
 
@@ -37,7 +38,8 @@ public sealed class SubAgentDispatcherChatClient : IChatClient
         EntityName dispatcherEntityName,
         SubAgentDispatcherOptions options,
         AgentServices? subAgentServices = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ISlashCommandRegistry? slashCommandRegistry = null)
     {
         ArgumentNullException.ThrowIfNull(runningAgentChatFactory);
         ArgumentNullException.ThrowIfNull(embeddingsProvider);
@@ -53,7 +55,23 @@ public sealed class SubAgentDispatcherChatClient : IChatClient
         _timeProvider = timeProvider ?? TimeProvider.System;
         _parser = new SubAgentMessageParser(options);
         _fuzzyRouter = new SubAgentFuzzyRouter(embeddingsProvider, options, _timeProvider);
+
+        if (slashCommandRegistry is { } registry)
+        {
+            registry.Register(new AvailableSubAgentsSlashCommandHandler(this));
+            registry.Register(new NewSubAgentSlashCommandHandler(this));
+            registry.Register(new SubAgentSlashCommandHandler(this));
+        }
     }
+
+    /// <inheritdoc />
+    public IReadOnlyList<AgentDefinitionTool> AvailableDefinitions => _options.AgentDefinitionTools;
+
+    /// <inheritdoc />
+    public IReadOnlyList<SubAgentDescriptor> ActiveSubAgents =>
+        _subAgents.Values
+            .Select(static subAgent => new SubAgentDescriptor(subAgent.Id, subAgent.Description))
+            .ToArray();
 
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
