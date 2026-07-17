@@ -572,6 +572,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public async Task InitializeAsync()
     {
         this.entityBroker = await this.entityBrokerTask;
+
+        // The broker refreshes subscriptions off the UI thread (UpdateAsync runs on the thread pool);
+        // marshal its UI-bound collection/snapshot mutations onto the Avalonia dispatcher.
+        this.entityBroker.UiMarshal = static action =>
+        {
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                action();
+            }
+            else
+            {
+                Dispatcher.UIThread.Invoke(action);
+            }
+        };
+
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
         this.interestCatalog = await InterestCatalog.CreateAsync(this.entityBroker);
         this.interestCatalog.Changed += this.OnInterestCatalogChanged;
@@ -1208,6 +1223,31 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         await previous.DisposeAsync();
 
+        await this.PopulateViewAsync(next);
+    }
+
+    /// <summary>
+    /// Rebinds a query-populated view in place — reusing the same <see cref="ViewPopulationViewModel"/>
+    /// instead of disposing and recreating it — when a live query's membership changes. This is the
+    /// live counterpart to navigate-away-and-back: the query subscription's results already reflect the
+    /// change, so the view's entities are rebuilt from them without a full re-navigation.
+    /// </summary>
+    private async Task RebindPopulationAsync(ViewPopulationViewModel population)
+    {
+        // A population that is no longer current (already replaced by a navigation) must not resurrect
+        // itself; only the displayed population rebinds.
+        if (!ReferenceEquals(this.currentPopulation, population)
+            || population.CancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        population.PrepareForRebuild();
+        await this.PopulateViewAsync(population);
+    }
+
+    private async Task PopulateViewAsync(ViewPopulationViewModel next)
+    {
         var selectedView = this.selectedTopLevelView ?? EmptyView;
         if (string.Equals(selectedView.Id, EmptyView.Id, StringComparison.Ordinal))
         {
@@ -1347,7 +1387,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         effectiveQuery = WithInterestRelationships(effectiveQuery, this.interestCatalog);
 
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
-        population.AddQuerySubscription(subscribedQuery);
+        population.AddQuerySubscription(subscribedQuery, () => this.RebindPopulationAsync(population));
 
         if (subscribedQuery.Results.Count == 0)
         {
@@ -1517,6 +1557,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (this.interestCatalog is { } interestCatalog && this.entityTypeCatalog is { } entityTypeCatalog)
         {
             entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot));
+
+            // Re-project interest badges whenever the entity's snapshot changes so relationship-only
+            // updates (for example toggling an interest, which the broker now pushes live) refresh the
+            // badges without requiring the user to navigate away and back.
+            entity.PropertyChanged += (_, e) =>
+            {
+                if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
+                {
+                    entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot));
+                }
+            };
         }
 
         // Project the entity's annotated status fields into colored status badges. Discovery is

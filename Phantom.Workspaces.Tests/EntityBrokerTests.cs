@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -1489,5 +1490,310 @@ public sealed class EntityBrokerTests
         Assert.NotNull(receivedToken);
         Assert.Equal(testToken, receivedToken.Value);
     }
-}
 
+    [AvaloniaFact]
+    public async Task UpdateAsync_RelationshipChange_AddsParticipantsToChangedEntityIds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId(Guid.NewGuid());
+        var broker = await CreateBrokerAsync(ct);
+        await SeedTaskViaDataAccessLayerAsync(broker, taskId);
+
+        var task = Assert.Single(await broker.GetEntitiesAsync([taskId], ct));
+        var userId = broker.EntityRepository.WorkspaceEntitySession.UserEntityId;
+
+        EntityBrokerChangedEventArgs? captured = null;
+        broker.Changed += (_, args) => captured = args;
+
+        await task.ToggleInterestAsync("actionable");
+
+        Assert.NotNull(captured);
+        // The relationship's participants (the target entity and the acting user) are treated as changed,
+        // even though their own ModifiedTime did not move.
+        Assert.Contains(taskId, captured!.ChangedEntityIds);
+        Assert.Contains(userId, captured.ChangedEntityIds);
+    }
+
+    [AvaloniaFact]
+    public async Task UpdateAsync_RelationshipAddedForSubscribedQueryParticipant_ReIssuesQueryAndPushesFreshRelationships()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId(Guid.NewGuid());
+        var broker = await CreateBrokerAsync(ct);
+        await SeedTaskViaDataAccessLayerAsync(broker, taskId);
+
+        var subscribedQuery = await broker.SubscribeQueryAsync(TaskInterestQuery(), ct);
+        var task = Assert.Single(subscribedQuery.Results);
+        Assert.DoesNotContain(task.Snapshot.Relationships, IsActionableRelationship);
+
+        await task.ToggleInterestAsync("actionable");
+
+        // The same view model instance is refreshed live — no re-navigation / re-query by the caller.
+        Assert.Same(task, Assert.Single(subscribedQuery.Results));
+        Assert.Contains(task.Snapshot.Relationships, IsActionableRelationship);
+    }
+
+    [AvaloniaFact]
+    public async Task UpdateAsync_RelationshipRemovedForSubscribedEntity_UpdatesSnapshotEvenWhenModifiedTimeUnchanged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId(Guid.NewGuid());
+        var broker = await CreateBrokerAsync(ct);
+        await SeedTaskViaDataAccessLayerAsync(broker, taskId);
+
+        var subscribedQuery = await broker.SubscribeQueryAsync(TaskInterestQuery(), ct);
+        var task = Assert.Single(subscribedQuery.Results);
+
+        await task.ToggleInterestAsync("actionable");
+        Assert.Contains(task.Snapshot.Relationships, IsActionableRelationship);
+        var modifiedTimeBefore = task.ModifiedTime;
+
+        await task.ToggleInterestAsync("actionable");
+
+        // The target's own ModifiedTime did not move, yet its stale relationship must be dropped.
+        Assert.Equal(modifiedTimeBefore, task.ModifiedTime);
+        Assert.DoesNotContain(task.Snapshot.Relationships, IsActionableRelationship);
+    }
+
+    [AvaloniaFact]
+    public async Task UpdateAsync_UnrelatedEntityChanged_DoesNotReIssueUnaffectedQuery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId(Guid.NewGuid());
+        var userEntityId = new EntityId(Guid.NewGuid());
+        var broker = await CreateBrokerAsync(ct);
+        await SeedTaskViaDataAccessLayerAsync(broker, taskId);
+        await SeedUnrelatedUserAsync(broker, userEntityId, "one");
+
+        var subscribedQuery = await broker.SubscribeQueryAsync(TaskInterestQuery(), ct);
+        var task = Assert.Single(subscribedQuery.Results);
+
+        var membershipEvents = 0;
+        subscribedQuery.Results.CollectionChanged += (_, _) => membershipEvents++;
+
+        // Change an entity whose type/participant filters do not intersect the tasks query.
+        await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Edit unrelated user." } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = userEntityId,
+                        ConcurrencyTag = null,
+                        Data = UnrelatedUserData(userEntityId, "two"),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            ct);
+
+        // The unaffected query's result set is untouched: no membership event and the same member instance.
+        Assert.Equal(0, membershipEvents);
+        Assert.Same(task, Assert.Single(subscribedQuery.Results));
+    }
+
+    [AvaloniaFact]
+    public async Task RefreshAsync_SubscribedQuery_ReflectsRelationshipMembershipChange()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId(Guid.NewGuid());
+        var broker = await CreateBrokerAsync(ct);
+        await SeedTaskViaDataAccessLayerAsync(broker, taskId);
+
+        var visibleTasksQuery = NotInterestingQuery.ExcludingNotInteresting(TaskInterestQuery());
+        var subscribedQuery = await broker.SubscribeQueryAsync(visibleTasksQuery, ct);
+        Assert.Contains(subscribedQuery.Results, entity => entity.EntityId == taskId);
+
+        // Mark the task not-interesting through the data layer directly — a relationship-only change that
+        // does not bump the task's own ModifiedTime, simulating an out-of-band change that the poll path
+        // (RefreshAsync) must still surface into the subscribed query's membership.
+        await SeedNotInterestingRelationshipAsync(broker, taskId);
+
+        await broker.RefreshAsync(ct);
+
+        Assert.DoesNotContain(subscribedQuery.Results, entity => entity.EntityId == taskId);
+    }
+
+    [AvaloniaFact]
+    public async Task SubscribeQueryAsync_RefreshesRelationshipBadges_MarshalsToUiThread()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var taskId = new EntityId(Guid.NewGuid());
+        var broker = await CreateBrokerAsync(ct);
+        await SeedTaskViaDataAccessLayerAsync(broker, taskId);
+
+        // Wire the broker's UI marshaler exactly as the application does.
+        broker.UiMarshal = static action =>
+        {
+            if (Dispatcher.UIThread.CheckAccess())
+            {
+                action();
+            }
+            else
+            {
+                Dispatcher.UIThread.Invoke(action);
+            }
+        };
+
+        var subscribedQuery = await broker.SubscribeQueryAsync(TaskInterestQuery(), ct);
+        var task = Assert.Single(subscribedQuery.Results);
+
+        bool? snapshotChangeOnUiThread = null;
+        task.PropertyChanged += (_, e) =>
+        {
+            if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
+            {
+                snapshotChangeOnUiThread = Dispatcher.UIThread.CheckAccess();
+            }
+        };
+
+        // Toggle a relationship from a background thread so the query re-issue's snapshot mutation
+        // originates off the UI thread; the marshaler must land the resulting PropertyChanged (which
+        // drives the relationship badges) on the UI thread.
+        await Task.Run(() => task.ToggleInterestAsync("actionable"), ct);
+
+        Assert.True(snapshotChangeOnUiThread);
+        Assert.Contains(task.Snapshot.Relationships, IsActionableRelationship);
+    }
+
+    private static bool IsActionableRelationship(EntitySnapshot relationship)
+    {
+        return relationship.Data is JsonElement data
+            && data.TryGetProperty("entity-types", out var types)
+            && types.ValueKind == JsonValueKind.Array
+            && types.EnumerateArray().Any(type =>
+                type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), "actionable", StringComparison.Ordinal));
+    }
+
+    private static QueryRequest TaskInterestQuery()
+    {
+        return new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("tasks"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(["task"]),
+                    },
+                },
+            ],
+            RelationshipsToReturn =
+            [
+                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["actionable"]) },
+            ],
+        };
+    }
+
+    private static async Task SeedTaskViaDataAccessLayerAsync(
+        EntityBroker broker,
+        EntityId taskId)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{taskId.Value}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tasks", "relationship-refresh"]],
+              "display-name": { "default": "Relationship Refresh Task" }
+            }
+            """);
+        var result = await broker.EntityRepository.DataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed task." } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = taskId,
+                        ConcurrencyTag = null,
+                        Data = document.RootElement.Clone(),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            TestContext.Current.CancellationToken);
+        var failure = result.EntityResults.FirstOrDefault(static r => r.UpdateState == UpdateState.Failed);
+        Assert.True(failure is null, failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
+    }
+
+    private static JsonElement UnrelatedUserData(
+        EntityId entityId,
+        string nameSuffix)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId.Value}}",
+              "entity-types": ["entity", "user"],
+              "names": [["users", "unrelated", "{{nameSuffix}}"]]
+            }
+            """);
+        return document.RootElement.Clone();
+    }
+
+    private static async Task SeedUnrelatedUserAsync(
+        EntityBroker broker,
+        EntityId entityId,
+        string nameSuffix)
+    {
+        var result = await broker.EntityRepository.DataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed unrelated user." } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entityId,
+                        ConcurrencyTag = null,
+                        Data = UnrelatedUserData(entityId, nameSuffix),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            TestContext.Current.CancellationToken);
+        var failure = result.EntityResults.FirstOrDefault(static r => r.UpdateState == UpdateState.Failed);
+        Assert.True(failure is null, failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
+    }
+
+    private static async Task SeedNotInterestingRelationshipAsync(
+        EntityBroker broker,
+        EntityId targetId)
+    {
+        var relationshipId = new EntityId(Guid.NewGuid());
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{relationshipId.Value}}",
+              "entity-types": ["entity", "not-interesting", "relationship"],
+              "names": [["relationships", "not-interesting-{{targetId.Value}}"]],
+              "participants": { "target": "{{targetId.Value}}" }
+            }
+            """);
+        var result = await broker.EntityRepository.DataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed not-interesting relationship." } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = relationshipId,
+                        ConcurrencyTag = null,
+                        Data = document.RootElement.Clone(),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            TestContext.Current.CancellationToken);
+        var failure = result.EntityResults.FirstOrDefault(static r => r.UpdateState == UpdateState.Failed);
+        Assert.True(failure is null, failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
+    }
+}

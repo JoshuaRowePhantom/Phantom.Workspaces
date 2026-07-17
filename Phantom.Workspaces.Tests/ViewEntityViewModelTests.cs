@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -184,6 +187,94 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         await viewModel.InitializeAsync();
 
         Assert.Contains(viewModel.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
+    }
+
+    [AvaloniaFact]
+    public async Task QueryPopulatedView_ReceivesRefreshedResults_WhenRelationshipUpdatedWithoutRenavigation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        var visibleId = new EntityId(Guid.NewGuid());
+        await SeedTaskAsync(dataAccessLayer, visibleId);
+
+        // A query-populated view whose membership excludes not-interesting tasks: membership therefore
+        // depends on a relationship, so toggling that relationship changes the query's results.
+        var tasksQuery = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("tasks"),
+                    Clause = new EntityTypeQueryClause
+                    {
+                        EntityTypeNames = new EntityTypeNameSet(["task"]),
+                    },
+                },
+            ],
+        };
+
+        var subscribedQuery = await broker.SubscribeQueryAsync(
+            NotInterestingQuery.ExcludingNotInteresting(tasksQuery),
+            ct);
+        Assert.Contains(subscribedQuery.Results, entity => entity.EntityId == visibleId);
+
+        // The populated view observes the live query results and rebinds in place (no dispose/recreate).
+        var population = new ViewPopulationViewModel();
+        var rebindCount = 0;
+        population.AddQuerySubscription(subscribedQuery, () =>
+        {
+            rebindCount++;
+            return Task.CompletedTask;
+        });
+
+        // Toggle 'not-interesting' on the task through the broker (a relationship update). This removes
+        // the task from the query's membership, so the live results change with no re-navigation.
+        var task = subscribedQuery.Results.Single(entity => entity.EntityId == visibleId);
+        await task.ToggleInterestAsync("not-interesting");
+
+        // Flush the rebind that was posted to the UI thread by the live results observer.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.DoesNotContain(subscribedQuery.Results, entity => entity.EntityId == visibleId);
+        Assert.True(rebindCount >= 1);
+
+        await population.DisposeAsync();
+    }
+
+    private static async Task SeedTaskAsync(IDataAccessLayer dataAccessLayer, EntityId id)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{id.Value}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tasks", "populated-view-task"]],
+              "display-name": { "default": "Populated View Task" }
+            }
+            """);
+
+        var result = await dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed task" } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = id,
+                        ConcurrencyTag = null,
+                        Data = document.RootElement.Clone(),
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            System.Threading.CancellationToken.None);
+
+        var failure = result.EntityResults.FirstOrDefault(static entityResult => entityResult.UpdateState == UpdateState.Failed);
+        Assert.True(failure is null, failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static error => error.Message)));
     }
 
     private ViewEntityViewModel CreateViewModel(bool isExpanded = true)

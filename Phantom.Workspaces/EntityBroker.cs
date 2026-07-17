@@ -17,6 +17,7 @@ public sealed class EntityBroker
     private readonly Dictionary<EntityId, WeakReference<SubscribedEntityViewModel>> subscribedEntitiesById = new();
     private readonly Dictionary<string, WeakReference<SubscribedGet>> subscribedGets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WeakReference<SubscribedQuery>> subscribedQueries = new(StringComparer.Ordinal);
+    private Action<Action> uiMarshal = static action => action();
 
     public EntityBroker(
         EntityRepository entityRepository)
@@ -25,6 +26,39 @@ public sealed class EntityBroker
     }
 
     public EntityRepository EntityRepository => this.entityRepository;
+
+    /// <summary>
+    /// Marshals UI-bound mutations onto the UI thread. <see cref="UpdateAsync"/> runs the write and the
+    /// subsequent subscription refresh off the UI thread (thread pool), so mutations to the subscribed
+    /// result collections (<see cref="SubscribedResults.Merge"/>) and to <see cref="SubscribedEntityViewModel"/>
+    /// properties bound to controls must be marshaled so the live rebind does not cross-thread the UI.
+    /// Defaults to inline execution; the application wires this to the Avalonia dispatcher.
+    /// </summary>
+    internal Action<Action> UiMarshal
+    {
+        get => this.uiMarshal;
+        set => this.uiMarshal = value ?? throw new ArgumentNullException(nameof(value));
+    }
+
+    internal void RunOnUiThread(Action action) => this.uiMarshal(action);
+
+    private readonly record struct PendingSnapshotUpdate(SubscribedEntityViewModel Entity, EntitySnapshot Snapshot);
+
+    private void ApplyPendingSnapshotUpdates(List<PendingSnapshotUpdate> pendingUpdates)
+    {
+        if (pendingUpdates.Count == 0)
+        {
+            return;
+        }
+
+        this.uiMarshal(() =>
+        {
+            foreach (var pendingUpdate in pendingUpdates)
+            {
+                pendingUpdate.Entity.UpdateSnapshot(pendingUpdate.Snapshot);
+            }
+        });
+    }
 
     public static async Task<EntityBroker> CreateInitializedAsync(
         RepositorySource repositorySource,
@@ -194,6 +228,7 @@ public sealed class EntityBroker
         var updateResult = await Task.Run(() => this.entityRepository.DataAccessLayer.UpdateAsync(request, cancellationToken));
 
         var changedEntityIds = new HashSet<EntityId>();
+        var uiMutations = new List<Action>();
         lock (this.gate)
         {
             foreach (var entityResult in updateResult.EntityResults)
@@ -202,26 +237,51 @@ public sealed class EntityBroker
 
                 // Track all changed entities for subscription refresh,
                 // not just those that are currently subscribed
-                if (entityResult.UpdateState != UpdateState.Failed)
+                if (entityResult.UpdateState == UpdateState.Failed)
                 {
-                    changedEntityIds.Add(entityId);
+                    continue;
                 }
+
+                changedEntityIds.Add(entityId);
+
+                // A relationship write (for example toggling an interest badge) creates or deletes a
+                // separate relationship entity and never bumps its participants' ModifiedTime. Expand
+                // the changed set to the relationship's participants so the queries that return those
+                // participants (and their relationship-derived data) are treated as affected. The new
+                // participants come from the write's resulting data; for a removal the resulting data
+                // is gone, so fall back to the previously-known snapshot of the relationship entity.
+                AddRelationshipParticipantIds(entityResult.CurrentEntity?.Data, changedEntityIds);
 
                 // Update subscribed entities if they exist
                 if (this.subscribedEntitiesById.TryGetValue(entityId, out var weakRef)
                     && weakRef.TryGetTarget(out var entity))
                 {
+                    AddRelationshipParticipantIds(entity.Snapshot.Data, changedEntityIds);
+
+                    // The snapshot/deletion mutations raise PropertyChanged on controls bound to the
+                    // entity, so they are deferred and applied on the UI thread outside the gate.
                     if (entityResult.CurrentEntity is EntitySnapshot currentEntity)
                     {
-                        entity.UpdateSnapshot(currentEntity);
+                        uiMutations.Add(() => entity.UpdateSnapshot(currentEntity));
                     }
 
                     if (entityResult.UpdateState == UpdateState.Removed)
                     {
-                        entity.MarkDeleted();
+                        uiMutations.Add(() => entity.MarkDeleted());
                     }
                 }
             }
+        }
+
+        if (uiMutations.Count > 0)
+        {
+            this.uiMarshal(() =>
+            {
+                foreach (var mutation in uiMutations)
+                {
+                    mutation();
+                }
+            });
         }
 
         if (changedEntityIds.Count > 0)
@@ -276,15 +336,21 @@ public sealed class EntityBroker
                 },
                 cancellationToken));
 
-            foreach (var changedEntity in changedEntitiesResult.Entities)
+            var pendingUpdates = new List<PendingSnapshotUpdate>();
+            lock (this.gate)
             {
-                if (changedEntity.Entity is not EntitySnapshot current)
+                foreach (var changedEntity in changedEntitiesResult.Entities)
                 {
-                    continue;
-                }
+                    if (changedEntity.Entity is not EntitySnapshot current)
+                    {
+                        continue;
+                    }
 
-                this.UpsertSubscribedEntity(current, changedEntityIds);
+                    this.UpsertSubscribedEntity(current, changedEntityIds, pendingUpdates);
+                }
             }
+
+            this.ApplyPendingSnapshotUpdates(pendingUpdates);
         }
 
         var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken);
@@ -313,13 +379,16 @@ public sealed class EntityBroker
         var snapshots = getResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
+        var pendingUpdates = new List<PendingSnapshotUpdate>();
         lock (this.gate)
         {
             foreach (var snapshot in snapshots)
             {
-                entities.Add(this.UpsertSubscribedEntity(snapshot, changedEntityIds));
+                entities.Add(this.UpsertSubscribedEntity(snapshot, changedEntityIds, pendingUpdates));
             }
         }
+
+        this.ApplyPendingSnapshotUpdates(pendingUpdates);
 
         return entities;
     }
@@ -334,13 +403,16 @@ public sealed class EntityBroker
         var snapshots = queryResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
+        var pendingUpdates = new List<PendingSnapshotUpdate>();
         lock (this.gate)
         {
             foreach (var snapshot in snapshots)
             {
-                entities.Add(this.UpsertSubscribedEntity(snapshot, changedEntityIds));
+                entities.Add(this.UpsertSubscribedEntity(snapshot, changedEntityIds, pendingUpdates));
             }
         }
+
+        this.ApplyPendingSnapshotUpdates(pendingUpdates);
 
         return entities;
     }
@@ -456,14 +528,33 @@ public sealed class EntityBroker
 
     private SubscribedEntityViewModel UpsertSubscribedEntity(
         EntitySnapshot snapshot,
-        ISet<EntityId>? changedEntityIds = null)
+        ISet<EntityId>? changedEntityIds = null,
+        List<PendingSnapshotUpdate>? pendingUpdates = null)
     {
         if (this.subscribedEntitiesById.TryGetValue(snapshot.EntityId, out var weakRef)
             && weakRef.TryGetTarget(out var existing))
         {
-            if (existing.ModifiedTime != snapshot.ModifiedTime)
+            // Apply the re-queried snapshot when its content actually changed, not only when the
+            // entity's own ModifiedTime moved. A relationship-only update (for example toggling an
+            // interest) leaves the participant's ModifiedTime untouched but changes the relationships
+            // returned alongside it, so a ModifiedTime-only gate would silently drop the fresh data.
+            var snapshotChanged =
+                existing.ModifiedTime != snapshot.ModifiedTime
+                || !RelationshipsEquivalent(existing.Snapshot.Relationships, snapshot.Relationships);
+            if (snapshotChanged)
             {
-                existing.UpdateSnapshot(snapshot);
+                // Defer the snapshot mutation (it raises PropertyChanged on bound controls) so it can
+                // be marshaled to the UI thread outside the gate; fall back to inline application when
+                // no pending list is supplied.
+                if (pendingUpdates is not null)
+                {
+                    pendingUpdates.Add(new PendingSnapshotUpdate(existing, snapshot));
+                }
+                else
+                {
+                    this.uiMarshal(() => existing.UpdateSnapshot(snapshot));
+                }
+
                 changedEntityIds?.Add(snapshot.EntityId);
             }
 
@@ -478,6 +569,43 @@ public sealed class EntityBroker
         this.subscribedEntitiesById[snapshot.EntityId] = new WeakReference<SubscribedEntityViewModel>(created);
         changedEntityIds?.Add(snapshot.EntityId);
         return created;
+    }
+
+    private static void AddRelationshipParticipantIds(
+        JsonElement? data,
+        ISet<EntityId> changedEntityIds)
+    {
+        if (data is JsonElement element
+            && RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(element, out var participantIds))
+        {
+            foreach (var participantId in participantIds)
+            {
+                changedEntityIds.Add(participantId);
+            }
+        }
+    }
+
+    private static bool RelationshipsEquivalent(
+        IReadOnlyCollection<EntitySnapshot> current,
+        IReadOnlyCollection<EntitySnapshot> next)
+    {
+        if (current.Count != next.Count)
+        {
+            return false;
+        }
+
+        var nextById = next.ToDictionary(static relationship => relationship.EntityId);
+        foreach (var relationship in current)
+        {
+            if (!nextById.TryGetValue(relationship.EntityId, out var other)
+                || other.ModifiedTime != relationship.ModifiedTime
+                || other.ConcurrencyTag != relationship.ConcurrencyTag)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private async Task ToggleInterestAsync(
@@ -706,7 +834,11 @@ public sealed class SubscribedGet
             changedEntityIds,
             cancellationToken)).ToList();
 
-        return SubscribedResults.Merge(this.Results, nextResults);
+        // The result collection is bound to the UI; marshal the merge so it does not cross-thread the
+        // bound controls when the refresh runs off the UI thread.
+        var membershipChanged = false;
+        this.entityBroker.RunOnUiThread(() => membershipChanged = SubscribedResults.Merge(this.Results, nextResults));
+        return membershipChanged;
     }
 }
 
@@ -739,7 +871,11 @@ public sealed class SubscribedQuery
             changedEntityIds,
             cancellationToken)).ToList();
 
-        return SubscribedResults.Merge(this.Results, nextResults);
+        // The result collection is bound to the UI; marshal the merge so it does not cross-thread the
+        // bound controls when the refresh runs off the UI thread.
+        var membershipChanged = false;
+        this.entityBroker.RunOnUiThread(() => membershipChanged = SubscribedResults.Merge(this.Results, nextResults));
+        return membershipChanged;
     }
 }
 
