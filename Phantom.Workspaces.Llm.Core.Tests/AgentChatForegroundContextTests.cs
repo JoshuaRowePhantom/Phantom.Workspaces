@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Interfaces;
 using System.Collections.Concurrent;
 using System.Collections.Specialized;
 
@@ -315,6 +316,344 @@ public sealed class AgentChatForegroundContextTests
         Assert.True(wasOnContext);
     }
 
+    private const string SuspendingClientSessionId = "persisted-session";
+
+    private static InMemoryAgentPersistenceStore CreateSeededStore(
+        string sessionId,
+        params ChatMessage[] messages)
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent { AgentSessionId = sessionId },
+            NewMessages = messages,
+        }).GetAwaiter().GetResult();
+        return store;
+    }
+
+    // Builds a chat-client creation path that genuinely suspends: it signals <paramref name="invoked"/>
+    // and then awaits <paramref name="gate"/> before returning a client. When the gate is completed
+    // from a thread-pool thread, the client-creation await in AgentChat.InitializeAsync (which uses
+    // ConfigureAwait(false)) resumes off the captured foreground context, reproducing the production
+    // race in issue #1098.
+    private static Func<CancellationToken, Task<IChatClient>> CreateSuspendingClientFactory(
+        TaskCompletionSource invoked,
+        Task gate) =>
+        async _ =>
+        {
+            invoked.TrySetResult();
+            await gate.ConfigureAwait(false);
+            return CreateCompletedEchoClient();
+        };
+
+    private static InternalCreateAgentChatRequest CreateSuspendingRequest(
+        TaskScheduler? foregroundScheduler,
+        string sessionId,
+        IAgentPersistenceStore store,
+        Func<CancellationToken, Task<IChatClient>> factory) =>
+        new()
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentDefinitionJson),
+            ConfiguredStore = store,
+            AgentSessionId = sessionId,
+            DisplayNameOverride = "foreground-context-suspend-chat",
+            ForegroundScheduler = foregroundScheduler,
+            ChatClientFactoryOverride = factory,
+            OverrideUseProvidedChatClientAsIs = true,
+        };
+
+    [Fact]
+    public async Task InitializeAsync_PersistedHistoryLoad_AddsHistoryOnForegroundScheduler()
+    {
+        // With a suspending chat-client creation (so the post-ConfigureAwait(false) continuation
+        // resumes off the pump thread), every History CollectionChanged raised while loading the
+        // persisted messages must still fire on the foreground scheduler (pump thread), never a
+        // thread-pool thread (issue #1098).
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        var store = CreateSeededStore(
+            SuspendingClientSessionId,
+            new ChatMessage(ChatRole.User, "persisted-user"),
+            new ChatMessage(ChatRole.Assistant, "persisted-assistant"));
+
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = CreateSuspendingClientFactory(invoked, gate.Task);
+
+        var historyThreads = new ConcurrentQueue<int>();
+        var createTask = pump.PostAsync(() => AgentChat.CreateAsync(
+            CreateSuspendingRequest(scheduler, SuspendingClientSessionId, store, factory),
+            onConstructed: c => ((INotifyCollectionChanged)c.History).CollectionChanged +=
+                (_, _) => historyThreads.Enqueue(Environment.CurrentManagedThreadId)));
+
+        await invoked.Task;
+        await Task.Run(gate.SetResult);
+        var chat = await createTask;
+        try
+        {
+            Assert.Equal(2, chat.History.Count);
+            Assert.NotEmpty(historyThreads);
+            Assert.All(historyThreads, threadId => Assert.Equal(pump.ThreadId, threadId));
+        }
+        finally
+        {
+            await chat.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenClientCreationSuspends_HistoryAddDoesNotOccurOnThreadPoolThread()
+    {
+        // Captures the managed thread ids of init-time History.Add notifications and asserts none
+        // equals the thread-pool thread that completed the client-creation gate — all are the pump
+        // thread (issue #1098).
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        var store = CreateSeededStore(
+            SuspendingClientSessionId,
+            new ChatMessage(ChatRole.User, "persisted-user"),
+            new ChatMessage(ChatRole.Assistant, "persisted-assistant"));
+
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = CreateSuspendingClientFactory(invoked, gate.Task);
+
+        var historyThreads = new ConcurrentQueue<int>();
+        var createTask = pump.PostAsync(() => AgentChat.CreateAsync(
+            CreateSuspendingRequest(scheduler, SuspendingClientSessionId, store, factory),
+            onConstructed: c => ((INotifyCollectionChanged)c.History).CollectionChanged +=
+                (_, _) => historyThreads.Enqueue(Environment.CurrentManagedThreadId)));
+
+        await invoked.Task;
+        var gateThreadId = await Task.Run(() =>
+        {
+            gate.SetResult();
+            return Environment.CurrentManagedThreadId;
+        });
+        var chat = await createTask;
+        try
+        {
+            Assert.NotEmpty(historyThreads);
+            Assert.DoesNotContain(gateThreadId, historyThreads);
+            Assert.All(historyThreads, threadId => Assert.Equal(pump.ThreadId, threadId));
+        }
+        finally
+        {
+            await chat.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InitializeAsync_SessionInitRunningItem_MutatesOnForegroundScheduler_WhenClientCreationSuspends()
+    {
+        // The session-init running item ("Loading session") create/complete mutations must occur on
+        // the foreground scheduler even when the client-creation await suspends and its continuation
+        // resumes on a thread-pool thread (issues #1098 / #1072).
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
+        var store = CreateSeededStore(
+            SuspendingClientSessionId,
+            new ChatMessage(ChatRole.User, "persisted-user"));
+
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = CreateSuspendingClientFactory(invoked, gate.Task);
+
+        var mutationThreads = new ConcurrentQueue<int>();
+        var seenRunningTexts = new List<string>();
+        var createTask = pump.PostAsync(() => AgentChat.CreateAsync(
+            CreateSuspendingRequest(scheduler, SuspendingClientSessionId, store, factory),
+            onConstructed: c => ((INotifyCollectionChanged)c.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    mutationThreads.Enqueue(Environment.CurrentManagedThreadId);
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        var text = item.Items.Count > 0
+                            ? string.Concat(item.Items[0].Contents.OfType<TextContent>().Select(static content => content.Text))
+                            : string.Empty;
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(text);
+                        }
+                    }
+                }));
+
+        await invoked.Task;
+        await Task.Run(gate.SetResult);
+        var chat = await createTask;
+        try
+        {
+            Assert.NotEmpty(mutationThreads);
+            Assert.All(mutationThreads, threadId => Assert.Equal(pump.ThreadId, threadId));
+            Assert.Contains(seenRunningTexts, text => text == "Loading session");
+            Assert.Empty(chat.RunningItems);
+        }
+        finally
+        {
+            await chat.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task InitializeAsync_PersistedHistory_NotVisibleUntilForegroundSchedulerPumped()
+    {
+        // With a foreground SynchronizationContextTaskScheduler whose context only executes when
+        // externally pumped, the persisted History load must not be observed until the context is
+        // drained — proving the load is marshalled onto the foreground scheduler rather than applied
+        // on the off-thread post-ConfigureAwait(false) continuation (issue #1098).
+        var context = new DeferredSynchronizationContext();
+        var scheduler = new SynchronizationContextTaskScheduler(context);
+        var store = CreateSeededStore(
+            SuspendingClientSessionId,
+            new ChatMessage(ChatRole.User, "persisted-user"),
+            new ChatMessage(ChatRole.Assistant, "persisted-assistant"));
+
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = CreateSuspendingClientFactory(invoked, gate.Task);
+
+        AgentChat? captured = null;
+        var historyThreads = new ConcurrentQueue<int>();
+        var createTask = CreateOnContextAsync(
+            context,
+            CreateSuspendingRequest(scheduler, SuspendingClientSessionId, store, factory),
+            onConstructed: c =>
+            {
+                captured = c;
+                ((INotifyCollectionChanged)c.History).CollectionChanged +=
+                    (_, _) => historyThreads.Enqueue(Environment.CurrentManagedThreadId);
+            });
+
+        await invoked.Task;
+        await Task.Run(gate.SetResult);
+
+        // Wait until the off-thread continuation has either queued foreground work (marshalled fix)
+        // or completed initialization inline (unmarshalled bug).
+        await Task.WhenAny(createTask, context.WorkQueued);
+
+        var chat = captured!;
+        Assert.False(createTask.IsCompleted);
+        Assert.Empty(chat.History);
+        Assert.False(chat.HistoryPopulated.IsCompleted);
+
+        var drainThreadId = await DrainUntilCompleteAsync(context, createTask);
+        try
+        {
+            Assert.Equal(2, chat.History.Count);
+            Assert.NotEmpty(historyThreads);
+            Assert.All(historyThreads, threadId => Assert.Equal(drainThreadId, threadId));
+        }
+        finally
+        {
+            await DisposeWithDrainAsync(chat, context);
+        }
+    }
+
+    [Fact]
+    public async Task InitializeAsync_HistoryPopulated_CompletesOnForegroundContext()
+    {
+        // historyPopulated.TrySetResult() must run on the foreground scheduler: with a foreground
+        // SynchronizationContextTaskScheduler whose context only executes when externally pumped,
+        // HistoryPopulated must remain incomplete until the context is drained (issue #1098; #1009
+        // consumers await HistoryPopulated).
+        var context = new DeferredSynchronizationContext();
+        var scheduler = new SynchronizationContextTaskScheduler(context);
+        var store = CreateSeededStore(
+            SuspendingClientSessionId,
+            new ChatMessage(ChatRole.User, "persisted-user"));
+
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var factory = CreateSuspendingClientFactory(invoked, gate.Task);
+
+        AgentChat? captured = null;
+        var createTask = CreateOnContextAsync(
+            context,
+            CreateSuspendingRequest(scheduler, SuspendingClientSessionId, store, factory),
+            onConstructed: c => captured = c);
+
+        await invoked.Task;
+        await Task.Run(gate.SetResult);
+        await Task.WhenAny(createTask, context.WorkQueued);
+
+        var chat = captured!;
+        Assert.False(chat.HistoryPopulated.IsCompleted);
+
+        await DrainUntilCompleteAsync(context, createTask);
+        try
+        {
+            Assert.True(chat.HistoryPopulated.IsCompleted);
+        }
+        finally
+        {
+            await DisposeWithDrainAsync(chat, context);
+        }
+    }
+
+    // Constructs the AgentChat on <paramref name="context"/> (installed as the current
+    // SynchronizationContext) so the #909 foreground-affinity verification in the constructor
+    // passes, then restores the previous context. CreateAsync runs synchronously up to the
+    // suspending client-creation gate and returns the still-running initialization task.
+    private static Task<AgentChat> CreateOnContextAsync(
+        DeferredSynchronizationContext context,
+        InternalCreateAgentChatRequest request,
+        Action<AgentChat> onConstructed)
+    {
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            return AgentChat.CreateAsync(request, onConstructed);
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(previous);
+        }
+    }
+
+    // Drains <paramref name="context"/> on a single dedicated thread until <paramref name="task"/>
+    // completes, returning that thread's managed id so callers can assert the marshalled foreground
+    // work ran on the pump thread.
+    private static async Task<int> DrainUntilCompleteAsync(DeferredSynchronizationContext context, Task task)
+    {
+        var drainThreadId = 0;
+        await Task.Run(() =>
+        {
+            drainThreadId = Environment.CurrentManagedThreadId;
+            while (!task.IsCompleted)
+            {
+                if (context.DrainAll() == 0)
+                {
+                    Thread.Yield();
+                }
+            }
+        });
+        await task;
+        return drainThreadId;
+    }
+
+    private static async Task DisposeWithDrainAsync(AgentChat chat, DeferredSynchronizationContext context)
+    {
+        var disposeTask = chat.DisposeAsync().AsTask();
+        await Task.Run(() =>
+        {
+            while (!disposeTask.IsCompleted)
+            {
+                if (context.DrainAll() == 0)
+                {
+                    Thread.Yield();
+                }
+            }
+        });
+        await disposeTask;
+    }
+
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
@@ -431,6 +770,71 @@ public sealed class AgentChatForegroundContextTests
 
             public override void Send(SendOrPostCallback d, object? state) =>
                 throw new NotSupportedException("Synchronous Send is not supported by the test pump.");
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="SynchronizationContext"/> that never runs posted callbacks on its own: they run
+    /// only when a test calls <see cref="DrainAll"/>. Wrapped in a
+    /// <see cref="SynchronizationContextTaskScheduler"/> it lets a test construct the chat on this
+    /// context (satisfying the #909 foreground-affinity check) and then control exactly when the
+    /// marshalled foreground work runs — proving that init-time history/session mutations are queued
+    /// onto the foreground scheduler rather than applied on the off-thread post-ConfigureAwait(false)
+    /// continuation (issue #1098). <see cref="DrainAll"/> installs this context while executing so
+    /// continuations posted by awaits inside the marshalled work re-enqueue here.
+    /// </summary>
+    internal sealed class DeferredSynchronizationContext : SynchronizationContext
+    {
+        private readonly object gate = new();
+        private readonly Queue<(SendOrPostCallback Callback, object? State)> queued = new();
+        private readonly TaskCompletionSource workQueued =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task WorkQueued => this.workQueued.Task;
+
+        public override void Post(SendOrPostCallback d, object? state)
+        {
+            lock (this.gate)
+            {
+                this.queued.Enqueue((d, state));
+            }
+
+            this.workQueued.TrySetResult();
+        }
+
+        public override void Send(SendOrPostCallback d, object? state) =>
+            throw new NotSupportedException("Synchronous Send is not supported by the deferred sync context.");
+
+        public int DrainAll()
+        {
+            var executed = 0;
+            var previous = Current;
+            SetSynchronizationContext(this);
+            try
+            {
+                while (true)
+                {
+                    (SendOrPostCallback Callback, object? State) next;
+                    lock (this.gate)
+                    {
+                        if (this.queued.Count == 0)
+                        {
+                            break;
+                        }
+
+                        next = this.queued.Dequeue();
+                    }
+
+                    next.Callback(next.State);
+                    executed++;
+                }
+            }
+            finally
+            {
+                SetSynchronizationContext(previous);
+            }
+
+            return executed;
         }
     }
 }

@@ -200,12 +200,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            : new AgentServices { SlashCommandRegistry = innerRegistry };
        var clientInfo = this.request.ClientOverride is not null
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : await AgentFactory.CreateChatClientAsync(
-               resolvedAgentDefinition,
-               servicesWithRegistry,
-               queueManager: this.queueManager,
-               subAgentChatRegistry: this,
-               cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
+           : this.request.ChatClientFactoryOverride is not null
+               ? new ChatClientResult(
+                   await this.request.ChatClientFactoryOverride(this.request.CancellationToken).ConfigureAwait(false),
+                   this.request.DisplayNameOverride ?? string.Empty)
+               : await AgentFactory.CreateChatClientAsync(
+                   resolvedAgentDefinition,
+                   servicesWithRegistry,
+                   queueManager: this.queueManager,
+                   subAgentChatRegistry: this,
+                   cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
        this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
@@ -330,51 +334,78 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
            this.request.CancellationToken);
 
-       // Session initialization runs inline (not dispatched) so the session is fully established
-       // when CreateAsync returns, preserving the historical contract that callers — and tests that
-       // supply a foreground scheduler which only executes when externally pumped — depend on.
-       // CreateAsync already executes on the foreground context (enforced by the constructor for a
-       // SynchronizationContextTaskScheduler), so these running-item mutations are on the foreground
-       // scheduler, and the session-init running item is fully completed before the processing loop
-       // starts, so it never races the loop (issues #1068 / #1072).
-       var sessionInitItem = this.CreateRunningItem(new AgentChatHistoryItem
+       // Session-init runs the running-item mutations, the initial persisted-history load
+       // (History.Add fires CollectionChanged), and historyPopulated.TrySetResult(). These mutate
+       // the non-thread-safe, UI-observed collections and so must run on the foreground scheduler.
+       //
+       // The continuation after the .ConfigureAwait(false) on the CreateChatClientAsync await (see
+       // the chat-client resolution above) is NOT guaranteed to run on the foreground context: when
+       // that await genuinely suspends (the real Copilot SDK client), the captured
+       // SynchronizationContext/scheduler is discarded and the rest of this method resumes on a
+       // thread-pool thread even when foregroundScheduler is a SynchronizationContextTaskScheduler
+       // over the UI thread (issues #1084 / #1068 / #1072). So when the foreground scheduler is a
+       // SynchronizationContextTaskScheduler and we are no longer on its context, marshal the block
+       // back onto it via RunOnForegroundAsync (mirroring the tool-init dispatch and
+       // EnqueueSystemNote/EnqueueHelpNote).
+       //
+       // When already on the foreground context, or for a plain scheduler (which carries no
+       // verifiable thread affinity -- headless CLI/test hosts, and tests that supply a scheduler
+       // that only drains when externally pumped), run inline: dispatching there would make
+       // CreateAsync block on a scheduler that is only pumped after CreateAsync returns, exactly as
+       // the guarded tool-init dispatch below avoids (issue #909's affinity invariant is enforced
+       // only for a SynchronizationContextTaskScheduler). Either way the session-init running item
+       // is fully completed before the processing loop starts, so it never races the loop.
+       async Task RunSessionInitAsync()
        {
-           Role = AgentChatHistoryItem.DiagnosticChatRole,
-           Contents = new AIContent[] { new TextContent("Loading session") },
-           Timestamp = DateTimeOffset.UtcNow,
-       });
-       try
-       {
-           this.LoadInitialHistory(persistedMessages);
-
-           // Signal that persisted history has been loaded into History. Consumers (e.g. the
-           // chat output control) await this before taking the initial history snapshot so the
-           // first render never captures an empty/partial History (issue #1009).
-           this.historyPopulated.TrySetResult();
-
-           this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
-           this.SetAgentSessionId(resolvedAgentSessionId);
-
-           if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
-           {
-               await this.RestoreSubAgentsAsync(this.request.CancellationToken);
-           }
-
-           // The session-init step is transient progress only: clear the running item without
-           // echoing "Loading session" into the History transcript. Failures (below) still
-           // surface an error diagnostic (issue #1072).
-           this.CompleteRunningItem(sessionInitItem, writeToHistory: false);
-       }
-       catch (Exception ex)
-       {
-           this.UpdateRunningItem(sessionInitItem, [new AgentChatHistoryItem
+           var sessionInitItem = this.CreateRunningItem(new AgentChatHistoryItem
            {
                Role = AgentChatHistoryItem.DiagnosticChatRole,
-               Contents = new AIContent[] { new ErrorContent($"Failed to load session: {ex}") },
+               Contents = new AIContent[] { new TextContent("Loading session") },
                Timestamp = DateTimeOffset.UtcNow,
-           }]);
-           this.CompleteRunningItem(sessionInitItem, writeToHistory: true);
-           throw;
+           });
+           try
+           {
+               this.LoadInitialHistory(persistedMessages);
+
+               // Signal that persisted history has been loaded into History. Consumers (e.g. the
+               // chat output control) await this before taking the initial history snapshot so the
+               // first render never captures an empty/partial History (issue #1009).
+               this.historyPopulated.TrySetResult();
+
+               this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
+               this.SetAgentSessionId(resolvedAgentSessionId);
+
+               if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+               {
+                   await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+               }
+
+               // The session-init step is transient progress only: clear the running item without
+               // echoing "Loading session" into the History transcript. Failures (below) still
+               // surface an error diagnostic (issue #1072).
+               this.CompleteRunningItem(sessionInitItem, writeToHistory: false);
+           }
+           catch (Exception ex)
+           {
+               this.UpdateRunningItem(sessionInitItem, [new AgentChatHistoryItem
+               {
+                   Role = AgentChatHistoryItem.DiagnosticChatRole,
+                   Contents = new AIContent[] { new ErrorContent($"Failed to load session: {ex}") },
+                   Timestamp = DateTimeOffset.UtcNow,
+               }]);
+               this.CompleteRunningItem(sessionInitItem, writeToHistory: true);
+               throw;
+           }
+       }
+
+       if (this.foregroundScheduler is SynchronizationContextTaskScheduler foregroundSyncContext
+           && !foregroundSyncContext.IsOnSynchronizationContext)
+       {
+           await this.RunOnForegroundAsync(RunSessionInitAsync);
+       }
+       else
+       {
+           await RunSessionInitAsync();
        }
 
        this.StartProcessingLoop();
@@ -2057,7 +2088,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             this.toolMutationLock.Release();
         }
     }
-
+
     private async Task<IReadOnlyList<RuntimeContextProviderRegistration>> CreateRuntimeContextProviderRegistrationsAsync(
         AgentDefinition agent,
         AgentServices? services,

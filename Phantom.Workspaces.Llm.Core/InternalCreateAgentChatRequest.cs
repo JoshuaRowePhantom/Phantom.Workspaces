@@ -45,4 +45,15 @@ internal sealed record InternalCreateAgentChatRequest
     /// deterministic <see cref="ClientOverride"/>.
     /// </summary>
     internal bool? OverrideUseProvidedChatClientAsIs { get; init; }
+
+    /// <summary>
+    /// Test-only seam that supplies an asynchronous chat-client creation path. When set (and
+    /// <see cref="ClientOverride"/> is null), <see cref="AgentChat"/> awaits the returned task with
+    /// <c>ConfigureAwait(false)</c> exactly like the real
+    /// <c>AgentFactory.CreateChatClientAsync</c> call, so tests can force the client-creation await
+    /// to genuinely suspend (mirroring the real Copilot SDK client) and have the post-await
+    /// continuation resume off the captured foreground context. Used by
+    /// <c>AgentChatForegroundContextTests</c> to reproduce issue #1098.
+    /// </summary>
+    internal Func<CancellationToken, Task<IChatClient>>? ChatClientFactoryOverride { get; init; }
 }
