@@ -163,10 +163,10 @@ internal static class WebView2AcceleratorInterop
         }
     }
 
-    private static bool IsKeyDown(int virtualKey) => (GetKeyState(virtualKey) & unchecked((short)0x8000)) != 0;
+    private static bool IsKeyDown(int virtualKey) => (GetAsyncKeyState(virtualKey) & unchecked((short)0x8000)) != 0;
 
     [DllImport("user32.dll")]
-    private static extern short GetKeyState(int nVirtKey);
+    private static extern short GetAsyncKeyState(int nVirtKey);
 }
 
 /// <summary>

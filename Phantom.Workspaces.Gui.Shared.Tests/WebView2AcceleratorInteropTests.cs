@@ -122,4 +122,60 @@ public sealed class WebView2AcceleratorInteropTests
 
         Assert.Equal(9, pane);
     }
+
+    [Fact]
+    public void Dispatch_KeyDownCtrlW_WhenCtrlDetected_CallsOnCloseTab()
+    {
+        var called = false;
+        WebView2AcceleratorInterop.Dispatch(0, VK_W,
+            onAltKeyState: _ => { },
+            onGoToTab: _ => { },
+            onCloseTab: () => called = true,
+            isKeyDown: key => key == VK_CONTROL);
+
+        Assert.True(called);
+    }
+
+    [Fact]
+    public void Dispatch_KeyDownCtrlW_WhenCtrlNotDetected_DoesNotCallOnCloseTab()
+    {
+        var called = false;
+        WebView2AcceleratorInterop.Dispatch(0, VK_W,
+            onAltKeyState: _ => { },
+            onGoToTab: _ => { },
+            onCloseTab: () => called = true,
+            isKeyDown: _ => false);
+
+        Assert.False(called);
+    }
+
+    [Fact]
+    public void Dispatch_SystemKeyDownShiftDigit_WhenShiftDetected_CallsOnGoToWorkspacePane()
+    {
+        int? tab = null;
+        int? pane = null;
+        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_2,
+            onAltKeyState: _ => { },
+            onGoToTab: v => tab = v,
+            onGoToWorkspacePane: v => pane = v,
+            isKeyDown: key => key == VK_SHIFT);
+
+        Assert.Null(tab);
+        Assert.Equal(1, pane);
+    }
+
+    [Fact]
+    public void Dispatch_SystemKeyDownShiftDigit_WhenShiftNotDetected_CallsOnGoToTab()
+    {
+        int? tab = null;
+        int? pane = null;
+        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_2,
+            onAltKeyState: _ => { },
+            onGoToTab: v => tab = v,
+            onGoToWorkspacePane: v => pane = v,
+            isKeyDown: _ => false);
+
+        Assert.Equal(1, tab);
+        Assert.Null(pane);
+    }
 }
