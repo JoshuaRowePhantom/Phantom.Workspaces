@@ -46,6 +46,7 @@
             "github-models",
             "github-copilot",
             "github-copilot-subagent",
+            "sub-agent-dispatcher",
             "ollama",
             "openai",
             "azure-openai"

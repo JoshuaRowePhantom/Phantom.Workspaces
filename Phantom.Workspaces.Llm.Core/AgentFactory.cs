@@ -244,8 +244,9 @@ public static class AgentFactory
             "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
             "openai" or "azure-openai" => CreateGitHubCopilotByokResult(provider, model, services, queueManager, resolver, subAgentChatRegistry),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
+            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure-openai"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, sub-agent-dispatcher, ollama, openai, azure-openai"),
         };
     }
 
@@ -303,9 +304,22 @@ public static class AgentFactory
             "github-copilot" => await CreateGitHubCopilotResultAsync(model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "openai" or "azure-openai" => await CreateGitHubCopilotByokResultAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
+            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure-openai"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, sub-agent-dispatcher, ollama, openai, azure-openai"),
         };
+    }
+
+    // Recognises the "sub-agent-dispatcher" provider discriminator and routes it to the
+    // dispatcher branch. The full wiring (constructing SubAgentDispatcherChatClient with its
+    // dispatcher entity name, extracted AgentDefinitionTool list, and SubAgentDispatcherOptions)
+    // is completed in the AgentFactory integration commit; this skeleton exists so the provider
+    // switch resolves the discriminator distinctly from an unknown/unsupported provider.
+    private static ChatClientResult CreateSubAgentDispatcherResult()
+    {
+        throw new NotSupportedException(
+            "The 'sub-agent-dispatcher' provider is recognised but not yet wired up. "
+            + "SubAgentDispatcherChatClient construction is completed by the AgentFactory integration commit.");
     }
 
     // Wraps the inner client with ToolResultSteeringMiddleware when a queue manager is provided.
