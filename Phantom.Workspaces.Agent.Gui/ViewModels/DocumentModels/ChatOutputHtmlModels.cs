@@ -1330,7 +1330,8 @@ public sealed class ChatOutputHtmlModel : IDisposable
         Func<string, string?>? resolveSubAgentId = null,
         IReadOnlyList<IRunningSubAgentDisplay>? subAgents = null,
         IReadOnlyList<IRunningSubAgent>? ancestors = null,
-        Action? beforeDispatchHistoryChunk = null)
+        Action? beforeDispatchHistoryChunk = null,
+        IRunningSubAgentDisplay? parentAgent = null)
     {
         ArgumentNullException.ThrowIfNull(historyItems);
         ArgumentNullException.ThrowIfNull(runningItems);
@@ -1369,7 +1370,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
 
         if (subAgents is not null)
         {
-            this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink);
+            this.subAgentsTransformer = new RunningSubAgentsHtmlTransformer(subAgents, ancestors ?? [], sink, parentAgent);
         }
 
         // Emit the always-present ancestor breadcrumb for non-root agents (issue #1046).

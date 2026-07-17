@@ -24,13 +24,17 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
     private readonly IChatOutputHtmlSink sink;
     private readonly IReadOnlyList<IRunningSubAgentDisplay> subAgents;
     private readonly IReadOnlyList<IRunningSubAgent> ancestors;
+    private readonly IRunningSubAgentDisplay? parentAgent;
+    private readonly EventHandler? parentActivityHandler;
+    private readonly EventHandler? parentCompletionStateHandler;
     private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> activityHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
     private readonly Dictionary<IRunningSubAgentDisplay, EventHandler> completionStateHandlers = new(ReferenceEqualityComparer<IRunningSubAgentDisplay>.Instance);
 
     public RunningSubAgentsHtmlTransformer(
         IReadOnlyList<IRunningSubAgentDisplay> subAgents,
         IReadOnlyList<IRunningSubAgent> ancestors,
-        IChatOutputHtmlSink sink)
+        IChatOutputHtmlSink sink,
+        IRunningSubAgentDisplay? parentAgent = null)
     {
         ArgumentNullException.ThrowIfNull(subAgents);
         ArgumentNullException.ThrowIfNull(ancestors);
@@ -39,10 +43,19 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         this.sink = sink;
         this.subAgents = subAgents;
         this.ancestors = ancestors;
+        this.parentAgent = parentAgent;
 
         if (subAgents is INotifyCollectionChanged notifier)
         {
             notifier.CollectionChanged += this.OnSubAgentsChanged;
+        }
+
+        if (parentAgent is not null)
+        {
+            this.parentActivityHandler = this.OnActivityChanged;
+            this.parentCompletionStateHandler = this.OnCompletionStateChanged;
+            parentAgent.ActivityChanged += this.parentActivityHandler;
+            parentAgent.CompletionStateChanged += this.parentCompletionStateHandler;
         }
 
         this.SyncActivitySubscriptions();
@@ -95,6 +108,8 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
 
     private void FullRender()
     {
+        this.RenderParentPanel();
+
         // The inner panel node is the only removable element; the sentinel wrapper is a persistent
         // shell region that is never replaced or removed. The browser swallows a Remove of a
         // missing id, so Remove-before-Append is always safe.
@@ -110,6 +125,25 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
             ChatOutputHtmlRenderer.SubAgentPanelSentinelId,
             ChatOutputUpdateLocation.Append,
             BuildPanelHtml(this.subAgents, this.ancestors));
+    }
+
+    private void RenderParentPanel()
+    {
+        // Root agents (no parent) render nothing and emit no operations, preserving the
+        // sub-agent panel's operation stream unchanged.
+        if (this.parentAgent is null)
+        {
+            return;
+        }
+
+        // The inner node is the only removable element; the sentinel wrapper is a persistent shell
+        // region. Remove-before-Append is safe: the browser swallows a Remove of a missing id.
+        this.sink.RemoveContent(ChatOutputHtmlRenderer.ParentAgentPanelInnerId);
+
+        this.sink.UpdateContent(
+            ChatOutputHtmlRenderer.ParentAgentPanelSentinelId,
+            ChatOutputUpdateLocation.Append,
+            BuildParentPanelHtml(this.parentAgent));
     }
 
     /// <summary>
@@ -135,6 +169,21 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
             }
         }
 
+        sb.Append("</div>");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds the parent-agent panel HTML rendered above the running sub-agents panel. Exposed as
+    /// <see langword="internal"/> for unit tests. The parent's clickable link carries the parent's
+    /// navigation id (its session id) in <c>data-navigate-agent-id</c>.
+    /// </summary>
+    internal static string BuildParentPanelHtml(IRunningSubAgentDisplay parentAgent)
+    {
+        var sb = new StringBuilder();
+        sb.Append("<div class=\"running-parent-agent-panel\" id=\"").Append(ChatOutputHtmlRenderer.ParentAgentPanelInnerId).Append("\">");
+        sb.Append("<h4 class=\"running-parent-agent-header\">[Parent agent]</h4>");
+        AppendSubAgentRow(sb, parentAgent, depth: 0);
         sb.Append("</div>");
         return sb.ToString();
     }
@@ -237,6 +286,19 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
         if (this.subAgents is INotifyCollectionChanged notifier)
         {
             notifier.CollectionChanged -= this.OnSubAgentsChanged;
+        }
+
+        if (this.parentAgent is not null)
+        {
+            if (this.parentActivityHandler is not null)
+            {
+                this.parentAgent.ActivityChanged -= this.parentActivityHandler;
+            }
+
+            if (this.parentCompletionStateHandler is not null)
+            {
+                this.parentAgent.CompletionStateChanged -= this.parentCompletionStateHandler;
+            }
         }
 
         foreach (var (agent, handler) in this.activityHandlers)

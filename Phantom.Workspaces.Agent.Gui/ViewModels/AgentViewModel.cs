@@ -42,13 +42,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null)
+    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null, AgentViewModel? parentAgentViewModel = null)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
         this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
         this.agentSessionId = agentChat.AgentSessionId;
+        this.ParentAgentViewModel = parentAgentViewModel;
+        this.ParentAgentDisplay = parentAgentViewModel is not null
+            ? new RunningParentAgentDisplay(parentAgentViewModel.agentChat)
+            : null;
         this.DisplayName = displayName;
         this.Description = description;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
@@ -71,7 +75,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.UnholdAllQueuesCommand = new RelayCommand(() => this.InputQueue?.UnholdAllQueuesCommand.Execute(null));
         this.EditorItems = [];
 
-        this.NavigateToAgentHandler = this.NavigateToSubAgent;
+        this.NavigateToAgentHandler = this.NavigateToAgent;
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged += this.OnToolsChanged;
@@ -220,6 +224,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     /// <summary>UI-layer display wrappers for each direct child sub-agent, in the order they were created.</summary>
     public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgentDisplays { get; }
+
+    /// <summary>The parent agent's view model, or <see langword="null"/> for root agents.</summary>
+    public AgentViewModel? ParentAgentViewModel { get; }
+
+    /// <summary>
+    /// Display wrapper for this agent's parent, used to render the [Parent agent] panel above the
+    /// [Running sub-agents] panel. <see langword="null"/> for root agents.
+    /// </summary>
+    public IRunningSubAgentDisplay? ParentAgentDisplay { get; }
 
     public ICommand InterruptCommand { get; }
 
@@ -536,6 +549,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 d.Dispose();
         }
 
+        if (this.ParentAgentDisplay is IDisposable parentDisplayDisposable)
+        {
+            parentDisplayDisposable.Dispose();
+        }
+
         // Dispose sub-agent leases
         foreach (var lease in this.subAgentLeases)
         {
@@ -609,7 +627,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler, this);
         // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
         // (issue #1046): the parent can resolve its own children, and if the target is above this
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
@@ -644,6 +662,44 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             CancellationToken.None,
             TaskContinuationOptions.None,
             this.foregroundScheduler);
+    }
+
+    /// <summary>
+    /// Navigates to any agent in the loaded agent tree identified by its agent id or session id.
+    /// Walks up to the root, then searches descendants, so navigating to a parent/ancestor id opens
+    /// that agent's view. Falls through to <see cref="NavigateToSubAgent"/> for the resolved agent.
+    /// </summary>
+    public void NavigateToAgent(string agentId)
+    {
+        var root = this;
+        while (root.ParentAgentViewModel is not null)
+        {
+            root = root.ParentAgentViewModel;
+        }
+
+        var target = root.FindInTreeById(agentId);
+        var resolvedAgentId = target is not null ? target.agentChat.AgentId : agentId;
+        root.NavigateToSubAgent(resolvedAgentId);
+    }
+
+    private AgentViewModel? FindInTreeById(string agentId)
+    {
+        if (string.Equals(this.agentChat.AgentId, agentId, StringComparison.Ordinal) ||
+            string.Equals(this.agentChat.AgentSessionId, agentId, StringComparison.Ordinal))
+        {
+            return this;
+        }
+
+        foreach (var child in this.subAgentViewModels)
+        {
+            var found = child.FindInTreeById(agentId);
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
     }
 
     private void NavigateToSubAgent(string agentId)

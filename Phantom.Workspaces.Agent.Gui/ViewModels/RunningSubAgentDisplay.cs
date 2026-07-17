@@ -71,6 +71,23 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     {
     }
 
+    /// <summary>
+    /// Creates a display that tracks only the given chat's own recent activity and completion
+    /// state, without enumerating or wrapping its sub-agents. Used by the parent-agent panel
+    /// (issue #902), where child sub-agents may be lazy <see cref="SubAgent"/> stubs that cannot be
+    /// cast to <see cref="AgentChat"/>.
+    /// </summary>
+    internal static RunningSubAgentDisplay CreateActivityOnly(AgentChat agentChat)
+        => new(
+            agentChat.AgentId,
+            agentChat.DisplayName,
+            agentChat.Description,
+            () => agentChat.CompletionState,
+            agentChat.RunningItems,
+            new ObservableCollection<IRunningSubAgent>(),
+            _ => throw new NotSupportedException("Parent-activity display does not wrap sub-agents."),
+            agentChat);
+
     private RunningSubAgentDisplay(
         string agentId,
         string displayName,

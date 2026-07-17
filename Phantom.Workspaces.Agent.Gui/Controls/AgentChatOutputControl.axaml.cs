@@ -308,7 +308,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             statusSink: this,
             resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
             subAgents: vm.SubAgentDisplays,
-            ancestors: BuildAncestors(vm.AgentChat));
+            ancestors: BuildAncestors(vm.AgentChat),
+            parentAgent: vm.ParentAgentDisplay);
         this.browser.EndBatch();
 
         // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom

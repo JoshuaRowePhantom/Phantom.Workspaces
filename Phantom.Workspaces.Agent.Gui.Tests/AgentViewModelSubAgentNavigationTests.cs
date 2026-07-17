@@ -125,6 +125,52 @@ public sealed class AgentViewModelSubAgentNavigationTests
         Assert.True(containerSlot.IsVisible);
     }
 
+    [Fact]
+    public async Task AgentViewModel_WithParentAgent_ParentAgentViewModelIsNotNull()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+
+        Assert.NotNull(childVm.ParentAgentViewModel);
+        Assert.Same(viewModel, childVm.ParentAgentViewModel);
+    }
+
+    [Fact]
+    public async Task AgentViewModel_WithNoParentAgent_ParentAgentViewModelIsNull()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        Assert.Null(viewModel.ParentAgentViewModel);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_ParentAgentId_NavigatesToParentView()
+    {
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+
+        // Navigate into the sub-agent first so we're not already on the parent view.
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+
+        // Navigate to the parent's session id — the id carried by the [Parent agent] link.
+        childVm.NavigateToAgent(chat.AgentSessionId);
+
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal(viewModel.EditorItems[0], viewModel.SelectedEditorItem);
+    }
+
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """

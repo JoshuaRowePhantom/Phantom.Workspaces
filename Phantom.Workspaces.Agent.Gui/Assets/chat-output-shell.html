@@ -399,6 +399,17 @@
       font-size: 1em;
       font-weight: 600;
     }
+
+    /* Parent agent panel styles */
+    .running-parent-agent-panel {
+      margin: 1em 0;
+    }
+
+    .running-parent-agent-header {
+      margin: 0 0 0.5em 0;
+      font-size: 1em;
+      font-weight: 600;
+    }
     
     .running-subagent-row[data-depth="1"] {
       padding-left: 1.5em;
@@ -447,6 +458,9 @@
 <body>
   <div id="chat-history-container"></div>
   <div id="running-items-container"></div>
+  <div id="parent-agent-panel-sentinel">
+    <div id="parent-agent-panel-inner"></div>
+  </div>
   <div id="subagent-panel-sentinel">
     <div id="subagent-panel-inner"></div>
   </div>

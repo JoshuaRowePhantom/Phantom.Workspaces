@@ -511,6 +511,88 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         return count;
     }
 
+    // ── Parent agent panel (issue #902) ───────────────────────────────────────
+
+    [Fact]
+    public void ParentAgentPanel_WithParentAgent_IsRenderedAboveSubAgentsPanel()
+    {
+        var parent = new StubSubAgent("parent-session", "Parent Agent", AgentChatCompletionState.Running);
+        var child = new StubSubAgent("a1", "Child Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink, parent);
+
+        // The parent panel is rendered into its own sentinel, which the HTML shell places above
+        // the sub-agents sentinel.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append &&
+            op.Content.Contains("running-parent-agent-panel"));
+        // The sub-agents panel is still rendered into its own (lower) sentinel.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+    }
+
+    [Fact]
+    public void ParentAgentPanel_WithNoParentAgent_IsNotRendered()
+    {
+        var child = new StubSubAgent("a1", "Child Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelSentinelId);
+    }
+
+    [Fact]
+    public void ParentAgentPanel_ShowsParentRecentActivity()
+    {
+        var activity = new List<SubAgentActivityLine>
+        {
+            new(SubAgentActivityKind.AgentText, "Waiting for the sub-agent to finish"),
+        };
+        var parent = new StubSubAgent("parent-session", "Parent Agent", AgentChatCompletionState.Running, activity: activity);
+        var html = RunningSubAgentsHtmlTransformer.BuildParentPanelHtml(parent);
+
+        Assert.Contains("[Parent agent]", html, StringComparison.Ordinal);
+        Assert.Contains("Waiting for the sub-agent to finish", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParentAgentLink_DataNavigateAgentId_IsParentSessionId()
+    {
+        var parent = new StubSubAgent("parent-session-123", "Parent Agent", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildParentPanelHtml(parent);
+
+        Assert.Contains("data-navigate-agent-id=\"parent-session-123\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParentAgentPanel_ActivityChanged_TriggersRerender()
+    {
+        var parent = new StubSubAgent("parent-session", "Parent Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink, parent);
+
+        sink.Clear();
+
+        parent.RaiseActivityChanged();
+
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelInnerId);
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append &&
+            op.Content.Contains("running-parent-agent-panel"));
+    }
+
     private sealed record Operation(string Kind, string Path, ChatOutputUpdateLocation Location, string Content);
 
     private sealed class RecordingSink : IChatOutputHtmlSink

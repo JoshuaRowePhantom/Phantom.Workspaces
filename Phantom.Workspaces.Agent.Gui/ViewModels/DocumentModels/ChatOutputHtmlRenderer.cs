@@ -34,6 +34,8 @@ internal static class ChatOutputHtmlRenderer
     public const string RunningContainerId = "running-items-container";
     public const string SubAgentPanelSentinelId = "subagent-panel-sentinel";
     public const string SubAgentPanelInnerId = "subagent-panel-inner";
+    public const string ParentAgentPanelSentinelId = "parent-agent-panel-sentinel";
+    public const string ParentAgentPanelInnerId = "parent-agent-panel-inner";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
 
