@@ -133,16 +133,31 @@ internal static class ChatOutputHtmlRenderer
     }
 
     /// <summary>
-    /// Renders the outer "tools (N calls)" wrapper used only when there are more than one call in a
-    /// group. The <paramref name="summary"/> is a pre-formatted one-liner such as
-    /// <c>last_tool(…)</c>. <paramref name="innerHtml"/> is the pre-rendered set of
+    /// Renders the outer tool-group wrapper used only when there are more than one call in a group.
+    /// The summary lists the UNIQUE tool names in first-seen order, prefixed with <c>$ </c>:
+    /// <c>$ tool (name)</c> for a single unique tool, <c>$ tools (n1, n2, …)</c> otherwise.
+    /// <paramref name="toolNames"/> is the (possibly duplicated) list of tool names for the group's
+    /// calls; it is deduplicated here. <paramref name="innerHtml"/> is the pre-rendered set of
     /// <c>details.chat-tool-group-item</c> elements placed directly inside.
     /// </summary>
-    public static string RenderToolGroupWrapper(string contentId, int callCount, string summary, string innerHtml)
+    public static string RenderToolGroupWrapper(string contentId, int callCount, IReadOnlyList<string> toolNames, string innerHtml)
     {
+        var uniqueToolNames = new List<string>();
+        foreach (var name in toolNames)
+        {
+            if (!string.IsNullOrEmpty(name) && !uniqueToolNames.Contains(name, StringComparer.Ordinal))
+            {
+                uniqueToolNames.Add(name);
+            }
+        }
+
+        var toolWord = uniqueToolNames.Count == 1 ? "tool" : "tools";
+        var joinedNames = string.Join(", ", uniqueToolNames.Select(HtmlEscape));
+
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-wrapper\" id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">tools  ").Append(HtmlEscape(summary))
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">$ ").Append(toolWord)
+            .Append(" (").Append(joinedNames).Append(')')
             .Append("  (").Append(callCount).Append(" calls)")
             .Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
             .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
@@ -268,7 +283,6 @@ internal static class ChatOutputHtmlRenderer
         else
         {
             var innerBuilder = new StringBuilder();
-            var lastCallName = string.Empty;
             var memberIndex = 0;
             foreach (var call in calls)
             {
@@ -286,11 +300,11 @@ internal static class ChatOutputHtmlRenderer
                     SerializeContentJson(call),
                     result is not null ? SerializeContentJson(result) : null,
                     $"{contentId}-{memberIndex}"));
-                lastCallName = call.Name ?? string.Empty;
                 memberIndex++;
             }
 
-            return RenderToolGroupWrapper(contentId, calls.Count, lastCallName + "(…)", innerBuilder.ToString());
+            var toolNames = calls.Select(c => c.Name ?? string.Empty).ToList();
+            return RenderToolGroupWrapper(contentId, calls.Count, toolNames, innerBuilder.ToString());
         }
     }
 
@@ -303,8 +317,9 @@ internal static class ChatOutputHtmlRenderer
         string? jumpLinkHtml = null)
     {
         var builder = new StringBuilder();
+        var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
-            .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
+            .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\">");
         builder.Append(RenderHeader(messageId, roleLabel, timestamp));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
@@ -389,8 +404,9 @@ internal static class ChatOutputHtmlRenderer
         }
 
         var builder = new StringBuilder();
-        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"1\">");
-        builder.Append("<span>[").Append(HtmlEscape(roleLabel)).Append("]</span>");
+        var stickyLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"").Append(stickyLevel).Append("\">");
+        builder.Append("<span>").Append(HtmlEscape(roleLabel)).Append("</span>");
         if (timestamp.HasValue)
         {
             builder.Append("<span class=\"chat-timestamp\" data-utc=\"")

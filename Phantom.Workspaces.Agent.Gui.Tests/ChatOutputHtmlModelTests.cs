@@ -710,7 +710,7 @@ public sealed class ChatOutputHtmlModelTests
     public void RenderToolGroupWrapper_ProducesOuterDetailsWithCallCount()
     {
         var inner = "<span>item</span>";
-        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper("g0", 3, "last_tool(…)", inner);
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper("g0", 3, new[] { "last_tool" }, inner);
 
         Assert.Contains("chat-tool-group-wrapper", html);
         Assert.Contains("3 calls", html);

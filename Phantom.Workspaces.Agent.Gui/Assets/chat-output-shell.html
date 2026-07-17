@@ -96,6 +96,28 @@
       color: #9cdcfe;
     }
 
+    .chat-user-message > .chat-header::before {
+      content: "▶ ";
+      font-weight: bold;
+    }
+
+    .chat-assistant-message > .chat-header::before {
+      content: "◉ ";
+    }
+
+    .chat-user-message .chat-header {
+      padding-left: 1.5em;
+      text-indent: -1.5em;
+    }
+
+    .chat-user-message .chat-contents {
+      padding-left: 1.5em;
+    }
+
+    .chat-assistant-message .chat-contents {
+      padding-left: 1.5em;
+    }
+
     .chat-help {
       white-space: pre-wrap;
       font-family: var(--chat-font-family);
@@ -234,6 +256,12 @@
       white-space: pre-wrap;
       word-break: break-word;
       overflow-x: auto;
+    }
+
+    details.chat-tool-call > pre,
+    details.chat-tool-result > pre,
+    .chat-collapsible-body {
+      font-weight: normal;
     }
 
     details.chat-content > summary {
