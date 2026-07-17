@@ -62,6 +62,28 @@ public sealed class WorkspacesTransportCompositionTests
         Assert.Empty(composition.HubFactories);
     }
 
+    [Fact]
+    public async Task Composition_WithHubFactories_ExposesThemToTransportHost()
+    {
+        var dataAccessLayer = new EntityLookupDataAccessLayer(
+            (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
+        var session = new WorkspaceEntitySession
+        {
+            UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            UserComputerProfileEntityId = LocalProfileId,
+        };
+        var hubFactory = new Phantom.Workspaces.Transport.ReverseHttp.ReverseHttpClientTransportFactory(
+            "http://localhost:5282",
+            LocalProfileId.ToString());
+
+        await using var composition = new WorkspacesTransportComposition(dataAccessLayer, session, [hubFactory]);
+
+        var exposed = Assert.Single(composition.HubFactories);
+        Assert.Same(hubFactory, exposed);
+        Assert.Same(hubFactory, Assert.Single(composition.TransportHost.HubFactories));
+    }
+
     private static WorkspacesTransportComposition CreateComposition()
     {
         var dataAccessLayer = new EntityLookupDataAccessLayer(

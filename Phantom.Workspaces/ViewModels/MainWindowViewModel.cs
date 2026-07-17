@@ -26,6 +26,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -752,6 +753,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return [];
     }
 
+    /// <summary>
+    /// Builds the reverse-HTTP hub client factories this instance registers with. A Web-DAL client
+    /// registers for reverse HTTP with its remote host endpoint so the host can call back into it
+    /// (e.g. to route an agent to run on this client); the host's "Inbound Connections" panel reflects
+    /// this registration. Non-web sources (Mongo/local/unknown) host their own data and never perform
+    /// outbound reverse-registration, so they return an empty list. Registration is intentionally
+    /// independent of <see cref="RemoteHostingConfiguration"/> and the dev tunnel, which govern inbound
+    /// hosting/tunnel exposure rather than this outbound client registration.
+    /// </summary>
+    internal static IReadOnlyList<ReverseHttpClientTransportFactory> BuildReverseHttpHubFactories(
+        RepositorySource repositorySource,
+        EntityId localProfileEntityId)
+    {
+        if (repositorySource is WebRepositorySource web
+            && !string.IsNullOrWhiteSpace(web.Endpoint))
+        {
+            return [new ReverseHttpClientTransportFactory(web.Endpoint, localProfileEntityId.ToString())];
+        }
+
+        return [];
+    }
+
     private async Task InitializeWebHostAsync()
     {
         if (this.configuration is null)
@@ -759,9 +782,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        var hubFactories = BuildReverseHttpHubFactories(
+            this.RepositorySource,
+            this.entityBroker!.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId);
+
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
-            this.entityBroker.EntityRepository.WorkspaceEntitySession);
+            this.entityBroker.EntityRepository.WorkspaceEntitySession,
+            hubFactories);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();
