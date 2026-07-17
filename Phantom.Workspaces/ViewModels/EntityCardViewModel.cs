@@ -39,6 +39,8 @@ public sealed class EntityCardViewModel : ViewModelBase
     private bool isJsonVisible;
     private IReadOnlyCollection<EntityFieldEditorViewModel>? editModeSnapshot;
     private string? editModeRawJsonSnapshot;
+    private MainWindowViewModel? shortcutMainWindowViewModel;
+    private ShortcutManager? shortcutManager;
 
     public EntityCardViewModel(
         SubscribedEntityViewModel entity,
@@ -258,6 +260,59 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
         this.RaisePropertyChanged(nameof(this.ShowJsonButton));
         this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+    }
+
+    /// <summary>
+    /// Supplies the card the context it needs to resolve its own shortcuts: the
+    /// <see cref="MainWindowViewModel"/> (which provides handler applicability and the
+    /// <c>ActivateShortcutCommand</c>) and the <see cref="ViewModels.ShortcutManager"/>. Assigning the
+    /// context wires <see cref="ActivateShortcutCommand"/> and re-resolves the shortcuts, so every card
+    /// path (tree, single-entity view, etc.) is self-sufficient without an external push.
+    /// </summary>
+    public void SetShortcutContext(
+        MainWindowViewModel mainWindowViewModel,
+        ShortcutManager shortcutManager)
+    {
+        this.shortcutMainWindowViewModel = mainWindowViewModel;
+        this.shortcutManager = shortcutManager;
+        this.ActivateShortcutCommand = mainWindowViewModel.ActivateShortcutCommand;
+        this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
+        this.QueueShortcutResolution();
+    }
+
+    /// <summary>
+    /// Resolves the card's shortcuts from the current entity and shortcut context, replacing the
+    /// contents of <see cref="Shortcuts"/>. No-op when no shortcut context or entity is available.
+    /// </summary>
+    public async Task ResolveShortcutsAsync(CancellationToken ct = default)
+    {
+        if (this.shortcutMainWindowViewModel is not { } mainWindowViewModel
+            || this.shortcutManager is not { } manager
+            || this.entity is null)
+        {
+            return;
+        }
+
+        await EntityShortcutViewModel.PopulateShortcutsAsync(
+            this.Shortcuts,
+            mainWindowViewModel,
+            this.entity,
+            manager);
+        this.RaisePropertyChanged(nameof(this.HasShortcuts));
+        this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+        this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+    }
+
+    private void QueueShortcutResolution()
+    {
+        if (this.shortcutMainWindowViewModel is null
+            || this.shortcutManager is null
+            || this.entity is null)
+        {
+            return;
+        }
+
+        Lifetime.Run(this.ResolveShortcutsAsync);
     }
 
     /// <summary>
@@ -503,6 +558,9 @@ public sealed class EntityCardViewModel : ViewModelBase
                 this.externalCard = ExternalEntityCardViewModel.Create(this.entity);
                 this.RaisePropertyChanged(nameof(this.ExternalCard));
             }
+
+            // Re-resolve shortcuts for the new data (applicability can change with the snapshot).
+            this.QueueShortcutResolution();
 
             return;
         }

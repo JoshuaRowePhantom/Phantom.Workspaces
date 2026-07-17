@@ -2226,7 +2226,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         await this.OpenTabAsync(
-            new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+            new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
             {
                 Id = subscribedEntity.EntityId.ToString(),
                 Title = subscribedEntity.DisplayName,
@@ -3330,7 +3330,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (!tabAdded)
         {
             // Fall back to a default entity view for the workspace itself
-            var defaultTab = new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+            var defaultTab = new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
             {
                 Id = workspaceEntity.EntityId.ToString(),
                 Title = workspaceEntity.DisplayName,
@@ -3484,7 +3484,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     var entity = entities.FirstOrDefault();
                     if (entity is not null)
                     {
-                        return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+                        return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
                         {
                             Id = tabId,
                             Title = entity.DisplayName,
@@ -3603,7 +3603,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Default: generic entity view
-        return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+        return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
         {
             Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
             Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
@@ -3658,7 +3658,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // If no tabs found, create a default tab for the workspace entity
         if (tabs.Count == 0)
         {
-            tabs.Add(new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+            tabs.Add(new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
             {
                 Id = workspaceEntity.EntityId.ToString(),
                 Title = workspaceEntity.DisplayName,
@@ -3732,7 +3732,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             // Default entity view
-            return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog)
+            return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
             {
                 Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
                 Title = ReadString(tab, "title") ?? targetEntity.DisplayName,

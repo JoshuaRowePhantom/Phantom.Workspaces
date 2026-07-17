@@ -75,8 +75,6 @@ public sealed class ShortcutManagerTests
             shortcutManager,
             indentLevel: 0);
 
-        Assert.Empty(viewEntity.Shortcuts);
-
         await viewEntity.InitializeAsync();
 
         var shortcutViewModel = Assert.Single(viewEntity.Shortcuts);

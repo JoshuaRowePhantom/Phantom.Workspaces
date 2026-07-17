@@ -182,11 +182,29 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
             shortcutManager,
             indentLevel: 0);
 
-        Assert.Empty(viewModel.Shortcuts);
-
         await viewModel.InitializeAsync();
 
         Assert.Contains(viewModel.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
+    }
+
+    [AvaloniaFact]
+    public async Task InitializeAsync_DoesNotPushShortcutsButTreeCardStillShowsThem()
+    {
+        var entity = CreateTestEntity();
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler());
+        var viewModel = new ViewEntityViewModel(
+            entity,
+            this.mainWindowViewModel,
+            shortcutManager,
+            indentLevel: 0);
+
+        // The card resolves its own shortcuts (no SetShortcuts push from the view model).
+        await viewModel.InitializeAsync();
+
+        Assert.True(viewModel.EntityCardNode.Card.HasShortcuts);
+        Assert.Contains(viewModel.EntityCardNode.Card.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
+        Assert.Same(viewModel.EntityCardNode.Card.Shortcuts, viewModel.Shortcuts);
     }
 
     [AvaloniaFact]
