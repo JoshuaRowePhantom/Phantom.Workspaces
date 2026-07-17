@@ -334,7 +334,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
            this.request.CancellationToken);
 
-       // Session-init runs the running-item mutations, the initial persisted-history load
+       // RunSessionInitAsync runs the running-item mutations, the initial persisted-history load
        // (History.Add fires CollectionChanged), and historyPopulated.TrySetResult(). These mutate
        // the non-thread-safe, UI-observed collections and so must run on the foreground scheduler.
        //
@@ -343,18 +343,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // that await genuinely suspends (the real Copilot SDK client), the captured
        // SynchronizationContext/scheduler is discarded and the rest of this method resumes on a
        // thread-pool thread even when foregroundScheduler is a SynchronizationContextTaskScheduler
-       // over the UI thread (issues #1084 / #1068 / #1072). So when the foreground scheduler is a
-       // SynchronizationContextTaskScheduler and we are no longer on its context, marshal the block
-       // back onto it via RunOnForegroundAsync (mirroring the tool-init dispatch and
-       // EnqueueSystemNote/EnqueueHelpNote).
+       // over the UI thread (issues #1084 / #1068 / #1072). So RunSessionInitAsync is always
+       // dispatched onto the foreground scheduler via RunOnForegroundAsync and awaited (mirroring
+       // the tool-init dispatch and EnqueueSystemNote/EnqueueHelpNote).
        //
-       // When already on the foreground context, or for a plain scheduler (which carries no
-       // verifiable thread affinity -- headless CLI/test hosts, and tests that supply a scheduler
-       // that only drains when externally pumped), run inline: dispatching there would make
-       // CreateAsync block on a scheduler that is only pumped after CreateAsync returns, exactly as
-       // the guarded tool-init dispatch below avoids (issue #909's affinity invariant is enforced
-       // only for a SynchronizationContextTaskScheduler). Either way the session-init running item
-       // is fully completed before the processing loop starts, so it never races the loop.
+       // Awaiting the dispatched foreground work here can never deadlock because production
+       // foreground schedulers are self-draining: the UI SynchronizationContextTaskScheduler pumps
+       // via the dispatcher, and the headless ConcurrentExclusiveSchedulerPair.ExclusiveScheduler
+       // drains via the thread pool -- so the dispatched task runs while this method is suspended
+       // awaiting it (issues #1098 / #1084). The session-init running item is fully completed before
+       // the processing loop starts, so it never races the loop.
        async Task RunSessionInitAsync()
        {
            var sessionInitItem = this.CreateRunningItem(new AgentChatHistoryItem
@@ -398,15 +396,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            }
        }
 
-       if (this.foregroundScheduler is SynchronizationContextTaskScheduler foregroundSyncContext
-           && !foregroundSyncContext.IsOnSynchronizationContext)
-       {
-           await this.RunOnForegroundAsync(RunSessionInitAsync);
-       }
-       else
-       {
-           await RunSessionInitAsync();
-       }
+       await this.RunOnForegroundAsync(RunSessionInitAsync);
 
        this.StartProcessingLoop();
 

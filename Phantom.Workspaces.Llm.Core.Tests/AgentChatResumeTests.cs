@@ -51,8 +51,9 @@ public sealed class AgentChatResumeTests
         InMemoryAgentPersistenceStore store,
         string parentSessionId,
         AgentServices? services = null,
-        TaskScheduler? foregroundScheduler = null) =>
-        await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        TaskScheduler? foregroundScheduler = null)
+    {
+        var createTask = AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = EchoAgentDefinition,
             AgentSessionId = parentSessionId,
@@ -62,6 +63,18 @@ public sealed class AgentChatResumeTests
             AgentServices = services,
             ForegroundScheduler = foregroundScheduler,
         });
+
+        // Initialization now unconditionally dispatches session init onto the foreground scheduler
+        // and awaits it (issue #1100). A CapturingTaskScheduler only runs work when driven, so run
+        // the queued init task here to let creation complete; the restore-time sub-agent stub adds
+        // it queues stay pending for the test to drain and observe.
+        if (foregroundScheduler is CapturingTaskScheduler capturing)
+        {
+            capturing.RunPending();
+        }
+
+        return await createTask;
+    }
 
     private static AgentChatFactory CreateFactory(InMemoryAgentPersistenceStore store) =>
         new(store, new AgentServices { ChatClientOverride = new DeterministicTestChatClient() }, TaskScheduler.Default);
@@ -86,6 +99,19 @@ public sealed class AgentChatResumeTests
                 foreach (var task in tasks)
                     TryExecuteTask(task);
             }
+        }
+
+        /// <summary>
+        /// Executes the tasks currently queued in a single pass, leaving any tasks they queue as a
+        /// side effect pending. Used to drive AgentChat initialization to completion without also
+        /// running the init-queued mutations, so the test retains control of when those run.
+        /// </summary>
+        public void RunPending()
+        {
+            var tasks = _queue.ToList();
+            _queue.Clear();
+            foreach (var task in tasks)
+                TryExecuteTask(task);
         }
 
         protected override IEnumerable<Task>? GetScheduledTasks() => _queue;

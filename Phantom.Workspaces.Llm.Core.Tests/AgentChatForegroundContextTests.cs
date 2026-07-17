@@ -150,14 +150,16 @@ public sealed class AgentChatForegroundContextTests
         await WaitForConditionAsync(
             chat.History,
             () => chat.History.Any(item => item.Role == ChatRole.Assistant),
-            "queued message to be answered while tool init is gated");
+            "queued message to be answered while tool init is gated",
+            scheduler);
 
         release.TrySetResult();
         await createTask;
         await WaitForConditionAsync(
             chat.RunningItems,
             () => chat.RunningItems.Count == 0,
-            "all running items to clear");
+            "all running items to clear",
+            scheduler);
 
         try
         {
@@ -261,7 +263,8 @@ public sealed class AgentChatForegroundContextTests
             await WaitForConditionAsync(
                 chat.History,
                 () => chat.History.Count == 2 && chat.History[^1].Role == ChatRole.Assistant,
-                "assistant response to complete");
+                "assistant response to complete",
+                scheduler);
 
             Assert.NotEmpty(mutationThreadIds);
             Assert.All(mutationThreadIds, threadId => Assert.Equal(pump.ThreadId, threadId));
@@ -657,15 +660,26 @@ public sealed class AgentChatForegroundContextTests
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
-        string description)
+        string description,
+        TaskScheduler foregroundScheduler)
     {
-        if (condition())
-        {
-            return;
-        }
+        // condition() enumerates the live collection, which is mutated on foregroundScheduler (the
+        // pump thread). Evaluating it on the test thread races those mutations and intermittently
+        // throws "Collection was modified; enumeration operation may not execute." Evaluate the
+        // condition on foregroundScheduler instead so every read is serialized with the writes
+        // (issue #1100).
+        Task<bool> EvaluateOnForegroundAsync() =>
+            Task.Factory.StartNew(
+                condition,
+                CancellationToken.None,
+                TaskCreationOptions.DenyChildAttach,
+                foregroundScheduler);
+
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
+            // Raised synchronously by the mutation on foregroundScheduler's thread, so condition()
+            // reads the collection here without racing a concurrent write.
             if (condition())
             {
                 signal.TrySetResult();
@@ -675,7 +689,7 @@ public sealed class AgentChatForegroundContextTests
         collection.CollectionChanged += OnCollectionChanged;
         try
         {
-            if (condition())
+            if (await EvaluateOnForegroundAsync())
             {
                 return;
             }
