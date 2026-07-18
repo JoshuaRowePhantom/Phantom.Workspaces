@@ -14,17 +14,20 @@ internal sealed class AgentSessionToolsetFactory : IToolsetFactory
     private readonly CurrentSessionContext _currentSessionContext;
     private readonly IRunningAgentChatFactory _factory;
     private readonly IToolsetFactory? _underlyingToolsetFactory;
+    private readonly TimeProvider _timeProvider;
 
     internal AgentSessionToolsetFactory(
         AgentChatRef parentChatRef,
         CurrentSessionContext currentSessionContext,
         IRunningAgentChatFactory factory,
-        IToolsetFactory? underlyingToolsetFactory = null)
+        IToolsetFactory? underlyingToolsetFactory = null,
+        TimeProvider? timeProvider = null)
     {
         _parentChatRef = parentChatRef;
         _currentSessionContext = currentSessionContext;
         _factory = factory;
         _underlyingToolsetFactory = underlyingToolsetFactory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public Task<AIContextProvider?> CreateToolsetAsync(AgentSchema.Tool tool, AgentServices agentServices)
@@ -32,7 +35,7 @@ internal sealed class AgentSessionToolsetFactory : IToolsetFactory
         if (string.Equals(tool.Kind, "agent-session", StringComparison.Ordinal))
         {
             return Task.FromResult<AIContextProvider?>(
-                new AgentSessionToolset(_parentChatRef, _currentSessionContext, _factory));
+                new AgentSessionToolset(_parentChatRef, _currentSessionContext, _factory, _timeProvider));
         }
 
         if (_underlyingToolsetFactory is not null)

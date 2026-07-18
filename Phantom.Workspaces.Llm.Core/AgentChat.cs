@@ -37,6 +37,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private readonly object sessionLock = new();
     private readonly InternalCreateAgentChatRequest request;
+    private readonly TimeProvider timeProvider;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
     private IChatClient? client;
@@ -82,7 +83,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private string agentId = string.Empty;
     private AgentChat? parentAgent;
     private bool acceptsUserInput = true;
-    private DateTime lastUpdatedAt = DateTime.UtcNow;
+    private DateTime lastUpdatedAt;
     private AgentChatCompletionState? completionStateOverride;
 
     // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
@@ -116,6 +117,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     {
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
+       this.timeProvider = request.TimeProvider;
+       this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
@@ -269,7 +272,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        var streamingMiddleware = new StreamingPersistenceMiddleware(resolvedClient, this.persistenceProvider, this.request.ConfiguredStore);
        this.chatHistoryProvider.InvocationStarting += (_, args) => streamingMiddleware.SetCurrentSession(args.Session);
        this.client = streamingMiddleware;
-       this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider);
+       this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider, this.timeProvider);
 #pragma warning disable MAAI001
        this.chatOptions = new ChatClientAgentOptions
        {
@@ -359,7 +362,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            {
                Role = AgentChatHistoryItem.DiagnosticChatRole,
                Contents = new AIContent[] { new TextContent("Loading session") },
-               Timestamp = DateTimeOffset.UtcNow,
+               Timestamp = this.timeProvider.GetUtcNow(),
            });
            try
            {
@@ -389,7 +392,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                {
                    Role = AgentChatHistoryItem.DiagnosticChatRole,
                    Contents = new AIContent[] { new ErrorContent($"Failed to load session: {ex}") },
-                   Timestamp = DateTimeOffset.UtcNow,
+                   Timestamp = this.timeProvider.GetUtcNow(),
                }]);
                this.CompleteRunningItem(sessionInitItem, writeToHistory: true);
                throw;
@@ -674,7 +677,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     [
                         new ChatMessage(ChatRole.User, contents.ToList())
                         {
-                            CreatedAt = DateTimeOffset.UtcNow,
+                            CreatedAt = this.timeProvider.GetUtcNow(),
                         },
                     ],
                 },
@@ -699,7 +702,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
                     Contents = [new TextContent(text)],
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 });
             },
             CancellationToken.None,
@@ -721,7 +724,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = AgentChatHistoryItem.HelpChatRole,
                     Contents = [new TextContent(text)],
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 });
             },
             CancellationToken.None,
@@ -834,7 +837,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private void AddHistoryItem(AgentChatHistoryItem item)
     {
-        this.lastUpdatedAt = DateTime.UtcNow;
+        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
         this.History.Add(item);
     }
 
@@ -851,7 +854,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = ChatRole.User,
                 Contents = message.Contents.ToArray(),
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             };
 
             this.History.Add(nextItem);
@@ -876,7 +879,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = ChatRole.User,
                 Contents = message.Contents.ToArray(),
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             });
         }
 
@@ -963,7 +966,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             }
         }
 
-        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty);
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty, this.timeProvider);
 
         // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
         // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
@@ -1332,7 +1335,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 var previousItems = this.cachedItems;
 
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider));
 
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
@@ -1369,14 +1372,15 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         private static async Task<AgentChatHistoryItem[]> CoalesceAsync(
             AgentResponseUpdate[] snapshot,
             AgentChatHistoryItem[] previous,
-            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials)
+            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials,
+            TimeProvider timeProvider)
         {
             AgentChatHistoryItem[] newItems;
 
             if (interstitials.Length == 0)
             {
                 // Fast path: no interstitials, single pass.
-                newItems = await CoalesceSegmentAsync(snapshot);
+                newItems = await CoalesceSegmentAsync(snapshot, timeProvider);
             }
             else
             {
@@ -1391,7 +1395,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     int segEnd = Math.Min(afterCount, snapshot.Length);
                     if (segEnd > segStart)
                     {
-                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd]));
+                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd], timeProvider));
                     }
 
                     result.Add(item);
@@ -1401,7 +1405,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 // Tail: remaining updates after the last interstitial.
                 if (segStart < snapshot.Length)
                 {
-                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..]));
+                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..], timeProvider));
                 }
 
                 newItems = result.ToArray();
@@ -1413,7 +1417,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 && snapshot[^1].Contents.OfType<ToolResultContent>().Any();
             if (lastIsToolResult)
             {
-                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = DateTimeOffset.UtcNow }];
+                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = timeProvider.GetUtcNow() }];
             }
 
             // Re-use the cached reference for each item whose content is structurally unchanged.
@@ -1426,7 +1430,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
         // returns an empty array; no assistant placeholder is added here (that is handled by the
         // caller on the full snapshot).
-        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates)
+        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
         {
             if (updates.Length == 0)
             {
@@ -1441,7 +1445,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = message.Role,
                     Contents = message.Contents.ToArray(),
-                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? DateTimeOffset.UtcNow,
+                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? timeProvider.GetUtcNow(),
                 })
                 .ToArray();
         }
@@ -1552,7 +1556,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     new AgentChatHistoryItem
                     {
                         Role = ChatRole.Assistant,
-                        Timestamp = DateTimeOffset.UtcNow,
+                        Timestamp = this.timeProvider.GetUtcNow(),
                     }]);
 
                 // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
@@ -1633,7 +1637,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                                 Contents = [new TextContent("Interrupted by user.")],
-                                Timestamp = DateTimeOffset.UtcNow,
+                                Timestamp = this.timeProvider.GetUtcNow(),
                             },
                         ])
                         .ToArray();
@@ -1653,7 +1657,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                                 Contents = [new ErrorContent($"Provider error: {ex}")],
-                                Timestamp = DateTimeOffset.UtcNow,
+                                Timestamp = this.timeProvider.GetUtcNow(),
                             },
                         ])
                         .ToArray();
@@ -1711,7 +1715,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 new AgentChatHistoryItem
                 {
                     Role = ChatRole.Assistant,
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 }]);
 
             partialResponses = new PartialResponseConflator(
@@ -1759,7 +1763,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                         {
                             Role = AgentChatHistoryItem.DiagnosticChatRole,
                             Contents = [new ErrorContent($"Hosted sub-agent error: {ex.Message}")],
-                            Timestamp = DateTimeOffset.UtcNow,
+                            Timestamp = this.timeProvider.GetUtcNow(),
                         },
                     ])
                     .ToArray();
@@ -2069,7 +2073,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex}") },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             });
             this.CompleteRunningItem(startupRunningItem, true);
         }
@@ -2132,7 +2136,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
             Contents = new AIContent[] { new TextContent($"Loading toolset {displayName}") },
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = this.timeProvider.GetUtcNow(),
         });
 
         try
@@ -2155,7 +2159,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
                     Contents = new AIContent[] { new ErrorContent(errorText) },
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 }]);
                 return new ToolInitializationResult([failedNode], []);
             }
@@ -2209,7 +2213,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("toolset", displayName, runtimeTools)) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
             return new ToolInitializationResult([root], runtimeTools.ToList());
         }
@@ -2223,7 +2227,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent(failureMessage) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
 
             var failedNode = new ToolStateNode(
@@ -2255,7 +2259,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
             Contents = new AIContent[] { new TextContent($"Loading mcp server {displayName}") },
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = this.timeProvider.GetUtcNow(),
         });
 
         try
@@ -2310,7 +2314,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("MCP server", displayName, mcpTools)) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
             return new ToolInitializationResult([serverNode], mcpTools.Cast<AITool>().ToList());
         }
@@ -2321,7 +2325,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent(errorMessage) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
 
             var failedNode = new ToolStateNode(

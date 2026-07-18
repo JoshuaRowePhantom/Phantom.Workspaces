@@ -14,7 +14,8 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
         Channel.CreateUnbounded<ChatResponseUpdate>();
 
     private volatile AgentChatCompletionState completionState = AgentChatCompletionState.Running;
-    private DateTime lastUpdatedAt = DateTime.UtcNow;
+    private readonly TimeProvider timeProvider;
+    private DateTime lastUpdatedAt;
 
     public string AgentId { get; }
     public string DisplayName { get; }
@@ -28,11 +29,13 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
 
     public event EventHandler? CompletionStateChanged;
 
-    public SubAgentChatClient(string agentId, string displayName, string description = "")
+    public SubAgentChatClient(string agentId, string displayName, string description = "", TimeProvider? timeProvider = null)
     {
         AgentId = agentId;
         DisplayName = displayName;
         Description = description;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
     }
 
     public void Push(ChatResponseUpdate update)
@@ -43,7 +46,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public void Complete()
     {
         completionState = AgentChatCompletionState.Succeeded;
-        lastUpdatedAt = DateTime.UtcNow;
+        lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
         channel.Writer.TryComplete();
         CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -51,7 +54,7 @@ internal sealed class SubAgentChatClient : IChatClient, ISubAgentChat, IHostedAg
     public void Fail(Exception ex)
     {
         completionState = AgentChatCompletionState.Failed;
-        lastUpdatedAt = DateTime.UtcNow;
+        lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
         channel.Writer.TryComplete(ex);
         CompletionStateChanged?.Invoke(this, EventArgs.Empty);
     }

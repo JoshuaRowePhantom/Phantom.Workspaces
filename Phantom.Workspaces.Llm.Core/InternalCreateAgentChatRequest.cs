@@ -38,6 +38,12 @@ internal sealed record InternalCreateAgentChatRequest
     public TaskScheduler? ForegroundScheduler { get; init; }
 
     /// <summary>
+    /// The time source used to stamp chat-history timestamps and drive time-based waits. Defaults
+    /// to <see cref="System.TimeProvider.System"/>; tests inject a fake provider for determinism.
+    /// </summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>
     /// When set, overrides the <c>UseProvidedChatClientAsIs</c> value that would otherwise be
     /// resolved from <see cref="ClientOverride"/> and the client's
     /// <see cref="ISelfInvokingToolChatClient"/> status.  Used in tests to exercise the

@@ -9,15 +9,18 @@ internal sealed class AgentChatHistoryService
 {
     private readonly AgentChatHistoryCollection history;
     private readonly AgentFrameworkChatHistoryProvider configuredProvider;
+    private readonly TimeProvider timeProvider;
     private AgentSession? activeSession;
     private AgentFrameworkChatHistoryProvider? provider;
 
     public AgentChatHistoryService(
         AgentChatHistoryCollection history,
-        AgentFrameworkChatHistoryProvider chatHistoryProvider)
+        AgentFrameworkChatHistoryProvider chatHistoryProvider,
+        TimeProvider timeProvider)
     {
         this.history = history;
         this.configuredProvider = chatHistoryProvider ?? throw new ArgumentNullException(nameof(chatHistoryProvider));
+        this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     public bool IsProviderBound => this.provider is not null;
@@ -54,7 +57,7 @@ internal sealed class AgentChatHistoryService
             {
                 Role = ChatRole.User,
                 Contents = contents,
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             };
 
             this.history.Add(nextItem);
