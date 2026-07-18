@@ -16,11 +16,13 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
     private readonly IMongoCollection<MongoDbEntityDocument> _entityCollection;
     private readonly IMongoCollection<MongoDbQueueHead> _queueHeadCollection;
     private readonly Phantom.Workspaces.Data.Vector.IEmbeddingsProvider _embeddingsProvider;
+    private readonly TimeProvider _timeProvider;
 
     public MongoDbEntityDataAccessLayer(
         IMongoDatabase database,
         string collectionName,
-        Phantom.Workspaces.Data.Vector.IEmbeddingsProvider? embeddingsProvider = null)
+        Phantom.Workspaces.Data.Vector.IEmbeddingsProvider? embeddingsProvider = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(database);
         if (string.IsNullOrWhiteSpace(collectionName))
@@ -31,6 +33,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         _entityCollection = database.GetCollection<MongoDbEntityDocument>($"{collectionName}_entities");
         _queueHeadCollection = database.GetCollection<MongoDbQueueHead>($"{collectionName}_queue_heads");
         _embeddingsProvider = embeddingsProvider ?? new Phantom.Workspaces.Data.Vector.DeterministicEmbeddingsProvider();
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<UpdateResult> UpdateAsync(
@@ -118,7 +121,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 continue;
             }
 
-            var nowUtc = DateTime.UtcNow;
+            var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
             var nextVersionId = ObjectId.GenerateNewId(nowUtc);
             var nextTag = new ConcurrencyTag(nextVersionId.ToString());
             var hasData = change.Data is not null;
@@ -229,7 +232,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             .ConfigureAwait(false);
         foreach (var document in entityDocuments)
         {
-            EnsureBootstrapVersion(document);
+            EnsureBootstrapVersion(document, _timeProvider);
         }
 
         // If relationships are requested, also load relationship documents not already in the
@@ -252,7 +255,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 .ConfigureAwait(false);
             foreach (var document in relationshipDocs)
             {
-                EnsureBootstrapVersion(document);
+                EnsureBootstrapVersion(document, _timeProvider);
             }
             var extra = relationshipDocs.Where(d => !loadedIds.Contains(d.Id)).ToList();
             if (extra.Count > 0)
@@ -643,7 +646,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             batch.AddRange(cursor.Current);
             while (batch.Count >= BatchSize)
             {
-                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], cancellationToken)
+                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], _timeProvider, cancellationToken)
                     .ConfigureAwait(false);
                 batch.RemoveRange(0, BatchSize);
             }
@@ -651,13 +654,14 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         if (batch.Count > 0)
         {
-            await ApplyMigrationBatchAsync(bsonCollection, batch, cancellationToken).ConfigureAwait(false);
+            await ApplyMigrationBatchAsync(bsonCollection, batch, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private static async Task ApplyMigrationBatchAsync(
         IMongoCollection<BsonDocument> collection,
         List<BsonDocument> docs,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var writes = new List<WriteModel<BsonDocument>>(docs.Count);
@@ -723,7 +727,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     new BsonDocument
                     {
                         { "VersionId", ReadVersionId(current) },
-                        { "TimestampUtc", ReadTimestampUtc(current) },
+                        { "TimestampUtc", ReadTimestampUtc(current, timeProvider) },
                         { "data", data.DeepClone() },
                     },
                 };
@@ -759,7 +763,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         return ObjectId.GenerateNewId();
     }
 
-    private static DateTime ReadTimestampUtc(BsonDocument current)
+    private static DateTime ReadTimestampUtc(BsonDocument current, TimeProvider timeProvider)
     {
         if (current.TryGetValue("modified-time-utc", out var value))
         {
@@ -774,7 +778,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             }
         }
 
-        return DateTime.UtcNow;
+        return timeProvider.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>
@@ -871,7 +875,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 return;
             }
 
-            await Task.Delay(VectorIndexRemovalPollInterval, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(VectorIndexRemovalPollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -1631,7 +1635,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var finalVersion = versions.LastOrDefault().Version;
         var finalSnapshot = finalVersion is null
-            ? new Timestamp(DateTimeOffset.UtcNow, ObjectId.GenerateNewId().ToString())
+            ? new Timestamp(_timeProvider.GetUtcNow(), ObjectId.GenerateNewId().ToString())
             : new Timestamp(new DateTimeOffset(finalVersion.TimestampUtc, TimeSpan.Zero), finalVersion.VersionId.ToString());
 
         return new ExportResult
@@ -1727,7 +1731,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             .LastOrDefault();
     }
 
-    private static void EnsureBootstrapVersion(MongoDbEntityDocument document)
+    private static void EnsureBootstrapVersion(MongoDbEntityDocument document, TimeProvider timeProvider)
     {
         if (document.Versions.Count > 0 || document.Current?.Data is null)
         {
@@ -1740,7 +1744,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 ? parsed
                 : ObjectId.GenerateNewId(),
             TimestampUtc = document.Current.ModifiedTimeUtc == default
-                ? DateTime.UtcNow
+                ? timeProvider.GetUtcNow().UtcDateTime
                 : document.Current.ModifiedTimeUtc,
             Data = document.Current.Data,
         });

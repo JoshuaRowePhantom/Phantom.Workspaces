@@ -14,10 +14,12 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
     private readonly IMongoCollection<MongoDbPersistedDefinitionDocument> definitionsCollection;
     private readonly IMongoCollection<MongoDbPersistedMessageDocument> messagesCollection;
     private readonly IMongoCollection<MongoDbSubAgentManifestDocument> subAgentManifestCollection;
+    private readonly TimeProvider timeProvider;
 
     public MongoDbAgentPersistenceStore(
         IMongoDatabase database,
-        string collectionName)
+        string collectionName,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(database);
         if (string.IsNullOrWhiteSpace(collectionName))
@@ -29,6 +31,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         this.definitionsCollection = database.GetCollection<MongoDbPersistedDefinitionDocument>($"{collectionName}-definitions");
         this.messagesCollection = database.GetCollection<MongoDbPersistedMessageDocument>($"{collectionName}-messages");
         this.subAgentManifestCollection = database.GetCollection<MongoDbSubAgentManifestDocument>($"{collectionName}-sub-agent-manifests");
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
@@ -54,7 +57,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentSessionJson = request.Agent.AgentSessionJson,
                 CopilotSdkSessionId = copilotSdkSessionId,
-                UpdatedUtc = DateTime.UtcNow,
+                UpdatedUtc = this.timeProvider.GetUtcNow().UtcDateTime,
             };
 
             await this.sessionsCollection.ReplaceOneAsync(
@@ -71,7 +74,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             {
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentDefinitionJson = request.Agent.AgentDefinitionJson,
-                UpdatedUtc = DateTime.UtcNow,
+                UpdatedUtc = this.timeProvider.GetUtcNow().UtcDateTime,
             };
 
             await this.definitionsCollection.ReplaceOneAsync(

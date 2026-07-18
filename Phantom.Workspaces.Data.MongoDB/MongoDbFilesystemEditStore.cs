@@ -8,10 +8,14 @@ namespace Phantom.Workspaces.Data.MongoDB;
 public sealed class MongoDbFilesystemEditStore : IFilesystemEditStore
 {
     private readonly IMongoCollection<MongoDbFilesystemEditDocument> edits;
+    private readonly TimeProvider timeProvider;
 
-    public MongoDbFilesystemEditStore(IMongoCollection<MongoDbFilesystemEditDocument> edits)
+    public MongoDbFilesystemEditStore(
+        IMongoCollection<MongoDbFilesystemEditDocument> edits,
+        TimeProvider? timeProvider = null)
     {
         this.edits = edits ?? throw new ArgumentNullException(nameof(edits));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<string> StoreEditAsync(
@@ -30,7 +34,7 @@ public sealed class MongoDbFilesystemEditStore : IFilesystemEditStore
             ModifiedContent = modifiedContent,
             Preview = preview,
             Operation = operation,
-            CreatedAt = DateTime.UtcNow,
+            CreatedAt = this.timeProvider.GetUtcNow().UtcDateTime,
         };
 
         await this.edits.InsertOneAsync(document, cancellationToken: cancellationToken).ConfigureAwait(false);
