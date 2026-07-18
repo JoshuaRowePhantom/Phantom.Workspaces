@@ -25,10 +25,11 @@ public sealed class UpdateController : IUpdateController, IDisposable
     private readonly string? installRootOverride;
     private readonly Action requestShutdown;
     private readonly UpdateCheckScheduler scheduler;
+    private readonly TimeProvider timeProvider;
     private readonly object gate = new();
     private ReleaseInfo? latestRelease;
     private AutomaticUpdateMode mode;
-    private Timer? periodicTimer;
+    private ITimer? periodicTimer;
     private bool disposed;
 
     /// <summary>Creates the controller over its collaborators.</summary>
@@ -41,7 +42,8 @@ public sealed class UpdateController : IUpdateController, IDisposable
         AutomaticUpdateMode mode,
         string? installRootOverride,
         Action requestShutdown,
-        UpdateCheckScheduler? scheduler = null)
+        UpdateCheckScheduler? scheduler = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(updateService);
         ArgumentNullException.ThrowIfNull(startupTaskService);
@@ -59,6 +61,7 @@ public sealed class UpdateController : IUpdateController, IDisposable
         this.installRootOverride = installRootOverride;
         this.requestShutdown = requestShutdown;
         this.scheduler = scheduler ?? new UpdateCheckScheduler(new SystemClock());
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -177,7 +180,7 @@ public sealed class UpdateController : IUpdateController, IDisposable
         {
             ObjectDisposedException.ThrowIf(this.disposed, this);
             this.periodicTimer?.Dispose();
-            this.periodicTimer = new Timer(
+            this.periodicTimer = this.timeProvider.CreateTimer(
                 _ => _ = this.PollAsync(),
                 state: null,
                 initialDelay ?? TimeSpan.FromSeconds(30),
