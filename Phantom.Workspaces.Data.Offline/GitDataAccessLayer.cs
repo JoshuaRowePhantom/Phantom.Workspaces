@@ -12,14 +12,17 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
 {
     private readonly SemaphoreSlim updateSemaphore = new(1, 1);
     private readonly FilesystemDataAccessLayer filesystemDataAccessLayer;
+    private readonly TimeProvider timeProvider;
 
     public GitDataAccessLayer(
-        string repositoryPath)
+        string repositoryPath,
+        TimeProvider? timeProvider = null)
     {
         this.RepositoryPath = repositoryPath;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.InitializeLocalRepository();
 
-        this.filesystemDataAccessLayer = new FilesystemDataAccessLayer(this.RepositoryPath);
+        this.filesystemDataAccessLayer = new FilesystemDataAccessLayer(this.RepositoryPath, this.timeProvider);
     }
 
     public string RepositoryPath { get; }
@@ -187,7 +190,7 @@ public sealed class GitDataAccessLayer : IDataAccessLayer
                 return updateResult;
             }
 
-            var signature = new Signature("Phantom Workspaces", "noreply@workspaces.phantom.to", DateTimeOffset.UtcNow);
+            var signature = new Signature("Phantom Workspaces", "noreply@workspaces.phantom.to", this.timeProvider.GetUtcNow());
             var commitMessage = string.IsNullOrWhiteSpace(request.UpdateMetadata.Comment.Text)
                 ? "Update entities"
                 : request.UpdateMetadata.Comment.Text;

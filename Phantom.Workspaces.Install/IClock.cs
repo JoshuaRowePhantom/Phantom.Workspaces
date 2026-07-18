@@ -10,12 +10,20 @@ public interface IClock
     DateTimeOffset UtcNow { get; }
 }
 
-/// <summary>The production <see cref="IClock"/> backed by the system clock.</summary>
+/// <summary>The production <see cref="IClock"/> backed by an injected <see cref="TimeProvider"/>.</summary>
 public sealed class SystemClock : IClock
 {
-    /// <summary>A shared instance.</summary>
+    /// <summary>A shared instance backed by the wall-clock <see cref="TimeProvider.System"/>.</summary>
     public static readonly SystemClock Instance = new();
 
+    private readonly TimeProvider timeProvider;
+
+    /// <summary>Creates a clock that reads the current instant from <paramref name="timeProvider"/>.</summary>
+    public SystemClock(TimeProvider? timeProvider = null)
+    {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+    }
+
     /// <inheritdoc />
-    public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
+    public DateTimeOffset UtcNow => this.timeProvider.GetUtcNow();
 }
