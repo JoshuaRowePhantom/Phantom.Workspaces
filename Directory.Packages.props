@@ -34,6 +34,7 @@
     <PackageVersion Include="Markdig.Signed" Version="1.0.0" />
     <PackageVersion Include="Markdown.Avalonia.Tight" Version="12.0.0-a3" />
     <PackageVersion Include="Markdown.Avalonia.SyntaxHigh" Version="12.0.0-a3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.7" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.7.0" />

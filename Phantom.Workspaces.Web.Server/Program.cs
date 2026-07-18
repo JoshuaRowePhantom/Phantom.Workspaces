@@ -3,6 +3,7 @@ using Phantom.Workspaces.Data.Web.Server;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Local;
@@ -10,6 +11,13 @@ using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// #1095: this standalone host never loads a WorkspacesConfiguration, so it resolves its own log
+// directory (content root / PHANTOM_WORKSPACES_LOG_DIRECTORY override) and registers the shared
+// #1086 rolling file provider against it — independent of the main .exe's single-resolution path.
+var logDirectory = HostLogDirectoryResolver.Resolve(builder.Environment.ContentRootPath);
+builder.Logging.AddProvider(new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
+
 var dataAccessLayer = await WebServerDataAccessLayerFactory.CreateDefaultAsync();
 builder.Services.AddSingleton<IDataAccessLayer>(dataAccessLayer);
 

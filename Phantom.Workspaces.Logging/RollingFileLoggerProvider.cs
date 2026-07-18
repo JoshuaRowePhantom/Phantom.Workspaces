@@ -9,9 +9,10 @@ namespace Phantom.Workspaces.Services.Logging;
 /// <summary>
 /// A small custom <see cref="ILoggerProvider"/> that writes to dated rolling files
 /// (<c>phantom-workspaces-yyyyMMdd.log</c>) in a supplied log directory, enforcing a retention
-/// period (7 days by default). The directory is supplied by <see cref="ILogDirectoryProvider"/>;
-/// this provider never resolves a directory itself. Old files are pruned on construction and
-/// whenever the active dated file rolls over to a new day.
+/// period (7 days by default). The directory is supplied by the caller (the config-driven
+/// <c>ILogDirectoryProvider</c> for the main process, or <c>HostLogDirectoryResolver</c> for
+/// config-less hosts); this provider never resolves a directory itself. Old files are pruned on
+/// construction and whenever the active dated file rolls over to a new day.
 /// </summary>
 public sealed class RollingFileLoggerProvider : ILoggerProvider
 {
