@@ -21,6 +21,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     private readonly Action<string, string?> activateTab;
     private readonly Action<string> openAgentForSession;
     private readonly Action<Action> dispatch;
+    private readonly TimeProvider timeProvider;
 
     private bool isAnyRunning;
     private bool isOpen;
@@ -40,13 +41,15 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         Func<IEnumerable<AgentTabInfo>> getAllAgentTabs,
         Action<string, string?> activateTab,
         Action<string> openAgentForSession,
-        Action<Action> dispatch)
+        Action<Action> dispatch,
+        TimeProvider? timeProvider = null)
     {
         this.table = table;
         this.getAllAgentTabs = getAllAgentTabs;
         this.activateTab = activateTab;
         this.openAgentForSession = openAgentForSession;
         this.dispatch = dispatch;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
         this.table.RunningSessions.CollectionChanged += this.OnSessionsChanged;
         this.Refresh();
@@ -178,7 +181,8 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             workspacePaneTitle: tabInfo.PaneTitle,
             tabTitle: tabInfo.Tab.Title,
             isThinking: tabInfo.Tab.Agent?.IsChatRunning ?? false,
-            activateCommand: activateCmd);
+            activateCommand: activateCmd,
+            timeProvider: this.timeProvider);
     }
 
     private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChatWithEntityInfo session)
@@ -194,7 +198,8 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         return new RunningAgentRowViewModel(
             sessionKey: capturedSessionKey,
             entityName: session.EntityName,
-            activateCommand: activateCmd);
+            activateCommand: activateCmd,
+            timeProvider: this.timeProvider);
     }
 
     /// <summary>
@@ -223,7 +228,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 string.Equals(r.SessionKey, sessionKey, StringComparison.Ordinal));
             if (row is not null)
             {
-                row.UpdateLastActivityAt(DateTime.UtcNow);
+                row.UpdateLastActivityAt(this.timeProvider.GetUtcNow().UtcDateTime);
                 this.ResortRows();
             }
         };

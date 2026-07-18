@@ -18,18 +18,17 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class AgentSessionShortcutContext
 {
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
-    private readonly Func<DateTimeOffset> currentTimeProvider;
+    private readonly TimeProvider timeProvider;
     private readonly string? userComputerProfileOverride;
     private readonly IAgentPersistenceStoreCache? persistenceStoreCache;
     private Task<IAgentPersistenceStore>? agentPersistenceStoreTask;
 
     public AgentSessionShortcutContext(
-        Func<DateTimeOffset>? currentTimeProvider = null,
+        TimeProvider? timeProvider = null,
         string? userComputerProfileOverride = null,
         IAgentPersistenceStoreCache? persistenceStoreCache = null)
     {
-        this.currentTimeProvider = currentTimeProvider
-            ?? (() => DateTimeOffset.UtcNow);
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.userComputerProfileOverride = userComputerProfileOverride;
         this.persistenceStoreCache = persistenceStoreCache;
     }
@@ -156,7 +155,7 @@ public sealed class AgentSessionShortcutContext
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var sessionObjectSimpleName = CreateSessionObjectSimpleName(
             agentSessionId,
-            this.currentTimeProvider());
+            this.timeProvider.GetUtcNow());
         var agentSessionNames = await WorkspaceEntityNameFactory.CreateEntityNames(
             mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer,
             workspaceEntitySession,

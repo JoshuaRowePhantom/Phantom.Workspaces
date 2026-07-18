@@ -4,6 +4,7 @@ using System.Collections.Specialized;
 using System.Linq;
 using System.Threading.Tasks;
 using AgentSchema;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -325,5 +326,97 @@ public sealed class AgentSessionNotificationTests
                 call => call.RunningState == RunningState.Idle
                     && call.TabDescriptor.WorkspaceId == "workspace-pane-1");
         }
+    }
+
+    [AvaloniaFact]
+    public async Task AgentSessionWorkspaceTabViewModel_RecordsEvent_StampsTimestampFromInjectedTimeProvider()
+    {
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+
+        var start = new DateTimeOffset(2024, 7, 4, 10, 0, 0, TimeSpan.Zero);
+        var fake = new FakeTimeProvider(start);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+
+        // Construct via the internal TimeProvider ctor so all three event-stamp sites
+        // (running / idle / streaming transitions in OnAgentPropertyChanged) read the fake clock.
+        var tab = new AgentSessionWorkspaceTabViewModel(fake)
+        {
+            Id = "agent-tab-stamp",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        // First run: fires a Running notification then, on going idle, an Idle notification —
+        // both stamped from the (un-advanced) fake clock.
+        var firstIdleTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void FirstIdleHandler(Notification notification)
+        {
+            if (notification.RunningState == RunningState.Idle)
+            {
+                firstIdleTcs.TrySetResult();
+            }
+        }
+
+        notificationService.NotifyCallReceived += FirstIdleHandler;
+
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using (var cts1 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            cts1.Token.Register(() => firstIdleTcs.TrySetCanceled());
+            await firstIdleTcs.Task;
+        }
+
+        notificationService.NotifyCallReceived -= FirstIdleHandler;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running && call.When == start.UtcDateTime);
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Idle && call.When == start.UtcDateTime);
+
+            // Every event so far was stamped from the injected provider, never wall-clock.
+            Assert.All(notificationService.Calls, call => Assert.Equal(start.UtcDateTime, call.When));
+        }
+
+        // Advance the fake clock to prove the stamps read the injected provider, not wall-clock time.
+        fake.Advance(TimeSpan.FromHours(3));
+        var advanced = fake.GetUtcNow().UtcDateTime;
+
+        var runningTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Running
+                && notification.NotificationState == NotificationState.Interesting
+                && notification.TabDescriptor.TabId == "agent-tab-stamp")
+            {
+                runningTcs.TrySetResult();
+            }
+        };
+
+        agentChat.EnqueueUserMessage("hello again");
+
+        using (var cts2 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            cts2.Token.Register(() => runningTcs.TrySetCanceled());
+            await runningTcs.Task;
+        }
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running
+                && call.NotificationState == NotificationState.Interesting
+                && call.TabDescriptor.TabId == "agent-tab-stamp"
+                && call.When == advanced);
+        }
+
+        await WaitForRunningItemsEmptyAsync(agentChat);
     }
 }

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using AgentSchema;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
@@ -528,6 +529,65 @@ public sealed class RunningAgentBrainViewModelTests
         });
 
         Assert.Equal("session-A", vm.Rows[0].SessionKey);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task RunningAgentBrainViewModel_OnActivity_StampsRowLastActivityAtFromInjectedTimeProvider()
+    {
+        var agentDefinitionJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """;
+
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
+
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "A", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent A");
+
+        var start = new DateTimeOffset(2024, 5, 1, 9, 0, 0, TimeSpan.Zero);
+        var fake = new FakeTimeProvider(start);
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action(),
+            timeProvider: fake);
+
+        var row = vm.Rows.Single(r => r.SessionKey == "session-1");
+
+        // The row's LastActivityAt starts at the fake clock's construction-time value.
+        Assert.Equal(start.UtcDateTime, row.LastActivityAt);
+
+        // Advance the fake clock to prove the activity stamp reads the injected provider
+        // (not wall-clock time) at the moment the activity callback fires.
+        fake.Advance(TimeSpan.FromMinutes(42));
+
+        // Adding a history item fires History.CollectionChanged synchronously, which the
+        // ViewModel handles by stamping LastActivityAt via the injected TimeProvider.
+        chat.History.Add(new AgentChatHistoryItem
+        {
+            Role = Microsoft.Extensions.AI.ChatRole.Assistant,
+            Contents = [new Microsoft.Extensions.AI.TextContent("hello")],
+            Timestamp = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Equal(fake.GetUtcNow().UtcDateTime, row.LastActivityAt);
+        Assert.NotEqual(start.UtcDateTime, row.LastActivityAt);
 
         vm.Dispose();
     }

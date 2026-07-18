@@ -657,7 +657,7 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(new Microsoft.Extensions.Time.Testing.FakeTimeProvider(fixedCurrentTime));
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
 
             agentSessionShortcutContext,
@@ -707,7 +707,7 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(new Microsoft.Extensions.Time.Testing.FakeTimeProvider(fixedCurrentTime));
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
 
             agentSessionShortcutContext,
@@ -759,7 +759,7 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(new Microsoft.Extensions.Time.Testing.FakeTimeProvider(fixedCurrentTime));
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
 
             agentSessionShortcutContext,
@@ -817,7 +817,7 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        var agentSessionShortcutContext = new AgentSessionShortcutContext(() => fixedCurrentTime);
+        var agentSessionShortcutContext = new AgentSessionShortcutContext(new Microsoft.Extensions.Time.Testing.FakeTimeProvider(fixedCurrentTime));
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
 
             agentSessionShortcutContext,

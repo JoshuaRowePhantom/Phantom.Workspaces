@@ -31,11 +31,18 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
     private readonly AsyncDisposableCollection leaseDisposables;
+    private readonly TimeProvider timeProvider;
     private RunningAgentChatLease? lease;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
 
     public AgentSessionWorkspaceTabViewModel()
+        : this(TimeProvider.System)
     {
+    }
+
+    internal AgentSessionWorkspaceTabViewModel(TimeProvider timeProvider)
+    {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.leaseDisposables = new AsyncDisposableCollection(this.OnLeaseDisposeError);
     }
 
@@ -188,7 +195,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.CreateTabDescriptor(),
                 "Running",
                 textSummary ?? string.Empty,
-                DateTime.UtcNow,
+                this.timeProvider.GetUtcNow().UtcDateTime,
                 RunningState.Running,
                 NotificationState.Interesting));
         }
@@ -201,7 +208,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.CreateTabDescriptor(),
                 heading,
                 reason,
-                DateTime.UtcNow,
+                this.timeProvider.GetUtcNow().UtcDateTime,
                 RunningState.Idle,
                 NotificationState.Interesting));
         }
@@ -217,7 +224,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                     this.CreateTabDescriptor(),
                     "Running",
                     textSummary ?? string.Empty,
-                    DateTime.UtcNow,
+                    this.timeProvider.GetUtcNow().UtcDateTime,
                     RunningState.Running,
                     NotificationState.NotInteresting));
             }
