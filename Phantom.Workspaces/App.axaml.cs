@@ -261,6 +261,11 @@ public partial class App : Application
                 configurationFilePath);
             var loggerFactory = Services.Logging.LoggingBootstrap.CreateLoggerFactory(logDirectoryProvider);
 
+            // #1093: route global uncaught/unobserved exceptions through the #1086 file facility now
+            // that the logger factory exists (the crash-dialog handlers installed in Program.Main stay
+            // in place; this adds the missing logging half).
+            Services.Logging.GlobalExceptionLogging.Register(loggerFactory);
+
             var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();

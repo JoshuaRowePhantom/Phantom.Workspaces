@@ -33,6 +33,7 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Shared\Phantom.Workspaces.Gui.Shared.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Logging\Phantom.Workspaces.Logging.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Assets\chat-output-shell.html" />

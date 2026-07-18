@@ -44,6 +44,10 @@ builder.Services.AddSingleton<IAgentPersistenceStore>(AgentPersistenceStoreFacto
 
 var app = builder.Build();
 
+// #1093: log global uncaught/unobserved exceptions for this standalone host through the file
+// provider registered above.
+GlobalExceptionLogging.Register(app.Services.GetRequiredService<ILoggerFactory>());
+
 app.UseWebSockets();
 
 app.MapGet("/", () => $"Phantom.Workspaces.Web.Server ({typeof(WebServerMarker).Namespace})");

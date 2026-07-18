@@ -7,6 +7,11 @@ using System.CommandLine;
 
 var definitionParser = new AgentDefinitionCommandLineParser();
 
+// #1093: register global uncaught/unobserved exception logging at CLI startup, backed by a
+// config-less file logger factory (#1095), so faults leave a diagnosable record on disk.
+GlobalExceptionLogging.Register(
+    HostFileLoggerFactory.Create(HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory)));
+
 var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
 {};
 definitionParser.AddOptions(rootCommand);

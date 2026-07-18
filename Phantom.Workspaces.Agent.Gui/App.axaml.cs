@@ -71,6 +71,10 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // #1093: log unhandled UI-dispatcher exceptions through the centralized helper (the Agent GUI
+        // previously had no dispatcher hook at all).
+        Avalonia.Threading.Dispatcher.UIThread.UnhandledException += OnDispatcherUnhandledException;
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             if (Program.ParseError is { } error)
@@ -114,6 +118,14 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static void OnDispatcherUnhandledException(
+        object? sender,
+        Avalonia.Threading.DispatcherUnhandledExceptionEventArgs e)
+    {
+        Phantom.Workspaces.Services.Logging.GlobalExceptionLogging.OnDispatcherUnhandled(e.Exception);
+        e.Handled = true;
     }
 
     private static void OnCopyableTextButtonClick(
