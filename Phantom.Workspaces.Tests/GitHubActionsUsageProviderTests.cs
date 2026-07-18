@@ -83,6 +83,58 @@ public sealed class GitHubActionsUsageProviderTests
     }
 
     [Fact]
+    public async Task GetMetricsAsync_UsesInjectedTimeProviderForLastUpdatedAt()
+    {
+        var instant = new DateTimeOffset(2024, 2, 15, 8, 30, 0, TimeSpan.Zero);
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(instant);
+        const string json = """
+            {
+              "total_minutes_used": 100,
+              "included_minutes": 500,
+              "total_paid_minutes_used": 0
+            }
+            """;
+
+        var provider = new GitHubActionsUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token",
+            logger: null,
+            timeProvider: timeProvider);
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(metrics);
+        Assert.All(metrics, m => Assert.Equal(instant.UtcDateTime, m.LastUpdatedAt));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_AfterAdvance_StampsLastUpdatedAtFromAdvancedTime()
+    {
+        var start = new DateTimeOffset(2024, 2, 1, 0, 0, 0, TimeSpan.Zero);
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(start);
+        const string json = """
+            {
+              "total_minutes_used": 100,
+              "included_minutes": 500,
+              "total_paid_minutes_used": 0
+            }
+            """;
+
+        var provider = new GitHubActionsUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token",
+            logger: null,
+            timeProvider: timeProvider);
+
+        timeProvider.Advance(TimeSpan.FromDays(1));
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(metrics);
+        Assert.All(metrics, m => Assert.Equal(start.UtcDateTime.AddDays(1), m.LastUpdatedAt));
+    }
+
+    [Fact]
     public async Task GetMetricsAsync_WhenNotFound_ReturnsEmpty()
     {
         var provider = new GitHubActionsUsageProvider(

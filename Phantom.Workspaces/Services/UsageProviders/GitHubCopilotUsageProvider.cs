@@ -25,24 +25,28 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
     private readonly HttpClient httpClient;
     private readonly Func<string?> tokenResolver;
     private readonly ILogger<GitHubCopilotUsageProvider> logger;
+    private readonly TimeProvider timeProvider;
 
     public Uri ProviderUri { get; } = new Uri("https://github.com/copilot");
 
     public GitHubCopilotUsageProvider(
         HttpClient httpClient,
-        ILogger<GitHubCopilotUsageProvider>? logger = null)
-        : this(httpClient, () => GitHubAuthTokenResolver.Resolve(), logger)
+        ILogger<GitHubCopilotUsageProvider>? logger = null,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, () => GitHubAuthTokenResolver.Resolve(), logger, timeProvider)
     {
     }
 
     internal GitHubCopilotUsageProvider(
         HttpClient httpClient,
         Func<string?> tokenResolver,
-        ILogger<GitHubCopilotUsageProvider>? logger = null)
+        ILogger<GitHubCopilotUsageProvider>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         this.httpClient = httpClient;
         this.tokenResolver = tokenResolver;
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubCopilotUsageProvider>.Instance;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<IReadOnlyList<UsageMetric>> GetMetricsAsync(
@@ -86,7 +90,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return ParseMetrics(json);
+        return ParseMetrics(json, this.timeProvider.GetUtcNow().UtcDateTime);
     }
 
     private Task<HttpResponseMessage> SendRequestAsync(string? token, CancellationToken cancellationToken)
@@ -105,12 +109,11 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         return this.httpClient.SendAsync(request, cancellationToken);
     }
 
-    private static IReadOnlyList<UsageMetric> ParseMetrics(string json)
+    private static IReadOnlyList<UsageMetric> ParseMetrics(string json, DateTime now)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var now = DateTime.UtcNow;
         var metrics = new List<UsageMetric>();
 
         // Included Usage: seat_breakdown.active_this_cycle / seat_breakdown.total

@@ -722,10 +722,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             new Services.UsageProviders.GitHubCopilotUsageProvider(
                 new HttpClient(),
-                this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubCopilotUsageProvider>()),
+                this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubCopilotUsageProvider>(),
+                TimeProvider.System),
             new Services.UsageProviders.GitHubActionsUsageProvider(
                 new HttpClient(),
-                this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubActionsUsageProvider>()),
+                this.loggerFactory.CreateLogger<Services.UsageProviders.GitHubActionsUsageProvider>(),
+                TimeProvider.System),
         };
         this.usageMetricsService = new Services.UsageMetricsService(
             dataAccessLayer,
