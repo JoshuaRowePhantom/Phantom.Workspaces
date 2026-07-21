@@ -31,8 +31,6 @@ public partial class MainWindow : Window
         {
             if (this.DataContext is MainWindowViewModel vm)
             {
-                vm.IsAltHeld = false;
-                vm.IsShiftHeld = false;
                 vm.NavStackPopup.Dismiss();
             }
         };
@@ -56,13 +54,6 @@ public partial class MainWindow : Window
         if (e.Key is Key.LeftCtrl or Key.RightCtrl)
         {
             viewModel.NavStackPopup.OpenAtCurrentPosition();
-            return;
-        }
-
-        if (e.Key is Key.LeftAlt or Key.RightAlt)
-        {
-            viewModel.IsAltHeld = true;
-            viewModel.IsShiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             return;
         }
 
@@ -118,40 +109,6 @@ public partial class MainWindow : Window
             return;
         }
 
-        var index = GetDigitIndex(e.PhysicalKey);
-        if (index < 0)
-        {
-            return;
-        }
-
-        if (e.KeyModifiers == KeyModifiers.Alt)
-        {
-            viewModel.GoToTabAtIndexCommand.Execute(index.ToString());
-            e.Handled = true;
-        }
-        else if (e.KeyModifiers == (KeyModifiers.Alt | KeyModifiers.Shift))
-        {
-            viewModel.GoToWorkspacePaneAtIndexCommand.Execute(index.ToString());
-            e.Handled = true;
-        }
-    }
-
-    private static int GetDigitIndex(PhysicalKey key)
-    {
-        return key switch
-        {
-            PhysicalKey.Digit1 => 0,
-            PhysicalKey.Digit2 => 1,
-            PhysicalKey.Digit3 => 2,
-            PhysicalKey.Digit4 => 3,
-            PhysicalKey.Digit5 => 4,
-            PhysicalKey.Digit6 => 5,
-            PhysicalKey.Digit7 => 6,
-            PhysicalKey.Digit8 => 7,
-            PhysicalKey.Digit9 => 8,
-            PhysicalKey.Digit0 => 9,
-            _ => -1,
-        };
     }
 
     private async void OnOpenSettingsClicked(
@@ -235,10 +192,5 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.Key is Key.LeftAlt or Key.RightAlt)
-        {
-            viewModel.IsAltHeld = false;
-            viewModel.IsShiftHeld = false;
-        }
     }
 }

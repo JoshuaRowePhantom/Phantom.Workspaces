@@ -477,17 +477,6 @@
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>
             </StackPanel>
-            <!-- Alt+N shortcut badge: visible only for tabs 1–10; fades in when Alt is held -->
-            <Border Classes="alt-index-badge"
-                    Classes.alt-held="{Binding IsShortcutBadgeVisible}"
-                    IsVisible="{Binding AltShortcutLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    ZIndex="10">
-                <TextBlock Text="{Binding AltShortcutLabel}"
-                           Classes="caption"
-                           HorizontalAlignment="Center" />
-            </Border>
         </Grid>
     </DataTemplate>
     <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">

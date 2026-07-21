@@ -80,33 +80,11 @@ public sealed class StatusTabHeaderItemViewModel : TabHeaderItemViewModel
 public class TabHeaderViewModel : ViewModelBase
 {
     private string title = string.Empty;
-    private string? altShortcutLabel;
-    private bool isShortcutBadgeVisible;
 
     public required string Title
     {
         get => this.title;
         set => this.SetProperty(ref this.title, value);
-    }
-
-    /// <summary>
-    /// The Alt+N shortcut label for this tab ("1"–"9", "0" for the 10th tab; null for tabs beyond index 9).
-    /// Set by <see cref="MainWindowViewModel"/> whenever the visible tab list changes.
-    /// </summary>
-    public string? AltShortcutLabel
-    {
-        get => this.altShortcutLabel;
-        set => this.SetProperty(ref this.altShortcutLabel, value);
-    }
-
-    /// <summary>
-    /// Controls whether the Alt+N / Alt+Shift+N shortcut badge overlay is visible on this tab.
-    /// Set by <see cref="MainWindowViewModel"/> when the relevant modifier combination is active.
-    /// </summary>
-    public bool IsShortcutBadgeVisible
-    {
-        get => this.isShortcutBadgeVisible;
-        set => this.SetProperty(ref this.isShortcutBadgeVisible, value);
     }
 
     public ObservableCollection<TabHeaderItemViewModel> Items { get; } = [];

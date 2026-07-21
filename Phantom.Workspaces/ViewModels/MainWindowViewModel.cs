@@ -83,8 +83,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
-    private bool isAltHeld;
-    private bool isShiftHeld;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
@@ -121,8 +119,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.CloseActiveTabCommand = new RelayCommand(_ => this.OnCloseActiveTab());
         this.CycleTabForwardCommand = new RelayCommand(_ => this.OnCycleTab(+1));
         this.CycleTabBackwardCommand = new RelayCommand(_ => this.OnCycleTab(-1));
-        this.GoToTabAtIndexCommand = new RelayCommand(param => this.OnGoToTabAtIndex(int.Parse((string)param!)));
-        this.GoToWorkspacePaneAtIndexCommand = new RelayCommand(param => this.OnGoToWorkspacePaneAtIndex(int.Parse((string)param!)));
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
@@ -221,10 +217,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     public RelayCommand CycleTabBackwardCommand { get; }
 
-    public RelayCommand GoToTabAtIndexCommand { get; }
-
-    public RelayCommand GoToWorkspacePaneAtIndexCommand { get; }
-
     public RelayCommand NavigateNextNotificationCommand { get; }
     public RelayCommand NavigatePreviousNotificationCommand { get; }
     public RelayCommand NavigateBackCommand { get; }
@@ -285,39 +277,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         return null;
-    }
-
-    /// <summary>
-    /// True while the Alt key is physically held down. Drives the Alt+N shortcut badge overlay on tab headers.
-    /// Set by <see cref="MainWindow"/> keyboard handlers; cleared here when a tab switch command fires.
-    /// </summary>
-    public bool IsAltHeld
-    {
-        get => this.isAltHeld;
-        set
-        {
-            if (this.SetProperty(ref this.isAltHeld, value))
-            {
-                this.PropagateBadgeVisibility(value, this.isShiftHeld);
-            }
-        }
-    }
-
-    /// <summary>
-    /// True while the Shift key is physically held down. Used together with <see cref="IsAltHeld"/>
-    /// to determine which badge type is active: Alt alone → content-tab badges; Alt+Shift → pane-tab badges.
-    /// Set by <see cref="MainWindow"/> keyboard handlers.
-    /// </summary>
-    public bool IsShiftHeld
-    {
-        get => this.isShiftHeld;
-        set
-        {
-            if (this.SetProperty(ref this.isShiftHeld, value))
-            {
-                this.PropagateBadgeVisibility(this.isAltHeld, value);
-            }
-        }
     }
 
     // IActiveTabProvider implementation
@@ -429,11 +388,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 this.RaisePropertyChanged(nameof(this.ActiveAgentViewModel));
 
-                // Alt+N numbering is scoped to the active workspace, so switching
-                // workspaces must renumber the newly active pane from 1 (clearing the
-                // old one) and re-target which pane shows the content badges.
-                this.RefreshActiveWorkspaceAltShortcutLabels();
-                this.PropagateBadgeVisibility(this.isAltHeld, this.isShiftHeld);
             }
         }
     }
@@ -875,9 +829,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.dockFactory.InitLayout(layout);
         this.Layout = layout;
 
-        this.WorkspacePanes.CollectionChanged += (_, _) => this.RefreshWorkspacePaneAltShortcutLabels();
-        this.RefreshWorkspacePaneAltShortcutLabels();
-
         // Monitor workspace dock for closes
         var workspacesDock = FindDocumentDock(layout);
         if (workspacesDock?.VisibleDockables is System.Collections.Specialized.INotifyCollectionChanged collection)
@@ -972,7 +923,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         });
 
-        this.RefreshWorkspacePaneAltShortcutLabels();
     }
 
     /// <summary>
@@ -1934,70 +1884,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.notificationService.MarkRead(nextDoc.Id);
     }
 
-    private void OnGoToTabAtIndex(int index)
-    {
-        var match = FindTabByAltShortcutIndex(this.ComputeActiveWorkspaceTabOrder(), index);
-        if (match is null)
-        {
-            return;
-        }
-
-        var (pane, doc) = match.Value;
-        if (pane.ContentLayout is null)
-        {
-            return;
-        }
-
-        var documentDock = this.FindDocumentDock(pane.ContentLayout);
-        if (documentDock is null)
-        {
-            return;
-        }
-
-        // Activate the pane that owns the badged tab (which may not be the currently
-        // selected pane), then activate the tab itself.
-        this.SelectedWorkspacePane = pane;
-        this.dockFactory.SetActiveDockable(doc);
-        this.dockFactory.SetFocusedDockable(documentDock, doc);
-        this.notificationService.MarkRead(doc.Id);
-        if (!this.navigatingViaHistory)
-        {
-            this.navigationHistoryService.Push(new NavigationEntry(doc.Id, pane.Id));
-        }
-    }
-
-    private void OnGoToWorkspacePaneAtIndex(int index)
-    {
-        if (index < 0 || index >= this.WorkspacePanes.Count)
-        {
-            return;
-        }
-
-        this.SelectedWorkspacePane = this.WorkspacePanes[index];
-
-        var paneDoc = this.dockFactory.GetPaneDocument(this.SelectedWorkspacePane.Id);
-        if (paneDoc is not null)
-        {
-            this.dockFactory.SetActiveDockable(paneDoc);
-        }
-
-        var notifTab = this.SelectedWorkspacePane.SelectedTab
-            ?? this.SelectedWorkspacePane.Tabs.FirstOrDefault();
-        if (notifTab is not null)
-        {
-            this.notificationService.MarkRead(notifTab.Id);
-        }
-
-        if (!this.navigatingViaHistory)
-        {
-            var activeTabId = this.ActiveTabId;
-            if (activeTabId is not null)
-            {
-                this.navigationHistoryService.Push(new NavigationEntry(activeTabId, this.SelectedWorkspacePane.Id));
-            }
-        }
-    }
-
     private void OnNavigateBack()
     {
         this.navigatingViaHistory = true;
@@ -2257,28 +2143,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (documentDock is null)
         {
             return;
-        }
-
-        // Wire up accelerator-key callbacks so Alt+1–0 and IsAltHeld work when this tab's WebView has focus.
-        if (tab is WebViewModel webVm)
-        {
-            webVm.AltKeyStateChanged += (_, held) =>
-            {
-                this.IsAltHeld = held;
-                if (!held) this.IsShiftHeld = false;
-            };
-            webVm.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
-            webVm.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.GoToWorkspacePaneAtIndexCommand.Execute(idx.ToString());
-        }
-        else if (tab is AgentSessionWorkspaceTabViewModel agentTab)
-        {
-            agentTab.AltKeyStateChanged += (_, held) =>
-            {
-                this.IsAltHeld = held;
-                if (!held) this.IsShiftHeld = false;
-            };
-            agentTab.GoToTabAtIndexRequested += (_, idx) => this.GoToTabAtIndexCommand.Execute(idx.ToString());
-            agentTab.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.GoToWorkspacePaneAtIndexCommand.Execute(idx.ToString());
         }
 
         // Check if tab already exists
@@ -2550,12 +2414,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         NotifyCollectionChangedEventHandler handler = (_, e) =>
         {
             this.SyncPaneTabsFromDockChange(workspacePane, documentDock, e);
-            this.RefreshActiveWorkspaceAltShortcutLabels();
         };
         collection.CollectionChanged += handler;
         this.innerDockSubscriptions[workspacePane.Id] = handler;
-
-        this.RefreshActiveWorkspaceAltShortcutLabels();
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
@@ -2853,173 +2714,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 workspacePane.Tabs.Move(currentIndex, targetIndex);
             }
-        }
-    }
-
-    /// <summary>
-    /// Maps a zero-based tab position to the Alt-shortcut badge label: 0→"1" … 8→"9", 9→"0";
-    /// positions outside the 1–10 range (including negatives) receive no label.
-    /// This single mapping is shared by badge assignment and Alt-N resolution so the two
-    /// can never diverge.
-    /// </summary>
-    internal static string? AltShortcutLabelForIndex(int index) => index switch
-    {
-        < 0 => null,
-        < 9 => (index + 1).ToString(CultureInfo.InvariantCulture),
-        9 => "0",
-        _ => null,
-    };
-
-    internal static void RefreshTabAltShortcutLabels(WorkspacePaneViewModel workspacePane, Func<string, WorkspaceDocument?> getDocumentForTab)
-    {
-        for (var i = 0; i < workspacePane.Tabs.Count; i++)
-        {
-            if (getDocumentForTab(workspacePane.Tabs[i].Id) is WorkspaceDocument doc)
-            {
-                doc.EffectiveTabHeader.AltShortcutLabel = AltShortcutLabelForIndex(i);
-            }
-        }
-    }
-
-    internal static void RefreshWorkspacePaneAltShortcutLabels(
-        IReadOnlyList<WorkspacePaneViewModel> workspacePanes,
-        Func<string, WorkspacePaneDocument?> getPaneDocument)
-    {
-        for (var i = 0; i < workspacePanes.Count; i++)
-        {
-            var paneDoc = getPaneDocument(workspacePanes[i].Id);
-            if (paneDoc is not null)
-            {
-                paneDoc.EffectiveTabHeader.AltShortcutLabel = AltShortcutLabelForIndex(i);
-            }
-        }
-    }
-
-    private void RefreshWorkspacePaneAltShortcutLabels()
-        => RefreshWorkspacePaneAltShortcutLabels(this.WorkspacePanes, this.dockFactory.GetPaneDocument);
-
-    private void RefreshActiveWorkspaceAltShortcutLabels()
-    {
-        // Clear content-tab labels on every workspace first so stale badges from a
-        // previously-active workspace do not linger once numbering is scoped to the
-        // currently active workspace.
-        foreach (var pane in this.WorkspacePanes)
-        {
-            foreach (var tab in pane.Tabs)
-            {
-                if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                {
-                    doc.EffectiveTabHeader.AltShortcutLabel = null;
-                }
-            }
-        }
-
-        AssignGlobalAltShortcutLabels(this.ComputeActiveWorkspaceTabOrder());
-    }
-
-    /// <summary>
-    /// Assigns sequential Alt-shortcut badge labels (1–9, then 0) to the documents in the
-    /// supplied global tab order. Documents beyond the tenth receive no label.
-    /// </summary>
-    internal static void AssignGlobalAltShortcutLabels(
-        IReadOnlyList<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> globalOrder)
-    {
-        for (var i = 0; i < globalOrder.Count; i++)
-        {
-            globalOrder[i].Document.EffectiveTabHeader.AltShortcutLabel = AltShortcutLabelForIndex(i);
-        }
-    }
-
-    /// <summary>
-    /// Resolves the tab whose displayed Alt-shortcut badge matches the requested zero-based
-    /// index. The badge label is the single source of truth, so this always returns the tab
-    /// that visually displays badge N regardless of which pane owns it.
-    /// </summary>
-    internal static (WorkspacePaneViewModel Pane, WorkspaceDocument Document)? FindTabByAltShortcutIndex(
-        IReadOnlyList<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> globalOrder,
-        int index)
-    {
-        var label = AltShortcutLabelForIndex(index);
-        if (label is null)
-        {
-            return null;
-        }
-
-        foreach (var entry in globalOrder)
-        {
-            if (string.Equals(entry.Document.EffectiveTabHeader.AltShortcutLabel, label, StringComparison.Ordinal))
-            {
-                return entry;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Enumerates the global tab order across the supplied panes: pane by pane, and within each
-    /// pane left-to-right in <see cref="WorkspacePaneViewModel.Tabs"/> order (the documented
-    /// visual source of truth, kept in sync with the dock's VisibleDockables).
-    /// </summary>
-    internal static List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> ComputeGlobalTabOrder(
-        IEnumerable<WorkspacePaneViewModel> panes,
-        Func<string, WorkspaceDocument?> getDocumentForTab)
-    {
-        var order = new List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)>();
-        foreach (var pane in panes)
-        {
-            foreach (var tab in pane.Tabs)
-            {
-                if (getDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                {
-                    order.Add((pane, doc));
-                }
-            }
-        }
-
-        return order;
-    }
-
-    /// <summary>
-    /// Computes the Alt+N tab order scoped to the currently active workspace only: its
-    /// content tabs in left-to-right <see cref="WorkspacePaneViewModel.Tabs"/> order. Content
-    /// tabs in other (non-active) workspaces are intentionally excluded so each workspace
-    /// restarts numbering at 1. Returns an empty order when no eligible workspace is active.
-    /// </summary>
-    private List<(WorkspacePaneViewModel Pane, WorkspaceDocument Document)> ComputeActiveWorkspaceTabOrder()
-    {
-        var pane = this.selectedWorkspacePane;
-        if (pane?.ContentLayout is null
-            || pane.Id.StartsWith("loading-workspace:", StringComparison.Ordinal))
-        {
-            return new();
-        }
-
-        return ComputeGlobalTabOrder([pane], this.dockFactory.GetDocumentForTab);
-    }
-
-    private void PropagateBadgeVisibility(bool isAltHeld, bool isShiftHeld)
-    {
-        // Content tabs: badge visible when Alt held WITHOUT Shift, and only on the
-        // currently active workspace (Alt+N numbering is scoped to that workspace).
-        var contentBadge = isAltHeld && !isShiftHeld;
-        foreach (var pane in this.WorkspacePanes)
-        {
-            var isActive = ReferenceEquals(pane, this.selectedWorkspacePane);
-            foreach (var tab in pane.Tabs)
-            {
-                if (this.dockFactory.GetDocumentForTab(tab.Id) is WorkspaceDocument doc)
-                    doc.EffectiveTabHeader.IsShortcutBadgeVisible = isActive && contentBadge;
-            }
-        }
-
-        // Workspace pane tabs: badge visible when Alt+Shift both held.
-        var paneBadge = isAltHeld && isShiftHeld;
-        foreach (var pane in this.WorkspacePanes)
-        {
-            var paneDoc = this.dockFactory.GetPaneDocument(pane.Id);
-            if (paneDoc is not null)
-                paneDoc.EffectiveTabHeader.IsShortcutBadgeVisible = paneBadge;
         }
     }
 
@@ -4388,7 +4082,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    private void OnActiveDockableChanged(object? sender, Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
+    private void OnActiveDockableChanged(object? sender, global::Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
     {
         this.RaisePropertyChanged(nameof(this.ActiveAgentViewModel));
         if (e.Dockable is WorkspacePaneDocument paneDoc)

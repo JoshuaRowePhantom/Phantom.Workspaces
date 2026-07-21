@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Phantom.Workspaces.ViewModels"
         xmlns:dock="using:Dock.Avalonia.Controls"
+        xmlns:ts="using:Phantom.Dock.Avalonia.TabSwitching"
 
         xmlns:controls="using:Phantom.Workspaces.Controls"
         mc:Ignorable="d"
@@ -187,7 +188,17 @@
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />
 
-            <dock:DockControl Grid.Column="2" Layout="{Binding Layout}" />
+            <dock:DockControl Grid.Column="2"
+                              Layout="{Binding Layout}"
+                              ts:DockTabSwitch.Enabled="True">
+                <ts:DockTabSwitch.Bindings>
+                    <ts:DockTabSwitchBindings>
+                        <ts:DockTabSwitchGestures Modifiers="Alt,Shift"
+                                                  Keys="Digits"
+                                                  Scope="AllSwitchable" />
+                    </ts:DockTabSwitchBindings>
+                </ts:DockTabSwitch.Bindings>
+            </dock:DockControl>
         </Grid>
 
         <!-- Anchor for the navigation-stack popup in the lower-left corner -->

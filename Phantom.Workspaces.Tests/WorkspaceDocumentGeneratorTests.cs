@@ -1,7 +1,7 @@
 using System;
 using System.Collections;
 using System.Text.Json;
-using Dock.Model.Core;
+using global::Dock.Model.Core;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
@@ -107,7 +107,7 @@ public sealed class WorkspaceDocumentGeneratorTests
         var tab = new EntityWorkspaceTabViewModel { Id = "tab-x", Title = "Tab X" };
 
         // Passing wrong container type should not throw
-        var wrongContainer = new Dock.Model.Mvvm.Controls.Document { Id = "wrong" };
+        var wrongContainer = new global::Dock.Model.Mvvm.Controls.Document { Id = "wrong" };
         generator.PrepareDocumentContainer(StubDock.Instance, wrongContainer, tab, 0);
     }
 
@@ -117,7 +117,7 @@ public sealed class WorkspaceDocumentGeneratorTests
         string? clearedId = null;
         var generator = new WorkspaceDocumentGenerator(onCleared: id => clearedId = id);
 
-        var wrongContainer = new Dock.Model.Mvvm.Controls.Document { Id = "wrong" };
+        var wrongContainer = new global::Dock.Model.Mvvm.Controls.Document { Id = "wrong" };
         generator.ClearDocumentContainer(StubDock.Instance, wrongContainer, null);
 
         Assert.Null(clearedId);

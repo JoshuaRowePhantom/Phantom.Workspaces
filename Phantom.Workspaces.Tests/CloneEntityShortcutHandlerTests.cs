@@ -3,8 +3,8 @@ using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Dock.Model.Controls;
-using Dock.Model.Core;
+using global::Dock.Model.Controls;
+using global::Dock.Model.Core;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 

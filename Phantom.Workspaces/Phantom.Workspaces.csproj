@@ -63,6 +63,7 @@
     <PackageReference Include="Microsoft.DevTunnels.Management" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Agent.Gui\Phantom.Workspaces.Agent.Gui.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core\Phantom.Workspaces.Data.Core.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.MongoDB\Phantom.Workspaces.Data.MongoDB.csproj" />

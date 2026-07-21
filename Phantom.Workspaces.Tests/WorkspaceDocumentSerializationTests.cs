@@ -276,17 +276,17 @@ public sealed class WorkspaceDocumentSerializationTests
         var dock1 = new WorkspaceContentDock
         {
             Id = "dock-1",
-            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable> { doc1 },
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { doc1 },
         };
         var dock2 = new WorkspaceContentDock
         {
             Id = "dock-2",
-            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable> { doc2 },
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { doc2 },
         };
-        var root = new Dock.Model.Mvvm.Controls.RootDock
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
         {
             Id = "root",
-            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable> { dock1, dock2 },
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { dock1, dock2 },
         };
 
         var found = MainWindowViewModel.EnumerateAllDocuments(root).ToList();
@@ -312,15 +312,15 @@ public sealed class WorkspaceDocumentSerializationTests
         var contentDock = new WorkspaceContentDock
         {
             Id = "content-dock",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { doc },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { doc },
         };
         contentDock.ActiveDockable = doc;
         contentDock.DefaultDockable = doc;
 
-        var root = new Dock.Model.Mvvm.Controls.RootDock
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
         {
             Id = "root",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { contentDock },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { contentDock },
         };
         root.ActiveDockable = contentDock;
         root.DefaultDockable = contentDock;
@@ -372,7 +372,7 @@ public sealed class WorkspaceDocumentSerializationTests
             """;
 
         var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
-        var ex = Record.Exception(() => serializer.Deserialize<Dock.Model.Controls.IRootDock>(jsonWithExtra));
+        var ex = Record.Exception(() => serializer.Deserialize<global::Dock.Model.Controls.IRootDock>(jsonWithExtra));
         Assert.Null(ex);
     }
 
@@ -390,14 +390,14 @@ public sealed class WorkspaceDocumentSerializationTests
         var contentDock = new WorkspaceContentDock
         {
             Id = "content-dock-vm",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { doc },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { doc },
         };
         contentDock.ActiveDockable = doc;
 
-        var root = new Dock.Model.Mvvm.Controls.RootDock
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
         {
             Id = "root-vm-fields",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { contentDock },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { contentDock },
         };
         root.ActiveDockable = contentDock;
         // Wire Owner back-references; ReferenceHandler.Preserve handles cycles via $ref.

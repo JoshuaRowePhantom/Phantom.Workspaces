@@ -1254,24 +1254,6 @@
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
     </Style>
 
-    <!-- Alt+N shortcut index badge on tab headers -->
-    <Style Selector="Border.alt-index-badge">
-        <Setter Property="Background" Value="{DynamicResource SystemAccentColor}" />
-        <Setter Property="CornerRadius" Value="4" />
-        <Setter Property="Padding" Value="3,1" />
-        <Setter Property="Margin" Value="0,-2,-2,0" />
-        <Setter Property="Opacity" Value="0" />
-        <Setter Property="ZIndex" Value="10" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <DoubleTransition Property="Opacity" Duration="0:0:0.1" Easing="LinearEasing" />
-            </Transitions>
-        </Setter>
-    </Style>
-    <Style Selector="Border.alt-index-badge.alt-held">
-        <Setter Property="Opacity" Value="1" />
-    </Style>
-
     <Style Selector="Button.workspace-url-link">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
