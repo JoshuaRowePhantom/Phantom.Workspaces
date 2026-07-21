@@ -291,9 +291,86 @@ public sealed class CopilotSdkStreamAdapterTests
             new SessionIdleEvent { Data = new SessionIdleData { Aborted = false } },
             DeltaEvent(string.Empty, "after idle"));
 
-        var update = Assert.Single(updates);
-        var text = Assert.IsType<TextContent>(Assert.Single(update.Contents));
+        Assert.Equal(2, updates.Count);
+        var text = Assert.IsType<TextContent>(Assert.Single(updates[0].Contents));
         Assert.Equal("before idle", text.Text);
+        Assert.Equal(ChatFinishReason.Stop, updates[1].FinishReason);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SessionIdleEvent_EmitsTerminalFinishReason()
+    {
+        // Issue #1103: on SessionIdleEvent the adapter must emit a terminal ChatResponseUpdate
+        // carrying FinishReason so StreamingPersistenceMiddleware treats the response as final
+        // and persists every assistant message from the turn (including the last one).
+        var updates = await TranslateAsync(
+            new SessionIdleEvent { Data = new SessionIdleData { Aborted = false } });
+
+        var update = Assert.Single(updates);
+        Assert.Equal(ChatFinishReason.Stop, update.FinishReason);
+        Assert.Equal(ChatRole.Assistant, update.Role);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_NoToolTurn_FinalDeltaFollowedByTerminalFinishReason()
+    {
+        // Issue #1103: a plain no-tool turn is a single assistant text delta then SessionIdle.
+        // The last emitted update must carry a FinishReason so the response is treated as final
+        // and the sole assistant message is persisted (previously it was dropped as "unstable").
+        var updates = await TranslateAsync(
+            DeltaEvent(string.Empty, "hello world"),
+            new SessionIdleEvent { Data = new SessionIdleData { Aborted = false } });
+
+        Assert.Equal(2, updates.Count);
+        Assert.Null(updates[0].FinishReason);
+        Assert.Equal(ChatFinishReason.Stop, updates[1].FinishReason);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolTurn_TerminalFinishReasonEmittedAfterToolEvents()
+    {
+        // Issue #1103: tool-invoking turns must still finalize with a terminal FinishReason so
+        // that once the tool executes and the model finalises, the response is persisted.
+        var toolStart = new ToolExecutionStartEvent
+        {
+            AgentId = string.Empty,
+            Data = new ToolExecutionStartData
+            {
+                ToolCallId = "call-1",
+                ToolName = "search",
+            },
+        };
+        var toolComplete = new ToolExecutionCompleteEvent
+        {
+            AgentId = string.Empty,
+            Data = new ToolExecutionCompleteData
+            {
+                ToolCallId = "call-1",
+                Success = true,
+                Result = new ToolExecutionCompleteResult { Content = "ok" },
+            },
+        };
+
+        var updates = await TranslateAsync(
+            toolStart,
+            toolComplete,
+            DeltaEvent(string.Empty, "tool used"),
+            new SessionIdleEvent { Data = new SessionIdleData { Aborted = false } });
+
+        Assert.Equal(4, updates.Count);
+        Assert.Equal(ChatFinishReason.Stop, updates[^1].FinishReason);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_EmptyTurn_TerminalFinishReasonStillEmitted()
+    {
+        // Issue #1103: even an empty/no-delta turn (SessionIdleEvent as the only event) must
+        // finalize with a terminal FinishReason so downstream middleware doesn't stall.
+        var updates = await TranslateAsync(
+            new SessionIdleEvent { Data = new SessionIdleData { Aborted = false } });
+
+        var update = Assert.Single(updates);
+        Assert.Equal(ChatFinishReason.Stop, update.FinishReason);
     }
 
     [Fact]

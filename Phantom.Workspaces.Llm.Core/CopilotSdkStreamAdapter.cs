@@ -182,6 +182,15 @@ public static class CopilotSdkStreamAdapter
                         $"GitHub Copilot session error: {error.Data?.Message}");
 
                 case SessionIdleEvent:
+                    // Emit a terminal update carrying FinishReason so downstream middleware
+                    // (StreamingPersistenceMiddleware) treats the response as final and persists
+                    // the last message of the turn. Without this the last message of every
+                    // Copilot turn is treated as unstable and never persisted (issue #1103).
+                    yield return new ChatResponseUpdate
+                    {
+                        Role = ChatRole.Assistant,
+                        FinishReason = ChatFinishReason.Stop,
+                    };
                     yield break;
             }
         }
