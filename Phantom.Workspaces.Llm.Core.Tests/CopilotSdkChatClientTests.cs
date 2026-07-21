@@ -846,8 +846,12 @@ public sealed class CopilotSdkChatClientTests
     [Fact]
     public void BuildMessageOptions_WithMultipleConsecutiveUserMessages_ConcatenatesAllTexts()
     {
+        // Batched user messages within a single turn are merged with the "---" separator.
+        // The batch must be preceded by a non-user separator (issue #1104 hardening) so the
+        // backward walk knows where the current turn starts.
         var messages = new[]
         {
+            new ChatMessage(ChatRole.Assistant, "prior reply"),
             new ChatMessage(ChatRole.User, "first"),
             new ChatMessage(ChatRole.User, "second"),
         };
@@ -861,10 +865,14 @@ public sealed class CopilotSdkChatClientTests
     [Fact]
     public void BuildMessageOptions_WithMultipleConsecutiveUserMessages_MergesAllAttachments()
     {
+        // Same as above but exercising attachment merging: the batch must be preceded by a
+        // non-user separator so the backward walk identifies exactly this turn's batch
+        // (issue #1104 hardening).
         var png1 = new byte[] { 1, 2 };
         var png2 = new byte[] { 3, 4 };
         var messages = new[]
         {
+            new ChatMessage(ChatRole.Assistant, "prior reply"),
             new ChatMessage(ChatRole.User, new AIContent[]
             {
                 new TextContent("img1"),
@@ -919,6 +927,108 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.Equal("new message", result.Prompt);
         Assert.Null(result.Attachments);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithUserOnlyHistoryRun_SendsOnlyCurrentTurnBatch()
+    {
+        // Issue #1104: when history degenerates into a run of consecutive user messages with no
+        // non-user separator (e.g. because a prior assistant reply was never persisted, or an
+        // errored/cancelled/restored turn), the prompt must contain only the current turn's
+        // most recent user text — earlier turns must NOT be concatenated into one giant prompt.
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "user turn 1"),
+            new ChatMessage(ChatRole.User, "user turn 2"),
+            new ChatMessage(ChatRole.User, "user turn 3 (current)"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("user turn 3 (current)", result.Prompt);
+        Assert.DoesNotContain("user turn 1", result.Prompt);
+        Assert.DoesNotContain("user turn 2", result.Prompt);
+        Assert.DoesNotContain("---", result.Prompt);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithInterleavedHistory_SendsOnlyCurrentUserTurn()
+    {
+        // Issue #1104: with normal interleaved (user/assistant) history, only the current user
+        // turn is sent — prior user turns are excluded by the assistant separator.
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "first"),
+            new ChatMessage(ChatRole.Assistant, "reply 1"),
+            new ChatMessage(ChatRole.User, "second"),
+            new ChatMessage(ChatRole.Assistant, "reply 2"),
+            new ChatMessage(ChatRole.User, "third (current)"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("third (current)", result.Prompt);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithMultipleBatchedUserMessagesThisTurn_JoinsOnlyThisTurn()
+    {
+        // Issue #1104: multiple user messages queued within a single turn are joined with the
+        // "\n\n---\n\n" separator, but the join does not reach into earlier turns even when
+        // those earlier turns are also user messages (the assistant separator bounds the batch).
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "earlier user turn"),
+            new ChatMessage(ChatRole.Assistant, "earlier reply"),
+            new ChatMessage(ChatRole.User, "batched-1"),
+            new ChatMessage(ChatRole.User, "batched-2"),
+            new ChatMessage(ChatRole.User, "batched-3"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("batched-1\n\n---\n\nbatched-2\n\n---\n\nbatched-3", result.Prompt);
+        Assert.DoesNotContain("earlier user turn", result.Prompt);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithSingleUserOnlyMessage_StillWorks()
+    {
+        // Issue #1104 edge case: a single user-only message with no history at all is the
+        // trivial first turn. The defensive path only collapses when there are 2+ user messages
+        // with no separator, so a single message is emitted verbatim.
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "only message"),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("only message", result.Prompt);
+    }
+
+    [Fact]
+    public void BuildMessageOptions_WithUserOnlyHistoryRun_PreservesLastMessageAttachments()
+    {
+        // Issue #1104: when collapsing a degenerate user-only history to the last message, that
+        // last message's attachments (e.g. an image the user just uploaded) must be preserved.
+        var pngBytes = new byte[] { 7, 8 };
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.User, "stale earlier text"),
+            new ChatMessage(ChatRole.User, new AIContent[]
+            {
+                new TextContent("current"),
+                new DataContent(pngBytes, "image/png"),
+            }),
+        };
+
+        var result = CopilotSdkChatClient.BuildMessageOptions(messages);
+
+        Assert.Equal("current", result.Prompt);
+        Assert.NotNull(result.Attachments);
+        var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(Assert.Single(result.Attachments));
+        Assert.Equal("image/png", blob.MimeType);
     }
 
     [Fact]

@@ -844,10 +844,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     }
 
     /// <summary>
-    /// Builds a <see cref="MessageOptions"/> from the message history by collecting all consecutive
-    /// trailing user messages (the current batch) and combining their text content and data attachments
-    /// into a single prompt. When multiple messages are queued in one turn their texts are joined with
+    /// Builds a <see cref="MessageOptions"/> from the message history by collecting the current
+    /// turn's user-message batch (the trailing run of user messages that follows a non-user
+    /// separator) and combining their text content and data attachments into a single prompt.
+    /// When multiple messages are queued in one turn their texts are joined with
     /// <c>\n\n---\n\n</c> so every queued message is visible to the model.
+    /// <para>
+    /// Defense-in-depth against issue #1104: if the history degenerates into a run of consecutive
+    /// user messages with no non-user separator (e.g. an errored/cancelled/restored turn whose
+    /// assistant reply was never persisted), the backward walk cannot distinguish the current
+    /// turn's batch from earlier turns. In that case the merge is bounded to the last user
+    /// message only, so a degenerate user-only history cannot collapse into one giant prompt
+    /// that re-answers stale user turns.
+    /// </para>
     /// </summary>
     internal static MessageOptions BuildMessageOptions(IEnumerable<ChatMessage> messages)
     {
@@ -856,11 +865,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         // Collect consecutive trailing user messages — these are the batched messages for this turn.
         // Stop as soon as a non-user message is encountered so earlier historical turns are not included.
         var batchMessages = new List<ChatMessage>();
+        var foundSeparator = false;
         for (var index = materialized.Count - 1; index >= 0; index--)
         {
             var message = materialized[index];
             if (message.Role != ChatRole.User)
             {
+                foundSeparator = true;
                 break;
             }
 
@@ -868,6 +879,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         batchMessages.Reverse();
+
+        // Defense-in-depth (issue #1104): when the trailing user run spans the entire history
+        // with no non-user separator, we cannot reliably identify the current turn's batch and
+        // must not concatenate historical user turns into one prompt. Keep only the last user
+        // message — that is the caller's most recent input and is safe to send. Genuinely
+        // batched user messages within one turn are still merged when a preceding non-user
+        // (assistant/system/tool) message is present, matching the stateful-session model
+        // documented in docs/design/github-copilot-provider-support.md.
+        if (!foundSeparator && batchMessages.Count > 1)
+        {
+            batchMessages = new List<ChatMessage> { batchMessages[^1] };
+        }
 
         var batchWithContent = batchMessages
             .Where(m => !string.IsNullOrEmpty(m.Text) || m.Contents.OfType<DataContent>().Any())
