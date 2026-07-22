@@ -751,11 +751,11 @@ public static class AgentFactory
 
         if (model.Connection is ApiKeyConnection connWithEndpoint && !string.IsNullOrWhiteSpace(connWithEndpoint.Endpoint))
         {
-            // Custom endpoints are BYOK; they are selected by the provider string, not by an
-            // endpoint-presence heuristic on the built-in provider (issue #896).
-            throw new InvalidOperationException(
-                "The github-copilot provider is for built-in Copilot models and does not accept a connection endpoint. "
-                + "Use provider 'openai' or 'azure-openai' for a custom (BYOK) endpoint.");
+            // github-copilot + explicit endpoint == Copilot SDK BYOK against an OpenAI-compatible
+            // endpoint (e.g. local Ollama). The wire provider defaults to "openai" (matching the
+            // schema's providerType default) so there is no ambiguous endpoint-presence heuristic
+            // (cf. issue #896). Delegating here keeps the schema and runtime in agreement (#1106).
+            return CreateGitHubCopilotByokClient("openai", model, services, queueManager, resolver, subAgentChatRegistry);
         }
 
         // Authenticate as a Copilot user, optionally with an explicit GitHub token. When no token
@@ -849,9 +849,11 @@ public static class AgentFactory
 
         if (model.Connection is ApiKeyConnection connWithEndpoint && !string.IsNullOrWhiteSpace(connWithEndpoint.Endpoint))
         {
-            throw new InvalidOperationException(
-                "The github-copilot provider is for built-in Copilot models and does not accept a connection endpoint. "
-                + "Use provider 'openai' or 'azure-openai' for a custom (BYOK) endpoint.");
+            // github-copilot + explicit endpoint == Copilot SDK BYOK against an OpenAI-compatible
+            // endpoint (e.g. local Ollama). Route through the BYOK client with the "openai" wire
+            // provider (schema default); see #1106.
+            return await CreateGitHubCopilotByokClientAsync(
+                "openai", model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false);
         }
 
         var gitHubToken = model.Connection switch

@@ -278,14 +278,110 @@ public sealed class AgentFactoryByokTests
     }
 
     [Fact]
-    public void CreateChatClient_GithubCopilot_WithEndpoint_Throws()
+    public void CreateChatClient_GithubCopilot_WithByokEndpoint_BuildsByokClientPointedAtEndpoint()
     {
-        // The endpoint-presence BYOK heuristic is gone (issue #896): custom endpoints must use
-        // the openai / azure-openai provider strings.
+        // Issue #1106: github-copilot + explicit endpoint routes through the Copilot SDK BYOK
+        // client so schema and runtime agree. Replaces the old
+        // CreateChatClient_GithubCopilot_WithEndpoint_Throws behaviour.
+        var agent = LoadByokAgent("github-copilot", "http://localhost:12345/", apiKey: "my-key");
+
+        var result = AgentFactory.CreateChatClient(agent);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.NotNull(copilotClient.ByokOptions);
+        Assert.Equal("http://localhost:12345/", copilotClient.ByokOptions!.BaseUrl);
+        Assert.Equal("my-key", copilotClient.ByokOptions.ApiKey);
+    }
+
+    [Fact]
+    public void CreateChatClient_GithubCopilot_WithByokEndpoint_ProviderDefaultsToOpenAi()
+    {
+        // Issue #1106: with no explicit connection.providerType, the BYOK wire provider defaults
+        // to "openai" (matching the JSON schema's providerType default).
         var agent = LoadByokAgent("github-copilot", "http://localhost:12345/");
 
-        var exception = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateChatClient(agent));
-        Assert.Contains("openai", exception.Message, StringComparison.Ordinal);
+        var result = AgentFactory.CreateChatClient(agent);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.NotNull(copilotClient.ByokOptions);
+        Assert.Equal("openai", copilotClient.ByokOptions!.Provider);
+    }
+
+    [Fact]
+    public void CreateChatClient_Workspaces256kManifest_ConstructsChatClientWithoutThrowing()
+    {
+        // Issue #1106: the exact "workspaces-256k" manifest shape (github-copilot + Ollama /v1
+        // endpoint + apiType OpenAI) must deserialize and build a chat client without throwing.
+        var agent = AgentDefinitionLoader.LoadAgentFromJson("""
+        {
+          "kind": "prompt",
+          "name": "workspaces-256k",
+          "model": {
+            "id": "qwen3.6",
+            "provider": "github-copilot",
+            "apiType": "OpenAI",
+            "connection": {
+              "kind": "key",
+              "endpoint": "http://localhost:11434/v1",
+              "apiKey": "ollama"
+            },
+            "options": {
+              "temperature": 0.7,
+              "topP": 0.9,
+              "maxOutputTokens": 8192,
+              "additionalProperties": {
+                "num_ctx": 262144
+              }
+            }
+          }
+        }
+        """);
+
+        var result = AgentFactory.CreateChatClient(agent);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.NotNull(copilotClient.ByokOptions);
+        Assert.Equal("http://localhost:11434/v1", copilotClient.ByokOptions!.BaseUrl);
+        Assert.Equal("ollama", copilotClient.ByokOptions.ApiKey);
+        Assert.Equal("openai", copilotClient.ByokOptions.Provider);
+    }
+
+    [Fact]
+    public async Task AgentFactory_GithubCopilot_ByokManifest_WiresBaseUrlFromConnection()
+    {
+        // Issue #1106: mirrors AgentFactory_OpenAi_ByokManifest_WiresBaseUrlFromConnection for the
+        // github-copilot provider string.
+        await using var server = new OpenAiCompatibleChatServer(new EchoChatClient());
+
+        var manifestJson = $$"""
+        {
+            "name": "gh-copilot-byok-wiring-test",
+            "displayName": "GH Copilot BYOK Wiring Test",
+            "template": {
+                "kind": "prompt",
+                "name": "gh-copilot-byok-wiring-test",
+                "model": {
+                    "id": "test-model",
+                    "provider": "github-copilot",
+                    "connection": {
+                        "kind": "key",
+                        "endpoint": "{{server.BaseUrl}}",
+                        "apiKey": "test-key"
+                    }
+                }
+            }
+        }
+        """;
+
+        var manifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(manifest, parameterValues: null);
+        var result = AgentFactory.CreateChatClient(definition);
+
+        var copilotClient = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.NotNull(copilotClient.ByokOptions);
+        Assert.Equal(server.BaseUrl, copilotClient.ByokOptions!.BaseUrl);
+        Assert.Equal("test-key", copilotClient.ByokOptions.ApiKey);
+        Assert.Equal("openai", copilotClient.ByokOptions.Provider);
     }
 
     // ---------------------------------------------------------------------------
