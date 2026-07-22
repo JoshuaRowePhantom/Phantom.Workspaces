@@ -310,20 +310,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.toolsDetail.SetRootItem(value);
             }
 
-            // Update the sub-agents container when a sub-agent nav item is selected.
+            // Fix #1112: only the "Sub-agents (N)" group node still uses the shared container as
+            // its DetailContent (for the browser card). Individual sub-agent nav items now carry
+            // their own ConversationDetail, so they resolve to a distinct AgentDetailDocumentItem
+            // via the ReferenceEquals scan below and no longer need ShowSubAgent slot toggling.
             if (value is not null && ReferenceEquals(value.DetailContent, this.subAgentsContainerDetail))
             {
-                if (value.Id == "chat-sub-agents")
-                {
-                    // The group node itself — show the browser card.
-                    this.subAgentsContainerDetail.ShowBrowser();
-                }
-                else if (value.Id.StartsWith("sub-agent-", StringComparison.Ordinal))
-                {
-                    // An individual sub-agent child node.
-                    var agentId = value.Id.Substring("sub-agent-".Length);
-                    this.subAgentsContainerDetail.ShowSubAgent(agentId);
-                }
+                this.subAgentsContainerDetail.ShowBrowser();
             }
 
             // Activate the cached detail document whose content matches the selected node
@@ -919,13 +912,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         protected override AgentEditorNavigationItemViewModel Create(SubAgentSlotViewModel slot)
         {
             var subRoot = slot.SubAgentViewModel.EditorItems.FirstOrDefault();
+            // Fix #1112: each sub-agent nav item's DetailContent is its OWN ConversationDetail (not
+            // the shared subAgentsContainerDetail). That way SelectedEditorItem's ReferenceEquals
+            // scan over AllDetailContents finds the sub-agent's own AgentDetailDocumentItem (added
+            // via AppendSubAgentDetailContents), so SetActiveDetail activates a distinct Document
+            // per sub-agent. The DocumentDock only realises the active Document's content, so at
+            // most one AgentChatOutputControl / native WebView2 surface is materialised at a time —
+            // eliminating the airspace overlap where every sub-agent showed the same transcript.
             return new AgentEditorNavigationItemViewModel(
                 $"sub-agent-{slot.AgentId}",
                 slot.SubAgentViewModel.DisplayName,
                 null,
                 slot.SubAgentViewModel.Description,
                 null,
-                this.subAgentsNavItem.DetailContent,
+                slot.SubAgentViewModel.ConversationDetail,
                 subRoot?.Children.ToArray() ?? [],
                 runningSubAgent: slot.RunningSubAgent);
         }

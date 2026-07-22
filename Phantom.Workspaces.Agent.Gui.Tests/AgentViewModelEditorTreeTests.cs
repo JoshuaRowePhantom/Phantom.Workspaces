@@ -288,8 +288,11 @@ public sealed class AgentViewModelEditorTreeTests
     }
 
     [Fact]
-    public async Task SubAgentNavItem_DetailContent_IsSubAgentsContainerDetail()
+    public async Task SubAgentNavItem_DetailContent_IsOwnConversationDetail()
     {
+        // Fix #1112: each sub-agent nav item's DetailContent is now the sub-agent's OWN
+        // ConversationDetail so it resolves to a distinct AgentDetailDocumentItem — the shared
+        // SubAgentsContainer is reserved for the group node's browser card only.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
@@ -299,9 +302,11 @@ public sealed class AgentViewModelEditorTreeTests
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
         var subAgentNav = Assert.Single(subAgentsNav.Children);
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "sub-agent-1").SubAgentViewModel;
 
         Assert.NotNull(subAgentNav.DetailContent);
-        Assert.Same(viewModel.SubAgentsContainer, subAgentNav.DetailContent);
+        Assert.Same(childVm.ConversationDetail, subAgentNav.DetailContent);
+        Assert.NotSame(viewModel.SubAgentsContainer, subAgentNav.DetailContent);
     }
 
     [Fact]

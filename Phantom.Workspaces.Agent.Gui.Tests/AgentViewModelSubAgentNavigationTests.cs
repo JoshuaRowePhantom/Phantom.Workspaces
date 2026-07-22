@@ -8,8 +8,12 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 public sealed class AgentViewModelSubAgentNavigationTests
 {
     [Fact]
-    public async Task SubAgentNavItem_DetailContent_IsSubAgentsContainerDetail()
+    public async Task SubAgentNavItem_DetailContent_IsOwnConversationDetail()
     {
+        // Fix #1112: each sub-agent's nav item DetailContent must be that sub-agent's OWN
+        // ConversationDetail (not the shared SubAgentsContainer) so the SelectedEditorItem scan
+        // resolves each sub-agent to a distinct AgentDetailDocumentItem, and only ONE
+        // AgentChatOutputControl/WebView2 is realised at a time.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
@@ -19,13 +23,17 @@ public sealed class AgentViewModelSubAgentNavigationTests
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
         var subAgentNavItem = Assert.Single(subAgentsNode.Children);
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
 
-        Assert.Same(viewModel.SubAgentsContainer, subAgentNavItem.DetailContent);
+        Assert.Same(childVm.ConversationDetail, subAgentNavItem.DetailContent);
+        Assert.NotSame(viewModel.SubAgentsContainer, subAgentNavItem.DetailContent);
     }
 
     [Fact]
-    public async Task SelectSubAgentNavItem_CallsShowSubAgent_WithCorrectAgentId()
+    public async Task SelectSubAgentNavItem_ActivatesThatSubAgentsOwnDocument()
     {
+        // Fix #1112: selecting a sub-agent nav item activates the sub-agent's OWN cached Document
+        // (the one carrying its ConversationDetail), not the shared sub-agents-container document.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
@@ -36,12 +44,13 @@ public sealed class AgentViewModelSubAgentNavigationTests
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
         var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
 
         viewModel.SelectedEditorItem = subAgentNavItem;
 
-        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
-        var selectedSlot = viewModel.SubAgentsContainer.Slots.Single(s => s.IsSelected);
-        Assert.Equal("a1", selectedSlot.AgentId);
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(childVm.ConversationDetail, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
     }
 
     [Fact]
@@ -58,16 +67,17 @@ public sealed class AgentViewModelSubAgentNavigationTests
         var subAgentNavItem = Assert.Single(subAgentsNode.Children);
 
         viewModel.SelectedEditorItem = subAgentNavItem;
-        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
-
+        // Group node still shows the browser card when selected.
         viewModel.SelectedEditorItem = subAgentsNode;
 
         Assert.True(viewModel.SubAgentsContainer.IsShowingBrowser);
     }
 
     [Fact]
-    public async Task SubAgentSlot_IsSelected_WhenSubAgentNavItemSelected()
+    public async Task SelectSubAgent_SwitchSelection_ActiveDockableChangesToNewAgent()
     {
+        // Fix #1112: switching selection from one sub-agent to another changes the active Document
+        // to the newly selected sub-agent's own Document (distinct documents per sub-agent).
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
@@ -77,17 +87,51 @@ public sealed class AgentViewModelSubAgentNavigationTests
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
-        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a2");
+        var navA = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+        var navB = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a2");
+        var childVmA = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+        var childVmB = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a2").SubAgentViewModel;
 
-        viewModel.SelectedEditorItem = subAgentNavItem;
+        viewModel.SelectedEditorItem = navA;
+        var activeA = viewModel.DetailDockFactory.ActiveDocument;
 
-        var slot = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a2");
-        Assert.True(slot.IsSelected);
+        viewModel.SelectedEditorItem = navB;
+        var activeB = viewModel.DetailDockFactory.ActiveDocument;
+
+        Assert.NotNull(activeA);
+        Assert.NotNull(activeB);
+        Assert.NotSame(activeA, activeB);
+        Assert.Same(childVmA.ConversationDetail, activeA!.DetailContent);
+        Assert.Same(childVmB.ConversationDetail, activeB!.DetailContent);
     }
 
     [Fact]
-    public async Task SubAgentSlot_IsSelected_False_WhenOtherSubAgentNavItemSelected()
+    public async Task EachSubAgent_MapsToDistinctDetailDocument()
     {
+        // Fix #1112: distinct sub-agents map to DIFFERENT AgentDetailDocumentItems in
+        // AllDetailContents — never share one document that would airspace-overlap their transcripts.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+
+        await AddSubAgentAsync(chat, "a1", "Sub Agent A");
+        await AddSubAgentAsync(chat, "a2", "Sub Agent B");
+
+        var childVmA = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
+        var childVmB = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a2").SubAgentViewModel;
+
+        var docA = viewModel.AllDetailContents.Single(i => ReferenceEquals(i.Content, childVmA.ConversationDetail));
+        var docB = viewModel.AllDetailContents.Single(i => ReferenceEquals(i.Content, childVmB.ConversationDetail));
+
+        Assert.NotSame(docA, docB);
+        Assert.NotEqual(docA.Key, docB.Key);
+    }
+
+    [Fact]
+    public async Task OnlyOneDetailDocument_IsActive_AtATime()
+    {
+        // Fix #1112: the shared DocumentDock keeps exactly one active document, guaranteeing at most
+        // one native transcript surface (WebView2) is materialised even with several sub-agents.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
@@ -97,17 +141,21 @@ public sealed class AgentViewModelSubAgentNavigationTests
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
-        var subAgentNavItemA = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
 
-        viewModel.SelectedEditorItem = subAgentNavItemA;
-
-        var slotB = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a2");
-        Assert.False(slotB.IsSelected);
+        foreach (var id in new[] { "sub-agent-a1", "sub-agent-a2" })
+        {
+            viewModel.SelectedEditorItem = subAgentsNode.Children.Single(c => c.Id == id);
+            var active = viewModel.DetailDockFactory.ActiveDocument;
+            Assert.NotNull(active);
+            Assert.Same(viewModel.SelectedDetailDocument, active);
+        }
     }
 
     [Fact]
-    public async Task SubAgentsContainerDocument_IsActive_WhenSubAgentNavItemSelected()
+    public async Task SubAgentsContainerDocument_IsActive_WhenSubAgentsGroupNodeSelected()
     {
+        // Fix #1112: the shared SubAgentsContainer document is activated ONLY when the group
+        // "Sub-agents (N)" nav item is selected (for the browser card view).
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
         await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
@@ -116,11 +164,9 @@ public sealed class AgentViewModelSubAgentNavigationTests
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
-        var subAgentNavItem = Assert.Single(subAgentsNode.Children);
 
-        viewModel.SelectedEditorItem = subAgentNavItem;
+        viewModel.SelectedEditorItem = subAgentsNode;
 
-        // Issue #1035: selecting the sub-agent node activates the cached sub-agents-container document.
         Assert.NotNull(viewModel.SelectedDetailDocument);
         Assert.Same(viewModel.SubAgentsContainer, viewModel.SelectedDetailDocument!.DetailContent);
         Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);

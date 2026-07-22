@@ -136,128 +136,47 @@ public sealed class AgentChatEditorControlTests
     }
 
     [Fact]
-    public void AgentChatEditorControl_SubAgentSlotTemplate_DoesNotInstantiateAgentChatEditorControl()
+    public void AgentChatEditorControl_SubAgentTemplate_HasNoOverlappingOutputControlStack()
     {
-        // Issue #884, #903: The SubAgentSlotViewModel DataTemplate must not instantiate a
-        // nested AgentChatEditorControl (with TreeView, GridSplitter, ToggleButton chrome).
-        // It should render only the conversation detail content via ContentControl.
+        // Fix #1112: the old SubAgentsContainerViewModel DataTemplate stacked one
+        // ContentControl per SubAgentSlotViewModel in a Panel and toggled visibility with
+        // IsSelected — this airspace-clobbered every native WebView2 transcript.
+        // The template must NOT contain an ItemsControl over Slots, and must not define a
+        // SubAgentSlotViewModel DataTemplate (per-sub-agent transcripts are now hosted as their
+        // own DocumentDock Documents).
         var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
-
-        var subAgentSlotStart = axamlContent.IndexOf(
-            "DataType=\"vm:SubAgentSlotViewModel\"",
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotStart > 0, "Could not find SubAgentSlotViewModel DataTemplate");
-
-        var subAgentSlotEnd = axamlContent.IndexOf(
-            "</DataTemplate>",
-            subAgentSlotStart,
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotEnd > subAgentSlotStart);
-
-        var subAgentSlotXaml = axamlContent.Substring(
-            subAgentSlotStart,
-            subAgentSlotEnd - subAgentSlotStart);
 
         Assert.DoesNotContain(
-            "AgentChatEditorControl",
-            subAgentSlotXaml,
+            "DataType=\"vm:SubAgentSlotViewModel\"",
+            axamlContent,
             StringComparison.Ordinal);
+
+        var containerStart = axamlContent.IndexOf(
+            "DataType=\"vm:SubAgentsContainerViewModel\"",
+            StringComparison.Ordinal);
+        Assert.True(containerStart > 0);
+        var containerEnd = axamlContent.IndexOf("</DataTemplate>", containerStart, StringComparison.Ordinal);
+        var containerXaml = axamlContent.Substring(containerStart, containerEnd - containerStart);
+
+        Assert.DoesNotContain("ItemsControl", containerXaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Slots", containerXaml, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AgentChatEditorControl_SubAgentSlotTemplate_BindsContentToSubAgentConversationDetail()
+    public void AgentChatEditorControl_SubAgentsContainerTemplate_RendersBrowserCardOnly()
     {
-        // Issue #884, #903: The SubAgentSlotViewModel DataTemplate must bind ContentControl.Content
-        // to SubAgentViewModel.ConversationDetail so the AgentChatConversationDetailViewModel
-        // DataTemplate renders output + conditional input queue without editor chrome.
+        // Fix #1112: the SubAgentsContainer DataTemplate is reserved for the "Sub-agents (N)"
+        // group node's browser card — no per-slot transcript rendering.
         var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
 
-        var subAgentSlotStart = axamlContent.IndexOf(
-            "DataType=\"vm:SubAgentSlotViewModel\"",
+        var containerStart = axamlContent.IndexOf(
+            "DataType=\"vm:SubAgentsContainerViewModel\"",
             StringComparison.Ordinal);
-        Assert.True(subAgentSlotStart > 0);
+        Assert.True(containerStart > 0);
+        var containerEnd = axamlContent.IndexOf("</DataTemplate>", containerStart, StringComparison.Ordinal);
+        var containerXaml = axamlContent.Substring(containerStart, containerEnd - containerStart);
 
-        var subAgentSlotEnd = axamlContent.IndexOf(
-            "</DataTemplate>",
-            subAgentSlotStart,
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotEnd > subAgentSlotStart);
-
-        var subAgentSlotXaml = axamlContent.Substring(
-            subAgentSlotStart,
-            subAgentSlotEnd - subAgentSlotStart);
-
-        Assert.Contains(
-            "ContentControl",
-            subAgentSlotXaml,
-            StringComparison.Ordinal);
-
-        Assert.Contains(
-            "Content=\"{Binding SubAgentViewModel.ConversationDetail}\"",
-            subAgentSlotXaml,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void AgentChatEditorControl_SubAgentSlotTemplate_IsVisibleBindingIsOnWrapperNotEditor()
-    {
-        // Issue #884, #903: The IsVisible binding must be on the wrapper Panel element, not on
-        // a nested AgentChatEditorControl. This ensures proper visibility control for sub-agent
-        // slots without triggering AXAML DataContext/IsVisible binding order bugs.
-        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
-
-        var subAgentSlotStart = axamlContent.IndexOf(
-            "DataType=\"vm:SubAgentSlotViewModel\"",
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotStart > 0);
-
-        var subAgentSlotEnd = axamlContent.IndexOf(
-            "</DataTemplate>",
-            subAgentSlotStart,
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotEnd > subAgentSlotStart);
-
-        var subAgentSlotXaml = axamlContent.Substring(
-            subAgentSlotStart,
-            subAgentSlotEnd - subAgentSlotStart);
-
-        Assert.Contains(
-            "<Panel IsVisible=\"{Binding IsSelected}\">",
-            subAgentSlotXaml,
-            StringComparison.Ordinal);
-
-        Assert.DoesNotContain(
-            "AgentChatEditorControl",
-            subAgentSlotXaml,
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void AgentChatEditorControl_SubAgentSlotTemplate_UsesCompiledBindings()
-    {
-        // Issue #903: The SubAgentSlotViewModel DataTemplate must use x:CompileBindings="True"
-        // for better performance and compile-time binding validation.
-        var axamlContent = ReadAxaml("AgentChatEditorControl.axaml");
-
-        var subAgentSlotStart = axamlContent.IndexOf(
-            "DataType=\"vm:SubAgentSlotViewModel\"",
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotStart > 0);
-
-        var subAgentSlotEnd = axamlContent.IndexOf(
-            "</DataTemplate>",
-            subAgentSlotStart,
-            StringComparison.Ordinal);
-        Assert.True(subAgentSlotEnd > subAgentSlotStart);
-
-        var subAgentSlotXaml = axamlContent.Substring(
-            subAgentSlotStart,
-            subAgentSlotEnd - subAgentSlotStart);
-
-        Assert.Contains(
-            "x:CompileBindings=\"True\"",
-            subAgentSlotXaml,
-            StringComparison.Ordinal);
+        Assert.Contains("Content=\"{Binding Browser}\"", containerXaml, StringComparison.Ordinal);
     }
 
     [Fact]
