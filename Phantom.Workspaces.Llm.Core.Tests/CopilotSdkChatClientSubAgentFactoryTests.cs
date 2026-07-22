@@ -31,10 +31,9 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         var channel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: factory,
-            subAgentTable: table,
-            logger: logger);
+            factory ?? new FakeRunningAgentChatFactory(),
+            table ?? new FakeSubAgentTable(),
+            logger);
         return (router, channel);
     }
 
@@ -199,17 +198,36 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     }
 
     [Fact]
-    public async Task SubAgentEvent_UnknownSubAgentId_LoggedAndIgnored()
+    public async Task SubAgentEvent_UnknownSubAgentId_BufferedThenFlushedOnLateStart_NeverParent()
     {
+        // Fix #1109/#1110: when a delta arrives for an agentId that has no lifecycle start yet,
+        // the router MUST buffer it in a per-child sink (never fall back to the parent transcript).
+        // When the start eventually arrives, the buffered updates are flushed in order to the
+        // real receiver.
         var factory = new FakeRunningAgentChatFactory();
         var table = new FakeSubAgentTable();
-        var logger = new FakeLogger();
-        var (router, _) = CreateRouter(factory, table, logger);
+        var (router, rootChannel) = CreateRouter(factory, table);
 
-        // No SubAgentStarted — dispatch event for unknown ID
-        await DispatchAsync(router, DeltaEvent("unknown-agent", "text"));
+        // Delta arrives BEFORE start.
+        await DispatchAsync(router, DeltaEvent("late-agent", "early buffered"));
 
-        Assert.Contains(logger.Logs, l => l.Level == LogLevel.Warning);
+        // Fix #1110 inverse-face: parent transcript received nothing.
+        rootChannel.Writer.Complete();
+        var rootUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in rootChannel.Reader.ReadAllAsync())
+            rootUpdates.Add(u);
+        Assert.Empty(rootUpdates);
+
+        // Now the start arrives — the receiver should get the previously buffered update.
+        await DispatchAsync(router, StartedEvent("late-agent"));
+
+        var receiver = factory.CreatedReceiver!;
+        receiver.Complete();
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in receiver.GetStreamingResponseAsync([]))
+            updates.Add(u);
+
+        Assert.Contains(updates, u => u.Text == "early buffered");
     }
 
     [Fact]
@@ -238,6 +256,63 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
         await DispatchAsync(router, FailedEvent("unknown-agent"));
 
         Assert.Contains(logger.Logs, l => l.Level == LogLevel.Warning);
+    }
+
+    [Fact]
+    public void SubAgentRouter_ConstructedWithoutFactory_Throws()
+    {
+        // Fix #1109: factory is a required construction argument — the router no longer supports
+        // a null-fallback path that could silently misroute sub-agent output.
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
+        var table = new FakeSubAgentTable();
+        Assert.Throws<ArgumentNullException>(() =>
+            new CopilotSubAgentRouter(channel.Writer, factory: null!, subAgentTable: table));
+    }
+
+    [Fact]
+    public void SubAgentRouter_ConstructedWithoutSubAgentTable_Throws()
+    {
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
+        var factory = new FakeRunningAgentChatFactory();
+        Assert.Throws<ArgumentNullException>(() =>
+            new CopilotSubAgentRouter(channel.Writer, factory, subAgentTable: null!));
+    }
+
+    [Fact]
+    public async Task SubAgentDelta_ForRegisteredChild_RoutedToChild_NeverParent()
+    {
+        // Fix #1110 inverse-face: sub-agent output never leaks into the parent transcript.
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new FakeSubAgentTable();
+        var (router, rootChannel) = CreateRouter(factory, table);
+
+        await DispatchAsync(router, StartedEvent("agent-x"));
+        await DispatchAsync(router, DeltaEvent("agent-x", "child-only text"));
+
+        rootChannel.Writer.Complete();
+        var rootUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in rootChannel.Reader.ReadAllAsync())
+            rootUpdates.Add(u);
+
+        Assert.Empty(rootUpdates);
+    }
+
+    [Fact]
+    public async Task RootDelta_WithNoActiveSubAgent_WrittenToRootStream()
+    {
+        // Fix #1109: replacement for the deleted
+        // AssistantMessageDeltaEvent_NullAgentId_WrittenToRootStream in the old registry-path
+        // test file. Root-level (null/empty agentId) deltas still land on the parent channel.
+        var (router, rootChannel) = CreateRouter();
+
+        await DispatchAsync(router, DeltaEvent(agentId: null!, "root text"));
+
+        rootChannel.Writer.Complete();
+        var rootUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in rootChannel.Reader.ReadAllAsync())
+            rootUpdates.Add(u);
+
+        Assert.Contains(rootUpdates, u => u.Text == "root text");
     }
 
     [Fact]

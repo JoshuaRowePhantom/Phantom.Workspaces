@@ -57,8 +57,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
-    private IRunningAgentChatFactory? runningAgentChatFactory;
-    private ISubAgentTable? subAgentTable;
+    private IRunningAgentChatFactory runningAgentChatFactory = default!;
+    private ISubAgentTable subAgentTable = default!;
 
     private CopilotClient? copilotClient;
     private CopilotSession? copilotSession;
@@ -431,14 +431,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
     /// <see cref="CopilotSubAgentRouter"/> uses to create and register sub-agent
     /// <see cref="AgentChat"/> instances when a <c>SubagentStartedEvent</c> arrives.
-    /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created,
-    /// in the same block that subscribes to <see cref="SteeringMessageForwarded"/> and
-    /// <see cref="SessionEstablished"/>.
+    /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created.
+    /// Fix #1109/#1110: both dependencies are now mandatory — the router no longer has a
+    /// registry-only fallback, and passing null would silently misroute sub-agent output into
+    /// the parent transcript at construction time.
     /// </summary>
-    internal void SetSubAgentDependencies(IRunningAgentChatFactory? factory, ISubAgentTable? table)
+    internal void SetSubAgentDependencies(IRunningAgentChatFactory factory, ISubAgentTable table)
     {
-        this.runningAgentChatFactory = factory;
-        this.subAgentTable = table;
+        this.runningAgentChatFactory = factory ?? throw new ArgumentNullException(nameof(factory));
+        this.subAgentTable = table ?? throw new ArgumentNullException(nameof(table));
     }
 
     /// <inheritdoc />
@@ -531,7 +532,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             var router = new CopilotSubAgentRouter(
                 channel.Writer,
-                this.subAgentChatRegistry,
                 this.runningAgentChatFactory,
                 this.subAgentTable,
                 this.loggerFactory?.CreateLogger<CopilotSubAgentRouter>());

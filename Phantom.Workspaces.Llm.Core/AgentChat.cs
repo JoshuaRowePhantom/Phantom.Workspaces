@@ -257,9 +257,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
        {
            copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
-           copilotChatClient.SetSubAgentDependencies(
-               this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory,
-               this);
+           // Fix #1109: RunningAgentChatFactory is mandatory for any AgentChat that hosts a Copilot
+           // SDK client — the sub-agent router has no fallback path if it's missing. Fail fast so
+           // callers cannot construct an AgentChat that would silently misroute sub-agent output
+           // (issue #1110) into the parent transcript.
+           var runningChatFactory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory
+               ?? throw new InvalidOperationException(
+                   "AgentServices.RunningAgentChatFactory must be supplied at construction time. " +
+                   "AgentChatFactory injects itself via WithSelfAsFactory; ensure this AgentChat was " +
+                   "created through IAgentChatFactory or the request explicitly carries a factory.");
+           copilotChatClient.SetSubAgentDependencies(runningChatFactory, this);
        }
 
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)
@@ -1096,18 +1103,20 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
             this.agentSessionId, cancellationToken);
 
-        var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
-        if (factory is null)
+        if (childIds.Count == 0)
         {
-            if (childIds.Count > 0)
-            {
-                var logger = this.request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>();
-                logger?.LogWarning(
-                    "Cannot restore {Count} subagent(s): IRunningAgentChatFactory unavailable",
-                    childIds.Count);
-            }
             return;
         }
+
+        // Fix #1109: RunningAgentChatFactory is mandatory. The previous null-tolerant warn-and-skip
+        // branch let restored sub-agents silently vanish and then leak their output into the parent
+        // transcript (issue #1110). Fail fast with a clear message.
+        var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory
+            ?? throw new InvalidOperationException(
+                $"Cannot restore {childIds.Count} sub-agent(s): AgentServices.RunningAgentChatFactory " +
+                "is required but was not supplied. AgentChatFactory.WithSelfAsFactory injects itself " +
+                "for chats created through the factory; construct this chat through IAgentChatFactory " +
+                "or supply an explicit RunningAgentChatFactory in AgentServices.");
 
         foreach (var childId in childIds)
         {

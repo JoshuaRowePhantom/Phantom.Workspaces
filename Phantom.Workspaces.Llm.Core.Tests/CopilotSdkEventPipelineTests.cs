@@ -23,9 +23,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: factory,
-            subAgentTable: table,
+            factory ?? new FakeRunningAgentChatFactory(),
+            table ?? new FakeSubAgentTable(),
             logger: null);
         return (router, channel);
     }
@@ -88,9 +87,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: null,
-            subAgentTable: null,
+            new FakeRunningAgentChatFactory(),
+            new FakeSubAgentTable(),
             logger: null);
 
         var toolStart1 = new ToolExecutionStartEvent
@@ -133,9 +131,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: null,
-            subAgentTable: null,
+            new FakeRunningAgentChatFactory(),
+            new FakeSubAgentTable(),
             logger: null);
 
         var events = new List<AssistantMessageDeltaEvent>
@@ -189,9 +186,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: null,
-            subAgentTable: null,
+            new FakeRunningAgentChatFactory(),
+            new FakeSubAgentTable(),
             logger: null);
 
         using var cts = new CancellationTokenSource();

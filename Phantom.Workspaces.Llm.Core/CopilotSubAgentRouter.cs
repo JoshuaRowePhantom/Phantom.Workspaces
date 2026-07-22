@@ -9,17 +9,20 @@ namespace Phantom.Workspaces.Llm;
 
 /// <summary>
 /// Interprets the routed <see cref="ChatResponseUpdate"/> stream produced by
-/// <see cref="CopilotSdkStreamAdapter"/> for <see cref="CopilotSdkChatClient"/> (issue #808).
-/// Routes each update to the correct <see cref="ISubAgentChat"/> sink (root or child), creates
-/// child <see cref="AgentChat"/> instances for new sub-agents, buffers root tool-call starts so
-/// tool-call arguments can be injected as the first history message of any sub-agent spawned by
-/// that tool call, and manages the race where either signal may arrive first.
-/// When <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> are provided,
-/// uses the factory path: creates an <see cref="AgentChat"/> backed by
-/// <see cref="CopilotSubAgentChatClient"/> and routes updates through
-/// <see cref="ICopilotSubAgentReceiver"/>. This class consumes only
-/// <see cref="ChatResponseUpdate"/> items — never raw Copilot SDK event types — so its routing
-/// logic is testable with pre-recorded annotated streams.
+/// <see cref="CopilotSdkStreamAdapter"/> for <see cref="CopilotSdkChatClient"/> (issues #808,
+/// #1109, #1110).
+///
+/// Unified single-path routing (issue #1109): every sub-agent is created via
+/// <see cref="IRunningAgentChatFactory"/> and registered with <see cref="ISubAgentTable"/> — the
+/// old two-path split (registry vs factory) is gone, and both dependencies are required at
+/// construction. Child sinks are inserted synchronously into an internal dictionary the moment
+/// either a start-lifecycle signal or a routed child update is observed; updates that arrive
+/// before the async <c>factory.CreateAsync</c> completes are buffered on the child sink and
+/// flushed in order once the real <see cref="ICopilotSubAgentReceiver"/> is attached (issue #1110:
+/// sub-agent output must never leak into the parent transcript).
+///
+/// This class consumes only <see cref="ChatResponseUpdate"/> items — never raw Copilot SDK event
+/// types — so its routing logic is testable with pre-recorded annotated streams.
 /// </summary>
 internal sealed class CopilotSubAgentRouter : ISubAgentChat
 {
@@ -28,55 +31,64 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         ?? throw new InvalidOperationException("Failed to parse sub-agent AgentDefinition.");
 
     private readonly ChannelWriter<ChatResponseUpdate> rootWriter;
-    private readonly ISubAgentChatRegistry? registry;
-    private readonly IRunningAgentChatFactory? factory;
-    private readonly ISubAgentTable? subAgentTable;
+    private readonly IRunningAgentChatFactory factory;
+    private readonly ISubAgentTable subAgentTable;
     private readonly ILogger? logger;
 
     // Tool starts arriving on the root stream, keyed by CallId, buffered so they can be injected
-    // as the first message when the corresponding sub-agent-started lifecycle signal arrives later.
+    // as the first history message when the corresponding sub-agent-started lifecycle signal
+    // arrives later.
     private readonly Dictionary<string, FunctionCallContent> bufferedToolStarts =
         new(StringComparer.Ordinal);
 
-    // Child sinks created by the sub-agent-started lifecycle signal before the matching root tool
-    // start arrived. Keyed by the parent tool call ID; flushed when the tool start arrives.
-    private readonly Dictionary<string, ISubAgentChat> pendingSubAgentSinks =
+    // Sub-agent starts observed before their spawning tool call arrived, keyed by parent
+    // tool-call id. When the tool call arrives the buffered start is drained here and its prompt
+    // injected as the child's first message.
+    private readonly Dictionary<string, ChildRoutingEntry> pendingChildrenByToolCall =
         new(StringComparer.Ordinal);
 
-    // Factory-path receivers, keyed by agent ID. Populated on the sub-agent-started lifecycle
-    // signal when the factory path is active; subsequent updates route through these receivers.
-    private readonly Dictionary<string, (RunningAgentChatLease Lease, ICopilotSubAgentReceiver Receiver)> factoryReceivers =
+    // Fix #1109/#1110: single unified table of per-child sinks keyed by agentId. A ChildRoutingEntry
+    // is created synchronously on the FIRST observation of an agentId (either a lifecycle start or
+    // a routed update); it buffers updates until the async factory.CreateAsync completes and the
+    // real receiver is attached, then flushes in order. This guarantees no sub-agent update is
+    // ever misattributed to the parent transcript, even during the async-create race window.
+    private readonly Dictionary<string, ChildRoutingEntry> childSinks =
         new(StringComparer.Ordinal);
 
     internal CopilotSubAgentRouter(
         ChannelWriter<ChatResponseUpdate> rootWriter,
-        ISubAgentChatRegistry? registry,
-        IRunningAgentChatFactory? factory = null,
-        ISubAgentTable? subAgentTable = null,
+        IRunningAgentChatFactory factory,
+        ISubAgentTable subAgentTable,
         ILogger? logger = null)
     {
+        ArgumentNullException.ThrowIfNull(rootWriter);
+        ArgumentNullException.ThrowIfNull(factory);
+        ArgumentNullException.ThrowIfNull(subAgentTable);
+
         this.rootWriter = rootWriter;
-        this.registry = registry;
         this.factory = factory;
         this.subAgentTable = subAgentTable;
         this.logger = logger;
     }
 
     /// <summary>
-    /// Disposes all leases held for factory-path sub-agents that have not yet completed or failed.
-    /// Called by the owning turn when the turn's subscription is torn down so no leases are leaked
-    /// across turns.
+    /// Disposes all leases held for sub-agents that have not yet completed or failed. Called by
+    /// the owning turn when the turn's subscription is torn down so no leases are leaked across
+    /// turns.
     /// </summary>
     internal async Task DisposeRemainingLeasesAsync()
     {
-        foreach (var (_, (lease, receiver)) in this.factoryReceivers)
+        List<ChildRoutingEntry> entries;
+        lock (this.childSinks)
         {
-            receiver.Fail(new OperationCanceledException("Sub-agent disposed without completing"));
-            lease.AgentChat.SetCompletionState(AgentChatCompletionState.Failed);
-            await lease.DisposeAsync().ConfigureAwait(false);
+            entries = this.childSinks.Values.ToList();
+            this.childSinks.Clear();
         }
 
-        this.factoryReceivers.Clear();
+        foreach (var entry in entries)
+        {
+            await entry.DisposeAsync(new OperationCanceledException("Sub-agent disposed without completing")).ConfigureAwait(false);
+        }
     }
 
     // ISubAgentChat — root sink
@@ -148,15 +160,21 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             return;
         }
 
-        if (this.pendingSubAgentSinks.TryGetValue(toolCallId, out var pendingSink))
+        ChildRoutingEntry? pendingChild;
+        lock (this.pendingChildrenByToolCall)
         {
-            this.pendingSubAgentSinks.Remove(toolCallId);
-            InjectToolCallPrompt(pendingSink, toolStart);
+            if (this.pendingChildrenByToolCall.Remove(toolCallId, out pendingChild))
+            {
+                // fall through — inject below
+            }
+            else
+            {
+                this.bufferedToolStarts[toolCallId] = toolStart;
+                return;
+            }
         }
-        else
-        {
-            this.bufferedToolStarts[toolCallId] = toolStart;
-        }
+
+        InjectToolCallPrompt(pendingChild!, toolStart);
     }
 
     private async Task HandleSubAgentStartedAsync(FunctionCallContent start)
@@ -169,28 +187,65 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
 
         var parentToolCallId = GetArgument(start, CopilotSdkStreamAdapter.ParentToolCallIdArgumentName);
 
-        if (this.factory is not null && this.subAgentTable is not null)
+        // Fix #1109: synchronously insert (or reuse) the child sink BEFORE any await, so any
+        // routed update that races us cannot fall through to the parent transcript.
+        ChildRoutingEntry entry;
+        lock (this.childSinks)
         {
-            await this.HandleSubAgentStartedWithFactoryAsync(agentId).ConfigureAwait(false);
+            if (!this.childSinks.TryGetValue(agentId, out entry!))
+            {
+                entry = new ChildRoutingEntry(agentId, this.logger);
+                this.childSinks[agentId] = entry;
+            }
         }
-        else if (this.registry is { } reg)
-        {
-            var subDef = CreateSubAgentDefinition(
-                GetArgument(start, CopilotSdkStreamAdapter.DisplayNameArgumentName),
-                GetArgument(start, CopilotSdkStreamAdapter.DescriptionArgumentName));
-            var childSink = await reg.GetOrCreateAsync(agentId, subDef, parentToolCallId ?? string.Empty)
-                .ConfigureAwait(false);
 
-            if (!string.IsNullOrEmpty(parentToolCallId) &&
-                this.bufferedToolStarts.TryGetValue(parentToolCallId, out var bufferedStart))
+        // Handle parent-tool-call prompt injection: if the tool start already arrived, inject
+        // now; otherwise register the pending child so BufferRootToolStart can inject when it
+        // does arrive.
+        if (!string.IsNullOrEmpty(parentToolCallId))
+        {
+            FunctionCallContent? buffered;
+            lock (this.pendingChildrenByToolCall)
             {
-                this.bufferedToolStarts.Remove(parentToolCallId);
-                InjectToolCallPrompt(childSink, bufferedStart);
+                if (this.bufferedToolStarts.Remove(parentToolCallId, out buffered))
+                {
+                    // fall through — inject below
+                }
+                else
+                {
+                    this.pendingChildrenByToolCall[parentToolCallId] = entry;
+                }
             }
-            else if (!string.IsNullOrEmpty(parentToolCallId))
+
+            if (buffered is not null)
             {
-                this.pendingSubAgentSinks[parentToolCallId] = childSink;
+                InjectToolCallPrompt(entry, buffered);
             }
+        }
+
+        try
+        {
+            var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
+            var lease = await this.factory.CreateAsync(SubAgentDefinition, sessionId).ConfigureAwait(false);
+            var agentChat = lease.AgentChat;
+
+            var receiver = agentChat.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver
+                ?? throw new InvalidOperationException(
+                    "Sub-agent AgentChat does not expose ICopilotSubAgentReceiver. " +
+                    "Ensure the AgentDefinition uses the 'github-copilot-subagent' provider.");
+
+            await this.subAgentTable.Add(agentChat);
+
+            entry.Attach(lease, receiver);
+        }
+        catch (InvalidOperationException)
+        {
+            // Rethrow: this is a wiring bug (see receiver-null throw above) and callers expect it.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            entry.Fail(ex);
         }
     }
 
@@ -204,90 +259,63 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
 
         var (failed, error) = ParseLifecycleResult(result);
 
-        if (this.factory is not null)
+        ChildRoutingEntry? entry;
+        lock (this.childSinks)
         {
-            if (this.factoryReceivers.TryGetValue(agentId, out var entry))
-            {
-                if (failed)
-                {
-                    entry.Receiver.Fail(new AgentSubagentFailedException(error));
-                    entry.Lease.AgentChat.SetCompletionState(AgentChatCompletionState.Failed);
-                }
-                else
-                {
-                    entry.Receiver.Complete();
-                    entry.Lease.AgentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
-                }
-
-                this.factoryReceivers.Remove(agentId);
-                await entry.Lease.DisposeAsync().ConfigureAwait(false);
-            }
-            else
-            {
-                this.logger?.LogWarning(
-                    "Received {Lifecycle} for unknown sub-agent ID '{AgentId}'; ignoring.",
-                    failed ? "SubagentFailed" : "SubagentCompleted",
-                    agentId);
-            }
+            this.childSinks.TryGetValue(agentId, out entry);
         }
-        else if (failed)
-        {
-            this.registry?.TryGet(agentId)?.Fail(new AgentSubagentFailedException(error));
-        }
-        else
-        {
-            this.registry?.TryGet(agentId)?.Complete();
-        }
-    }
 
-    // Pushes an update to the correct sink: factory-path receiver → registry sink → root.
-    // When the factory path is active and the agentId is non-null but unknown, logs a warning
-    // and ignores the update.
-    private void PushUpdate(string? agentId, ChatResponseUpdate update)
-    {
-        if (!string.IsNullOrEmpty(agentId) && this.factory is not null)
+        if (entry is null)
         {
-            if (this.factoryReceivers.TryGetValue(agentId, out var entry))
-            {
-                entry.Receiver.Push(update);
-            }
-            else
-            {
-                this.logger?.LogWarning(
-                    "Received sub-agent event for unknown sub-agent ID '{AgentId}'; ignoring.",
-                    agentId);
-            }
-
+            this.logger?.LogWarning(
+                "Received {Lifecycle} for unknown sub-agent ID '{AgentId}'; ignoring.",
+                failed ? "SubagentFailed" : "SubagentCompleted",
+                agentId);
             return;
         }
 
-        this.GetTarget(agentId).Push(update);
+        if (failed)
+        {
+            await entry.CompleteAsFailedAsync(new AgentSubagentFailedException(error)).ConfigureAwait(false);
+        }
+        else
+        {
+            await entry.CompleteAsync().ConfigureAwait(false);
+        }
+
+        lock (this.childSinks)
+        {
+            this.childSinks.Remove(agentId);
+        }
     }
 
-    private ISubAgentChat GetTarget(string? agentId)
-        => string.IsNullOrEmpty(agentId)
-            ? this
-            : this.registry?.TryGet(agentId) ?? this;
-
-    private async Task HandleSubAgentStartedWithFactoryAsync(string agentId)
+    // Fix #1109/#1110: push an update to the correct sink. For a non-empty agentId we always route
+    // to a per-child ChildRoutingEntry (creating a buffering entry on first sight if the start
+    // lifecycle has not yet arrived). Sub-agent output is NEVER pushed to the parent transcript.
+    private void PushUpdate(string? agentId, ChatResponseUpdate update)
     {
-        var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
+        if (string.IsNullOrEmpty(agentId))
+        {
+            this.rootWriter.TryWrite(update);
+            return;
+        }
 
-        var lease = await this.factory!.CreateAsync(SubAgentDefinition, sessionId).ConfigureAwait(false);
-        var agentChat = lease.AgentChat;
+        ChildRoutingEntry entry;
+        lock (this.childSinks)
+        {
+            if (!this.childSinks.TryGetValue(agentId, out entry!))
+            {
+                entry = new ChildRoutingEntry(agentId, this.logger);
+                this.childSinks[agentId] = entry;
+            }
+        }
 
-        var receiver = agentChat.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver
-            ?? throw new InvalidOperationException(
-                "Sub-agent AgentChat does not expose ICopilotSubAgentReceiver. " +
-                "Ensure the AgentDefinition uses the 'github-copilot-subagent' provider.");
-
-        await this.subAgentTable!.Add(agentChat);
-        this.factoryReceivers[agentId] = (lease, receiver);
+        entry.Push(update);
     }
 
-    private static void InjectToolCallPrompt(ISubAgentChat childSink, FunctionCallContent toolStart)
+    private static void InjectToolCallPrompt(ChildRoutingEntry entry, FunctionCallContent toolStart)
     {
-        childSink.Push(new ChatResponseUpdate
+        entry.Push(new ChatResponseUpdate
         {
             Role = ChatRole.User,
             Contents = [toolStart],
@@ -325,11 +353,219 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     private static string? GetArgument(FunctionCallContent call, string name)
         => call.Arguments?.TryGetValue(name, out var value) == true ? value as string : null;
 
-    private static AgentDefinition CreateSubAgentDefinition(string? displayName, string? description)
+    /// <summary>
+    /// Per-child routing entry. Owns the (optional) buffer of updates that arrived before the
+    /// async factory-create completed, the real <see cref="ICopilotSubAgentReceiver"/> once
+    /// attached, and the <see cref="RunningAgentChatLease"/> that must be disposed on completion
+    /// or dispose. Guarantees ordered flush and end-of-lifecycle propagation even if
+    /// <see cref="Attach"/> races with <see cref="CompleteAsync"/> / <see cref="CompleteAsFailedAsync"/>.
+    /// </summary>
+    private sealed class ChildRoutingEntry
     {
-        var name = string.IsNullOrWhiteSpace(displayName) ? "sub-agent" : displayName;
-        var safeName = name.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        return AgentDefinition.FromJson($$"""{"kind":"prompt","name":"{{safeName}}"}""")
-            ?? throw new InvalidOperationException("Failed to create sub-agent AgentDefinition.");
+        private readonly object gate = new();
+        private readonly string agentId;
+        private readonly ILogger? logger;
+        private readonly List<ChatResponseUpdate> pending = new();
+        private ICopilotSubAgentReceiver? receiver;
+        private RunningAgentChatLease? lease;
+        private bool completedSucceeded;
+        private Exception? completedFailure;
+        private bool endSignalled;
+        private bool disposed;
+
+        internal ChildRoutingEntry(string agentId, ILogger? logger)
+        {
+            this.agentId = agentId;
+            this.logger = logger;
+        }
+
+        internal void Push(ChatResponseUpdate update)
+        {
+            ICopilotSubAgentReceiver? target;
+            lock (this.gate)
+            {
+                if (this.disposed)
+                {
+                    return;
+                }
+
+                if (this.receiver is null)
+                {
+                    this.pending.Add(update);
+                    return;
+                }
+
+                target = this.receiver;
+            }
+
+            target.Push(update);
+        }
+
+        internal void Attach(RunningAgentChatLease lease, ICopilotSubAgentReceiver receiver)
+        {
+            List<ChatResponseUpdate> flushed;
+            bool completedSucceeded;
+            Exception? failure;
+            lock (this.gate)
+            {
+                if (this.disposed)
+                {
+                    // Router was torn down while we were creating; dispose the lease we just built.
+                    _ = lease.DisposeAsync();
+                    return;
+                }
+
+                this.receiver = receiver;
+                this.lease = lease;
+                flushed = new List<ChatResponseUpdate>(this.pending);
+                this.pending.Clear();
+                completedSucceeded = this.completedSucceeded;
+                failure = this.completedFailure;
+                if (this.endSignalled)
+                {
+                    // We're about to propagate the end signal now; make sure we don't double it.
+                    this.endSignalled = false;
+                }
+            }
+
+            foreach (var update in flushed)
+            {
+                receiver.Push(update);
+            }
+
+            if (failure is not null)
+            {
+                receiver.Fail(failure);
+            }
+            else if (completedSucceeded)
+            {
+                receiver.Complete();
+            }
+        }
+
+        internal void Fail(Exception exception)
+        {
+            ICopilotSubAgentReceiver? target;
+            lock (this.gate)
+            {
+                if (this.disposed)
+                {
+                    return;
+                }
+
+                this.completedFailure ??= exception;
+                target = this.receiver;
+                if (target is null)
+                {
+                    this.endSignalled = true;
+                    return;
+                }
+            }
+
+            target.Fail(exception);
+        }
+
+        internal async Task CompleteAsync()
+        {
+            ICopilotSubAgentReceiver? target;
+            RunningAgentChatLease? leaseToDispose;
+            lock (this.gate)
+            {
+                this.completedSucceeded = true;
+                target = this.receiver;
+                if (target is null)
+                {
+                    this.endSignalled = true;
+                    this.disposed = true;
+                    leaseToDispose = this.lease;
+                    this.lease = null;
+                }
+                else
+                {
+                    leaseToDispose = this.lease;
+                    this.lease = null;
+                    this.disposed = true;
+                }
+            }
+
+            if (target is not null)
+            {
+                target.Complete();
+                if (leaseToDispose is { } lease && lease.AgentChat is { } agentChat)
+                {
+                    agentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
+                }
+            }
+
+            if (leaseToDispose is not null)
+            {
+                await leaseToDispose.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        internal async Task CompleteAsFailedAsync(Exception exception)
+        {
+            ICopilotSubAgentReceiver? target;
+            RunningAgentChatLease? leaseToDispose;
+            lock (this.gate)
+            {
+                this.completedFailure ??= exception;
+                target = this.receiver;
+                leaseToDispose = this.lease;
+                this.lease = null;
+                this.disposed = true;
+                if (target is null)
+                {
+                    this.endSignalled = true;
+                }
+            }
+
+            if (target is not null)
+            {
+                target.Fail(exception);
+                if (leaseToDispose is { } lease && lease.AgentChat is { } agentChat)
+                {
+                    agentChat.SetCompletionState(AgentChatCompletionState.Failed);
+                }
+            }
+
+            if (leaseToDispose is not null)
+            {
+                await leaseToDispose.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        internal async Task DisposeAsync(Exception cancellationReason)
+        {
+            ICopilotSubAgentReceiver? target;
+            RunningAgentChatLease? leaseToDispose;
+            lock (this.gate)
+            {
+                if (this.disposed)
+                {
+                    return;
+                }
+
+                this.disposed = true;
+                target = this.receiver;
+                leaseToDispose = this.lease;
+                this.lease = null;
+                this.pending.Clear();
+            }
+
+            if (target is not null)
+            {
+                target.Fail(cancellationReason);
+                if (leaseToDispose is { } lease && lease.AgentChat is { } agentChat)
+                {
+                    agentChat.SetCompletionState(AgentChatCompletionState.Failed);
+                }
+            }
+
+            if (leaseToDispose is not null)
+            {
+                await leaseToDispose.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 }

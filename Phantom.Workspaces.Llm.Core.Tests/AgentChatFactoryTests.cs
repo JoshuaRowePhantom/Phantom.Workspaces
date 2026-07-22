@@ -457,8 +457,12 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
-    public async Task GetAsync_ExplicitFactoryInServices_IsNotOverwritten()
+    public async Task GetAsync_ExplicitFactoryInServices_IsOverwrittenBySelf()
     {
+        // Fix #1109: WithSelfAsFactory now ALWAYS injects the outer factory unconditionally.
+        // The previous "preserve intentional override" behavior let a foreign factory be wired
+        // past the outer factory's sub-agent lifecycle bookkeeping — the same silent-misroute
+        // that #1109/#1110 remove for the null case.
         var sessionId = new AgentSessionId("session-selffactory-explicit");
         var store = await CreatePopulatedStoreAsync(sessionId);
         var explicitFactory = CreateFactory(store: store);
@@ -473,7 +477,8 @@ public sealed class AgentChatFactoryTests
         await using var lease = await factory.GetAsync(sessionId);
 
         var chatServices = GetRequestServices(lease.AgentChat);
-        Assert.Same(explicitFactory, chatServices.RunningAgentChatFactory);
+        Assert.Same(factory, chatServices.RunningAgentChatFactory);
+        Assert.NotSame(explicitFactory, chatServices.RunningAgentChatFactory);
     }
 
     [Fact]

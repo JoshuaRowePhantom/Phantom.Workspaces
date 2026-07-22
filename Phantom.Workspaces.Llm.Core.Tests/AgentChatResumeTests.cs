@@ -174,18 +174,18 @@ public sealed class AgentChatResumeTests
     }
 
     [Fact]
-    public async Task AgentChat_Resume_NoFactory_SubAgentsIsEmpty()
+    public async Task AgentChat_Resume_NoFactory_Throws()
     {
         var store = new InMemoryAgentPersistenceStore();
         var parentSessionId = "parent-nofactory";
         await StoreChildrenAsync(store, parentSessionId, 2);
 
         var scheduler = new CapturingTaskScheduler();
-        // No factory in services
-        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services: null, scheduler);
-        scheduler.Drain();
-
-        Assert.Empty(parent.SubAgents);
+        // No factory in services + persisted children => restore must throw.
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services: null, scheduler);
+        });
     }
 
     [Fact]

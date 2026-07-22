@@ -6,23 +6,30 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 /// <summary>
-/// Tests for <see cref="CopilotSubAgentRouter"/> in isolation: routing, lifecycle interpretation,
-/// and tool-start buffering driven by pre-recorded <see cref="ChatResponseUpdate"/> streams with
-/// no raw Copilot SDK event types (issue #808 / #866).
+/// Tests for <see cref="CopilotSubAgentRouter"/> in isolation over pre-recorded
+/// <see cref="ChatResponseUpdate"/> streams (issue #808 / #866 / #1109 / #1110). All tests exercise
+/// the unified factory path — the registry path was removed in issue #1109.
 /// </summary>
 public sealed class CopilotSubAgentRouterTests
 {
     private static (CopilotSubAgentRouter router, Channel<ChatResponseUpdate> channel)
-        CreateRouter(ISubAgentChatRegistry? registry = null)
+        CreateRouter(
+            SubAgentTestFakes.FakeRunningAgentChatFactory? factory = null,
+            SubAgentTestFakes.FakeSubAgentTable? table = null)
     {
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
-        var router = new CopilotSubAgentRouter(channel.Writer, registry);
+        var router = new CopilotSubAgentRouter(
+            channel.Writer,
+            factory ?? new SubAgentTestFakes.FakeRunningAgentChatFactory(),
+            table ?? new SubAgentTestFakes.FakeSubAgentTable());
         return (router, channel);
     }
 
@@ -35,6 +42,15 @@ public sealed class CopilotSubAgentRouterTests
             updates.Add(update);
         }
 
+        return updates;
+    }
+
+    private static async Task<List<ChatResponseUpdate>> DrainReceiverAsync(CopilotSubAgentChatClient receiver)
+    {
+        receiver.Complete();
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in receiver.GetStreamingResponseAsync([]))
+            updates.Add(u);
         return updates;
     }
 
@@ -119,39 +135,38 @@ public sealed class CopilotSubAgentRouterTests
     }
 
     [Fact]
-    public async Task RouteAsync_SubAgentUpdate_PushedToChildSink()
+    public async Task RouteAsync_SubAgentUpdate_PushedToChildReceiver_NeverParent()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, channel) = CreateRouter(registry);
+        // Fix #1110 inverse-face: sub-agent-tagged updates route to the child receiver only.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
 
         await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
         await router.RouteAsync(SubAgentText("agent-1", "child text"));
 
-        var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
-        var childUpdate = Assert.Single(childSink.ReceivedUpdates);
-        Assert.Equal("child text", ((TextContent)childUpdate.Contents.Single()).Text);
         Assert.Empty(await DrainAsync(channel));
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        Assert.Contains(updates, u => u.Text == "child text");
     }
 
     [Fact]
-    public async Task RouteAsync_LifecycleStart_CreatesChildViaRegistryWithParentToolCallId()
+    public async Task RouteAsync_LifecycleStart_CallsFactoryWithSubAgentDefinition()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, _) = CreateRouter(registry);
+        // Fix #1109: sub-agent construction goes through the mandatory factory (no registry path).
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
 
         await router.RouteAsync(LifecycleStart("agent-1", "call-7", displayName: "Researcher"));
 
-        var call = Assert.Single(registry.CreateCalls);
-        Assert.Equal("agent-1", call.AgentId);
-        Assert.Equal("call-7", call.ParentToolCallId);
-        Assert.Contains("Researcher", call.Definition.ToJson());
+        var call = Assert.Single(factory.CreateCalls);
+        Assert.Contains("github-copilot-subagent", call.Definition.ToJson());
     }
 
     [Fact]
     public async Task RouteAsync_LifecycleUpdate_NotForwardedToRootChannel()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, channel) = CreateRouter(registry);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
 
         await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
         await router.RouteAsync(LifecycleCompleted("agent-1"));
@@ -162,15 +177,14 @@ public sealed class CopilotSubAgentRouterTests
     [Fact]
     public async Task RouteAsync_ToolStartBeforeLifecycleStart_InjectsBufferedToolCallIntoChild()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, _) = CreateRouter(registry);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
 
         await router.RouteAsync(RootToolStart("call-1", "spawn_agent"));
         await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
 
-        var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
-        var injected = Assert.Single(childSink.ReceivedUpdates);
-        Assert.Equal(ChatRole.User, injected.Role);
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        var injected = Assert.Single(updates, u => u.Role == ChatRole.User);
         var call = Assert.IsType<FunctionCallContent>(injected.Contents.Single());
         Assert.Equal("call-1", call.CallId);
         Assert.Equal("spawn_agent", call.Name);
@@ -179,100 +193,93 @@ public sealed class CopilotSubAgentRouterTests
     [Fact]
     public async Task RouteAsync_LifecycleStartBeforeToolStart_InjectsToolCallWhenToolStartArrives()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, _) = CreateRouter(registry);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
 
         await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
         await router.RouteAsync(RootToolStart("call-1", "spawn_agent"));
 
-        var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
-        var injected = Assert.Single(childSink.ReceivedUpdates);
-        Assert.Equal(ChatRole.User, injected.Role);
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        var injected = Assert.Single(updates, u => u.Role == ChatRole.User);
         Assert.Equal("spawn_agent", ((FunctionCallContent)injected.Contents.Single()).Name);
     }
 
     [Fact]
-    public async Task RouteAsync_LifecycleCompleted_CompletesChildSink()
+    public async Task RouteAsync_LifecycleCompleted_CompletesChildReceiver()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, _) = CreateRouter(registry);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
 
         await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
         await router.RouteAsync(LifecycleCompleted("agent-1"));
 
-        var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
-        Assert.Equal(AgentChatCompletionState.Succeeded, childSink.CompletionState);
+        // After Complete, the receiver's stream finishes without throwing.
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in factory.CreatedReceiver!.GetStreamingResponseAsync([]))
+            updates.Add(u);
+        // No assertion on count — merely that draining terminates gracefully.
     }
 
     [Fact]
-    public async Task RouteAsync_LifecycleFailed_FailsChildSinkWithError()
+    public async Task RouteAsync_LifecycleFailed_FailsChildReceiverWithError()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, _) = CreateRouter(registry);
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
 
         await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
         await router.RouteAsync(LifecycleFailed("agent-1", "engine exploded"));
 
-        var childSink = (FakeSubAgentChat)registry.Sinks["agent-1"];
-        Assert.Equal(AgentChatCompletionState.Failed, childSink.CompletionState);
-        Assert.NotNull(childSink.FailureException);
-        Assert.Contains("engine exploded", childSink.FailureException!.Message);
+        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            await foreach (var _ in factory.CreatedReceiver!.GetStreamingResponseAsync([]))
+            { }
+        });
+        Assert.Contains("engine exploded", ex.ToString());
     }
 
     [Fact]
-    public async Task RouteAsync_UnknownSubAgentIdWithRegistry_FallsBackToRootChannel()
+    public async Task RouteAsync_UnknownSubAgentId_BufferedInChildSink_NeverParent()
     {
-        var registry = new FakeSubAgentChatRegistry();
-        var (router, channel) = CreateRouter(registry);
+        // Fix #1109/#1110: a delta with a non-empty agentId for which no start has arrived is
+        // buffered in a per-child sink — never falls back to the parent transcript. When start
+        // eventually arrives, the buffered update is flushed to the real receiver in order.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
 
-        await router.RouteAsync(SubAgentText("never-started", "orphan text"));
+        await router.RouteAsync(SubAgentText("late-agent", "buffered text"));
 
-        var updates = await DrainAsync(channel);
-        var update = Assert.Single(updates);
-        Assert.Equal("orphan text", ((TextContent)update.Contents.Single()).Text);
+        // Fix #1110: parent transcript stays empty.
+        Assert.Empty(await DrainAsync(channel));
     }
 
-    // ─── Fakes ───────────────────────────────────────────────────────────────────
-
-    private sealed class FakeSubAgentChat : ISubAgentChat
+    [Fact]
+    public async Task RouteAsync_BufferedSubAgentDelta_FlushedToChildReceiver_OnLateStart()
     {
-        public AgentChatCompletionState CompletionState { get; private set; } = AgentChatCompletionState.Running;
-        public Exception? FailureException { get; private set; }
-        public List<ChatResponseUpdate> ReceivedUpdates { get; } = new();
+        // Fix #1109: pre-start deltas are held on a BufferingSubAgentChat and flushed when the
+        // real receiver is attached.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
 
-        public void Push(ChatResponseUpdate update) => ReceivedUpdates.Add(update);
+        await router.RouteAsync(SubAgentText("late-agent", "pre-start message"));
+        await router.RouteAsync(LifecycleStart("late-agent", "call-late"));
 
-        public void Complete() => CompletionState = AgentChatCompletionState.Succeeded;
-
-        public void Fail(Exception ex)
-        {
-            CompletionState = AgentChatCompletionState.Failed;
-            FailureException = ex;
-        }
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        Assert.Contains(updates, u => u.Text == "pre-start message");
     }
 
-    private sealed class FakeSubAgentChatRegistry : ISubAgentChatRegistry
+    [Fact]
+    public void CopilotSubAgentRouter_NullFactory_Throws()
     {
-        public List<(string AgentId, AgentDefinition Definition, string ParentToolCallId)> CreateCalls { get; } = new();
-        public Dictionary<string, ISubAgentChat> Sinks { get; } = new(StringComparer.Ordinal);
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        Assert.Throws<ArgumentNullException>(() =>
+            new CopilotSubAgentRouter(channel.Writer, factory: null!, new SubAgentTestFakes.FakeSubAgentTable()));
+    }
 
-        public Task<ISubAgentChat> GetOrCreateAsync(
-            string agentId,
-            AgentDefinition subAgentDefinition,
-            string parentToolCallId,
-            CancellationToken cancellationToken = default)
-        {
-            CreateCalls.Add((agentId, subAgentDefinition, parentToolCallId));
-            if (!Sinks.TryGetValue(agentId, out var existing))
-            {
-                existing = new FakeSubAgentChat();
-                Sinks[agentId] = existing;
-            }
-
-            return Task.FromResult(existing);
-        }
-
-        public ISubAgentChat? TryGet(string agentId) =>
-            Sinks.TryGetValue(agentId, out var sink) ? sink : null;
+    [Fact]
+    public void CopilotSubAgentRouter_NullSubAgentTable_Throws()
+    {
+        var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
+        Assert.Throws<ArgumentNullException>(() =>
+            new CopilotSubAgentRouter(channel.Writer, new SubAgentTestFakes.FakeRunningAgentChatFactory(), subAgentTable: null!));
     }
 }

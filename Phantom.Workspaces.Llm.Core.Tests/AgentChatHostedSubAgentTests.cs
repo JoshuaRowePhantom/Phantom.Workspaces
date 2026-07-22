@@ -365,16 +365,17 @@ public sealed class AgentChatHostedSubAgentTests
 
 
     [Fact]
-    public async Task RestoreSubAgentsAsync_NoFactory_LogsWarning()
+    public async Task RestoreSubAgentsAsync_NoFactory_Throws()
     {
+        // Fix #1109: RunningAgentChatFactory is mandatory when there are children to restore.
+        // The old warn-and-skip branch silently dropped restored sub-agents and their output
+        // then leaked into the parent transcript (issue #1110). Now it throws.
         var store = new InMemoryAgentPersistenceStore();
 
-        // Create and persist a child agent link manually
         var parentSessionId = "parent-session-id";
         var childSessionId = "child-session-id";
         await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
 
-        var loggerFactory = Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
         var testLoggerFactory = new TestLoggerFactory();
 
         var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
@@ -391,25 +392,23 @@ public sealed class AgentChatHostedSubAgentTests
             }
             """);
 
-        // Create parent without RunningAgentChatFactory
-        await using var restoredParent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            AgentDefinition = parentDefinition,
-            ConfiguredStore = store,
-            ClientOverride = new DeterministicTestChatClient(),
-            DisplayNameOverride = "restored-parent",
-            AgentSessionId = parentSessionId,
-            AgentServices = new AgentServices
+            await using var _ = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
             {
-                // No RunningAgentChatFactory provided
-                LoggerFactory = testLoggerFactory,
-                ChatClientOverride = new DeterministicTestChatClient()
-            },
+                AgentDefinition = parentDefinition,
+                ConfiguredStore = store,
+                ClientOverride = new DeterministicTestChatClient(),
+                DisplayNameOverride = "restored-parent",
+                AgentSessionId = parentSessionId,
+                AgentServices = new AgentServices
+                {
+                    // No RunningAgentChatFactory provided.
+                    LoggerFactory = testLoggerFactory,
+                    ChatClientOverride = new DeterministicTestChatClient()
+                },
+            });
         });
-
-        // Assert: A warning should have been logged
-        var warnings = testLoggerFactory.GetLogs(Microsoft.Extensions.Logging.LogLevel.Warning);
-        Assert.Contains(warnings, w => w.Contains("subagent") && w.Contains("IRunningAgentChatFactory"));
     }
 
     private sealed class TestLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
