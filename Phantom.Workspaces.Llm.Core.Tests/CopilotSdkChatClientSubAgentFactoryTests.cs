@@ -298,6 +298,62 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
     }
 
     [Fact]
+    public async Task SubAgentDelta_ForRegisteredChild_RoutedToChild_NeverRootStream()
+    {
+        // Fix #1110: named per the issue's Expected Tests table. Exercises the same
+        // invariant as the sibling _NeverParent test but with an explicit assertion that
+        // BOTH the child receiver saw the delta AND the root/parent channel did not.
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new FakeSubAgentTable();
+        var (router, rootChannel) = CreateRouter(factory, table);
+
+        await DispatchAsync(router, StartedEvent("agent-x"));
+        await DispatchAsync(router, DeltaEvent("agent-x", "child-only text"));
+        await DispatchAsync(router, CompletedEvent("agent-x"));
+
+        var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        var childUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in receiver.GetStreamingResponseAsync([]))
+            childUpdates.Add(u);
+
+        rootChannel.Writer.Complete();
+        var rootUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in rootChannel.Reader.ReadAllAsync())
+            rootUpdates.Add(u);
+
+        Assert.Contains(childUpdates, u => u.Text == "child-only text");
+        Assert.DoesNotContain(rootUpdates, u => u.Text == "child-only text");
+    }
+
+    [Fact]
+    public async Task ParentTurnDelta_WhileSubAgentActive_NotRoutedToChildSink()
+    {
+        // Fix #1110 inverse-inverse: while a sub-agent is active, root-level (untagged)
+        // parent-turn deltas must still reach the parent's root stream and must NOT be
+        // duplicated into the active child's receiver.
+        var factory = new FakeRunningAgentChatFactory();
+        var table = new FakeSubAgentTable();
+        var (router, rootChannel) = CreateRouter(factory, table);
+
+        await DispatchAsync(router, StartedEvent("agent-x"));
+        await DispatchAsync(router, DeltaEvent(agentId: null!, "parent-turn text"));
+        await DispatchAsync(router, CompletedEvent("agent-x"));
+
+        var receiver = (CopilotSubAgentChatClient)factory.CreatedLease!.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        var childUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in receiver.GetStreamingResponseAsync([]))
+            childUpdates.Add(u);
+
+        rootChannel.Writer.Complete();
+        var rootUpdates = new List<ChatResponseUpdate>();
+        await foreach (var u in rootChannel.Reader.ReadAllAsync())
+            rootUpdates.Add(u);
+
+        Assert.Contains(rootUpdates, u => u.Text == "parent-turn text");
+        Assert.DoesNotContain(childUpdates, u => u.Text == "parent-turn text");
+    }
+
+    [Fact]
     public async Task RootDelta_WithNoActiveSubAgent_WrittenToRootStream()
     {
         // Fix #1109: replacement for the deleted
