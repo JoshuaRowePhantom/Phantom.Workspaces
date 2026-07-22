@@ -188,8 +188,10 @@
 
             <GridSplitter Grid.Column="1" Classes="main-splitter" />
 
-            <dock:DockControl Grid.Column="2"
+            <dock:DockControl x:Name="TopLevelDockControl"
+                              Grid.Column="2"
                               Layout="{Binding Layout}"
+                              AutoCreateDataTemplates="False"
                               ts:DockTabSwitch.Enabled="True">
                 <ts:DockTabSwitch.Bindings>
                     <ts:DockTabSwitchBindings>

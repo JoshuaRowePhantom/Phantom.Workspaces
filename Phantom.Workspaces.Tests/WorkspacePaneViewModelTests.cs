@@ -211,6 +211,61 @@ public sealed class WorkspacePaneViewModelTests
         Assert.True(indicator.HasUnread);
     }
 
+    // ── #1119: aggregate glyph visibility on the workspace-level tab header ──────
+
+    [Fact]
+    public void WorkspacePaneDocument_WhenAllTabsIdleAndNoNotification_ShowsNeitherGlyph()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Idle;
+        pane.Tabs.Add(new TestRunningTab("idle-tab", tabStatus));
+
+        var running = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        var notification = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+
+        Assert.False(running.IsRunning);
+        Assert.False(notification.HasUnread);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_WhenTabRunningAndUnread_ShowsBothGlyphs()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        pane.Tabs.Add(new TestRunningTab("running-tab", tabStatus));
+        pane.AnyTabHasUnreadNotification = true;
+
+        var running = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        var notification = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+
+        Assert.True(running.IsRunning);
+        Assert.True(notification.HasUnread);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_RunningIndicator_ClearsWhenTabTransitionsToIdle()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        pane.Tabs.Add(new TestRunningTab("running-tab", tabStatus));
+
+        var running = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        Assert.True(running.IsRunning);
+
+        tabStatus.RunningStatus = RunningStatus.Idle;
+
+        Assert.False(running.IsRunning);
+    }
+
     [Fact]
     public void WorkspacePaneDocument_EffectiveTabHeader_Title_MatchesPaneTitle()
     {

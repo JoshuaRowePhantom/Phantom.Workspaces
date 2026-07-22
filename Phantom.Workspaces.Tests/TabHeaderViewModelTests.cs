@@ -297,6 +297,19 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
+    // ── #1119: DockDataTemplates must include a template for WorkspacesPaneDock ─────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_WorkspacesPaneDock()
+    {
+        var templates = new DockDataTemplates();
+        var viewModel = new WorkspacesPaneDock();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
     // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
 
     [AvaloniaFact(Timeout = 15_000)]

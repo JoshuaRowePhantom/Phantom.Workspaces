@@ -38,9 +38,17 @@ public partial class MainWindow : Window
 
     private void AddDockDataTemplates()
     {
+        // The DockDataTemplates must be applied both at Window scope (for content resolution)
+        // and directly on the top-level DockControl (so Dock.Avalonia's tab-strip rendering
+        // scope, which does not walk up to ancestor DataTemplates, can resolve the custom
+        // WorkspacesPaneDock header template + glyph indicator templates). See #1119.
         foreach (var template in new DockDataTemplates())
         {
             this.DataTemplates.Add(template);
+        }
+        foreach (var template in new DockDataTemplates())
+        {
+            this.TopLevelDockControl.DataTemplates.Add(template);
         }
     }
 
