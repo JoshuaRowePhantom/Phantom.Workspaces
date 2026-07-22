@@ -5140,12 +5140,13 @@ public sealed class MainWindowIntegrationTests
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
 
         // Alt+1 resolves the tab that is visually first (C) — NOT pane.Tabs' original first element (A).
-        // The Dock's VisibleDockables order is authoritative; the internal list is re-derived from it.
+        // The Dock's VisibleDockables order is authoritative for indexing; per issue #1107 the
+        // internal pane.Tabs list is INDEPENDENT of the dock order and preserves its insertion order.
         ActivateContentTabAtIndex(viewModel, "0");
         var docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
         Assert.Equal("ncl-c", docs[0].Id);
         Assert.Equal(docs[0], documentDock.ActiveDockable);
-        Assert.Equal(new[] { "ncl-c", "ncl-a", "ncl-b" }, pane.Tabs.Select(t => t.Id).ToArray());
+        Assert.Equal(new[] { "ncl-a", "ncl-b", "ncl-c" }, pane.Tabs.Select(t => t.Id).ToArray());
     }
 
     [AvaloniaFact(Timeout = 15_000)]

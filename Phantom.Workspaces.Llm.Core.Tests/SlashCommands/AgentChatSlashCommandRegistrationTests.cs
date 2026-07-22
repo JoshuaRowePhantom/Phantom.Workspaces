@@ -1,4 +1,5 @@
 using AgentSchema;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Llm.Tests.SlashCommands;
@@ -60,10 +61,14 @@ public sealed class AgentChatSlashCommandRegistrationTests
     [Fact]
     public async Task SlashCommands_ForCopilotAgent_WorkingDirectoryCommand_IsCopilotSdkSpecificHandler()
     {
-        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
-        {
-            AgentDefinition = CreateCopilotAgent(),
-        });
+        await using var factory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            TaskScheduler.Default);
+        await using var lease = await factory.CreateAsync(
+            CreateCopilotAgent(),
+            new AgentSessionId(Guid.NewGuid().ToString("n")));
+        var chat = lease.AgentChat;
 
         var handler = Assert.Single(chat.SlashCommands.Commands, c => c.Name == "working-directory");
         Assert.IsType<CopilotSdkWorkingDirectorySlashCommandHandler>(handler);
@@ -72,10 +77,14 @@ public sealed class AgentChatSlashCommandRegistrationTests
     [Fact]
     public async Task SlashCommands_ForCopilotAgent_IncludesModelCommand()
     {
-        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
-        {
-            AgentDefinition = CreateCopilotAgent(),
-        });
+        await using var factory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            TaskScheduler.Default);
+        await using var lease = await factory.CreateAsync(
+            CreateCopilotAgent(),
+            new AgentSessionId(Guid.NewGuid().ToString("n")));
+        var chat = lease.AgentChat;
 
         Assert.Contains(chat.SlashCommands.Commands, c => c.Name == "model");
     }
