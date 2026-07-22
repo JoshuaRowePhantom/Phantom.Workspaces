@@ -84,7 +84,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
     private NavigationStackPopupViewModel? navStackPopup;
-    private readonly Dictionary<string, NotifyCollectionChangedEventHandler> innerDockSubscriptions = new();
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
     private readonly List<RunningAgentChatLease> autoResumeLeases = [];
 
@@ -1868,16 +1867,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
+        // Fix #1107: cycle in dock visual order (VisibleDockables), not pane.Tabs order.
+        // pane.Tabs is a plain, order-independent membership set; the visual/dock order is the
+        // source of truth for user-facing tab cycling.
+        var docs = documentDock.VisibleDockables?.OfType<WorkspaceDocument>().ToList()
+            ?? new List<WorkspaceDocument>();
+        if (docs.Count < 2)
+        {
+            return;
+        }
+
         var activeTabId = (documentDock.ActiveDockable as WorkspaceDocument)?.Id;
         var currentIndex = activeTabId is not null
-            ? pane.Tabs.IndexOf(pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, activeTabId, StringComparison.Ordinal))!)
+            ? docs.FindIndex(d => string.Equals(d.Id, activeTabId, StringComparison.Ordinal))
             : 0;
         if (currentIndex < 0) currentIndex = 0;
 
-        var nextIndex = ((currentIndex + delta) % pane.Tabs.Count + pane.Tabs.Count) % pane.Tabs.Count;
-        var nextTab = pane.Tabs[nextIndex];
-        var nextDoc = this.dockFactory.GetDocumentForTab(nextTab.Id);
-        if (nextDoc is null) return;
+        var nextIndex = ((currentIndex + delta) % docs.Count + docs.Count) % docs.Count;
+        var nextDoc = docs[nextIndex];
 
         this.dockFactory.SetActiveDockable(nextDoc);
         this.dockFactory.SetFocusedDockable(documentDock, nextDoc);
@@ -2187,7 +2194,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 // WorkspaceDocument at the correct dock position automatically.
                 var paneInsertIndex = sourceTabIndex + 1;
                 if (paneInsertIndex > targetPane.Tabs.Count) paneInsertIndex = targetPane.Tabs.Count;
-                this.RunSuppressingDockOrderSync(() => targetPane.Tabs.Insert(paneInsertIndex, tab));
+                targetPane.Tabs.Insert(paneInsertIndex, tab);
                 var newDocument = this.dockFactory.GetDocumentForTab(tab.Id);
                 if (focus)
                 {
@@ -2273,7 +2280,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         // Insert new tab at the same position; ItemsSource creates a new WorkspaceDocument automatically.
         if (paneIndex >= 0 && paneIndex <= pane.Tabs.Count)
-            this.RunSuppressingDockOrderSync(() => pane.Tabs.Insert(paneIndex, newTab));
+            pane.Tabs.Insert(paneIndex, newTab);
         else
             pane.Tabs.Add(newTab);
 
@@ -2407,27 +2414,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private void SubscribeToInnerDockChanges(WorkspacePaneViewModel workspacePane)
     {
-        if (workspacePane.ContentLayout is null) return;
-        var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
-        if (documentDock?.VisibleDockables is not INotifyCollectionChanged collection) return;
-
-        NotifyCollectionChangedEventHandler handler = (_, e) =>
-        {
-            this.SyncPaneTabsFromDockChange(workspacePane, documentDock, e);
-        };
-        collection.CollectionChanged += handler;
-        this.innerDockSubscriptions[workspacePane.Id] = handler;
+        // Fix #1107: no-op. The former dock->Tabs order back-sync has been removed; Tabs order is
+        // now independent of dock order, so there is nothing to react to on VisibleDockables
+        // CollectionChanged. The subscription helpers are retained as empty hooks to keep the many
+        // existing call sites simple; they may be removed once no callers remain.
+        _ = workspacePane;
     }
 
     private void UnsubscribeFromInnerDockChanges(WorkspacePaneViewModel workspacePane)
     {
-        if (!this.innerDockSubscriptions.TryGetValue(workspacePane.Id, out var handler)) return;
-        this.innerDockSubscriptions.Remove(workspacePane.Id);
-
-        if (workspacePane.ContentLayout is null) return;
-        var documentDock = this.FindDocumentDock(workspacePane.ContentLayout);
-        if (documentDock?.VisibleDockables is INotifyCollectionChanged collection)
-            collection.CollectionChanged -= handler;
+        // Fix #1107: no-op. See SubscribeToInnerDockChanges above.
+        _ = workspacePane;
     }
 
     /// <summary>
@@ -2633,89 +2630,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         };
     }
 
-    /// <summary>
-    /// Synchronizes the ORDER of <see cref="WorkspacePaneViewModel.Tabs"/> when the dock model
-    /// fires a <see cref="INotifyCollectionChanged"/> event on <c>VisibleDockables</c>.
-    /// Disposal and tab removal on close/float are handled exclusively by OnDockableTabClosed;
-    /// this method never adds or removes tabs. It re-derives the visual ORDER for every
-    /// structural change — including the Add + Remove pair that Dock.Avalonia's live drag-reorder
-    /// emits instead of a <see cref="NotifyCollectionChangedAction.Move"/> — so Alt+N indexing and
-    /// the numbered tab badges (which read <see cref="WorkspacePaneViewModel.Tabs"/>) always
-    /// reflect the current visual order. <see cref="SyncPaneTabsOrderFromDock"/> only reorders
-    /// tabs present in both collections, so it is membership-safe and idempotent for every action.
-    /// </summary>
-    private void SyncPaneTabsFromDockChange(
-        WorkspacePaneViewModel workspacePane,
-        IDocumentDock documentDock,
-        NotifyCollectionChangedEventArgs e)
-    {
-        if (this.suppressDockOrderSync) return;
-
-        if (e.Action is NotifyCollectionChangedAction.Add
-            or NotifyCollectionChangedAction.Remove
-            or NotifyCollectionChangedAction.Move
-            or NotifyCollectionChangedAction.Replace
-            or NotifyCollectionChangedAction.Reset)
-        {
-            SyncPaneTabsOrderFromDock(workspacePane, documentDock);
-        }
-    }
-
-    /// <summary>
-    /// Set while this view-model is programmatically inserting a tab into a pane's
-    /// <see cref="WorkspacePaneViewModel.Tabs"/> collection at a specific index. The Dock library
-    /// reacts synchronously by <b>appending</b> the generated document to the end of
-    /// <c>VisibleDockables</c> — it does not honour the insert index (see #1065). Without this
-    /// guard, the reentrant dock-order back-sync in <see cref="SyncPaneTabsFromDockChange"/> would
-    /// observe that appended order and overwrite the correct, app-authored <c>Tabs</c> order.
-    /// Suppressing the back-sync for the duration of the programmatic insert keeps <c>Tabs</c>
-    /// authoritative for app-driven inserts, while user drag-reorders (which mutate
-    /// <c>VisibleDockables</c> directly, outside any <c>Tabs</c> mutation) still sync back so the
-    /// Alt+N badges follow the new visual order.
-    /// </summary>
-    private bool suppressDockOrderSync;
-
-    private void RunSuppressingDockOrderSync(Action mutation)
-    {
-        var previous = this.suppressDockOrderSync;
-        this.suppressDockOrderSync = true;
-        try
-        {
-            mutation();
-        }
-        finally
-        {
-            this.suppressDockOrderSync = previous;
-        }
-    }
-
-    /// <summary>
-    /// Reorders <see cref="WorkspacePaneViewModel.Tabs"/> to match the current visual order
-    /// in <see cref="IDocumentDock.VisibleDockables"/> after a user drag-reorder.
-    /// Uses index-based moves so no Add/Remove events fire.
-    /// </summary>
-    private static void SyncPaneTabsOrderFromDock(
-        WorkspacePaneViewModel workspacePane,
-        IDocumentDock documentDock)
-    {
-        if (documentDock.VisibleDockables is null) return;
-
-        var newOrder = documentDock.VisibleDockables
-            .OfType<WorkspaceDocument>()
-            .Select(d => d.TabViewModel)
-            .OfType<WorkspaceTabViewModel>()
-            .ToList();
-
-        for (var targetIndex = 0; targetIndex < newOrder.Count; targetIndex++)
-        {
-            var tab = newOrder[targetIndex];
-            var currentIndex = workspacePane.Tabs.IndexOf(tab);
-            if (currentIndex >= 0 && currentIndex != targetIndex)
-            {
-                workspacePane.Tabs.Move(currentIndex, targetIndex);
-            }
-        }
-    }
+    // Fix #1107: SyncPaneTabsFromDockChange, SyncPaneTabsOrderFromDock, RunSuppressingDockOrderSync
+    // and the suppressDockOrderSync field have been deleted. Tab order (WorkspacePaneViewModel.Tabs)
+    // is now a pure, order-independent membership set — only explicit open/close code mutates it —
+    // and the dock's VisibleDockables is the sole source of visual/dock order. This removes the
+    // reentrant back-sync that crashed ObservableCollection with
+    // "Cannot change ObservableCollection during a CollectionChanged event" when opening a tab
+    // after a guarded insert.
 
     private IDocumentDock? FindDocumentDock(IDockable dockable)
     {

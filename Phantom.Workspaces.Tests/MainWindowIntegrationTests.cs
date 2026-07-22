@@ -7099,5 +7099,208 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("mru-dockable-a", documentDock!.ActiveDockable?.Id);
     }
 
+    // ─── Fix #1107: Tabs order is independent of dock order — no reentrant back-sync ─────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_AppendAfterIndexedInsert_DoesNotThrow()
+    {
+        // Regression #1107: an indexed insert (insertAfterTabId) followed by an unguarded append
+        // used to explode with "Cannot change ObservableCollection during a CollectionChanged
+        // event." because the dock->Tabs order back-sync tried to Move within the still-firing
+        // Tabs.CollectionChanged notification. With the back-sync deleted the append is safe.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "reenter-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "reenter-b", Title = "B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "reenter-c", Title = "C" };
+
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB, insertAfterTabId: "reenter-a");
+        await viewModel.OpenTabAsync(tabC); // plain append — must not throw.
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.Contains(pane.Tabs, t => t.Id == "reenter-c");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_MultipleAppends_DoesNotFaultUnobservedTask()
+    {
+        // Regression #1107: opening several tabs in sequence must not fault the returned Task
+        // with an unobserved AggregateException wrapping an ObservableCollection reentrancy
+        // exception.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        for (var i = 0; i < 5; i++)
+        {
+            var tab = new WebViewModel($"https://append-{i}.example.com")
+            {
+                Id = $"append-{i}",
+                Title = $"Tab {i}",
+            };
+            var task = viewModel.OpenTabAsync(tab);
+            await task; // must not throw
+            Assert.False(task.IsFaulted);
+        }
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.Equal(5, pane.Tabs.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_ThenReorderDock_LeavesTabsOrderUnchanged()
+    {
+        // Fix #1107: WorkspacePaneViewModel.Tabs order is independent of dock order — the dock
+        // may reorder VisibleDockables without our Tabs collection shifting.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "order-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "order-b", Title = "B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "order-c", Title = "C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var beforeTabIds = pane.Tabs.Select(t => t.Id).ToList();
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var visible = documentDock!.VisibleDockables!;
+        // Reorder VisibleDockables (simulates a user drag-reorder in the dock).
+        if (visible.Count >= 3)
+        {
+            var first = visible[0];
+            visible.RemoveAt(0);
+            visible.Insert(visible.Count, first);
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var afterTabIds = pane.Tabs.Select(t => t.Id).ToList();
+        Assert.Equal(beforeTabIds, afterTabIds);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task DockReorder_DoesNotMoveTabsCollection()
+    {
+        // Fix #1107: reordering VisibleDockables must not raise NotifyCollectionChangedAction.Move
+        // on pane.Tabs — the back-sync is gone.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "no-move-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "no-move-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var moveEventCount = 0;
+        pane.Tabs.CollectionChanged += (_, e) =>
+        {
+            if (e.Action == NotifyCollectionChangedAction.Move)
+            {
+                Interlocked.Increment(ref moveEventCount);
+            }
+        };
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var visible = documentDock!.VisibleDockables!;
+        if (visible.Count >= 2)
+        {
+            var first = visible[0];
+            visible.RemoveAt(0);
+            visible.Insert(visible.Count, first);
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Equal(0, moveEventCount);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseTab_RemovesTabFromTabsCollection()
+    {
+        // Fix #1107: explicit close is still the only mutation that removes membership from Tabs.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "closerm-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "closerm-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.Contains(pane.Tabs, t => t.Id == "closerm-b");
+
+        viewModel.CloseTabById("closerm-b");
+
+        Assert.DoesNotContain(pane.Tabs, t => t.Id == "closerm-b");
+        Assert.Contains(pane.Tabs, t => t.Id == "closerm-a");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CycleTab_AfterDockReorder_FollowsVisibleDockablesOrder()
+    {
+        // Fix #1107: Ctrl+Tab cycles in dock visual order (VisibleDockables), not pane.Tabs order.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "cyc-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "cyc-b", Title = "B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "cyc-c", Title = "C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var visible = documentDock!.VisibleDockables!;
+
+        // Reorder VisibleDockables so dock order diverges from any assumed insertion order.
+        if (visible.Count >= 3)
+        {
+            var first = visible[0];
+            visible.RemoveAt(0);
+            visible.Insert(visible.Count, first);
+        }
+
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var startIndex = visible.IndexOf(documentDock.ActiveDockable!);
+        viewModel.CycleTabForwardCommand.Execute(null);
+        var afterIndex = visible.IndexOf(documentDock.ActiveDockable!);
+        Assert.Equal((startIndex + 1) % visible.Count, afterIndex);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CycleTab_ActivatesNextDockableByIdentity()
+    {
+        // Fix #1107: cycling resolves the current/next dockable by identity within
+        // VisibleDockables, independent of any pane.Tabs ordering assumption.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "cyc-id-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "cyc-id-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var activeBefore = documentDock!.ActiveDockable;
+        Assert.NotNull(activeBefore);
+
+        viewModel.CycleTabForwardCommand.Execute(null);
+        var activeAfter = documentDock.ActiveDockable;
+
+        Assert.NotSame(activeBefore, activeAfter);
+        Assert.Contains(activeAfter, documentDock.VisibleDockables!);
+    }
+
 }
 
