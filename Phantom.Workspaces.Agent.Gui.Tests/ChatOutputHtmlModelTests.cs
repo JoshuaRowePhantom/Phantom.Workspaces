@@ -2454,6 +2454,257 @@ public sealed class ChatOutputHtmlModelTests
             o.Path.Contains("insert-after") || o.Content.Contains("insert-after"));
     }
 
+    // ── Issue #1123: grouped-member streaming must not nest tools inside tools ─
+
+    private static AgentChatHistoryItem MultiToolCallMessage(params (string CallId, string Name)[] calls)
+        => new()
+        {
+            Role = ChatRole.Assistant,
+            Contents = calls.Select(c => (AIContent)new FunctionCallContent(c.CallId, c.Name)).ToList(),
+        };
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GroupedMember_StreamsSecondToolCall_DoesNotNestToolGroupInsideToolGroup()
+    {
+        // Reproduces issue #1123: a message that was grouped while it had a single call later
+        // streams a 2nd FunctionCallContent. The equal-category fast-path must not leave a nested
+        // content-level tools(…) wrapper inside the outer message-level group body.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("powershell", "c1"),
+            MultiToolCallMessage(("c2", "report_intent")),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // Stream: the grouped member (index 1) grows from 1 call to 2 calls.
+        history[1] = MultiToolCallMessage(("c2", "report_intent"), ("c3", "powershell"));
+
+        var contentOps = sink.ContentOperations;
+
+        // Assert: no operation emits a content-level wrapper — the flat items are used instead.
+        Assert.DoesNotContain(contentOps, op => op.Content.Contains("chat-tool-group-wrapper"));
+
+        // The streaming delta must emit at least one flat chat-tool-group-item — the newly-added
+        // 2nd call is appended as its own binding. The pre-existing 1st call binding is unchanged
+        // (its key is stable), so this delta contains a single new item, not a wrapper.
+        Assert.Contains(contentOps, op => op.Content.Contains("chat-tool-group-item"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GroupedMember_StreamsSecondToolCall_RefreshesOuterGroupSummaryToolNames()
+    {
+        // After a grouped member gains a 2nd call, the outer tools(…) summary must reflect the
+        // updated distinct tool-name set and total call count.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("powershell", "c1"),
+            MultiToolCallMessage(("c2", "report_intent")),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history[1] = MultiToolCallMessage(("c2", "report_intent"), ("c3", "workspaces_entity_get"));
+
+        var summaryOps = sink.ContentOperations
+            .Where(op => op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"))
+            .ToList();
+        Assert.NotEmpty(summaryOps);
+        var lastSummary = summaryOps.Last();
+
+        // Total calls across the group = powershell + report_intent + workspaces_entity_get = 3.
+        Assert.Contains("3 calls", lastSummary.Content);
+        Assert.Contains("powershell", lastSummary.Content);
+        Assert.Contains("report_intent", lastSummary.Content);
+        Assert.Contains("workspaces_entity_get", lastSummary.Content);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GroupedMember_StreamsAdditionalToolCall_FromMultiBackToSingle_StillNoNestedWrapper()
+    {
+        // Reverse boundary crossing: a grouped member starts with 2 calls and streams down to 1.
+        // No content-level wrapper must be emitted at any point.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("powershell", "c1"),
+            MultiToolCallMessage(("c2", "tool_a"), ("c3", "tool_b")),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        // Neither the initial insertion nor any subsequent update should emit a wrapper for a
+        // grouped member.
+        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("chat-tool-group-wrapper"));
+
+        sink.Clear();
+        history[1] = MultiToolCallMessage(("c2", "tool_a"));
+
+        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("chat-tool-group-wrapper"));
+
+        // Summary now reflects 2 total calls (powershell + tool_a).
+        var summaryOp = sink.ContentOperations.LastOrDefault(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.NotNull(summaryOp);
+        Assert.Contains("2 calls", summaryOp!.Content);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AssistantMessageBetweenToolBatches_ProducesTwoSiblingToolGroups_NotNested()
+    {
+        // A visible assistant text between two tool batches yields two independent (sibling) tool
+        // groups. A visible non-tool message must always close the open group.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolCallMessage("write_file", "c2"),
+            TextMessage(ChatRole.Assistant, "reply"),
+            ToolCallMessage("list_files", "c3"),
+            ToolCallMessage("grep", "c4"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var allContent = string.Concat(sink.ContentOperations.Select(op => op.Content));
+
+        // Exactly two chat-tool-group top-level elements; no nesting of one inside the other.
+        var groupMatches = System.Text.RegularExpressions.Regex.Matches(allContent, "class=\"chat-content chat-tool-group\"");
+        Assert.Equal(2, groupMatches.Count);
+        Assert.DoesNotContain("chat-tool-group-wrapper", allContent);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ConsecutiveToolCalls_NoInterleaving_CoalesceIntoSingleGroup()
+    {
+        // Guard against over-fixing: three single-call tool messages in a row still coalesce
+        // into exactly one message-level group, no nested wrappers.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            ToolCallMessage("tool_c", "c3"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        var allContent = string.Concat(sink.ContentOperations.Select(op => op.Content));
+        var groupMatches = System.Text.RegularExpressions.Regex.Matches(allContent, "class=\"chat-content chat-tool-group\"");
+        Assert.Single(groupMatches);
+        Assert.DoesNotContain("chat-tool-group-wrapper", allContent);
+
+        Assert.Contains("3 calls", allContent);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OrdinaryStreamingToolCallText_StillUsesFastPath_NoRegression()
+    {
+        // Ordinary equal-category streaming (a grouped single-call member gets its argument text
+        // updated but the call count stays at 1) must still take the fast path: the target model
+        // is updated, but no promotion, no new group, and — because the composition unchanged —
+        // the outer summary is refreshed only when function-call state actually changed.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            ToolCallMessage("write_file", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // Replace the second grouped member with a functionally-equivalent single-call message
+        // (still tool-call-only, still one FunctionCallContent).
+        history[1] = ToolCallMessage("write_file", "c2");
+
+        // No wrapper anywhere in the fast-path ops.
+        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("chat-tool-group-wrapper"));
+        // No new message-level group was created (no chat-tool-group-body in a Replace on msg-0).
+        Assert.DoesNotContain(sink.ContentOperations, op =>
+            op.Location == ChatOutputUpdateLocation.Replace &&
+            op.Path == ChatOutputHtmlRenderer.MessageId(0) &&
+            op.Content.Contains("chat-tool-group-body"));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task StreamedToolCalls_OutOfChunkOrder_RenderFlatSiblingGroupStructure()
+    {
+        // Simulates the intermittent streamed-order case: the grouped member's 2nd call arrives
+        // in a later chunk (rather than as part of the original message). The final DOM must
+        // remain flat/sibling — no nested wrapper.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("first_call", "c1"),
+            MultiToolCallMessage(("c2", "second_call")),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        // Chunk 2: grow member[1] with a 2nd call.
+        history[1] = MultiToolCallMessage(("c2", "second_call"), ("c3", "third_call"));
+
+        // Chunk 3: grow member[1] with a 3rd call.
+        history[1] = MultiToolCallMessage(("c2", "second_call"), ("c3", "third_call"), ("c4", "fourth_call"));
+
+        // Chunk 4: replace one of them with new arguments to trigger another equal-category update.
+        history[1] = MultiToolCallMessage(
+            ("c2", "second_call"),
+            ("c3", "third_call_renamed"),
+            ("c4", "fourth_call"));
+
+        // Assert: never a wrapper inside a body across all ops.
+        Assert.DoesNotContain(sink.ContentOperations, op => op.Content.Contains("chat-tool-group-wrapper"));
+
+        // Final summary reflects the updated tool-name set and total (4) calls.
+        var summaryOp = sink.ContentOperations.Last(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
+        Assert.Contains("4 calls", summaryOp.Content);
+        Assert.Contains("first_call", summaryOp.Content);
+        Assert.Contains("second_call", summaryOp.Content);
+        Assert.Contains("third_call_renamed", summaryOp.Content);
+        Assert.Contains("fourth_call", summaryOp.Content);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GroupedMember_WithMultipleCalls_LoadedInBulk_RendersFlatItemsInsideGroupBody()
+    {
+        // Headless / no-visual-tree bulk-load variant: a grouped member with multiple calls
+        // built via the HistoryRenderPlan path must also render flat, not nested. This exercises
+        // the AppendItemStateOnly plan branch (issue #1123).
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("first_tool", "c1"),
+            MultiToolCallMessage(("c2", "second_tool"), ("c3", "third_tool")),
+            ToolCallMessage("fourth_tool", "c4"),
+        };
+        var sink = new RecordingSink();
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, sink, () => true);
+        var planHtml = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Exactly one message-level group; no nested content-level wrapper anywhere.
+        var groupMatches = System.Text.RegularExpressions.Regex.Matches(planHtml, "class=\"chat-content chat-tool-group\"");
+        Assert.Single(groupMatches);
+        Assert.DoesNotContain("chat-tool-group-wrapper", planHtml);
+
+        // Group summary sees all four calls and all distinct tool names.
+        Assert.Contains("4 calls", planHtml);
+        Assert.Contains("first_tool", planHtml);
+        Assert.Contains("second_tool", planHtml);
+        Assert.Contains("third_tool", planHtml);
+        Assert.Contains("fourth_tool", planHtml);
+
+        // The nested wrapper is absent: the second message's two calls appear as sibling
+        // chat-tool-group-item elements inside its chat-message body, which is inside the group body.
+        var itemMatches = System.Text.RegularExpressions.Regex.Matches(planHtml, "chat-tool-group-item");
+        Assert.True(itemMatches.Count >= 4, $"Expected at least 4 flat items in bulk-loaded group; got {itemMatches.Count}.");
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task UserMessage_AddedAfterRunningItemCompletes_InsertsIntoHistoryDom()
     {

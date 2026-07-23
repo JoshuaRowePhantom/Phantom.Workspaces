@@ -36,6 +36,7 @@ internal sealed class ChatMessageHtmlModel
     private string? renderedRoleLabel;
     private bool hasRendered;
     private bool lastReasoningVisible;
+    private bool isInsideMessageLevelToolGroup;
     private Dictionary<string, FunctionResultContent>? supplementalResults;
 
     public ChatMessageHtmlModel(
@@ -73,6 +74,34 @@ internal sealed class ChatMessageHtmlModel
 
     /// <summary>Set once the message element has been inserted into the DOM by its transformer.</summary>
     public bool IsInserted { get; set; }
+
+    /// <summary>
+    /// True when this message is a member of a message-level <c>chat-tool-group</c> — i.e. its
+    /// element lives inside a <c>chat-tool-group-body</c>. While set, any run of
+    /// <see cref="FunctionCallContent"/> in this message renders as flat
+    /// <c>chat-tool-group-item</c> sibling bindings rather than being wrapped in an inner
+    /// <c>chat-tool-group-wrapper</c>. This preserves the structural invariant that a
+    /// <c>tools (…)</c> group is never a descendant of another <c>tools (…)</c> group even when
+    /// streaming grows a grouped member's tool-call count past 1 (issue #1123).
+    /// </summary>
+    public bool IsInsideMessageLevelToolGroup => this.isInsideMessageLevelToolGroup;
+
+    /// <summary>
+    /// Sets <see cref="IsInsideMessageLevelToolGroup"/>. When the value changes the content
+    /// bindings are recomputed so subsequent <see cref="BuildHtml"/> reflects the new mode.
+    /// Emits DOM operations only when <paramref name="emit"/> is true (used when the flag flips
+    /// while the message is live and no enclosing Replace will subsume the change).
+    /// </summary>
+    internal void SetIsInsideMessageLevelToolGroup(bool value, bool emit)
+    {
+        if (this.isInsideMessageLevelToolGroup == value)
+        {
+            return;
+        }
+
+        this.isInsideMessageLevelToolGroup = value;
+        this.Render(emit);
+    }
 
     /// <summary>
     /// True when the message has been rendered and produced no visible content bindings (an empty
@@ -224,6 +253,30 @@ internal sealed class ChatMessageHtmlModel
 
             if (content is FunctionCallContent firstCall)
             {
+                // Grouped-member mode: never emit an inner content-level `chat-tool-group-wrapper`
+                // inside the enclosing message-level group body. Each FunctionCallContent becomes
+                // its own flat `chat-tool-group-item` binding (issue #1123).
+                if (this.isInsideMessageLevelToolGroup)
+                {
+                    var flatContentId = ChatOutputHtmlRenderer.ContentId(this.ElementId, newBindings.Count);
+                    var flatKeyParts = new List<string>(2)
+                    {
+                        ChatOutputHtmlRenderer.ComputeContentKey(firstCall, isDiagnostic),
+                    };
+                    if (firstCall.CallId is not null &&
+                        resultLookup is not null &&
+                        resultLookup.TryGetValue(firstCall.CallId, out var flatMatchedResult))
+                    {
+                        flatKeyParts.Add(ChatOutputHtmlRenderer.ComputeContentKey(flatMatchedResult, isDiagnostic));
+                    }
+
+                    var flatKey = "flat:" + string.Join("\x02", flatKeyParts);
+                    var flatHtml = ChatOutputHtmlRenderer.RenderToolGroup(flatContentId, new[] { firstCall }, resultLookup);
+                    newBindings.Add(new ContentBinding(flatKey, flatContentId, flatHtml));
+                    contentIndex++;
+                    continue;
+                }
+
                 // Collect the maximal run of consecutive FunctionCallContent items.
                 var calls = new List<FunctionCallContent> { firstCall };
                 contentIndex++;
@@ -326,22 +379,22 @@ internal sealed class ChatMessageHtmlModel
 /// Renders a run of consecutive tool-call history items as a single collapsible
 /// <c>details</c> element. Children are <see cref="ChatMessageHtmlModel"/> instances whose HTML
 /// is placed intact inside the expanded body (so later per-content diffs can still target their
-/// child ids). The summary line shows the last tool name and a call-count badge. The group id is
-/// derived from the first member's source index and never changes for the life of the group.
+/// child ids). The summary line lists the distinct tool names across all members (in first-seen
+/// encounter order across the members' <see cref="FunctionCallContent"/> items) and the total
+/// call count. The group id is derived from the first member's source index and never changes
+/// for the life of the group.
 /// </summary>
 internal sealed class ToolCallGroupHtmlModel
 {
     private readonly IChatOutputHtmlSink sink;
-    private readonly List<string> orderedToolNames;
-    private int callCount;
+    private readonly List<ChatMessageHtmlModel> members = [];
 
-    public ToolCallGroupHtmlModel(int firstHistoryIndex, string groupId, IChatOutputHtmlSink sink, string firstToolName)
+    public ToolCallGroupHtmlModel(int firstHistoryIndex, string groupId, IChatOutputHtmlSink sink, ChatMessageHtmlModel firstMember)
     {
         this.FirstHistoryIndex = firstHistoryIndex;
         this.GroupId = groupId;
         this.sink = sink;
-        this.callCount = 1;
-        this.orderedToolNames = new List<string> { firstToolName };
+        this.members.Add(firstMember);
     }
 
     /// <summary>The source index of the first (top-level) member the group replaced.</summary>
@@ -349,21 +402,64 @@ internal sealed class ToolCallGroupHtmlModel
 
     public string GroupId { get; }
 
-    /// <summary>The distinct tool names in the group, in first-seen (encounter) order.</summary>
-    public IReadOnlyList<string> DistinctToolNames => this.orderedToolNames;
+    /// <summary>The distinct tool names in the group, in first-seen (encounter) order across all
+    /// members' <see cref="FunctionCallContent"/> items.</summary>
+    public IReadOnlyList<string> DistinctToolNames
+    {
+        get
+        {
+            var seen = new List<string>();
+            foreach (var member in this.members)
+            {
+                foreach (var content in member.Source.Contents)
+                {
+                    if (content is FunctionCallContent call)
+                    {
+                        var name = call.Name ?? string.Empty;
+                        if (!seen.Contains(name))
+                        {
+                            seen.Add(name);
+                        }
+                    }
+                }
+            }
+
+            return seen;
+        }
+    }
+
+    /// <summary>Total number of <see cref="FunctionCallContent"/> items across all members.</summary>
+    public int CallCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var member in this.members)
+            {
+                foreach (var content in member.Source.Contents)
+                {
+                    if (content is FunctionCallContent)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            return count;
+        }
+    }
 
     /// <summary>
     /// Builds the complete group element for DOM insertion, with <paramref name="firstMessageHtml"/>
     /// (or the concatenated member HTML) pre-placed inside the body container.
     /// </summary>
     public string BuildHtml(string firstMessageHtml)
-        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.GroupId, this.orderedToolNames, this.callCount, firstMessageHtml);
+        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.GroupId, this.DistinctToolNames, this.CallCount, firstMessageHtml);
 
     /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
-    public void AppendItem(ChatMessageHtmlModel model, string toolName)
+    public void AppendItem(ChatMessageHtmlModel model)
     {
-        this.callCount++;
-        this.AddToolName(toolName);
+        this.members.Add(model);
 
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolGroupBodyId(this.GroupId),
@@ -371,10 +467,7 @@ internal sealed class ToolCallGroupHtmlModel
             model.BuildHtml());
         model.IsInserted = true;
 
-        this.sink.UpdateContent(
-            ChatOutputHtmlRenderer.ToolGroupSummaryId(this.GroupId),
-            ChatOutputUpdateLocation.Replace,
-            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.orderedToolNames, this.callCount));
+        this.EmitSummaryUpdate();
     }
 
     /// <summary>
@@ -382,18 +475,25 @@ internal sealed class ToolCallGroupHtmlModel
     /// Used by render-plan/chunk generation and run rebuilds, where the group HTML is produced
     /// as one blob rather than by incremental DOM operations.
     /// </summary>
-    internal void AppendItemStateOnly(ChatMessageHtmlModel model, string toolName)
+    internal void AppendItemStateOnly(ChatMessageHtmlModel model)
     {
-        this.callCount++;
-        this.AddToolName(toolName);
+        this.members.Add(model);
     }
 
-    private void AddToolName(string toolName)
+    /// <summary>
+    /// Re-emits the group summary from the current member set. Called after a grouped member's
+    /// tool-call composition changes during streaming so that the outer <c>tools (…)</c> label
+    /// reflects the current set of tool names and total call count (issue #1123).
+    /// </summary>
+    public void RefreshSummary()
+        => this.EmitSummaryUpdate();
+
+    private void EmitSummaryUpdate()
     {
-        if (!this.orderedToolNames.Contains(toolName))
-        {
-            this.orderedToolNames.Add(toolName);
-        }
+        this.sink.UpdateContent(
+            ChatOutputHtmlRenderer.ToolGroupSummaryId(this.GroupId),
+            ChatOutputUpdateLocation.Replace,
+            ChatOutputHtmlRenderer.RenderToolCallGroupSummary(this.GroupId, this.DistinctToolNames, this.CallCount));
     }
 }
 
@@ -533,6 +633,17 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             {
                 this.RemoveCallIdsFromIndex(target);
                 this.AddCallIdsToIndex(sourceItem, target);
+
+                // If this slot is a member of a message-level tool group and its tool-call
+                // composition may have changed (added/removed/renamed calls), refresh the outer
+                // group's summary so the `tools (…)` label and call-count badge stay accurate
+                // (issue #1123). The member is already rendered in "grouped-member" flat mode
+                // (flag set at join time), so the member's own DOM re-render above never emits
+                // a nested content-level wrapper.
+                if (target.Group is { } enclosingGroup)
+                {
+                    enclosingGroup.RefreshSummary();
+                }
             }
 
             // A result-only message whose results are injected has no DOM element; keep the matched
@@ -599,6 +710,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             existing.IsTopLevelFirstGroupMember = false;
             existing.HasDomElement = false;
             existing.Model.IsInserted = false;
+            existing.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
         }
 
         for (var index = 0; index < this.Target.Count; index++)
@@ -649,24 +761,29 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         if (IsToolCallOnlyItem(sourceItem))
         {
-            var toolName = GetLastToolName(sourceItem);
             var groupablePredecessor = this.FindGroupablePredecessor(index);
             if (groupablePredecessor is not null)
             {
                 if (groupablePredecessor.Group is { } existingGroup)
                 {
-                    existingGroup.AppendItem(slot.Model, toolName);
+                    // Silently switch the joining member into grouped-member render mode so its
+                    // BuildHtml emits flat `chat-tool-group-item` bindings rather than an inner
+                    // `chat-tool-group-wrapper` (issue #1123).
+                    slot.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+                    existingGroup.AppendItem(slot.Model);
                     slot.Group = existingGroup;
                     return;
                 }
 
                 // Previous item was a standalone tool call: promote both into a new group whose id
                 // is derived from the previous item's global source index.
+                groupablePredecessor.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+                slot.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
                 var group = new ToolCallGroupHtmlModel(
                     groupablePredecessor.Model.SourceIndex,
                     this.groupIdForSourceIndex(groupablePredecessor.Model.SourceIndex),
                     this.sink,
-                    GetLastToolName(groupablePredecessor.Model.Source));
+                    groupablePredecessor.Model);
                 this.sink.UpdateContent(
                     groupablePredecessor.Model.ElementId,
                     ChatOutputUpdateLocation.Replace,
@@ -674,7 +791,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 groupablePredecessor.Group = group;
                 groupablePredecessor.IsTopLevelFirstGroupMember = true;
 
-                group.AppendItem(slot.Model, toolName);
+                group.AppendItem(slot.Model);
                 slot.Group = group;
                 return;
             }
@@ -731,6 +848,9 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         {
             first.Group = null;
             first.IsTopLevelFirstGroupMember = false;
+            // Sole surviving member goes back to standalone rendering — content-level wrapper is
+            // allowed again since there is no enclosing message-level group body (issue #1123).
+            first.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
             this.sink.UpdateContent(group.GroupId, ChatOutputUpdateLocation.Replace, first.Model.BuildHtml());
             return;
         }
@@ -739,7 +859,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             first.Model.SourceIndex,
             this.groupIdForSourceIndex(first.Model.SourceIndex),
             this.sink,
-            GetLastToolName(first.Model.Source));
+            first.Model);
+        first.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
         var body = new StringBuilder(first.Model.BuildHtml());
         first.Group = rebuiltGroup;
         first.IsTopLevelFirstGroupMember = true;
@@ -747,7 +868,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         for (var memberIndex = 1; memberIndex < members.Count; memberIndex++)
         {
             var member = members[memberIndex];
-            rebuiltGroup.AppendItemStateOnly(member.Model, GetLastToolName(member.Model.Source));
+            member.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+            rebuiltGroup.AppendItemStateOnly(member.Model);
             member.Group = rebuiltGroup;
             member.IsTopLevelFirstGroupMember = false;
             body.Append(member.Model.BuildHtml());
@@ -852,6 +974,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             slot.IsTopLevelFirstGroupMember = false;
             slot.HasDomElement = false;
             slot.Model.IsInserted = false;
+            slot.Model.SetIsInsideMessageLevelToolGroup(false, emit: false);
         }
 
         for (var i = repairStart; i < this.Target.Count; i++)
@@ -1544,23 +1667,25 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 continue;
             }
 
-            var toolName = ChatMessageHtmlTransformer.GetLastToolName(snapshot[i]);
             if (groupablePredecessor.Group is { } existingGroup)
             {
-                existingGroup.AppendItemStateOnly(slots[i].Model, toolName);
+                slots[i].Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+                existingGroup.AppendItemStateOnly(slots[i].Model);
                 slots[i].Group = existingGroup;
             }
             else
             {
                 var firstIndex = groupablePredecessor.Model.SourceIndex;
+                groupablePredecessor.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
+                slots[i].Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
                 var group = new ToolCallGroupHtmlModel(
                     firstIndex,
                     ChatOutputHtmlRenderer.ToolGroupId(firstIndex),
                     sink,
-                    ChatMessageHtmlTransformer.GetLastToolName(snapshot[firstIndex]));
+                    groupablePredecessor.Model);
                 groupablePredecessor.Group = group;
                 groupablePredecessor.IsTopLevelFirstGroupMember = true;
-                group.AppendItemStateOnly(slots[i].Model, toolName);
+                group.AppendItemStateOnly(slots[i].Model);
                 slots[i].Group = group;
             }
         }
