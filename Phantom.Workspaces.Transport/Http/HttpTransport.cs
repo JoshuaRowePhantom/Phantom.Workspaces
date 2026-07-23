@@ -8,14 +8,16 @@ namespace Phantom.Workspaces.Transport.Http;
 
 public sealed class HttpTransport : ITransport
 {
+    private static readonly TimeSpan ReadDrainTimeout = TimeSpan.FromSeconds(5);
+
     private readonly WebSocket socket;
     private readonly ConcurrentDictionary<string, HttpTransportChannel> channels = new();
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<IMessageChannel>> pendingChannels = new();
+    private readonly ConcurrentDictionary<string, HttpTransportStream> streams = new();
     private readonly SemaphoreSlim sendLock = new(1, 1);
-    private readonly CancellationTokenSource shutdown = new();
+    private readonly CancellationTokenSource keepaliveShutdown = new();
     private readonly Task readLoop;
     private readonly Task keepaliveLoop;
-    private bool disposed;
+    private int disposed;
 
     public HttpTransport(WebSocket socket, TimeSpan? keepaliveInterval = null)
     {
@@ -29,19 +31,24 @@ public sealed class HttpTransport : ITransport
         this.ThrowIfDisposed();
         var channelId = Guid.NewGuid().ToString("D");
         var channel = new HttpTransportChannel(this, channelId);
-        var pending = new TaskCompletionSource<IMessageChannel>(TaskCreationOptions.RunContinuationsAsynchronously);
         this.channels[channelId] = channel;
-        this.pendingChannels[channelId] = pending;
 
-        await this.SendFrameAsync(new TransportFrame
+        try
         {
-            Type = TransportFrame.Types.ChannelOpen,
-            ChannelId = channelId,
-            Request = request.Clone(),
-        }, ct).ConfigureAwait(false);
+            await this.SendFrameAsync(new TransportFrame
+            {
+                Type = TransportFrame.Types.ChannelOpen,
+                ChannelId = channelId,
+                Request = request.Clone(),
+            }, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            this.channels.TryRemove(channelId, out _);
+            throw;
+        }
 
-        await using var registration = ct.Register(() => pending.TrySetCanceled(ct));
-        return await pending.Task.ConfigureAwait(false);
+        return channel;
     }
 
     public async Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
@@ -49,15 +56,32 @@ public sealed class HttpTransport : ITransport
         this.ThrowIfDisposed();
         var streamId = Guid.NewGuid().ToString("D");
         var stream = new HttpTransportStream(this, streamId);
+        this.streams[streamId] = stream;
 
-        await this.SendFrameAsync(new TransportFrame
+        try
         {
-            Type = TransportFrame.Types.StreamOpen,
-            StreamId = streamId,
-            Request = request.Clone(),
-        }, ct).ConfigureAwait(false);
+            await this.SendFrameAsync(new TransportFrame
+            {
+                Type = TransportFrame.Types.StreamOpen,
+                StreamId = streamId,
+                Request = request.Clone(),
+            }, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            this.streams.TryRemove(streamId, out _);
+            throw;
+        }
 
         return stream;
+    }
+
+    internal void NotifyStreamDisposed(string streamId)
+    {
+        if (this.streams.TryRemove(streamId, out _) && Volatile.Read(ref this.disposed) == 0)
+        {
+            _ = this.SendStreamCloseAsync(streamId, CancellationToken.None);
+        }
     }
 
     internal Task SendChannelMessageAsync(string channelId, JsonElement payload, CancellationToken ct)
@@ -84,13 +108,11 @@ public sealed class HttpTransport : ITransport
 
     public async ValueTask DisposeAsync()
     {
-        if (this.disposed)
+        if (Interlocked.Exchange(ref this.disposed, 1) != 0)
         {
             return;
         }
 
-        this.disposed = true;
-        this.shutdown.Cancel();
         try
         {
             if (this.socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
@@ -103,9 +125,42 @@ public sealed class HttpTransport : ITransport
         {
         }
 
+        this.keepaliveShutdown.Cancel();
+
+        // Force the read loop to exit while letting it drain any frames already
+        // buffered on the socket first. Disposing the socket signals EOF /
+        // aborts pending ReceiveAsync calls, so the read loop dispatches any
+        // remaining inbound frames (delivering them to their channels/streams)
+        // before returning. Only AFTER that draining is complete do we call
+        // CompleteAll, so channels never lose an inbound ChannelMessage /
+        // streams never lose an inbound StreamData that had already been
+        // received when dispose was requested.
+        try
+        {
+            this.socket.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            await this.readLoop.WaitAsync(ReadDrainTimeout).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            await this.keepaliveLoop.WaitAsync(ReadDrainTimeout).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
         this.CompleteAll(new ObjectDisposedException(nameof(HttpTransport)));
-        this.socket.Dispose();
-        this.shutdown.Dispose();
+        this.keepaliveShutdown.Dispose();
         this.sendLock.Dispose();
     }
 
@@ -128,16 +183,20 @@ public sealed class HttpTransport : ITransport
         var buffer = new byte[64 * 1024];
         try
         {
-            while (!this.shutdown.IsCancellationRequested && this.socket.State == WebSocketState.Open)
+            while (this.socket.State is WebSocketState.Open or WebSocketState.CloseSent)
             {
                 using var message = new MemoryStream();
                 WebSocketReceiveResult result;
                 do
                 {
-                    result = await this.socket.ReceiveAsync(buffer, this.shutdown.Token).ConfigureAwait(false);
+                    result = await this.socket.ReceiveAsync(buffer, CancellationToken.None).ConfigureAwait(false);
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
-                        this.CompleteAll(new TransportException("HTTP transport closed."));
+                        if (Volatile.Read(ref this.disposed) == 0)
+                        {
+                            this.CompleteAll(new TransportException("HTTP transport closed."));
+                        }
+
                         return;
                     }
 
@@ -151,9 +210,15 @@ public sealed class HttpTransport : ITransport
                 }
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException)
         {
-            this.CompleteAll(ex);
+        }
+        catch (Exception ex)
+        {
+            if (Volatile.Read(ref this.disposed) == 0)
+            {
+                this.CompleteAll(ex);
+            }
         }
     }
 
@@ -164,11 +229,6 @@ public sealed class HttpTransport : ITransport
             case TransportFrame.Types.ChannelMessage:
                 if (frame.ChannelId is not null && this.channels.TryGetValue(frame.ChannelId, out var channel) && frame.Payload is { } payload)
                 {
-                    if (this.pendingChannels.TryRemove(frame.ChannelId, out var pending))
-                    {
-                        pending.TrySetResult(channel);
-                    }
-
                     await channel.ReceiveAsync(payload).ConfigureAwait(false);
                 }
                 break;
@@ -176,21 +236,34 @@ public sealed class HttpTransport : ITransport
                 if (frame.ChannelId is not null)
                 {
                     var error = new TransportException(frame.Message ?? "Channel open failed.");
-                    if (this.pendingChannels.TryRemove(frame.ChannelId, out var pending))
-                    {
-                        pending.TrySetException(error);
-                    }
-
                     if (this.channels.TryRemove(frame.ChannelId, out var failedChannel))
                     {
                         failedChannel.Complete(error);
                     }
+                }
+                else if (frame.StreamId is not null && this.streams.TryRemove(frame.StreamId, out var failedStream))
+                {
+                    failedStream.Fault(new TransportException(frame.Message ?? "Stream open failed."));
                 }
                 break;
             case TransportFrame.Types.ChannelClose:
                 if (frame.ChannelId is not null && this.channels.TryRemove(frame.ChannelId, out var closed))
                 {
                     closed.Complete();
+                }
+                break;
+            case TransportFrame.Types.StreamData:
+                if (frame.StreamId is not null
+                    && frame.Data is not null
+                    && this.streams.TryGetValue(frame.StreamId, out var streamForData))
+                {
+                    await streamForData.ReceiveAsync(Convert.FromBase64String(frame.Data), CancellationToken.None).ConfigureAwait(false);
+                }
+                break;
+            case TransportFrame.Types.StreamClose:
+                if (frame.StreamId is not null && this.streams.TryRemove(frame.StreamId, out var closedStream))
+                {
+                    closedStream.Complete();
                 }
                 break;
             case TransportFrame.Types.TransportClose:
@@ -204,35 +277,38 @@ public sealed class HttpTransport : ITransport
         using var timer = new PeriodicTimer(interval);
         try
         {
-            while (await timer.WaitForNextTickAsync(this.shutdown.Token).ConfigureAwait(false))
+            while (await timer.WaitForNextTickAsync(this.keepaliveShutdown.Token).ConfigureAwait(false))
             {
-                await this.SendFrameAsync(new TransportFrame { Type = TransportFrame.Types.Keepalive }, this.shutdown.Token).ConfigureAwait(false);
+                await this.SendFrameAsync(new TransportFrame { Type = TransportFrame.Types.Keepalive }, this.keepaliveShutdown.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
+        {
+        }
+        catch
         {
         }
     }
 
     private void CompleteAll(Exception ex)
     {
-        foreach (var pending in this.pendingChannels.Values)
-        {
-            pending.TrySetException(ex);
-        }
-
         foreach (var channel in this.channels.Values)
         {
             channel.Complete(ex);
         }
 
-        this.pendingChannels.Clear();
+        foreach (var stream in this.streams.Values)
+        {
+            stream.Fault(ex);
+        }
+
         this.channels.Clear();
+        this.streams.Clear();
     }
 
     private void ThrowIfDisposed()
     {
-        if (this.disposed)
+        if (Volatile.Read(ref this.disposed) != 0)
         {
             throw new ObjectDisposedException(nameof(HttpTransport));
         }

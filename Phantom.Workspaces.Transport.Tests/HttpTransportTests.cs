@@ -5,6 +5,10 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Http;
 
@@ -18,7 +22,7 @@ public class HttpTransportTests
         using var socket = new TestWebSocket();
         await using var transport = new HttpTransport(socket, TimeSpan.FromHours(1));
 
-        var connectTask = transport.ConnectToMessageChannelAsync(Json("{\"target\":\"echo\"}"));
+        var channel = await transport.ConnectToMessageChannelAsync(Json("{\"target\":\"echo\"}"));
         var openFrame = await socket.ReadSentFrameAsync();
         await socket.ReceiveTextAsync(new TransportFrame
         {
@@ -27,7 +31,6 @@ public class HttpTransportTests
             Payload = Json("{\"value\":\"hello\"}"),
         });
 
-        var channel = await connectTask.WaitAsync(TestTimeout);
         var message = await channel.Reader.ReadAsync(TestCancellationToken());
 
         Assert.Equal("hello", message.GetProperty("value").GetString());
@@ -39,10 +42,9 @@ public class HttpTransportTests
         using var socket = new TestWebSocket();
         await using var transport = new HttpTransport(socket, TimeSpan.FromHours(1));
 
-        var connectTask = transport.ConnectToMessageChannelAsync(Json("{}"));
+        var channel = await transport.ConnectToMessageChannelAsync(Json("{}"));
         var openFrame = await socket.ReadSentFrameAsync();
         await socket.ReceiveTextAsync(new TransportFrame { Type = TransportFrame.Types.ChannelMessage, ChannelId = openFrame.ChannelId, Payload = Json("{\"index\":1}") });
-        var channel = await connectTask.WaitAsync(TestTimeout);
         await socket.ReceiveTextAsync(new TransportFrame { Type = TransportFrame.Types.ChannelMessage, ChannelId = openFrame.ChannelId, Payload = Json("{\"index\":2}") });
         await socket.ReceiveTextAsync(new TransportFrame { Type = TransportFrame.Types.ChannelClose, ChannelId = openFrame.ChannelId });
         await socket.ReceiveTextAsync(new TransportFrame { Type = TransportFrame.Types.ChannelMessage, ChannelId = openFrame.ChannelId, Payload = Json("{\"index\":3}") });
@@ -57,12 +59,12 @@ public class HttpTransportTests
     }
 
     [Fact]
-    public async Task HttpTransport_ChannelOpenError_FaultsConnect()
+    public async Task HttpTransport_ChannelOpenError_FaultsChannelReader()
     {
         using var socket = new TestWebSocket();
         await using var transport = new HttpTransport(socket, TimeSpan.FromHours(1));
 
-        var connectTask = transport.ConnectToMessageChannelAsync(Json("{}"));
+        var channel = await transport.ConnectToMessageChannelAsync(Json("{}"));
         var openFrame = await socket.ReadSentFrameAsync();
         await socket.ReceiveTextAsync(new TransportFrame
         {
@@ -71,7 +73,8 @@ public class HttpTransportTests
             Message = "no listener",
         });
 
-        var exception = await Assert.ThrowsAsync<TransportException>(async () => await connectTask.WaitAsync(TestTimeout));
+        var exception = await Assert.ThrowsAsync<TransportException>(async () =>
+            await channel.Reader.Completion.WaitAsync(TestTimeout));
         Assert.Contains("no listener", exception.Message, StringComparison.Ordinal);
     }
 
@@ -92,10 +95,9 @@ public class HttpTransportTests
         using var socket = new TestWebSocket();
         var transport = new HttpTransport(socket, TimeSpan.FromHours(1));
 
-        var connectTask = transport.ConnectToMessageChannelAsync(Json("{}"));
+        var channel = await transport.ConnectToMessageChannelAsync(Json("{}"));
         var openFrame = await socket.ReadSentFrameAsync();
         await socket.ReceiveTextAsync(new TransportFrame { Type = TransportFrame.Types.ChannelMessage, ChannelId = openFrame.ChannelId, Payload = Json("{\"ready\":true}") });
-        var channel = await connectTask.WaitAsync(TestTimeout);
 
         await transport.DisposeAsync();
         var closeFrame = await socket.ReadSentFrameAsync();
@@ -416,6 +418,76 @@ public class HttpClientTransportFactoryTests
         Assert.Null(transport);
     }
 
+    [Fact]
+    public async Task HttpClientTransportFactory_ConnectTo_InProcessServer_ReturnsWorkingTransport()
+    {
+        await using var host = await InProcessHttpTransportHost.StartAsync(new EchoChannelListener());
+
+        var factory = new HttpClientTransportFactory();
+        using var descriptor = JsonDocument.Parse($$"""{"type":"http","url":"{{host.BaseUrl}}"}""");
+        var transport = await factory.ConnectToAsync(descriptor.RootElement).WaitAsync(InProcessTimeout);
+
+        Assert.NotNull(transport);
+        await using (transport)
+        {
+            using var request = JsonDocument.Parse("""{"target":"echo"}""");
+            var channel = await transport!.ConnectToMessageChannelAsync(request.RootElement).WaitAsync(InProcessTimeout);
+            using var payload = JsonDocument.Parse("""{"value":"hello"}""");
+            await channel.Writer.WriteAsync(payload.RootElement).AsTask().WaitAsync(InProcessTimeout);
+
+            var reply = await channel.Reader.ReadAsync().AsTask().WaitAsync(InProcessTimeout);
+            Assert.Equal("hello", reply.GetProperty("value").GetString());
+
+            await channel.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task HttpClientTransportFactory_ConnectTo_ConcurrentConnects_AllSucceed()
+    {
+        await using var host = await InProcessHttpTransportHost.StartAsync(new EchoChannelListener());
+
+        var factory = new HttpClientTransportFactory();
+        using var descriptor = JsonDocument.Parse($$"""{"type":"http","url":"{{host.BaseUrl}}"}""");
+        var descriptorElement = descriptor.RootElement;
+
+        var connectTasks = Enumerable.Range(0, 8)
+            .Select(_ => factory.ConnectToAsync(descriptorElement))
+            .ToArray();
+
+        var transports = await Task.WhenAll(connectTasks).WaitAsync(InProcessTimeout);
+
+        Assert.All(transports, t => Assert.NotNull(t));
+
+        try
+        {
+            var channelTasks = transports.Select(async (t, i) =>
+            {
+                using var req = JsonDocument.Parse("""{"target":"echo"}""");
+                var ch = await t!.ConnectToMessageChannelAsync(req.RootElement).WaitAsync(InProcessTimeout);
+                using var payload = JsonDocument.Parse($$"""{"value":"concurrent-{{i}}"}""");
+                await ch.Writer.WriteAsync(payload.RootElement).AsTask().WaitAsync(InProcessTimeout);
+                var reply = await ch.Reader.ReadAsync().AsTask().WaitAsync(InProcessTimeout);
+                Assert.Equal($"concurrent-{i}", reply.GetProperty("value").GetString());
+                await ch.DisposeAsync();
+            }).ToArray();
+
+            await Task.WhenAll(channelTasks).WaitAsync(InProcessTimeout);
+        }
+        finally
+        {
+            foreach (var t in transports)
+            {
+                if (t is not null)
+                {
+                    await t.DisposeAsync();
+                }
+            }
+        }
+    }
+
+    private static readonly TimeSpan InProcessTimeout = TimeSpan.FromSeconds(30);
+
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
 
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
@@ -542,5 +614,127 @@ public class HttpClientTransportFactoryTests
     }
 
     private sealed record HandshakeRequest(string Method, string Path, IReadOnlyDictionary<string, string> Headers);
+
+    private sealed class EchoChannelListener : ITransportListener
+    {
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(new EchoLease(channel));
+
+        public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        private sealed class EchoLease : IAsyncDisposable
+        {
+            private readonly IMessageChannel channel;
+            private readonly CancellationTokenSource cts = new();
+            private readonly Task pump;
+
+            public EchoLease(IMessageChannel channel)
+            {
+                this.channel = channel;
+                this.pump = Task.Run(this.PumpAsync);
+            }
+
+            private async Task PumpAsync()
+            {
+                try
+                {
+                    while (await this.channel.Reader.WaitToReadAsync(this.cts.Token).ConfigureAwait(false))
+                    {
+                        while (this.channel.Reader.TryRead(out var msg))
+                        {
+                            await this.channel.Writer.WriteAsync(msg.Clone(), this.cts.Token).ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                await this.cts.CancelAsync().ConfigureAwait(false);
+                try
+                {
+                    await this.pump.ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+
+                this.cts.Dispose();
+            }
+        }
+    }
+
+    private sealed class InProcessHttpTransportHost : IAsyncDisposable
+    {
+        private readonly Microsoft.AspNetCore.Builder.WebApplication app;
+        private readonly HttpServerTransportFactory serverFactory;
+
+        private InProcessHttpTransportHost(Microsoft.AspNetCore.Builder.WebApplication app, HttpServerTransportFactory serverFactory, string baseUrl)
+        {
+            this.app = app;
+            this.serverFactory = serverFactory;
+            this.BaseUrl = baseUrl;
+        }
+
+        public string BaseUrl { get; }
+
+        public static async Task<InProcessHttpTransportHost> StartAsync(ITransportListener listener)
+        {
+            var registry = new TransportRegistry();
+            registry.Register(listener);
+            var serverFactory = new HttpServerTransportFactory(registry);
+
+            var port = GetFreePort();
+            var builder = Microsoft.AspNetCore.Builder.WebApplication.CreateBuilder();
+            builder.Logging.ClearProviders();
+            builder.WebHost.UseKestrel(o => o.Listen(IPAddress.Loopback, port));
+            var app = builder.Build();
+            app.UseWebSockets();
+            serverFactory.Map(app);
+            await app.StartAsync().ConfigureAwait(false);
+            return new InProcessHttpTransportHost(app, serverFactory, $"http://127.0.0.1:{port}");
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            try
+            {
+                await this.serverFactory.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                await this.app.StopAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            await this.app.DisposeAsync().ConfigureAwait(false);
+        }
+
+        private static int GetFreePort()
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            try
+            {
+                return ((IPEndPoint)listener.LocalEndpoint).Port;
+            }
+            finally
+            {
+                listener.Stop();
+            }
+        }
+    }
 }
 

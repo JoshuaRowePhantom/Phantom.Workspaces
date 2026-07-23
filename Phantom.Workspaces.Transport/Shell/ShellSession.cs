@@ -10,6 +10,7 @@ public sealed class ShellSession : IAsyncDisposable
     private readonly Task relayInputTask;
     private readonly Task relayOutputTask;
     private readonly Task relayErrorTask;
+    private readonly Task exitWatcher;
     private int disposed;
 
     internal ShellSession(Process process, Stream transportStream, CancellationToken cancellationToken)
@@ -20,6 +21,7 @@ public sealed class ShellSession : IAsyncDisposable
         this.relayInputTask = Task.Run(() => this.RelayInputAsync(this.cts.Token), CancellationToken.None);
         this.relayOutputTask = Task.Run(() => this.RelayOutputAsync(process.StandardOutput.BaseStream, this.cts.Token), CancellationToken.None);
         this.relayErrorTask = Task.Run(() => this.RelayOutputAsync(process.StandardError.BaseStream, this.cts.Token), CancellationToken.None);
+        this.exitWatcher = Task.Run(this.WatchExitAsync, CancellationToken.None);
     }
 
     public int ProcessId => this.process.Id;
@@ -48,9 +50,32 @@ public sealed class ShellSession : IAsyncDisposable
         await SuppressAsync(this.relayInputTask).ConfigureAwait(false);
         await SuppressAsync(this.relayOutputTask).ConfigureAwait(false);
         await SuppressAsync(this.relayErrorTask).ConfigureAwait(false);
+        await SuppressAsync(this.exitWatcher).ConfigureAwait(false);
         await this.transportStream.DisposeAsync().ConfigureAwait(false);
         this.process.Dispose();
         this.cts.Dispose();
+    }
+
+    private async Task WatchExitAsync()
+    {
+        try
+        {
+            await Task.WhenAll(this.relayOutputTask, this.relayErrorTask).ConfigureAwait(false);
+        }
+        catch
+        {
+        }
+
+        if (this.disposed == 0)
+        {
+            try
+            {
+                await this.transportStream.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+        }
     }
 
     private async Task RelayInputAsync(CancellationToken ct)
