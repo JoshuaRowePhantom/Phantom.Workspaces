@@ -266,13 +266,11 @@
                           Classes="main-splitter"
                           ResizeBehavior="PreviousAndNext"/>
             <ToggleButton x:Name="TreeCollapseToggle"
-                          Width="16"
-                          Height="16"
+                          Classes="pane-collapser"
                           HorizontalAlignment="Center"
                           VerticalAlignment="Center"
                           Grid.Column="1"
-                          Click="OnTreeCollapseToggleClicked"
-                          Content="◀"/>
+                          Click="OnTreeCollapseToggleClicked"/>
             <!-- Issue #1035: the detail region is a locked, tab-strip-less Dock.Avalonia
                  DocumentDock (cache-N/show-one). Every nav node's DetailContent —
                  including every sub-agent child — is a first-class cached Document, so the panel is

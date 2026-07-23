@@ -252,7 +252,6 @@ public sealed class MainWindowAxamlTests
 
         Assert.False(navigationTree.IsVisible);
         Assert.False(splitterHost.IsVisible);
-        Assert.Equal("▶", collapseToggle.Content);
         Assert.True(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
@@ -516,7 +515,7 @@ public sealed class MainWindowAxamlTests
         Assert.False(navigationTree.IsVisible);
         Assert.False(splitterHost.IsVisible);
         Assert.False(treeSplitter.IsVisible);
-        Assert.Equal("▶", collapseToggle.Content);
+        Assert.True(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
 
@@ -525,7 +524,7 @@ public sealed class MainWindowAxamlTests
         Assert.True(navigationTree.IsVisible);
         Assert.True(splitterHost.IsVisible);
         Assert.True(treeSplitter.IsVisible);
-        Assert.Equal("◀", collapseToggle.Content);
+        Assert.False(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(318), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(24), editorGrid.ColumnDefinitions[1].Width);
     }

@@ -135,7 +135,8 @@ public partial class AgentChatEditorControl : UserControl
 
         this.NavigationTree.IsVisible = !collapsed;
         this.SplitterHost.IsVisible = !collapsed;
-        this.TreeCollapseToggle.Content = collapsed ? "▶" : "◀";
+        // Issue #1120: the ">>"/"<<" glyph is now driven by the shared pane-collapser style's
+        // :checked state trigger, not by a code-behind Content swap.
         if (this.TreeCollapseToggle.IsChecked != collapsed)
         {
             this.TreeCollapseToggle.IsChecked = collapsed;

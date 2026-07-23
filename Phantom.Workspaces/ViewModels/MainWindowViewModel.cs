@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -67,6 +68,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private string selectedThemeName = ProfileThemeSettings.Dark.Name;
     private bool suppressThemeSelectionChange;
     private bool showHiddenItems;
+    private bool isLeftPaneCollapsed;
+    private static readonly GridLength LeftPaneExpandedWidth = new(1, GridUnitType.Star);
+    private static readonly GridLength LeftPaneCollapsedWidth = new(0, GridUnitType.Pixel);
     private readonly WorkspaceDockFactory dockFactory;
     private IRootDock? layout;
     private ScheduledTools.ScheduledToolHost? scheduledToolHost;
@@ -374,9 +378,37 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 return;
             }
 
+            // Issue #1120: navigating to a different top-level view auto-expands the left pane
+            // so a freshly-navigated view is never hidden behind a still-collapsed collapser.
+            this.IsLeftPaneCollapsed = false;
+
             _ = this.ApplySelectedViewAsync();
         }
     }
+
+    /// <summary>
+    /// Issue #1120: whether the MainWindow left navigation column is collapsed. Toggled via the
+    /// shared <c>pane-collapser</c> ToggleButton on the inner (right) edge of the left column;
+    /// auto-reset to false on top-level navigation.
+    /// </summary>
+    public bool IsLeftPaneCollapsed
+    {
+        get => this.isLeftPaneCollapsed;
+        set
+        {
+            if (this.SetProperty(ref this.isLeftPaneCollapsed, value))
+            {
+                this.RaisePropertyChanged(nameof(this.LeftPaneColumnWidth));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #1120: the MainWindow left column's <see cref="GridLength"/>. Collapses to 0px when
+    /// <see cref="IsLeftPaneCollapsed"/> is true and restores to <c>*</c> (proportional) otherwise.
+    /// </summary>
+    public GridLength LeftPaneColumnWidth =>
+        this.isLeftPaneCollapsed ? LeftPaneCollapsedWidth : LeftPaneExpandedWidth;
 
     public WorkspacePaneViewModel SelectedWorkspacePane
     {

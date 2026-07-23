@@ -1265,6 +1265,38 @@
         <Setter Property="Background" Value="Transparent" />
     </Style>
 
+    <!-- Issue #1120: shared pane-collapser toggle. Rounded box with white ">>"/"<<" chevron
+         glyphs whose direction reflects state (unchecked = expanded = "<<", checked = collapsed
+         = ">>"). Used by BOTH the agent-chat tree collapser and the MainWindow left-pane
+         collapser so they stay visually identical. -->
+    <Style Selector="ToggleButton.pane-collapser">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource SystemAccentColor}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Collapser.Glyph.Foreground}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Classes="pane-collapser-box"
+                        Background="{TemplateBinding Background}"
+                        CornerRadius="4">
+                    <TextBlock Classes="pane-collapser-glyph"
+                               Text="&lt;&lt;"
+                               FontSize="10"
+                               FontWeight="Bold"
+                               Foreground="{TemplateBinding Foreground}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ToggleButton.pane-collapser:checked /template/ TextBlock.pane-collapser-glyph">
+        <Setter Property="Text" Value="&gt;&gt;" />
+    </Style>
+
 </Styles>
 
 

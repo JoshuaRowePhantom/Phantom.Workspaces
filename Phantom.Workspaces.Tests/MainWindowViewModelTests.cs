@@ -307,4 +307,104 @@ public sealed class MainWindowViewModelTests
         dockFactory.SetActiveDockable(document);
         dockFactory.SetFocusedDockable(documentDock, document);
     }
+
+    // --- #1120: left-pane collapser (right/inner-edge), auto-expand on navigation ---------------
+
+    [Fact]
+    public async Task MainWindow_LeftPaneCollapser_TogglesLeftColumnToZero()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+
+        Assert.False(viewModel.IsLeftPaneCollapsed);
+        Assert.Equal(new GridLength(1, GridUnitType.Star), viewModel.LeftPaneColumnWidth);
+
+        viewModel.IsLeftPaneCollapsed = true;
+
+        Assert.True(viewModel.IsLeftPaneCollapsed);
+        Assert.Equal(new GridLength(0, GridUnitType.Pixel), viewModel.LeftPaneColumnWidth);
+    }
+
+    [Fact]
+    public async Task MainWindow_LeftPaneCollapser_ExpandRestoresColumnWidth()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+
+        viewModel.IsLeftPaneCollapsed = true;
+        Assert.Equal(new GridLength(0, GridUnitType.Pixel), viewModel.LeftPaneColumnWidth);
+
+        viewModel.IsLeftPaneCollapsed = false;
+
+        Assert.False(viewModel.IsLeftPaneCollapsed);
+        // Restored to the default proportional (*) width of the left column.
+        Assert.Equal(new GridLength(1, GridUnitType.Star), viewModel.LeftPaneColumnWidth);
+    }
+
+    [Fact]
+    public async Task MainWindow_Navigate_AutoExpandsCollapsedLeftPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+
+        viewModel.IsLeftPaneCollapsed = true;
+        Assert.True(viewModel.IsLeftPaneCollapsed);
+
+        // Simulate the user selecting a different top-level view. The setter must auto-expand.
+        var newView = new ViewDefinitionViewModel
+        {
+            Id = "nav-target",
+            Title = "Nav Target",
+            Description = string.Empty,
+            IconGlyph = "◻",
+        };
+        viewModel.SelectedTopLevelView = newView;
+
+        Assert.False(viewModel.IsLeftPaneCollapsed);
+    }
+
+    [Fact]
+    public async Task MainWindow_LeftPaneCollapsed_PersistsUntilNavigateOrToggle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+
+        viewModel.IsLeftPaneCollapsed = true;
+
+        // A non-navigation change (ShowHiddenItems) must not disturb the collapsed state.
+        viewModel.ShowHiddenItems = !viewModel.ShowHiddenItems;
+        Assert.True(viewModel.IsLeftPaneCollapsed);
+
+        // Explicit toggle clears it.
+        viewModel.IsLeftPaneCollapsed = false;
+        Assert.False(viewModel.IsLeftPaneCollapsed);
+    }
+
+    [Fact]
+    public void MainWindow_LeftPaneCollapser_MirrorsAgentChatCollapserClass()
+    {
+        // The left collapser in MainWindow uses the shared 'pane-collapser' class, and the
+        // agent-chat TreeCollapseToggle uses the same class — the two collapsers share one style.
+        var repoRoot = FindRepositoryRoot();
+        var mainWindowXaml = File.ReadAllText(Path.Combine(
+            repoRoot.FullName, "Phantom.Workspaces", "MainWindow.axaml"));
+        var agentChatXaml = File.ReadAllText(Path.Combine(
+            repoRoot.FullName, "Phantom.Workspaces.Agent.Gui", "Controls", "AgentChatEditorControl.axaml"));
+
+        Assert.Contains("Classes=\"pane-collapser\"", mainWindowXaml, StringComparison.Ordinal);
+        Assert.Contains("IsChecked=\"{Binding IsLeftPaneCollapsed", mainWindowXaml, StringComparison.Ordinal);
+        Assert.Contains("Classes=\"pane-collapser\"", agentChatXaml, StringComparison.Ordinal);
+    }
+
+    private static DirectoryInfo FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return current;
+            }
+
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
 }

@@ -574,6 +574,94 @@ public sealed class AgentChatEditorControlTests
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
     }
 
+    [Fact]
+    public void AgentChatEditorControl_Collapser_ShowsChevronGlyphWhenExpanded()
+    {
+        // #1120: expanded (unchecked) state renders "<<" via the shared pane-collapser style.
+        // The AgentChatEditorControl toggle now delegates its glyph to the shared style rather
+        // than a plain single-char Content, and no longer carries the old "◀" default.
+        var axaml = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains("x:Name=\"TreeCollapseToggle\"", axaml, StringComparison.Ordinal);
+        var toggleStart = axaml.IndexOf("x:Name=\"TreeCollapseToggle\"", StringComparison.Ordinal);
+        var toggleEnd = axaml.IndexOf("/>", toggleStart, StringComparison.Ordinal);
+        var toggleXaml = axaml.Substring(toggleStart, toggleEnd - toggleStart);
+        Assert.Contains("Classes=\"pane-collapser\"", toggleXaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content=\"◀\"", toggleXaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Content=\"▶\"", toggleXaml, StringComparison.Ordinal);
+
+        var sharedStyles = ReadSharedStyles();
+        // Expanded (base) state ⇒ "<<".
+        Assert.Contains("&lt;&lt;", sharedStyles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_Collapser_ShowsReversedChevronWhenCollapsed()
+    {
+        // #1120: collapsed (:checked) state renders ">>". The state trigger lives in the shared
+        // pane-collapser style so both collapsers switch identically.
+        var sharedStyles = ReadSharedStyles();
+        Assert.Contains("ToggleButton.pane-collapser:checked", sharedStyles, StringComparison.Ordinal);
+        Assert.Contains("&gt;&gt;", sharedStyles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_Collapser_GlyphForegroundIsThematicWhite()
+    {
+        // #1120: the pane-collapser glyph resolves to Theme.Collapser.Glyph.Foreground, and that
+        // brush key is defined as white (#FFFFFF) in BOTH the Light and Dark theme dictionaries.
+        var sharedStyles = ReadSharedStyles();
+        Assert.Contains("Theme.Collapser.Glyph.Foreground", sharedStyles, StringComparison.Ordinal);
+
+        foreach (var theme in new[] { "Light.axaml", "Dark.axaml" })
+        {
+            var themeXaml = ReadSharedTheme(theme);
+            Assert.Contains("Theme.Collapser.Glyph.Foreground", themeXaml, StringComparison.Ordinal);
+            var keyStart = themeXaml.IndexOf("Theme.Collapser.Glyph.Foreground", StringComparison.Ordinal);
+            var elementEnd = themeXaml.IndexOf("</SolidColorBrush>", keyStart, StringComparison.Ordinal);
+            Assert.True(elementEnd > keyStart, $"Missing brush closing tag in {theme}.");
+            var element = themeXaml.Substring(keyStart, elementEnd - keyStart);
+            Assert.Contains("#FFFFFF", element, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_Collapser_CodeBehind_DoesNotSwapGlyphManually()
+    {
+        // #1120: the "▶"/"◀" glyph swap in code-behind is replaced by the shared style's :checked
+        // state trigger, so SetTreeCollapsed no longer touches TreeCollapseToggle.Content.
+        var repoRoot = FindRepositoryRoot();
+        var codeBehind = File.ReadAllText(Path.Combine(
+            repoRoot.FullName,
+            "Phantom.Workspaces.Agent.Gui",
+            "Controls",
+            "AgentChatEditorControl.axaml.cs"));
+
+        Assert.DoesNotContain("TreeCollapseToggle.Content =", codeBehind, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"▶\"", codeBehind, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"◀\"", codeBehind, StringComparison.Ordinal);
+    }
+
+    private static string ReadSharedStyles()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        return File.ReadAllText(Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Styles",
+            "SharedStyles.axaml"));
+    }
+
+    private static string ReadSharedTheme(string themeFileName)
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        return File.ReadAllText(Path.Combine(
+            repositoryRoot.FullName,
+            "Phantom.Workspaces.Gui.Shared",
+            "Themes",
+            themeFileName));
+    }
+
     private static T GetField<T>(object instance, string fieldName) where T : class
     {
         var field = instance.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic)
