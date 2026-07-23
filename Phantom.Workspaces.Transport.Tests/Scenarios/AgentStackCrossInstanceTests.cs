@@ -8,7 +8,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Transport.Chat;
-using Phantom.Workspaces.Transport.Local;
+using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Shell;
 using Phantom.Workspaces.Transport.Tests.Infrastructure;
 
@@ -27,14 +27,13 @@ namespace Phantom.Workspaces.Transport.Tests.Scenarios;
 /// profile document is what selects the underlying transport factory (forward-HTTP vs.
 /// reverse-HTTP), so the two seeded profile IDs genuinely drive the routing.</para>
 ///
-/// <para><b>Forward-HTTP cells</b> host the executor on a <see cref="LocalTransport"/> (the
-/// in-process transport that supports both message channels <i>and</i> streams — chat and shell) and
-/// register it with the real <see cref="InProcessHttpServerTransportFactory"/>, the forward-HTTP
-/// server harness used by <see cref="LeaseExpiryTests"/>. Instance A's factory registry then holds a
-/// small <see cref="PreConnectedForwardTransportFactory"/> that dispenses the accepted forward-HTTP
-/// transport when the profile router resolves B's <c>connection-descriptor</c> — so the wire
-/// exercised is the forward-HTTP in-process harness (not a bare <c>LocalTransport</c> that bypasses
-/// the profile+registry routing as the earlier version of these tests did).</para>
+/// <para><b>Forward-HTTP cells</b> plumb a real <see cref="HttpTransport"/> against a real
+/// <see cref="ServerHttpTransport"/> in-process (via <see cref="PairedWebSocket"/>) and register
+/// the pair with the real <see cref="InProcessHttpServerTransportFactory"/> for lease-tracking
+/// parity with <see cref="LeaseExpiryTests"/>. Instance A's factory registry then holds the
+/// forward harness itself (as an <see cref="ITransportFactory"/>) so that when the profile router
+/// resolves B's <c>connection-descriptor</c>, the transport handed back is the production
+/// <see cref="HttpTransport"/> — no <c>LocalTransport</c> leaf substitute.</para>
 ///
 /// <para><b>Reverse-HTTP cells</b> reuse <see cref="HubRelayHarness"/>, driving the real
 /// <c>ReverseHttpForwardingTransportFactory</c> + <c>ReverseExecutionDispatcher</c>. Instance A's
@@ -125,6 +124,49 @@ public sealed class AgentStackCrossInstanceTests
         Assert.Equal("persist please", persisted[1].Text);
     }
 
+    // -------------------- forward-HTTP guard tests (#1127) --------------------
+
+    [Fact]
+    public async Task ForwardHttp_LeafWire_IsRealHttpTransport()
+    {
+        var ct = TransportScenarioSupport.TestToken();
+        var executorRegistry = new TransportRegistry();
+        executorRegistry.Register(new ChatClientTransportListener(new EchoChatClient()));
+
+        await using var forward = await ForwardHttpInstance.CreateAsync(executorRegistry, ct);
+        var profileFactory = await BuildForwardProfileRoutingAsync(forward, ct);
+
+        await using var transport = await ConnectToInstanceBAsync(profileFactory, ct);
+
+        var unwrapped = transport is ForwardHttpInstance.NonOwningTransport nonOwning ? nonOwning.Inner : transport;
+        Assert.IsType<HttpTransport>(unwrapped);
+    }
+
+    [Fact]
+    public void ForwardHttp_HarnessSetup_DoesNotReferenceLocalTransport()
+    {
+        var testType = typeof(AgentStackCrossInstanceTests);
+        var relatedTypes = testType.Assembly.GetTypes()
+            .Where(t => t == testType || t.DeclaringType == testType)
+            .ToArray();
+
+        Assert.DoesNotContain(relatedTypes, t => t.Name == "PreConnectedForwardTransportFactory");
+
+        var localTransportName = typeof(Phantom.Workspaces.Transport.Local.LocalTransport).FullName!;
+        foreach (var type in relatedTypes)
+        {
+            foreach (var field in type.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            {
+                Assert.NotEqual(localTransportName, field.FieldType.FullName);
+            }
+
+            foreach (var property in type.GetProperties(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            {
+                Assert.NotEqual(localTransportName, property.PropertyType.FullName);
+            }
+        }
+    }
+
     // -------------------- reverse HTTP (hub relay) --------------------
 
     [Fact]
@@ -196,20 +238,19 @@ public sealed class AgentStackCrossInstanceTests
 
     // Instance A's forward-HTTP wiring. Seed a real InMemoryDataAccessLayer (SchemaPopulator-populated)
     // with two user-computer-profile entities; Instance B's document carries a real forward-HTTP
-    // connection-descriptor. Instance A's TransportFactoryRegistry hosts a PreConnectedForwardTransportFactory
-    // that returns the accepted forward-HTTP transport (LocalTransport, the in-process transport that supports
-    // channels + streams — registered with the real InProcessHttpServerTransportFactory harness).
-    // UserComputerProfileTransportFactory then routes A's user-computer-profile descriptor to that factory.
+    // connection-descriptor. Instance A's TransportFactoryRegistry hosts the ForwardHttpInstance
+    // itself (as an ITransportFactory) — so profile routing hands back the production HttpTransport
+    // that is paired against a production ServerHttpTransport hosting the executor listeners.
     private static async Task<UserComputerProfileTransportFactory> BuildForwardProfileRoutingAsync(
         ForwardHttpInstance forward,
         CancellationToken ct)
     {
         var instanceBConnectionDescriptor = ParseJson(
-            $$"""{"type":"{{PreConnectedForwardTransportFactory.DescriptorType}}","instance":"instance-b"}""");
+            $$"""{"type":"{{ForwardHttpInstance.DescriptorType}}","instance":"instance-b"}""");
         var profiles = await SeedTwoInstanceProfilesAsync(instanceBConnectionDescriptor, ct);
 
         var innerRegistry = new TransportFactoryRegistry();
-        innerRegistry.Register(new PreConnectedForwardTransportFactory(forward.ClientTransport));
+        innerRegistry.Register(forward);
 
         var session = new WorkspaceEntitySession
         {
@@ -385,55 +426,50 @@ public sealed class AgentStackCrossInstanceTests
         return accumulated.ToString();
     }
 
-    // Accepted forward-HTTP transport hosting the executor. LocalTransport is used because it is the
-    // in-process transport that supports both message channels (chat, persistence) and streams (shell).
-    // The transport is registered with the real InProcessHttpServerTransportFactory (the forward-HTTP
-    // server harness used by LeaseExpiryTests) so lease-tracking parity with the reverse-HTTP half is
-    // preserved.
-    private sealed class ForwardHttpInstance : IAsyncDisposable
+    // Real forward-HTTP wire: PairedWebSocket plumbs a production HttpTransport against a
+    // production ServerHttpTransport, which hosts the executor listeners. Doubles as an
+    // ITransportFactory so Instance A's registry can route B's descriptor here without a
+    // LocalTransport leaf substitute (the removal of which is asserted in the guard tests).
+    private sealed class ForwardHttpInstance : IAsyncDisposable, ITransportFactory
     {
-        private readonly InProcessHttpServerTransportFactory httpServer;
-        private readonly LocalTransport transport;
+        public const string DescriptorType = "in-process-forward-http";
 
-        private ForwardHttpInstance(InProcessHttpServerTransportFactory httpServer, LocalTransport transport)
+        private readonly InProcessHttpServerTransportFactory httpServer;
+        private readonly PairedWebSocket clientSocket;
+        private readonly PairedWebSocket serverSocket;
+        private readonly ServerHttpTransport server;
+        private readonly HttpTransport client;
+        private readonly Task serverRun;
+
+        private ForwardHttpInstance(
+            InProcessHttpServerTransportFactory httpServer,
+            PairedWebSocket clientSocket,
+            PairedWebSocket serverSocket,
+            ServerHttpTransport server,
+            HttpTransport client,
+            Task serverRun)
         {
             this.httpServer = httpServer;
-            this.transport = transport;
+            this.clientSocket = clientSocket;
+            this.serverSocket = serverSocket;
+            this.server = server;
+            this.client = client;
+            this.serverRun = serverRun;
         }
 
-        public ITransport ClientTransport => this.transport;
+        public ITransport ClientTransport => this.client;
 
         public InProcessHttpServerTransportFactory HttpServer => this.httpServer;
 
         public static async Task<ForwardHttpInstance> CreateAsync(TransportRegistry executorRegistry, CancellationToken ct)
         {
+            var (clientSocket, serverSocket) = PairedWebSocket.CreatePair();
+            var server = new ServerHttpTransport(serverSocket, executorRegistry, TimeSpan.FromHours(1));
+            var serverRun = Task.Run(() => server.RunAsync(CancellationToken.None), CancellationToken.None);
+            var client = new HttpTransport(clientSocket, TimeSpan.FromHours(1));
             var httpServer = new InProcessHttpServerTransportFactory();
-            var transport = new LocalTransport(executorRegistry);
-            await httpServer.AcceptAsync(transport, ct).ConfigureAwait(false);
-            return new ForwardHttpInstance(httpServer, transport);
-        }
-
-        public async ValueTask DisposeAsync()
-        {
-            await this.httpServer.DisposeAsync().ConfigureAwait(false);
-            await this.transport.DisposeAsync().ConfigureAwait(false);
-        }
-    }
-
-    // Test-only ITransportFactory that dispenses the pre-accepted forward-HTTP transport when a
-    // matching connection-descriptor is presented by UserComputerProfileTransportFactory. This is
-    // what lets Instance A's factory registry participate in real profile-based routing without
-    // opening a new socket per call (the forward-HTTP transport was already accepted by the server
-    // harness above).
-    private sealed class PreConnectedForwardTransportFactory : ITransportFactory
-    {
-        public const string DescriptorType = "in-process-forward-http";
-
-        private readonly ITransport transport;
-
-        public PreConnectedForwardTransportFactory(ITransport transport)
-        {
-            this.transport = transport;
+            await httpServer.AcceptAsync(client, ct).ConfigureAwait(false);
+            return new ForwardHttpInstance(httpServer, clientSocket, serverSocket, server, client, serverRun);
         }
 
         public Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
@@ -444,18 +480,35 @@ public sealed class AgentStackCrossInstanceTests
                 return Task.FromResult<ITransport?>(null);
             }
 
-            return Task.FromResult<ITransport?>(new NonOwningTransport(this.transport));
+            return Task.FromResult<ITransport?>(new NonOwningTransport(this.client));
         }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public async ValueTask DisposeAsync()
+        {
+            await this.httpServer.DisposeAsync().ConfigureAwait(false);
+            await this.server.DisposeAsync().ConfigureAwait(false);
+            try
+            {
+                await this.serverRun.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+
+            this.clientSocket.Dispose();
+            this.serverSocket.Dispose();
+        }
 
         // Prevents `await using` at each test's transport-open site from tearing down the shared
-        // forward-HTTP transport (ForwardHttpInstance owns lifecycle).
-        private sealed class NonOwningTransport : ITransport
+        // forward-HTTP transport (ForwardHttpInstance owns lifecycle). The unwrapped inner is
+        // exposed for the LeafWire_IsRealHttpTransport guard test.
+        internal sealed class NonOwningTransport : ITransport
         {
             private readonly ITransport inner;
 
             public NonOwningTransport(ITransport inner) => this.inner = inner;
+
+            public ITransport Inner => this.inner;
 
             public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
                 => this.inner.ConnectToMessageChannelAsync(request, ct);
