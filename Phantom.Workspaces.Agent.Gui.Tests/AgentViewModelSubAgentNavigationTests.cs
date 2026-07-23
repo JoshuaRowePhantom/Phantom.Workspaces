@@ -16,7 +16,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // AgentChatOutputControl/WebView2 is realised at a time.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -36,7 +36,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // (the one carrying its ConversationDetail), not the shared sub-agents-container document.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -58,7 +58,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -80,7 +80,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // to the newly selected sub-agent's own Document (distinct documents per sub-agent).
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -112,7 +112,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // AllDetailContents — never share one document that would airspace-overlap their transcripts.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -134,7 +134,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // one native transcript surface (WebView2) is materialised even with several sub-agents.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent A");
         await AddSubAgentAsync(chat, "a2", "Sub Agent B");
@@ -158,7 +158,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // "Sub-agents (N)" nav item is selected (for the browser card view).
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -177,7 +177,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -192,7 +192,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         Assert.Null(viewModel.ParentAgentViewModel);
     }
@@ -202,7 +202,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -225,7 +225,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // to a real cached document (never blank).
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -249,7 +249,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // the parent — its backing AgentViewModel is the sub-agent's own view-model.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -276,7 +276,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // Issue #1035 regression: selecting a sub-agent's own tools child node resolves to a cached document.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -298,7 +298,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // Issue #1035: the dock's active document always follows the selected nav node.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -329,7 +329,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // each with a generated cached document.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         var beforeCount = viewModel.AllDetailContents.Count;
 
@@ -351,7 +351,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // Issue #1035: arbitrarily nested sub-agent detail VMs are flattened into the root collection.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
         var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "a1").SubAgentViewModel;
@@ -374,7 +374,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
         // Issue #1035: after a sub-agent completes, its chat-details child still resolves to a document.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
@@ -444,7 +444,7 @@ public sealed class AgentViewModelSubAgentNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         var definition = AgentDefinitionLoader.LoadAgentFromJson(
             """

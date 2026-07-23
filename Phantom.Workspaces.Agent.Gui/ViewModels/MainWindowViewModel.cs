@@ -1,16 +1,18 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
 {
-    private MainWindowViewModel(AgentChat chat, AgentDefinitionParseResult parseResult, ObservableLoggerFactory loggerFactory)
+    private MainWindowViewModel(AgentChat chat, AgentDefinitionParseResult parseResult, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler)
     {
         this.LoggerFactory = loggerFactory;
-        this.Agent = CreateAgentViewModel(parseResult, chat, loggerFactory);
+        this.Agent = CreateAgentViewModel(parseResult, chat, loggerFactory, foregroundScheduler);
     }
 
     public static Task<MainWindowViewModel> CreateAsync(AgentDefinitionParseResult parseResult)
@@ -20,6 +22,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
         AgentDefinitionParseResult parseResult,
         AgentServices? agentServicesOverride)
     {
+        // #1122: Capture the UI-thread scheduler synchronously (before any await) so that it
+        // truly reflects the calling thread's SynchronizationContext. Callers invoke this on
+        // the UI thread in production. In test contexts without a SynchronizationContext, we
+        // fall back to TaskScheduler.Default — those tests do not exercise the UI-affine
+        // sub-agent restore path that #1122 addresses.
+        var foregroundScheduler = SynchronizationContext.Current is not null
+            ? (TaskScheduler)SynchronizationContextTaskScheduler.FromCurrent()
+            : TaskScheduler.Default;
         var loggerFactory = new ObservableLoggerFactory();
         var services = agentServicesOverride ?? CreateServices(parseResult, loggerFactory);
         var chat = await AgentFactory.CreateAgentChatAsync(
@@ -29,7 +39,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
                 AgentDefinition = parseResult.AgentDefinition,
                 AgentServices = services,
             });
-        return new MainWindowViewModel(chat, parseResult, loggerFactory);
+        return new MainWindowViewModel(chat, parseResult, loggerFactory, foregroundScheduler);
     }
 
     public AgentViewModel Agent { get; }
@@ -58,7 +68,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
     private static AgentViewModel CreateAgentViewModel(
         AgentDefinitionParseResult parseResult,
         AgentChat chat,
-        ObservableLoggerFactory loggerFactory)
+        ObservableLoggerFactory loggerFactory,
+        TaskScheduler foregroundScheduler)
     {
         var displayName = chat.DisplayName;
         if (!string.IsNullOrEmpty(parseResult.AgentSchemaPath))
@@ -66,7 +77,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IAsyncDisposable
             displayName = $"{displayName} [from {Path.GetFileName(parseResult.AgentSchemaPath)}]";
         }
 
-        return new AgentViewModel(chat, displayName, chat.Description, loggerFactory)
+        return new AgentViewModel(chat, displayName, chat.Description, loggerFactory, foregroundScheduler)
         {
             OpenUrlHandler = OpenUrlExternal,
         };

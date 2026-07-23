@@ -207,7 +207,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                         ForegroundScheduler = foregroundScheduler,
                     });
                 return (agentChat, loggerFactory);
-            }, createdAgentSessionEntity, loadingTab));
+            }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
         else if (data.TryGetProperty("definition", out var definitionElement))
         {
@@ -227,20 +227,21 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                         ForegroundScheduler = foregroundScheduler,
                     });
                 return (agentChat, loggerFactory);
-            }, createdAgentSessionEntity, loadingTab));
+            }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
     }
 
     private async Task InitializeSessionTabAsync(
         Func<Task<(AgentChat AgentChat, ObservableLoggerFactory LoggerFactory)>> createChatAsync,
         SubscribedEntityViewModel createdAgentSessionEntity,
-        AgentSessionWorkspaceTabViewModel loadingTab)
+        AgentSessionWorkspaceTabViewModel loadingTab,
+        TaskScheduler foregroundScheduler)
     {
         try
         {
             var (agentChat, loggerFactory) = await createChatAsync();
             var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id);
+                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id, foregroundScheduler);
             loadingTab.SetReady(agent, loggerFactory);
         }
         catch (Exception ex)

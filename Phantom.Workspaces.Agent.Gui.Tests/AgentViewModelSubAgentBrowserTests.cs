@@ -16,7 +16,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Agent Alpha");
 
@@ -29,7 +29,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Alpha");
         await AddSubAgentAsync(chat, "a2", "Beta");
@@ -87,7 +87,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "running", "Running Agent");
         await AddSubAgentAsync(chat, "done", "Done Agent");
@@ -108,7 +108,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "running", "Running");
         var subAgentChat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "running");
@@ -126,7 +126,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub A");
         await AddSubAgentAsync(chat, "a2", "Sub B");
@@ -148,7 +148,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Navigating to the parent's own agent id should select the root conversation view.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub A");
 
@@ -170,7 +170,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub A");
 
@@ -191,7 +191,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         // Navigate to an id that is neither a child nor the current agent.
         // This simulates an unloaded ancestor. Should not throw.
@@ -212,7 +212,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory, TaskScheduler.Default);
 
         Assert.False(subAgentViewModel.AcceptsUserInput);
     }
@@ -223,7 +223,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Root/parent agents use a real chat client → AcceptsUserInput is true.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         Assert.True(viewModel.AcceptsUserInput);
     }
@@ -235,7 +235,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "a1", "Sub A");
         await AddSubAgentAsync(chat, "a2", "Sub B");
@@ -364,7 +364,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory, TaskScheduler.Default);
 
         Assert.False(subAgentViewModel.AcceptsUserInput);
     }
@@ -380,7 +380,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory, TaskScheduler.Default);
 
         Assert.Null(subAgentViewModel.InputQueue);
     }
@@ -391,7 +391,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Selecting a factory-path sub-agent in the nav tree should create a view with InputQueue = null.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub1", "Sub Agent");
 
@@ -409,7 +409,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         // Root/parent agents should have InputQueue created.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         Assert.True(viewModel.AcceptsUserInput);
         Assert.NotNull(viewModel.InputQueue);
@@ -427,7 +427,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
         var subAgentChat = (AgentChat)subAgentEntry;
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory);
+        await using var subAgentViewModel = new AgentViewModel(subAgentChat, "sub", "", loggerFactory, TaskScheduler.Default);
 
         Assert.Null(subAgentViewModel.InputQueue);
         

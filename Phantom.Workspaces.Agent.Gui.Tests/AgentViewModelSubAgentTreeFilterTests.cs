@@ -15,7 +15,7 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.Single(c => c.Id == "chat-sub-agents");
@@ -28,7 +28,7 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.Single(c => c.Id == "chat-sub-agents");
@@ -46,7 +46,7 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "running", "Running Agent");
         await AddSubAgentAsync(chat, "done", "Done Agent");
@@ -75,7 +75,7 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "running", "Running Agent");
         await AddSubAgentAsync(chat, "done", "Done Agent");
@@ -96,7 +96,7 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "worker", "Worker Agent");
 

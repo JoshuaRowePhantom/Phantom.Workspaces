@@ -476,7 +476,7 @@ public sealed class AgentChatEditorControlTests
         // i.e. the detail region is NOT blank (the original bug), and it shows the SUB-AGENT's session.
         var chat = await CreateAgentChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
         await AddSubAgentAsync(chat, "a1", "Sub Agent");
 
         var root = viewModel.EditorItems.Single();

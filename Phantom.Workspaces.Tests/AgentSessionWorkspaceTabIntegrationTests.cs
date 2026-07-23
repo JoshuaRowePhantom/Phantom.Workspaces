@@ -50,7 +50,7 @@ public sealed class AgentSessionWorkspaceTabIntegrationTests
                 AgentServices = new AgentServices { ChatClientOverride = client },
             });
             var loggerFactory = new ObservableLoggerFactory();
-            var agentViewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+            var agentViewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
             var tab = new AgentSessionWorkspaceTabViewModel
             {
                 Id = "agent-tab-teardown",
@@ -185,7 +185,7 @@ public sealed class AgentSessionWorkspaceTabIntegrationTests
             var chat = await AgentFactory.CreateAgentChatAsync(
                 new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
             var loggerFactory = new ObservableLoggerFactory();
-            var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+            var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
             using var document = JsonDocument.Parse("""
             {
               "entity-id": "00000000-0000-0000-0000-000000000001",

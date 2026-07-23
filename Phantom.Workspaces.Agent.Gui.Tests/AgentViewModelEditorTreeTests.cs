@@ -12,7 +12,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #819: The DiagnosticsInspector property was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var property = typeof(AgentViewModel).GetProperty("DiagnosticsInspector");
         Assert.Null(property);
@@ -24,7 +24,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #819: The Diagnostics navigation item (tab) was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var diagnosticsNav = root.Children.FirstOrDefault(c => c.Id == "chat-diagnostics");
@@ -36,7 +36,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var toolsNavBefore = root.Children.First(c => c.Id == "chat-tools");
@@ -52,7 +52,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var rootBefore = Assert.Single(viewModel.EditorItems);
         var chatDetailsBefore = rootBefore.Children.First(c => c.Id == "chat-details");
@@ -75,7 +75,7 @@ public sealed class AgentViewModelEditorTreeTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var chat = await CreateChatWithMcpAsync(server.BoundUrl);
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var toolsNav = root.Children.First(c => c.Id == "chat-tools");
@@ -94,7 +94,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
@@ -113,7 +113,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
@@ -134,7 +134,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var toolsNav = root.Children.First(c => c.Id == "chat-tools");
@@ -152,7 +152,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         // Issue #819: Use chat-details instead of removed chat-diagnostics
@@ -170,7 +170,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -186,7 +186,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -203,7 +203,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #1030: The "Background tasks" section was removed from every sub-agent too.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -220,7 +220,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #1030: The "Background tasks" placeholder section was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.DoesNotContain(root.Children, c => c.Id == "chat-background-tasks");
@@ -232,7 +232,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #1030: The root nav item's children are exactly Chat details, Tools, Sub-agents.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.Equal(
@@ -246,7 +246,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #1031: The Sub-agents nav item is expanded by default.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
@@ -259,7 +259,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -276,7 +276,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #819: Diagnostics tab was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -295,7 +295,7 @@ public sealed class AgentViewModelEditorTreeTests
         // SubAgentsContainer is reserved for the group node's browser card only.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -316,7 +316,7 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentDef = CreateMcpAgentDefinition(server.BoundUrl);
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await chat.GetOrCreateAsync("sub-agent-1", subAgentDef, "tool-call-sub-agent-1", TestContext.Current.CancellationToken);
 
@@ -336,7 +336,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "sub-agent-1", "Sub Agent 1");
 
@@ -359,7 +359,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         // Issue #1035: the flat detail-content collection carries one item per fixed nav node
         // (conversation, chat-details, chat-tools, chat-sub-agents). Count is 4.
@@ -372,7 +372,7 @@ public sealed class AgentViewModelEditorTreeTests
         // Issue #1035: each fixed nav node's DetailContent resolves to exactly one cached document.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         foreach (var nav in new[] { root }.Concat(root.Children))
@@ -389,7 +389,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var chatDetailsNav = root.Children.First(c => c.Id == "chat-details");
@@ -406,7 +406,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var conversationItem = viewModel.AllDetailContents
@@ -426,7 +426,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var items = viewModel.AllDetailContents.ToArray();
@@ -448,7 +448,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         // The conversation node is selected by default, so its cached document is active.
         Assert.NotNull(viewModel.SelectedDetailDocument);
@@ -463,7 +463,7 @@ public sealed class AgentViewModelEditorTreeTests
         // when the first sub-agent is added.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
@@ -480,7 +480,7 @@ public sealed class AgentViewModelEditorTreeTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
@@ -500,7 +500,7 @@ public sealed class AgentViewModelEditorTreeTests
         // directly to it without instantiating a nested AgentChatEditorControl.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var conversationDetail = viewModel.ConversationDetail;
         Assert.NotNull(conversationDetail);

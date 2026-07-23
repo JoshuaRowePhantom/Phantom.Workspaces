@@ -114,7 +114,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory)
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default)
         {
             OpenUrlHandler = null,
         };
@@ -341,7 +341,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -371,7 +371,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -465,7 +465,7 @@ public sealed class AgentChatOutputControlTests
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("how are you?")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -509,7 +509,7 @@ public sealed class AgentChatOutputControlTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -544,7 +544,7 @@ public sealed class AgentChatOutputControlTests
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -583,7 +583,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         // Simulate a session whose history is still loading when the browser becomes ready.
         var historyPopulated = new TaskCompletionSource();
@@ -622,7 +622,7 @@ public sealed class AgentChatOutputControlTests
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browser = GetBrowser(control);
@@ -642,7 +642,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var historyPopulated = new TaskCompletionSource();
         viewModel.SetHistoryPopulatedForTest(historyPopulated.Task);
@@ -699,7 +699,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
         viewModel.AutoScrollEnabled = false;
 
         var control = new AgentChatOutputControl();
@@ -724,7 +724,7 @@ public sealed class AgentChatOutputControlTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -764,7 +764,7 @@ public sealed class AgentChatOutputControlTests
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -814,7 +814,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -856,7 +856,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -896,7 +896,7 @@ public sealed class AgentChatOutputControlTests
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -964,7 +964,7 @@ public sealed class AgentChatOutputControlTests
         }
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -999,7 +999,7 @@ public sealed class AgentChatOutputControlTests
         }
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -1035,7 +1035,7 @@ public sealed class AgentChatOutputControlTests
         }
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -1078,7 +1078,7 @@ public sealed class AgentChatOutputControlTests
         }
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
 
@@ -1113,7 +1113,7 @@ public sealed class AgentChatOutputControlTests
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant, Contents = [new TextContent("hi")] });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl();
         var browserField = typeof(AgentChatOutputControl)
@@ -1206,7 +1206,7 @@ public sealed class AgentChatOutputControlTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl { DataContext = viewModel };
         var window = new Window { Content = control };
@@ -1239,7 +1239,7 @@ public sealed class AgentChatOutputControlTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
         chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl { DataContext = viewModel };
         var browserField = typeof(AgentChatOutputControl)
@@ -1298,7 +1298,7 @@ public sealed class AgentChatOutputControlTests
                 ForegroundScheduler = uiScheduler,
             }));
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var control = new AgentChatOutputControl { DataContext = viewModel };
         var browserField = typeof(AgentChatOutputControl)

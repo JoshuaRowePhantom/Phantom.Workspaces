@@ -46,12 +46,19 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentDetailDockFactory detailDockFactory;
     private AgentDetailDocumentItem? selectedDetailItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null, AgentViewModel? parentAgentViewModel = null)
+    // #1122: foregroundScheduler is a required constructor parameter. A silent
+    // TaskScheduler.Default fallback caused sub-agent restore continuations to run on the
+    // thread pool and mutate UI-bound collections off the UI thread, crashing the app.
+    // Every construction site must supply a UI-thread scheduler (e.g. captured via
+    // SynchronizationContextTaskScheduler.FromCurrent() on the UI thread) so that the
+    // continuation in AddSubAgentSlotLazy performs its UI-affine mutations on the correct
+    // thread. Tests that do not exercise UI-thread affinity may pass TaskScheduler.Default.
+    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
-        this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
+        this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
         this.agentSessionId = agentChat.AgentSessionId;
         this.ParentAgentViewModel = parentAgentViewModel;
         this.ParentAgentDisplay = parentAgentViewModel is not null
@@ -740,7 +747,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void AddSubAgentSlotLazy(SubAgent stub)
     {
-        // Start async lease acquisition and schedule UI update when complete
+        // #1122: The continuation body performs UI-affine mutations (allDetailContents,
+        // subAgentDisplayItems, Dock updates via AgentDetailDockFactory) and MUST run on the
+        // UI-thread foregroundScheduler. The scheduler is now a required constructor
+        // parameter so the value is guaranteed to be a real UI-thread scheduler in production.
+        // We also wrap the success branch in try/catch so any exception thrown by the UI-thread
+        // work is observed and logged rather than surfacing as an unobserved-task exception on
+        // the finalizer thread (which previously crashed the process).
         var acquisitionTask = stub.AcquireLeaseAsync();
         acquisitionTask.ContinueWith(
             task =>
@@ -753,7 +766,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     {
                         this.subAgentLeases.Add(lease);
                     }
-                    this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                    try
+                    {
+                        this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                    }
+                    catch (Exception ex)
+                    {
+                        this.logger.LogError(ex, "Failed to add restored sub-agent slot {AgentId}", stub.SessionId.Value);
+                    }
                 }
                 else if (task.IsFaulted)
                 {

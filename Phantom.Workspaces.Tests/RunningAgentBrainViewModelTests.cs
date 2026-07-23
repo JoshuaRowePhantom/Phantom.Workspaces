@@ -489,8 +489,8 @@ public sealed class RunningAgentBrainViewModelTests
         var chatA = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
         var chatB = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
 
-        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory());
-        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory());
+        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "tab-A", Title = "A", AgentSessionId = "session-A" };
         var tabB = new AgentSessionWorkspaceTabViewModel { Id = "tab-B", Title = "B", AgentSessionId = "session-B" };
@@ -549,7 +549,7 @@ public sealed class RunningAgentBrainViewModelTests
         var definition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
         var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
 
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "A", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -772,7 +772,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -809,7 +809,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -842,7 +842,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -874,7 +874,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -906,7 +906,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -944,7 +944,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());

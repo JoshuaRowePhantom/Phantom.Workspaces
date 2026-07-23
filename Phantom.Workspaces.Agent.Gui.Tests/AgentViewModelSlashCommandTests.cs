@@ -19,7 +19,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
@@ -46,7 +46,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
@@ -67,7 +67,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
@@ -92,7 +92,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         // Register a test command that returns a diagnostic status message
         chat.SlashCommands.Register(new FakeDiagnosticCommandHandler());
@@ -119,7 +119,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         chat.SlashCommands.Register(new FakeTransientCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
@@ -146,7 +146,7 @@ public sealed class AgentViewModelSlashCommandTests
             new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
 
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         chat.SlashCommands.Register(new FakeThrowingCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });

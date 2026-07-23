@@ -212,8 +212,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         SubscribedEntityViewModel agentSessionEntity,
         AgentChat agentChat)
     {
+        // #1122: Capture the UI-thread scheduler synchronously before any awaits so it truly
+        // reflects the calling thread's SynchronizationContext, then thread it through to
+        // AgentViewModel so its sub-agent restore continuation mutates UI-bound state on the
+        // UI thread.
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
         var loggerFactory = new ObservableLoggerFactory();
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString(), foregroundScheduler);
         var tab = new AgentSessionWorkspaceTabViewModel
         {
             Id = agentSessionEntity.EntityId.ToString(),
@@ -316,7 +321,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             agentChat = lease.AgentChat;
         }
 
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id);
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id, foregroundScheduler);
 
         var trustedExecutorIdentifier = targetClientInstance;
 
@@ -435,9 +440,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
         string title,
-        string agentSessionTabId)
+        string agentSessionTabId,
+        TaskScheduler foregroundScheduler)
     {
-        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title, agentSessionTabId);
+        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title, agentSessionTabId, foregroundScheduler);
     }
 
     private static AgentViewModel BuildAgentViewModel(
@@ -445,9 +451,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
         string title,
-        string agentSessionTabId)
+        string agentSessionTabId,
+        TaskScheduler foregroundScheduler)
     {
-        return new AgentViewModel(agentChat, title, agentChat.Description, loggerFactory)
+        // #1122: foregroundScheduler is a required constructor parameter on AgentViewModel so
+        // sub-agent restore continuations run on the UI thread. Callers capture the scheduler
+        // on the UI thread and thread it through.
+        return new AgentViewModel(agentChat, title, agentChat.Description, loggerFactory, foregroundScheduler)
         {
             OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
                 new WebViewModel(url, mainWindowViewModel)
