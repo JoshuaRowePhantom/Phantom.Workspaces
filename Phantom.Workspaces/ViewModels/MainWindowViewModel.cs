@@ -140,6 +140,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new StartShellFromEntityShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new OpenShellEntityShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenEntityShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenAssociatedWorkspaceShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new DeleteEntityShortcutHandler());
