@@ -34,6 +34,7 @@
     <ProjectReference Include="..\Phantom.Workspaces.Llm.Echo\Phantom.Workspaces.Llm.Echo.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Gui.Shared\Phantom.Workspaces.Gui.Shared.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Logging\Phantom.Workspaces.Logging.csproj" />
+    <ProjectReference Include="..\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Assets\chat-output-shell.html" />

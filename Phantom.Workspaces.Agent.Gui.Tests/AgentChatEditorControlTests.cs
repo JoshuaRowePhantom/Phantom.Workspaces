@@ -1,4 +1,5 @@
 using Avalonia.Headless.XUnit;
+using Avalonia.Input;
 using System;
 using System.IO;
 using System.Linq;
@@ -127,7 +128,7 @@ public sealed class AgentChatEditorControlTests
         Assert.NotNull(editorGrid);
 
         var dockControl = editorGrid.Children
-            .OfType<Dock.Avalonia.Controls.DockControl>()
+            .OfType<global::Dock.Avalonia.Controls.DockControl>()
             .FirstOrDefault(d => Grid.GetColumn(d) == 2);
         Assert.NotNull(dockControl);
 
@@ -668,5 +669,247 @@ public sealed class AgentChatEditorControlTests
             ?? throw new InvalidOperationException($"Could not find field '{fieldName}'.");
 
         return Assert.IsAssignableFrom<T>(field.GetValue(instance));
+    }
+
+    // --- #1124 top-level dock-tab-switch adoption tests for the detail dock ---
+
+    [Fact]
+    public void AgentChatEditorControl_Root_DeclaresTabSwitchingNamespace()
+    {
+        // #1124 adoption: the UserControl root declares xmlns:ts pointing at the tab-switching
+        // submodule so ts:DockTabSwitch.* attached properties resolve. No Window/UserControl-level
+        // target property is declared — the opt-in lives on the DockControl itself.
+        var axaml = ReadAxaml("AgentChatEditorControl.axaml");
+
+        Assert.Contains(
+            "xmlns:ts=\"using:Phantom.Dock.Avalonia.TabSwitching\"",
+            axaml,
+            StringComparison.Ordinal);
+
+        // No Window/UserControl-level TargetDockControl-style property (rejected NameScope design).
+        Assert.DoesNotContain("ts:DockTabSwitch.TargetDockControl", axaml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatEditorControl_DetailDock_OptsIntoInstallOnTopLevelWithCtrlAltDigits()
+    {
+        // #1124 adoption: the detail DockControl carries Enabled=True + InstallOnTopLevel=True and
+        // a Ctrl+Alt+Digits AllSwitchable binding (a distinct chord from MainWindow's Alt+Shift+
+        // Digits so the two co-hosted docks do not collide).
+        var axaml = ReadAxaml("AgentChatEditorControl.axaml");
+
+        // The three flags live on the same DockControl declaration — locate the detail dock by
+        // its Layout binding then assert its opening element contains all three attributes.
+        var detailStart = axaml.IndexOf("Layout=\"{Binding DetailLayout}\"", StringComparison.Ordinal);
+        Assert.True(detailStart >= 0, "Expected detail DockControl to bind Layout=DetailLayout.");
+        var openTagEnd = axaml.IndexOf('>', detailStart);
+        Assert.True(openTagEnd > detailStart);
+        var openTag = axaml.Substring(detailStart, openTagEnd - detailStart);
+
+        Assert.Contains("ts:DockTabSwitch.Enabled=\"True\"", openTag, StringComparison.Ordinal);
+        Assert.Contains("ts:DockTabSwitch.InstallOnTopLevel=\"True\"", openTag, StringComparison.Ordinal);
+
+        // The Ctrl+Alt+Digits binding is declared as a child <ts:DockTabSwitchGestures/> element.
+        var bindingsStart = axaml.IndexOf("<ts:DockTabSwitchBindings>", detailStart, StringComparison.Ordinal);
+        Assert.True(bindingsStart > detailStart, "Expected <ts:DockTabSwitchBindings> under the detail dock.");
+        var bindingsEnd = axaml.IndexOf("</ts:DockTabSwitchBindings>", bindingsStart, StringComparison.Ordinal);
+        Assert.True(bindingsEnd > bindingsStart);
+        var bindingsXaml = axaml.Substring(bindingsStart, bindingsEnd - bindingsStart);
+
+        Assert.Contains("Modifiers=\"Control,Alt\"", bindingsXaml, StringComparison.Ordinal);
+        Assert.Contains("Keys=\"Digits\"", bindingsXaml, StringComparison.Ordinal);
+        Assert.Contains("Scope=\"AllSwitchable\"", bindingsXaml, StringComparison.Ordinal);
+    }
+
+    private static global::Dock.Avalonia.Controls.DockControl GetDetailDockControl(AgentChatEditorControl control)
+    {
+        var editorGrid = GetField<Grid>(control, "EditorGrid");
+        return editorGrid.Children
+            .OfType<global::Dock.Avalonia.Controls.DockControl>()
+            .First(d => Grid.GetColumn(d) == 2);
+    }
+
+    private static async Task<AgentViewModel> CreateAgentViewModelAsync()
+    {
+        var chat = await CreateAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        return new AgentViewModel(chat, "parent", string.Empty, loggerFactory, TaskScheduler.Default);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatEditorControl_CtrlAltDigitWithFocusOutsideDetailDock_SwitchesDetailDocument()
+    {
+        // #1124 adoption: with the event source on the NavigationTree (outside the detail
+        // DockControl subtree), Ctrl+Alt+2 activates the second cached AgentDetailDocument. The
+        // top-level-installed tunnel handler catches the chord regardless of focus.
+        await using var viewModel = await CreateAgentViewModelAsync();
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        var window = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        var detailDock = GetDetailDockControl(control);
+        var documents = viewModel.DetailDockFactory.DetailDock.VisibleDockables!
+            .OfType<Phantom.Workspaces.Agent.Gui.ViewModels.AgentDetailDocument>()
+            .ToList();
+        Assert.True(documents.Count >= 2);
+
+        // Ensure the tree is outside the detail dock subtree.
+        var tree = control.GetVisualDescendants()
+            .OfType<TreeView>()
+            .First();
+        Assert.DoesNotContain(detailDock.GetVisualDescendants(), v => ReferenceEquals(v, tree));
+
+        window.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+            Key = Avalonia.Input.Key.D2,
+            KeyModifiers = Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Alt,
+            Source = tree,
+        });
+
+        Assert.Same(documents[1], viewModel.DetailDockFactory.DetailDock.ActiveDockable);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatEditorControl_CtrlAltDigit_ActivatesDetailDocumentExactlyOnce()
+    {
+        // #1124 adoption: with InstallOnTopLevel the in-control tunnel handler is suppressed on
+        // the detail DockControl, so a single Ctrl+Alt+1 chord causes exactly one
+        // SetActiveDockable on the target detail document (no double-handling).
+        await using var viewModel = await CreateAgentViewModelAsync();
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        var window = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        var detailDock = viewModel.DetailDockFactory.DetailDock;
+        var documents = detailDock.VisibleDockables!
+            .OfType<Phantom.Workspaces.Agent.Gui.ViewModels.AgentDetailDocument>()
+            .ToList();
+        Assert.True(documents.Count >= 2);
+
+        // Start on document 2 so activating document 1 is an observable transition.
+        viewModel.DetailDockFactory.SetActiveDockable(documents[1]);
+        Assert.Same(documents[1], detailDock.ActiveDockable);
+
+        var activationCount = 0;
+        void Handler(object? _, global::Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
+        {
+            if (ReferenceEquals(e.Dockable, documents[0]))
+            {
+                activationCount++;
+            }
+        }
+        viewModel.DetailDockFactory.ActiveDockableChanged += Handler;
+        try
+        {
+            var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+                Key = Avalonia.Input.Key.D1,
+                KeyModifiers = Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Alt,
+                Source = tree,
+            });
+        }
+        finally
+        {
+            viewModel.DetailDockFactory.ActiveDockableChanged -= Handler;
+        }
+
+        Assert.Equal(1, activationCount);
+        Assert.Same(documents[0], detailDock.ActiveDockable);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatEditorControl_DetailDockTransitivelyInvisible_DoesNotSwitch()
+    {
+        // #1124 adoption: the IsEffectivelyVisible gate blocks activation when an ancestor of
+        // the detail dock is hidden. Ctrl+Alt+2 must be a no-op in that state.
+        await using var viewModel = await CreateAgentViewModelAsync();
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        var window = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        var detailDock = viewModel.DetailDockFactory.DetailDock;
+        var documents = detailDock.VisibleDockables!
+            .OfType<Phantom.Workspaces.Agent.Gui.ViewModels.AgentDetailDocument>()
+            .ToList();
+        Assert.True(documents.Count >= 2);
+
+        // Start on document 1.
+        viewModel.DetailDockFactory.SetActiveDockable(documents[0]);
+        Assert.Same(documents[0], detailDock.ActiveDockable);
+
+        // Hide the host control (an ancestor of the detail DockControl) → IsEffectivelyVisible=false.
+        control.IsVisible = false;
+        Dispatcher.UIThread.RunJobs();
+
+        var detailControl = GetDetailDockControl(control);
+        Assert.False(detailControl.IsEffectivelyVisible);
+
+        window.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+            Key = Avalonia.Input.Key.D2,
+            KeyModifiers = Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Alt,
+            Source = window,
+        });
+
+        Assert.Same(documents[0], detailDock.ActiveDockable);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentChatEditorControl_ReparentedBetweenHosts_RebindsHookToCurrentTopLevel()
+    {
+        // #1124 adoption: because AgentChatEditorControl can move between the embedded workspace
+        // host and the standalone agent window, the detail dock's controller must rebind its
+        // top-level tunnel hook whenever the control's hosting TopLevel changes. Behaviourally:
+        // a gesture on the old TopLevel no longer activates; a gesture on the new one does.
+        await using var viewModel = await CreateAgentViewModelAsync();
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        var hostA = new Window { Width = 1000, Height = 700, Content = control };
+        hostA.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var detailDock = viewModel.DetailDockFactory.DetailDock;
+        var documents = detailDock.VisibleDockables!
+            .OfType<Phantom.Workspaces.Agent.Gui.ViewModels.AgentDetailDocument>()
+            .ToList();
+        Assert.True(documents.Count >= 3);
+
+        viewModel.DetailDockFactory.SetActiveDockable(documents[0]);
+        Assert.Same(documents[0], detailDock.ActiveDockable);
+
+        // Move the control to a fresh window.
+        hostA.Content = null;
+        Dispatcher.UIThread.RunJobs();
+
+        var hostB = new Window { Width = 1000, Height = 700, Content = control };
+        hostB.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        // Gesture on the OLD TopLevel must NOT activate — the hook rebound off it.
+        hostA.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+            Key = Avalonia.Input.Key.D2,
+            KeyModifiers = Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Alt,
+            Source = hostA,
+        });
+        Assert.Same(documents[0], detailDock.ActiveDockable);
+
+        // Gesture on the NEW TopLevel activates the target document via the rebound hook.
+        hostB.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+            Key = Avalonia.Input.Key.D3,
+            KeyModifiers = Avalonia.Input.KeyModifiers.Control | Avalonia.Input.KeyModifiers.Alt,
+            Source = hostB,
+        });
+        Assert.Same(documents[2], detailDock.ActiveDockable);
     }
 }

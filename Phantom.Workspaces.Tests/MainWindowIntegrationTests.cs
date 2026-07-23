@@ -7303,5 +7303,250 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(activeAfter, documentDock.VisibleDockables!);
     }
 
+    // --- #1124 top-level dock-tab-switch adoption tests ---
+
+    private static DockControl GetTopLevelDockControl(MainWindow window) =>
+        window.GetVisualDescendants()
+            .OfType<DockControl>()
+            .First(d => string.Equals(d.Name, "TopLevelDockControl", StringComparison.Ordinal));
+
+    private static async Task OpenTwoWorkspacesForTabSwitchAsync(
+        MainWindowViewModel viewModel,
+        string idPrefix)
+    {
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var idA = new EntityId($"{idPrefix}-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            idA,
+            $$"""
+            {
+              "entity-id": "{{idA}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "{{idPrefix}}-a"]],
+              "display-name": { "default": "{{idPrefix}} A" },
+              "regions": []
+            }
+            """);
+
+        var idB = new EntityId($"{idPrefix}-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            idB,
+            $$"""
+            {
+              "entity-id": "{{idB}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "{{idPrefix}}-b"]],
+              "display-name": { "default": "{{idPrefix}} B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = idA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = idB });
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_TopLevelDockControl_OptsIntoInstallOnTopLevel()
+    {
+        // #1124 adoption: the realized TopLevelDockControl carries
+        // ts:DockTabSwitch.InstallOnTopLevel=True in addition to its existing
+        // Enabled=True + Alt+Shift+Digits AllSwitchable binding.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var dock = GetTopLevelDockControl(window);
+
+            Assert.True(Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetInstallOnTopLevel(dock));
+            Assert.True(Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetEnabled(dock));
+
+            var bindings = Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetBindings(dock);
+            Assert.NotNull(bindings);
+            var gesture = Assert.Single(bindings!);
+            Assert.Equal(KeyModifiers.Alt | KeyModifiers.Shift, gesture.Modifiers);
+            Assert.Equal(
+                Phantom.Dock.Avalonia.TabSwitching.DockTabSwitchKeys.Digits,
+                gesture.Keys);
+            Assert.Equal(
+                Phantom.Dock.Avalonia.TabSwitching.DockTabSwitchScope.AllSwitchable,
+                gesture.Scope);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_AltShiftDigitWithFocusOutsideDock_SwitchesTopLevelDockTab()
+    {
+        // #1124 adoption: with the event source on the left-pane TreeView (outside the
+        // TopLevelDockControl), Alt+Shift+2 must still switch the top-level dock's active
+        // workspace-pane document to the second pane. This is the whole point of top-level
+        // sourcing: focus-independence.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await OpenTwoWorkspacesForTabSwitchAsync(viewModel, "11241124");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            // Start on pane 1 so pane 2 activation is observable.
+            ActivateWorkspacePaneAtIndex(viewModel, "0");
+            Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+            var dock = GetTopLevelDockControl(window);
+            var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+
+            // The tree lives in the left pane, outside the DockControl subtree.
+            Assert.DoesNotContain(dock.GetVisualDescendants(), v => ReferenceEquals(v, treeView));
+
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D2,
+                KeyModifiers = KeyModifiers.Alt | KeyModifiers.Shift,
+                Source = treeView,
+            });
+
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_AltShiftDigit_ActivatesTabExactlyOnce()
+    {
+        // #1124 adoption: with InstallOnTopLevel the in-control tunnel handlers are
+        // suppressed, so a single physical Alt+Shift+2 chord causes exactly one
+        // SetActiveDockable on the target pane — no double-handling.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await OpenTwoWorkspacesForTabSwitchAsync(viewModel, "11241125");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            ActivateWorkspacePaneAtIndex(viewModel, "0");
+            Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+            var factory = GetDockFactoryAs<IFactory>(viewModel);
+            var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+            Assert.NotNull(workspacesDock);
+            var paneDoc2 = workspacesDock!.VisibleDockables!
+                .OfType<WorkspacePaneDocument>()
+                .First(d => ReferenceEquals(d.WorkspacePane, viewModel.WorkspacePanes[1]));
+
+            var activationCount = 0;
+            void Handler(object? _, global::Dock.Model.Core.Events.ActiveDockableChangedEventArgs e)
+            {
+                if (ReferenceEquals(e.Dockable, paneDoc2))
+                {
+                    activationCount++;
+                }
+            }
+            factory.ActiveDockableChanged += Handler;
+            try
+            {
+                var dock = GetTopLevelDockControl(window);
+                var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+
+                window.RaiseEvent(new KeyEventArgs
+                {
+                    RoutedEvent = InputElement.KeyDownEvent,
+                    Key = Key.D2,
+                    KeyModifiers = KeyModifiers.Alt | KeyModifiers.Shift,
+                    Source = treeView,
+                });
+            }
+            finally
+            {
+                factory.ActiveDockableChanged -= Handler;
+            }
+
+            Assert.Equal(1, activationCount);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_AltShiftHeld_ShowsBadgesRegardlessOfFocus()
+    {
+        // #1124 adoption: with focus outside the TopLevelDockControl, holding the exact
+        // Alt+Shift modifier set (the binding chord) makes the controller's badges visible;
+        // releasing a modifier hides them again. The gesture is sourced from the TopLevel so
+        // this is what a real user experiences with focus on the left-pane tree.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var dock = GetTopLevelDockControl(window);
+            var controller = Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetController(dock);
+            Assert.NotNull(controller);
+            Assert.False(controller!.AreBadgesVisible);
+
+            var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+
+            // Alt alone does not match Alt+Shift ⇒ still hidden.
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.LeftAlt,
+                KeyModifiers = KeyModifiers.Alt,
+                Source = treeView,
+            });
+            Assert.False(controller.AreBadgesVisible);
+
+            // Add Shift ⇒ exact match ⇒ visible.
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.LeftShift,
+                KeyModifiers = KeyModifiers.Alt | KeyModifiers.Shift,
+                Source = treeView,
+            });
+            Assert.True(controller.AreBadgesVisible);
+
+            // Release Alt ⇒ Shift alone ⇒ hidden again.
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyUpEvent,
+                Key = Key.LeftAlt,
+                KeyModifiers = KeyModifiers.Shift,
+                Source = treeView,
+            });
+            Assert.False(controller.AreBadgesVisible);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
 }
 

@@ -292,7 +292,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// Hosts the locked, tab-strip-less <see cref="AgentDetailDocumentDock"/> whose cached documents
     /// are generated from <see cref="AllDetailContents"/>.
     /// </summary>
-    public Dock.Model.Controls.IRootDock DetailLayout => this.detailDockFactory.Layout;
+    public global::Dock.Model.Controls.IRootDock DetailLayout => this.detailDockFactory.Layout;
 
     /// <summary>The cached detail document currently active in the detail dock, or null.</summary>
     public AgentDetailDocument? SelectedDetailDocument => this.detailDockFactory.GetDocument(this.selectedDetailItem);
