@@ -26,11 +26,28 @@ internal sealed class HubRelayHarness : IAsyncDisposable
 
     public Guid ExecutorEntityId { get; }
 
+    /// <summary>Default hub URL used by <see cref="ConnectMachineBAsync"/> and <see cref="CreateForwardingFactory"/>.</summary>
+    public const string DefaultHubUrl = "https://hub-a.example";
+
     /// <summary>The registration channel serviced on the executor (Machine C) side.</summary>
     public IMessageChannel ExecutorRegistrationChannel { get; private set; } = null!;
 
     public static async Task<HubRelayHarness> CreateAsync(IChatClient executorChatClient, CancellationToken ct)
     {
+        var registry = new TransportRegistry();
+        registry.Register(new ChatClientTransportListener(executorChatClient));
+        return await CreateAsync(registry, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reusable overload (#1083): the caller supplies a fully-populated <see cref="TransportRegistry"/>
+    /// hosting whatever listeners the executor should service (chat, shell, …). Everything else — the
+    /// in-process hub fixture, the executor registration channel, and the reverse-execution dispatcher
+    /// wiring — is set up identically to the single-<see cref="IChatClient"/> overload.
+    /// </summary>
+    public static async Task<HubRelayHarness> CreateAsync(TransportRegistry executorRegistry, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(executorRegistry);
         var fixture = new InProcessReverseHubFixture();
         var harness = new HubRelayHarness(fixture, Guid.NewGuid());
         harness.ownedAsync.Add(fixture);
@@ -38,11 +55,36 @@ internal sealed class HubRelayHarness : IAsyncDisposable
         await fixture.SimulateClientRegistrationAsync(harness.ExecutorEntityId, ct).ConfigureAwait(false);
         harness.ExecutorRegistrationChannel = fixture.LastClientRegistrationChannel!;
 
-        var registry = new TransportRegistry();
-        registry.Register(new ChatClientTransportListener(executorChatClient));
-        var dispatcher = new ReverseExecutionDispatcher(harness.ExecutorRegistrationChannel, registry);
+        var dispatcher = new ReverseExecutionDispatcher(harness.ExecutorRegistrationChannel, executorRegistry);
         harness.ownedAsync.Insert(0, dispatcher);
         return harness;
+    }
+
+    /// <summary>
+    /// Builds a real <see cref="ReverseHttpForwardingTransportFactory"/> wired to this harness's
+    /// in-process hub shim. Callers can register the returned factory in their own
+    /// <see cref="TransportFactoryRegistry"/> (e.g. behind a
+    /// <see cref="UserComputerProfileTransportFactory"/>) so a
+    /// <c>{"type":"reverse-http","hub-urls":[...],"entity-id":...}</c> descriptor routes through
+    /// the executor without directly calling <see cref="ConnectMachineBAsync"/>.
+    /// </summary>
+    public ITransportFactory CreateForwardingFactory(
+        params (string Url, InProcessHubHttpTransportFactory.HubBehavior Behavior)[] hubs)
+    {
+        if (hubs.Length == 0)
+        {
+            hubs = [(DefaultHubUrl, InProcessHubHttpTransportFactory.HubBehavior.Healthy)];
+        }
+
+        var shim = new InProcessHubHttpTransportFactory(this.Fixture);
+        foreach (var (url, behavior) in hubs)
+        {
+            shim.SetBehavior(url, behavior);
+        }
+
+        var forwarding = new ReverseHttpForwardingTransportFactory(shim, TimeSpan.FromSeconds(20));
+        this.ownedAsync.Add(forwarding);
+        return forwarding;
     }
 
     /// <summary>
@@ -55,7 +97,7 @@ internal sealed class HubRelayHarness : IAsyncDisposable
     {
         if (hubs.Length == 0)
         {
-            hubs = [("https://hub-a.example", InProcessHubHttpTransportFactory.HubBehavior.Healthy)];
+            hubs = [(DefaultHubUrl, InProcessHubHttpTransportFactory.HubBehavior.Healthy)];
         }
 
         var shim = new InProcessHubHttpTransportFactory(this.Fixture);
