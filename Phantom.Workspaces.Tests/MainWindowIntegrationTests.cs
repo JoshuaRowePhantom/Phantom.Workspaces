@@ -1148,6 +1148,211 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<AgentSessionWorkspaceTabViewModel>(agentTab);
     }
 
+    // ---- #1129: workspace-open of a shell entity should open a terminal, not an entity card. ----
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateWorkspacePaneAsync_WithShellEntityTab_CreatesShellTabViewModel()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var fakeSession = new Shell1129FakeTerminalSession();
+        InstallFakeShellShortcutHandler(viewModel, (_, _, _) => Task.FromResult<ITerminalSession>(fakeSession));
+
+        var shellEntityId = new EntityId("5ce1101a-0000-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(
+            GetEntityBroker(viewModel),
+            shellEntityId,
+            """
+            {
+              "entity-id": "5ce1101a-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "shell"],
+              "display-name": { "default": "restored-shell" },
+              "command": "pwsh"
+            }
+            """);
+
+        var workspacePane = await InvokeCreateWorkspacePaneForShellAsync(
+            viewModel,
+            workspaceEntityIdText: "5ce1101a-0000-4000-8000-0000000000f1",
+            shellEntityIdText: shellEntityId.ToString(),
+            tabId: "restored-shell-tab",
+            title: "Restored Shell",
+            dock: "full");
+
+        var restoredTab = Assert.Single(workspacePane.Tabs);
+        Assert.IsType<ShellTabViewModel>(restoredTab);
+        // Regression: must NOT fall through to the generic entity card view.
+        Assert.IsNotType<EntityWorkspaceTabViewModel>(restoredTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateWorkspacePaneAsync_WithShellEntityTab_DispatchesThroughShortcutPipeline()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        ShellEntityOpenSpec? observedSpec = null;
+        var fakeSession = new Shell1129FakeTerminalSession();
+        InstallFakeShellShortcutHandler(viewModel, (_, spec, _) =>
+        {
+            observedSpec = spec;
+            return Task.FromResult<ITerminalSession>(fakeSession);
+        });
+
+        var shellEntityId = new EntityId("5ce1101a-0000-4000-8000-000000000002");
+        await UpsertEntityAndLoadAsync(
+            GetEntityBroker(viewModel),
+            shellEntityId,
+            """
+            {
+              "entity-id": "5ce1101a-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "shell"],
+              "display-name": { "default": "pipeline-shell" },
+              "mode": "pty",
+              "command": "pwsh",
+              "command-arguments": ["-NoLogo"],
+              "working-directory": "/work"
+            }
+            """);
+
+        var workspacePane = await InvokeCreateWorkspacePaneForShellAsync(
+            viewModel,
+            workspaceEntityIdText: "5ce1101a-0000-4000-8000-0000000000f2",
+            shellEntityIdText: shellEntityId.ToString(),
+            tabId: "shell-pipeline",
+            title: null,
+            dock: null);
+
+        var restoredTab = Assert.Single(workspacePane.Tabs);
+        Assert.IsType<ShellTabViewModel>(restoredTab);
+        // The shortcut handler's session-opener must have been invoked with the entity's spec —
+        // proof that CreateWorkspacePaneAsync dispatched through the ShortcutManager restore
+        // pipeline instead of the old ad-hoc EntityWorkspaceTabViewModel fallback.
+        Assert.NotNull(observedSpec);
+        Assert.Equal("pty", observedSpec!.Mode);
+        Assert.Equal("pwsh", observedSpec.Command);
+        Assert.Equal(new[] { "-NoLogo" }, observedSpec.CommandArguments);
+        Assert.Equal("/work", observedSpec.WorkingDirectory);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CreateWorkspacePaneAsync_WithShellEntityTab_PreservesPersistedTabIdTitleAndDock()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var fakeSession = new Shell1129FakeTerminalSession();
+        InstallFakeShellShortcutHandler(viewModel, (_, _, _) => Task.FromResult<ITerminalSession>(fakeSession));
+
+        var shellEntityId = new EntityId("5ce1101a-0000-4000-8000-000000000003");
+        await UpsertEntityAndLoadAsync(
+            GetEntityBroker(viewModel),
+            shellEntityId,
+            """
+            {
+              "entity-id": "5ce1101a-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "shell"],
+              "display-name": { "default": "layout-shell" },
+              "command": "pwsh"
+            }
+            """);
+
+        var workspacePane = await InvokeCreateWorkspacePaneForShellAsync(
+            viewModel,
+            workspaceEntityIdText: "5ce1101a-0000-4000-8000-0000000000f3",
+            shellEntityIdText: shellEntityId.ToString(),
+            tabId: "persisted-shell-id",
+            title: "Custom Shell Title",
+            dock: "right");
+
+        var shellTab = Assert.IsType<ShellTabViewModel>(Assert.Single(workspacePane.Tabs));
+        Assert.Equal("persisted-shell-id", shellTab.Id);
+        Assert.Equal("Custom Shell Title", shellTab.Title);
+        Assert.Equal("right", shellTab.DockRegion);
+    }
+
+    private static void InstallFakeShellShortcutHandler(
+        MainWindowViewModel viewModel,
+        Func<string, ShellEntityOpenSpec, CancellationToken, Task<ITerminalSession>> sessionOpener)
+    {
+        viewModel.ShortcutManager.ReplaceShortcutHandlerForTesting<OpenShellEntityShortcutHandler>(
+            new OpenShellEntityShortcutHandler(sessionOpener));
+    }
+
+    private static async Task<WorkspacePaneViewModel> InvokeCreateWorkspacePaneForShellAsync(
+        MainWindowViewModel viewModel,
+        string workspaceEntityIdText,
+        string shellEntityIdText,
+        string tabId,
+        string? title,
+        string? dock)
+    {
+        var titleProp = title is null ? string.Empty : $"\"title\": \"{title}\",";
+        var dockProp = dock is null ? string.Empty : $"\"dock\": \"{dock}\",";
+        var workspaceJson = $$"""
+            {
+              "entity-id": "{{workspaceEntityIdText}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Shell Restore Test Workspace" },
+              "regions": [
+                {
+                  "tabs": [
+                    {
+                      "tab-id": "{{tabId}}",
+                      {{titleProp}}
+                      {{dockProp}}
+                      "content": {
+                        "target-entity-name": "{{shellEntityIdText}}"
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        using var workspaceDoc = JsonDocument.Parse(workspaceJson);
+        var workspaceEntity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId(workspaceEntityIdText),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = workspaceDoc.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+
+        var createWorkspacePaneMethod = typeof(MainWindowViewModel).GetMethod(
+            "CreateWorkspacePaneAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(createWorkspacePaneMethod);
+
+        var task = (Task<WorkspacePaneViewModel>?)createWorkspacePaneMethod!.Invoke(
+            viewModel,
+            [workspaceEntity, workspaceDoc.RootElement.Clone()]);
+        Assert.NotNull(task);
+        var pane = await task!;
+        Assert.NotNull(pane);
+        return pane;
+    }
+
+    private sealed class Shell1129FakeTerminalSession : ITerminalSession
+    {
+        private readonly MemoryStream stream = new();
+        public Stream Stream => this.stream;
+        public ValueTask ResizeAsync(int columns, int rows, CancellationToken cancellationToken)
+            => ValueTask.CompletedTask;
+        public ValueTask SignalAsync(string signal, CancellationToken cancellationToken)
+            => ValueTask.CompletedTask;
+        public Task<int> WaitForExitAsync() => Task.FromResult(0);
+        public ValueTask DisposeAsync()
+        {
+            this.stream.Dispose();
+            return ValueTask.CompletedTask;
+        }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task CloseActiveTabCommand_WithTwoTabs_ClosesActiveTabAndLeavesOther()
     {

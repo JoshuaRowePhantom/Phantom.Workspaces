@@ -70,6 +70,32 @@ public sealed class OpenShellEntityShortcutHandler : ShortcutHandler
         return true;
     }
 
+    /// <summary>
+    /// #1129: Restore-aware factory used by the workspace-open/restore path so shell
+    /// entities open a live terminal (the same <see cref="ShellTabViewModel"/> the
+    /// top-level Open shortcut produces) instead of the generic entity card, preserving
+    /// the persisted tab-id / title / dock region so the restored dock layout is stable.
+    /// </summary>
+    public override async Task<WorkspaceTabViewModel?> TryCreateTabForRestoreAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel,
+        string? tabId,
+        string? title,
+        string? dockRegion)
+    {
+        var spec = ReadShellSpec(entityViewModel);
+        var targetClientInstance = ResolveTargetClientInstance(mainWindowViewModel, entityViewModel);
+
+        var session = await this.OpenSessionAsync(targetClientInstance, spec, CancellationToken.None);
+
+        return new ShellTabViewModel(session)
+        {
+            Id = tabId ?? $"shell-entity-{entityViewModel.EntityId}",
+            Title = title ?? $"{spec.Command} — {entityViewModel.DisplayName}",
+            DockRegion = dockRegion ?? "full",
+        };
+    }
+
     private static ShellEntityOpenSpec ReadShellSpec(SubscribedEntityViewModel entityViewModel)
     {
         string? mode = null;

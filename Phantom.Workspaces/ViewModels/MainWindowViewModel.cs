@@ -3216,49 +3216,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         JsonElement content,
         SubscribedEntityViewModel targetEntity)
     {
-        // External entity → embedded browser tab
-        if (targetEntity.IsEntityType("external"))
-        {
-            var urls = OpenExternalEntityShortcutHandler.ParseUrls(targetEntity);
-            if (urls.Count > 0)
-            {
-                var urlKey = urls.ContainsKey("default") ? "default" : urls.Keys.First();
-                var entityUrl = urls[urlKey];
-                var isDefault = string.Equals(urlKey, "default", StringComparison.OrdinalIgnoreCase);
-                var explicitTitle = ReadString(tab, "title");
+        var tabId = ReadString(tab, "tab-id");
+        var title = ReadString(tab, "title");
+        var dockRegion = ReadString(tab, "dock");
 
-                return new WebViewModel(entityUrl, this, titleFixed: explicitTitle is not null || !isDefault)
-                {
-                    Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
-                    Title = explicitTitle ?? (isDefault ? targetEntity.DisplayName : urlKey),
-                    DockRegion = ReadString(tab, "dock") ?? "full",
-                };
-            }
-        }
-
-        // Agent-session entity → restore via dedicated handler
-        if (targetEntity.IsEntityType("agent-session") && this.openAgentSessionShortcutHandler is not null)
+        // #1129: Route the workspace-open/restore path through the Open shortcut pipeline
+        // so any interactive entity type (external browser, agent-session, shell, and any
+        // future handler) reconstitutes into its correct tab kind — not the generic entity
+        // card. The pipeline preserves the persisted tab-id/title/dock so the restored dock
+        // layout remains stable. Falls back to the generic EntityWorkspaceTabViewModel for
+        // non-interactive entities (no handler claims Open, or the handler declines).
+        var restoredTab = await this.shortcutManager.TryCreateTabForRestoreAsync(
+            this, Shortcut.Open, targetEntity, tabId, title, dockRegion);
+        if (restoredTab is not null)
         {
-            var agentSessionTab = await this.openAgentSessionShortcutHandler
-                .TryCreateAgentSessionTabForRestoreAsync(
-                    this,
-                    targetEntity,
-                    tabId: ReadString(tab, "tab-id"),
-                    title: ReadString(tab, "title"),
-                    dockRegion: ReadString(tab, "dock"));
-            if (agentSessionTab is not null)
-            {
-                return agentSessionTab;
-            }
+            return restoredTab;
         }
 
         // Default: generic entity view
         return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
         {
-            Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
-            Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+            Id = tabId ?? targetEntity.EntityId.ToString(),
+            Title = title ?? targetEntity.DisplayName,
             Entity = targetEntity,
-            DockRegion = ReadString(tab, "dock") ?? "full",
+            DockRegion = dockRegion ?? "full",
         };
     }
 
@@ -3343,51 +3324,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         if (this.entityBroker?.TryGetReferencedEntity(content, "target-entity-name", out var targetEntity) == true
             && targetEntity is not null)
         {
-            // For external entities, create WebViewModel with embedded browser
-            if (targetEntity.IsEntityType("external"))
-            {
-                var urls = OpenExternalEntityShortcutHandler.ParseUrls(targetEntity);
-                if (urls.Count > 0)
-                {
-                    var urlKey = urls.ContainsKey("default") ? "default" : urls.Keys.First();
-                    var entityUrl = urls[urlKey];
-                    var isDefault = string.Equals(urlKey, "default", StringComparison.OrdinalIgnoreCase);
-                    var explicitTitle = ReadString(tab, "title");
+            var tabId = ReadString(tab, "tab-id");
+            var title = ReadString(tab, "title");
+            var dockRegion = ReadString(tab, "dock");
 
-                    return new WebViewModel(entityUrl, this, titleFixed: explicitTitle is not null || !isDefault)
-                    {
-                        Id = ReadString(tab, "tab-id") ?? $"web-{targetEntity.EntityId}",
-                        Title = explicitTitle ?? (isDefault ? targetEntity.DisplayName : urlKey),
-                        DockRegion = ReadString(tab, "dock") ?? "full",
-                    };
-                }
-            }
-
-            // For agent-session entities, restore through the dedicated handler so the agent is
-            // correctly initialised (same path as a manual open via OpenAgentSessionShortcutHandler).
-            if (targetEntity.IsEntityType("agent-session") && this.openAgentSessionShortcutHandler is not null)
+            // #1129: Route the workspace-open/restore path through the Open shortcut
+            // pipeline so any interactive entity type (external browser, agent-session,
+            // shell, and any future handler) reconstitutes into its correct tab kind — not
+            // the generic entity card. Preserves the persisted tab-id / title / dock so the
+            // restored dock layout remains stable. Falls through to the generic entity
+            // card only when no interactive handler claims the entity.
+            var restoredTab = await this.shortcutManager.TryCreateTabForRestoreAsync(
+                this, Shortcut.Open, targetEntity, tabId, title, dockRegion);
+            if (restoredTab is not null)
             {
-                var agentSessionTab = await this.openAgentSessionShortcutHandler
-                    .TryCreateAgentSessionTabForRestoreAsync(
-                        this,
-                        targetEntity,
-                        tabId: ReadString(tab, "tab-id"),
-                        title: ReadString(tab, "title"),
-                        dockRegion: ReadString(tab, "dock"));
-                if (agentSessionTab is not null)
-                {
-                    return agentSessionTab;
-                }
-                // Fall through to generic entity view if creation fails (missing data etc.).
+                return restoredTab;
             }
 
             // Default entity view
             return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
             {
-                Id = ReadString(tab, "tab-id") ?? targetEntity.EntityId.ToString(),
-                Title = ReadString(tab, "title") ?? targetEntity.DisplayName,
+                Id = tabId ?? targetEntity.EntityId.ToString(),
+                Title = title ?? targetEntity.DisplayName,
                 Entity = targetEntity,
-                DockRegion = ReadString(tab, "dock") ?? "full",
+                DockRegion = dockRegion ?? "full",
             };
         }
 

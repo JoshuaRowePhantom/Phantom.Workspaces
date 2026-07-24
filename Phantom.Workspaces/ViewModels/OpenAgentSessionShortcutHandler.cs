@@ -164,6 +164,24 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     }
 
     /// <summary>
+    /// #1129: Restore-aware factory override that routes the workspace-open/restore path
+    /// through the shortcut pipeline. Delegates to
+    /// <see cref="TryCreateAgentSessionTabForRestoreAsync"/> so agent-session entities keep
+    /// producing an <see cref="AgentSessionWorkspaceTabViewModel"/> (not the generic entity
+    /// card) while preserving the saved tab metadata.
+    /// </summary>
+    public override async Task<WorkspaceTabViewModel?> TryCreateTabForRestoreAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel,
+        string? tabId,
+        string? title,
+        string? dockRegion)
+    {
+        return await this.TryCreateAgentSessionTabForRestoreAsync(
+            mainWindowViewModel, entityViewModel, tabId, title, dockRegion);
+    }
+
+    /// <summary>
     /// Creates an agent chat for the given session in the <see cref="IRunningAgentChatTable"/>,
     /// enqueues <paramref name="resumePrompt"/> as the first user message, and returns the
     /// acquired lease. Returns <see langword="null"/> when the entity data is missing required fields.
