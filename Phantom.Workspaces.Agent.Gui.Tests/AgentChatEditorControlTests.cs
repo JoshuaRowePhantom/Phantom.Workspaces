@@ -1,6 +1,8 @@
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
+using Avalonia.Media;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -266,14 +268,14 @@ public sealed class AgentChatEditorControlTests
     public void SubAgentItem_LastModified_RendersAgoLabel()
     {
         // Issue #1034: the sub-agent header template renders a relative "ago" label bound to
-        // LastUpdatedAt, positioned in the lower-right of the item.
+        // LastUpdatedAt. #1131: it now lives on its own row (Grid.Row="1"), right-aligned
+        // beneath the name, so it cannot overlap the name/glyph.
         var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
 
         var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
 
         Assert.Contains("controls:AgoTextBlock", navHeader, StringComparison.Ordinal);
         Assert.Contains("Value=\"{Binding LastUpdatedAt}\"", navHeader, StringComparison.Ordinal);
-        Assert.Contains("VerticalAlignment=\"Bottom\"", navHeader, StringComparison.Ordinal);
         Assert.Contains("HorizontalAlignment=\"Right\"", navHeader, StringComparison.Ordinal);
     }
 
@@ -426,6 +428,194 @@ public sealed class AgentChatEditorControlTests
         var restoredOutput = editorGrid.ColumnDefinitions[2].ActualWidth;
 
         Assert.True(restoredOutput > shrunkOutput);
+    }
+
+    // ── #1131: last-modified timestamp must not overlap the id/name and state glyph ──
+
+    [Fact]
+    public void SubAgentItem_Header_UsesTwoRowLayout()
+    {
+        // #1131: The header Grid declares RowDefinitions="Auto,Auto" so the name/glyph
+        // row and the timestamp row are laid out on separate vertical bounds.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+
+        Assert.Contains("RowDefinitions=\"Auto,Auto\"", navHeader, StringComparison.Ordinal);
+        Assert.DoesNotContain("ColumnDefinitions=\"*,Auto\"", navHeader, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubAgentItem_AgoLabel_OccupiesOwnRowBelowName()
+    {
+        // #1131: The AgoTextBlock is assigned Grid.Row="1"; the glyph+name StackPanel
+        // sits on Grid.Row="0". They live on distinct rows, so the timestamp is on its
+        // own row beneath the name/glyph row.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+
+        var agoStart = navHeader.IndexOf("controls:AgoTextBlock", StringComparison.Ordinal);
+        Assert.True(agoStart >= 0);
+        var agoEnd = navHeader.IndexOf("/>", agoStart, StringComparison.Ordinal);
+        var agoElement = navHeader[agoStart..agoEnd];
+        Assert.Contains("Grid.Row=\"1\"", agoElement, StringComparison.Ordinal);
+
+        // The glyph+name StackPanel is on Grid.Row="0".
+        var stackStart = navHeader.IndexOf("<StackPanel Grid.Row=\"0\"", StringComparison.Ordinal);
+        Assert.True(stackStart >= 0, "Expected the glyph+name StackPanel to be on Grid.Row=\"0\".");
+    }
+
+    [Fact]
+    public void SubAgentItem_NameTextBlock_IsNotEllipsisTruncated()
+    {
+        // #1131: The Name TextBlock does not declare TextTrimming="CharacterEllipsis";
+        // long ids are shown in full (may wrap) rather than truncated.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+
+        var nameStart = navHeader.IndexOf("Text=\"{Binding Name}\"", StringComparison.Ordinal);
+        Assert.True(nameStart >= 0);
+        var nameEnd = navHeader.IndexOf("/>", nameStart, StringComparison.Ordinal);
+        var nameElement = navHeader[nameStart..nameEnd];
+
+        Assert.DoesNotContain("TextTrimming=\"CharacterEllipsis\"", nameElement, StringComparison.Ordinal);
+        Assert.DoesNotContain("TextTrimming=\"CharacterEllipsis\"", navHeader, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SubAgentItem_AgoLabel_StaysRightAlignedOnItsRow()
+    {
+        // #1131: The AgoTextBlock keeps HorizontalAlignment="Right" within its dedicated
+        // second row so the timestamp visually sits at the lower-right of the item.
+        var axamlContent = ReadAxaml("AgentChatToolTemplates.axaml");
+        var navHeader = ExtractTemplate(axamlContent, "AgentNavigationHeaderTemplate");
+
+        var agoStart = navHeader.IndexOf("controls:AgoTextBlock", StringComparison.Ordinal);
+        Assert.True(agoStart >= 0);
+        var agoEnd = navHeader.IndexOf("/>", agoStart, StringComparison.Ordinal);
+        var agoElement = navHeader[agoStart..agoEnd];
+
+        Assert.Contains("HorizontalAlignment=\"Right\"", agoElement, StringComparison.Ordinal);
+        Assert.Contains("Grid.Row=\"1\"", agoElement, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SubAgentItem_LongName_NameAndAgoLabelOccupyDifferentRows()
+    {
+        // #1131: With a long agent id, the Name element and the AgoTextBlock render in
+        // disjoint vertical bounds (name bottom edge ≤ timestamp top edge).
+        var (window, nameBlock, agoBlock) = RenderNavHeader(
+            "236153f8a2a14b7f901e35a11c09a427",
+            DateTime.UtcNow.AddHours(-1),
+            width: 260);
+
+        Assert.True(nameBlock.Bounds.Height > 0);
+        Assert.True(agoBlock.Bounds.Height > 0);
+        Assert.True(
+            nameBlock.Bounds.Bottom <= agoBlock.Bounds.Top + 0.5,
+            $"Expected name bottom ({nameBlock.Bounds.Bottom}) to be at or above ago top ({agoBlock.Bounds.Top}).");
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SubAgentItem_LongName_FullNameIsRenderedWithoutTruncation()
+    {
+        // #1131: With a long id and a constrained width, the full name text is preserved
+        // (wraps within row 0) rather than being replaced by an ellipsis.
+        var longName = "236153f8a2a14b7f901e35a11c09a427";
+        var (window, nameBlock, _) = RenderNavHeader(longName, DateTime.UtcNow.AddMinutes(-5), width: 220);
+
+        Assert.Equal(longName, nameBlock.Text);
+        Assert.NotEqual(TextTrimming.CharacterEllipsis, nameBlock.TextTrimming);
+
+        window.Close();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SubAgentItem_ShortName_RendersWithTimestampOnSecondRow()
+    {
+        // #1131: A short name renders fully on row 0 with the AgoTextBlock on row 1
+        // beneath it; no overlap and no unintended ellipsis.
+        var (window, nameBlock, agoBlock) = RenderNavHeader("short", DateTime.UtcNow.AddMinutes(-2), width: 400);
+
+        Assert.Equal("short", nameBlock.Text);
+        Assert.True(nameBlock.Bounds.Height > 0);
+        Assert.True(agoBlock.Bounds.Height > 0);
+        Assert.True(
+            nameBlock.Bounds.Bottom <= agoBlock.Bounds.Top + 0.5,
+            $"Expected name bottom ({nameBlock.Bounds.Bottom}) to be at or above ago top ({agoBlock.Bounds.Top}).");
+        Assert.NotEqual(TextTrimming.CharacterEllipsis, nameBlock.TextTrimming);
+
+        window.Close();
+    }
+
+    private static (Window window, TextBlock name, Phantom.Workspaces.Agent.Gui.Controls.AgoTextBlock ago) RenderNavHeader(
+        string name,
+        DateTime lastUpdatedAt,
+        double width)
+    {
+        // Materialize the AgentNavigationHeaderTemplate through an AgentChatEditorControl
+        // whose Resources include AgentChatToolTemplates.axaml. We host the template's
+        // built content in a ContentControl inside a Window so it is measured/arranged.
+        var editor = new AgentChatEditorControl();
+        Assert.True(
+            editor.TryFindResource("AgentNavigationHeaderTemplate", out var resource),
+            "Expected AgentNavigationHeaderTemplate resource on AgentChatEditorControl.");
+        var template = Assert.IsAssignableFrom<Avalonia.Controls.Templates.IDataTemplate>(resource);
+
+        var navItem = new AgentEditorNavigationItemViewModel(
+            id: "n1",
+            name: name,
+            toolId: null,
+            summary: "s",
+            tool: null,
+            detailContent: new object(),
+            children: Array.Empty<AgentEditorNavigationItemViewModel>(),
+            runningSubAgent: new HeaderStubSubAgent(lastUpdatedAt));
+
+        var content = new ContentControl
+        {
+            Content = navItem,
+            ContentTemplate = template,
+            Width = width,
+            HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Left,
+        };
+
+        var window = new Window
+        {
+            Width = width + 40,
+            Height = 300,
+            Content = content,
+        };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        content.Measure(new Size(width, 300));
+        content.Arrange(new Rect(0, 0, width, 300));
+        Dispatcher.UIThread.RunJobs();
+
+        var name0 = content.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .First(tb => string.Equals(tb.Text, name, StringComparison.Ordinal));
+        var ago = content.GetVisualDescendants()
+            .OfType<Phantom.Workspaces.Agent.Gui.Controls.AgoTextBlock>()
+            .First();
+
+        return (window, name0, ago);
+    }
+
+    private sealed class HeaderStubSubAgent : IRunningSubAgent
+    {
+        public HeaderStubSubAgent(DateTime lastUpdatedAt)
+        {
+            this.LastUpdatedAt = lastUpdatedAt;
+        }
+
+        public string AgentId => "stub";
+        public string DisplayName => "stub";
+        public string Description => string.Empty;
+        public AgentChatCompletionState CompletionState => AgentChatCompletionState.Running;
+        public DateTime LastUpdatedAt { get; }
+        public IReadOnlyList<IRunningSubAgent> SubAgents => Array.Empty<IRunningSubAgent>();
     }
 
     private static Window ShowInWindow(Control content, double width, double height)

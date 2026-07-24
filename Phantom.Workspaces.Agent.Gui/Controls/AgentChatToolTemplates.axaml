@@ -76,9 +76,13 @@
             <StackPanel IsVisible="{Binding NotHasTool}"
                         HorizontalAlignment="Stretch"
                         Spacing="2">
-                <Grid ColumnDefinitions="*,Auto"
+                <!-- #1131: two-row layout so the AgoTextBlock ("N ago") never overlaps the
+                     agent id/name or state glyph. Row 0 holds the glyph+name (full text,
+                     no ellipsis truncation); row 1 holds the timestamp on its own line,
+                     right-aligned beneath the name. -->
+                <Grid RowDefinitions="Auto,Auto"
                       HorizontalAlignment="Stretch">
-                    <StackPanel Grid.Column="0"
+                    <StackPanel Grid.Row="0"
                                 Orientation="Horizontal"
                                 Spacing="6">
                         <ProgressBar Classes="glyph-indicator pulsating-brain"
@@ -90,15 +94,16 @@
                         <ProgressBar Classes="running-indicator failed"
                                      IsVisible="{Binding IsFailed}"/>
                         <TextBlock Text="{Binding Name}"
-                                   Classes="agent-tool-node-title"/>
+                                   Classes="agent-tool-node-title"
+                                   TextWrapping="Wrap"/>
                     </StackPanel>
-                    <!-- Issue #1034: sub-agent last-modified time as a relative "ago" label,
-                         positioned in the lower-right of the item. Hidden when LastUpdatedAt is null. -->
-                    <controls:AgoTextBlock Grid.Column="1"
+                    <!-- Issue #1034: sub-agent last-modified time as a relative "ago" label.
+                         #1131: moved onto its own row (Row 1) beneath the name row so it
+                         cannot overlap the name/glyph. Hidden when LastUpdatedAt is null. -->
+                    <controls:AgoTextBlock Grid.Row="1"
                                            Classes="muted"
-                                           VerticalAlignment="Bottom"
                                            HorizontalAlignment="Right"
-                                           Margin="8,0,0,0"
+                                           Margin="0,2,0,0"
                                            Value="{Binding LastUpdatedAt}"
                                            IsVisible="{Binding LastUpdatedAt, Converter={x:Static converters:NotNullConverter.Instance}}"/>
                 </Grid>
