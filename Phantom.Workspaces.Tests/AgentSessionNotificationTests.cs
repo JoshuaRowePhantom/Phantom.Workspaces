@@ -419,4 +419,86 @@ public sealed class AgentSessionNotificationTests
 
         await WaitForRunningItemsEmptyAsync(agentChat);
     }
+
+    [AvaloniaFact]
+    public async Task Notify_SetsWorkspaceId_FromOwningPane()
+    {
+        // #1135: When an agent-session tab is added to a WorkspacePaneViewModel, the pane
+        // authoritatively stamps the tab's WorkspacePaneId with its own Id — overwriting any
+        // stale value captured from SelectedWorkspacePane?.Id at construction time (e.g. during
+        // workspace restore where the tab is created before it lands in its actual pane).
+        // The subsequently posted notification's TabDescriptor.WorkspaceId reflects the pane
+        // the tab actually lives in, so cross-workspace notification navigation resolves the
+        // right owning workspace.
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Idle)
+            {
+                notifyTcs.TrySetResult();
+            }
+        };
+
+        // The tab is created with a stale/wrong workspace-pane id (mirroring the buggy
+        // pre-#1135 behaviour where restore paths captured SelectedWorkspacePane?.Id at
+        // construction time — a different pane than the one the tab was actually restored into).
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab-owning-pane",
+            Title = "Agent",
+            WorkspacePaneId = "stale-active-pane",
+            NotificationService = notificationService,
+        };
+
+        var owningPane = new WorkspacePaneViewModel(
+            CreateWorkspaceEntity(),
+            id: "owning-pane-1");
+        owningPane.Tabs.Add(tab);
+
+        // Adding the tab to the pane must stamp WorkspacePaneId with the pane's actual id.
+        Assert.Equal("owning-pane-1", tab.WorkspacePaneId);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        timeoutCts.Token.Register(() => notifyTcs.TrySetCanceled());
+        await notifyTcs.Task;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.TabDescriptor.TabId == "agent-tab-owning-pane"
+                && call.TabDescriptor.WorkspaceId == "owning-pane-1");
+            Assert.DoesNotContain(notificationService.Calls, call =>
+                call.TabDescriptor.WorkspaceId == "stale-active-pane");
+        }
+    }
+
+    private static SubscribedEntityViewModel CreateWorkspaceEntity()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(
+            """
+            {
+              "entity-id": "22222222-2222-2222-2222-222222222222",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Test Owning Pane" }
+            }
+            """);
+        return new SubscribedEntityViewModel(
+            new Phantom.Workspaces.Data.EntitySnapshot
+            {
+                EntityId = new Phantom.Workspaces.Data.EntityId("22222222-2222-2222-2222-222222222222"),
+                ConcurrencyTag = new Phantom.Workspaces.Data.ConcurrencyTag("1"),
+                ModifiedTime = new Phantom.Workspaces.Data.Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<Phantom.Workspaces.Data.EntitySnapshot>(),
+            });
+    }
 }

@@ -23,11 +23,20 @@ public sealed class RunningAgentChatWithEntityInfo
     /// </summary>
     public string? EntityId { get; }
 
-    internal RunningAgentChatWithEntityInfo(RunningAgentChat chat, string entityName, string? entityId)
+    /// <summary>
+    /// The owning workspace-pane id (the pane the session was started/opened in), if known.
+    /// Used by cross-workspace status-button navigation (#1135) to switch to (and load) the
+    /// owning workspace before focusing the agent, so a click on the brain popup never routes
+    /// the agent into the currently-active pane by mistake.
+    /// </summary>
+    public string? WorkspaceId { get; }
+
+    internal RunningAgentChatWithEntityInfo(RunningAgentChat chat, string entityName, string? entityId, string? workspaceId = null)
     {
         _chat = chat;
         EntityName = entityName;
         EntityId = entityId;
+        WorkspaceId = workspaceId;
     }
 
     /// <summary>

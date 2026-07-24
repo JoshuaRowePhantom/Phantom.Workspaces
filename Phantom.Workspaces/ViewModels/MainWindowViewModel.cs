@@ -79,6 +79,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private ScheduledToolsPauseIndicatorViewModel? scheduledToolsPause;
     private ScheduledToolsRunningViewModel? scheduledToolsRunning;
     private RunningAgentBrainViewModel? runningAgentBrain;
+    private IRunningAgentChatTable? runningAgentChats;
     private UsageTrackerViewModel? usageTracker;
     private Services.UsageMetricsService? usageMetricsService;
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
@@ -168,20 +169,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.dockFactory.ActiveDockableChanged += this.OnActiveDockableChanged;
 
         var runningAgentChats = services.RunningAgentChats;
+        this.runningAgentChats = runningAgentChats;
         this.runningAgentBrain = new RunningAgentBrainViewModel(
             runningAgentChats,
             this.GetAllAgentTabs,
             this.ActivateTabById,
-            sessionKey =>
-            {
-                var entityId = runningAgentChats.RunningSessions
-                    .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal))
-                    ?.EntityId;
-                if (entityId is not null)
-                {
-                    _ = this.OpenEntityByIdAsync(entityId);
-                }
-            },
+            sessionKey => _ = this.OpenAgentForSessionAsync(sessionKey),
             action => Dispatcher.UIThread.Post(action));
     }
 
@@ -1982,6 +1975,52 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private void ActivateTabById(string tabId, string? workspacePaneId)
     {
         _ = this.ActivateTabByIdAsync(tabId, workspacePaneId);
+    }
+
+    /// <summary>
+    /// #1135: Cross-workspace navigation entry-point for the running-agent brain popup's
+    /// fallback rows (rows whose session has no open tab in any pane). Switches to (and, if
+    /// necessary, loads) the workspace pane the session was started in, then opens/focuses
+    /// the agent tab there. Safe no-op when the session is unknown or has no resolvable
+    /// owning workspace/entity.
+    /// </summary>
+    internal async Task OpenAgentForSessionAsync(string sessionKey)
+    {
+        if (this.runningAgentChats is null)
+        {
+            return;
+        }
+
+        var session = this.runningAgentChats.RunningSessions
+            .FirstOrDefault(s => string.Equals(s.SessionId.Value, sessionKey, StringComparison.Ordinal));
+        if (session is null)
+        {
+            return;
+        }
+
+        if (session.WorkspaceId is { } paneId
+            && !string.IsNullOrWhiteSpace(paneId)
+            && Guid.TryParse(paneId, out var paneGuid))
+        {
+            var pane = this.WorkspacePanes.FirstOrDefault(
+                p => string.Equals(p.Id, paneId, StringComparison.Ordinal));
+            if (pane is null || pane.ContentLayout is null)
+            {
+                await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = new EntityId(paneGuid) });
+                pane = this.WorkspacePanes.FirstOrDefault(
+                    p => string.Equals(p.Id, paneId, StringComparison.Ordinal));
+            }
+
+            if (pane is not null)
+            {
+                this.SelectedWorkspacePane = pane;
+            }
+        }
+
+        if (session.EntityId is { } eid && !string.IsNullOrWhiteSpace(eid))
+        {
+            await this.OpenEntityByIdAsync(eid);
+        }
     }
 
     internal async Task ActivateTabByIdAsync(string tabId, string? workspacePaneId)

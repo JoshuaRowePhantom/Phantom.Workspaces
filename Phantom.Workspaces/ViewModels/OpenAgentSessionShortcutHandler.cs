@@ -219,6 +219,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 AgentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel),
                 EntityName = agentSessionEntity.DisplayName,
                 EntityId = agentSessionEntity.EntityId.ToString(),
+                // #1135: For auto-resume, the session's owning workspace is the currently-selected
+                // pane at auto-resume time (the pane the tab will be restored into).
+                WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
             });
 
         lease.AgentChat.EnqueueUserMessage(resumePrompt);
@@ -335,6 +338,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     EntityId = agentSessionEntity.EntityId.ToString(),
                     EntityDisplayName = entityDisplayName,
                     EntityDescription = entityDescription,
+                    // #1135: Stamp the pane the session was started/opened in so cross-workspace
+                    // status-button clicks (running-agent brain) can switch to it before focusing.
+                    WorkspaceId = tab.WorkspacePaneId,
                 });
             agentChat = lease.AgentChat;
         }

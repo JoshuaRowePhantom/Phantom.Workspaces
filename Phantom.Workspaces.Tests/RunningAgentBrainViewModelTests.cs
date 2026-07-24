@@ -22,10 +22,10 @@ public sealed class RunningAgentBrainViewModelTests
     {
         public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions { get; } = [];
 
-        public void AddSession(string sessionKey, string entityName = "")
+        public void AddSession(string sessionKey, string entityName = "", string? workspaceId = null)
         {
             var chat = new RunningAgentChat(new AgentSessionId(sessionKey), null!);
-            RunningSessions.Add(new RunningAgentChatWithEntityInfo(chat, entityName, null));
+            RunningSessions.Add(new RunningAgentChatWithEntityInfo(chat, entityName, null, workspaceId));
         }
 
         public void RemoveSession(string sessionKey)
@@ -335,6 +335,41 @@ public sealed class RunningAgentBrainViewModelTests
         var row = Assert.Single(vm.Rows);
         row.ActivateCommand.Execute(null);
 
+        Assert.False(vm.IsOpen);
+    }
+
+    [Fact]
+    public void RunningAgentBrain_ClickSessionWithNoOwningWorkspace_IsSafeNoOp()
+    {
+        // #1135: A fallback row whose session has no resolvable owning workspace
+        // (WorkspaceId == null) must not throw and must not attempt to focus a tab
+        // in the currently-active pane (no call into activateTab). The row simply
+        // forwards to openAgentForSession, which is the delegate that resolves and
+        // switches to the owning workspace; when there is no owning workspace, the
+        // delegate is expected to be a safe no-op.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-no-owner", "Orphaned Agent", workspaceId: null);
+        var openedSessions = new List<string>();
+        var activated = new List<(string tabId, string? paneId)>();
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [],
+            activateTab: (tabId, paneId) => activated.Add((tabId, paneId)),
+            openAgentForSession: sessionKey => openedSessions.Add(sessionKey),
+            dispatch: action => action());
+
+        vm.IsOpen = true;
+        var row = Assert.Single(vm.Rows);
+
+        var exception = Record.Exception(() => row.ActivateCommand.Execute(null));
+        Assert.Null(exception);
+
+        // Fallback row must route through openAgentForSession (the workspace-switching
+        // delegate), NOT the activateTab short-circuit which would focus a tab in the
+        // currently-active pane.
+        Assert.Empty(activated);
+        Assert.Equal(new[] { "session-no-owner" }, openedSessions);
         Assert.False(vm.IsOpen);
     }
 

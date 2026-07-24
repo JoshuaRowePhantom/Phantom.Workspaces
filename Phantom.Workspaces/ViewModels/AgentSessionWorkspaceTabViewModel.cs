@@ -74,7 +74,14 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public string? AgentSessionId { get; init; }
 
-    public string? WorkspacePaneId { get; init; }
+    /// <summary>
+    /// The workspace-pane id the tab currently lives in.
+    /// Init-stamped from the creating handler's <c>SelectedWorkspacePane?.Id</c>; overwritten
+    /// authoritatively by <see cref="WorkspacePaneViewModel"/>'s Tabs.CollectionChanged handler
+    /// when the tab is added to a pane so <see cref="CreateTabDescriptor"/> reflects the actual
+    /// owning pane, not the pane that happened to be active at creation time (#1135).
+    /// </summary>
+    public string? WorkspacePaneId { get; internal set; }
 
     public RunningAgentChatLease? Lease => this.lease;
 

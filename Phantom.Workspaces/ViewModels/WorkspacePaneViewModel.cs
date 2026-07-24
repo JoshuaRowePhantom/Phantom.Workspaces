@@ -140,6 +140,21 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
+        // #1135: When agent-session tabs are added (via OpenTabAsync or workspace restore),
+        // stamp the tab's WorkspacePaneId with THIS pane's Id so TabDescriptor.WorkspaceId
+        // and status-button navigation reflect the pane the tab actually lives in — not the
+        // pane that happened to be SelectedWorkspacePane when the tab was constructed.
+        if (e.NewItems is not null)
+        {
+            foreach (var newItem in e.NewItems)
+            {
+                if (newItem is AgentSessionWorkspaceTabViewModel agentTab)
+                {
+                    agentTab.WorkspacePaneId = this.Id;
+                }
+            }
+        }
+
         this.ResubscribeToTabs();
         this.RecomputeAnyTabIsRunning();
     }
