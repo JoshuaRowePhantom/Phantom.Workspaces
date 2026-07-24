@@ -10,6 +10,15 @@
         <dock:RootDockControl />
     </DataTemplate>
 
+    <!-- Supply proportional (split) dock template (normally auto-created).
+         Required because AutoCreateDataTemplates="False" on the hosting
+         DockControls; without it a "New Horizontal/Vertical Dock"
+         ProportionalDock renders as its raw type name
+         (Dock.Model.Mvvm.Controls.ProportionalDock). See #1130. -->
+    <DataTemplate DataType="dmc:IProportionalDock">
+        <dock:ProportionalDockControl />
+    </DataTemplate>
+
     <!-- WorkspaceContentDock is our typed subclass of DocumentDock.
          Using a concrete subtype means Dock's FuncDataTemplate<IDocumentDock>
          (on PART_ContentControl) is bypassed, so AutoCreateDataTemplates=False
@@ -84,6 +93,12 @@
                 </DataTemplate>
                 <DataTemplate DataType="vm:WorkspaceDocument">
                     <ContentControl Content="{Binding TabViewModel}" />
+                </DataTemplate>
+                <!-- Supply proportional (split) dock template within the inner pane
+                     DockControl too, since it has its own scoped, non-inheriting
+                     template set (#1130). -->
+                <DataTemplate DataType="dmc:IProportionalDock">
+                    <dock:ProportionalDockControl />
                 </DataTemplate>
             </dock:DockControl.DataTemplates>
         </dock:DockControl>
