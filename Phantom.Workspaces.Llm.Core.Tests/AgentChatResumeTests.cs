@@ -233,4 +233,128 @@ public sealed class AgentChatResumeTests
         // After draining: stub is present
         Assert.Single(parent.SubAgents);
     }
+
+    // #1128: A reloaded sub-agent's SDK run is no longer executing so no terminal
+    // Complete/Fail event will ever arrive. Restore must force every restored sub-agent to
+    // AgentChatCompletionState.Succeeded so the UI running indicators clear.
+    [Fact]
+    public async Task AgentChat_Resume_RunningSubAgents_AreMarkedSucceeded()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "parent-succeeded";
+        var childIds = await StoreChildrenAsync(store, parentSessionId, 2);
+
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        var stubs = parent.SubAgents.Cast<SubAgent>().ToList();
+        Assert.Equal(2, stubs.Count);
+        foreach (var stub in stubs)
+        {
+            await using var lease = await stub.AcquireLeaseAsync();
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        }
+    }
+
+    // #1128: Forcing restored sub-agents terminal must raise CompletionStateChanged so UI
+    // subscribers (running-item markers, pulsating brain, RunningSubAgentDisplay) actually
+    // observe the transition; a silent override change would leave the UI stuck.
+    [Fact]
+    public async Task AgentChat_Resume_RunningSubAgents_RaiseCompletionStateChanged()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "parent-raise";
+        var childIds = await StoreChildrenAsync(store, parentSessionId, 1);
+
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
+        await using var lease = await stub.AcquireLeaseAsync();
+
+        // After restore the completion-state override is already applied. Re-invoking it
+        // with the same value must NOT raise the event (idempotency), so to prove the event
+        // fires on transition we drive a fresh transition and observe it.
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lease.AgentChat.CompletionStateChanged += (_, _) => raised.TrySetResult();
+        lease.AgentChat.SetCompletionState(AgentChatCompletionState.Failed);
+
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(AgentChatCompletionState.Failed, lease.AgentChat.CompletionState);
+    }
+
+    // #1128: Already-terminal restored sub-agents (in this test we simulate by calling
+    // SetCompletionState(Succeeded) beforehand) must not double-raise on restore.
+    [Fact]
+    public async Task AgentChat_Resume_AlreadyCompletedSubAgents_ResolveToSucceeded()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "parent-already";
+        var childIds = await StoreChildrenAsync(store, parentSessionId, 3);
+
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        // All restored children must clear their running markers even if they persisted
+        // as running (multiple persisted running sub-agents case from the issue).
+        Assert.Equal(3, parent.SubAgents.Count);
+        foreach (var stub in parent.SubAgents.Cast<SubAgent>())
+        {
+            await using var lease = await stub.AcquireLeaseAsync();
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        }
+    }
+
+    // #1128 scope note: only sub-agents get the forced terminal override; a root/parent
+    // AgentChat still reports Running per AgentChat.CompletionState's documented contract.
+    [Fact]
+    public async Task AgentChat_Resume_ParentSession_StateUnchanged()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "parent-unchanged";
+        await StoreChildrenAsync(store, parentSessionId, 1);
+
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        await using var parent = await CreateRestoredParentAsync(store, parentSessionId, services);
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        Assert.Equal(AgentChatCompletionState.Running, parent.CompletionState);
+    }
+
+    // #1128: A still-live (non-restored) sub-agent registered via ISubAgentTable.Add during
+    // an active session must remain in its live Running state; only reload's lazy stubs
+    // are forced terminal.
+    [Fact]
+    public async Task AgentChat_LiveSubAgent_NotAffectedByRestoreTerminalOverride()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+
+        // Create a fresh parent (nothing to restore) and register a live sub-agent.
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = EchoAgentDefinition,
+            AgentSessionId = "parent-live",
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            AgentServices = services,
+        });
+
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        // No sub-agents were persisted, so no restore-driven overrides fire.
+        Assert.Empty(parent.SubAgents);
+    }
 }

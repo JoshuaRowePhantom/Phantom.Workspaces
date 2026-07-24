@@ -78,6 +78,59 @@ public sealed class AgentChatSubAgentRegistryTests
         Assert.Null(result);
     }
 
+    // #1128: SetCompletionState must be idempotent — invoking it with the currently active
+    // override must not re-raise CompletionStateChanged, avoiding duplicate UI updates when
+    // restore and a stray terminal event both flip the state.
+    [Fact]
+    public async Task SetCompletionState_SameState_DoesNotRaiseCompletionStateChanged()
+    {
+        await using var parent = CreateParentChat();
+
+        // Perform the initial transition and wait for its event to fire so the counter
+        // starts clean against the second (same-state) call.
+        var firstRaised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFirst(object? _, EventArgs __) => firstRaised.TrySetResult();
+        parent.CompletionStateChanged += OnFirst;
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+        await firstRaised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        parent.CompletionStateChanged -= OnFirst;
+
+        var raised = 0;
+        parent.CompletionStateChanged += (_, _) => Interlocked.Increment(ref raised);
+
+        // Same-state call — must NOT schedule an event.
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        // Round-trip a foreground work item to prove no event was queued behind us. If the
+        // idempotency guard were missing, the raise would already be scheduled on the same
+        // scheduler and would drain before this probe completes.
+        var probe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Factory.StartNew(
+            () => probe.TrySetResult(),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            parent.ForegroundSchedulerForTesting);
+        await probe.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, Volatile.Read(ref raised));
+    }
+
+    // #1128: SetCompletionState with a NEW state must raise CompletionStateChanged so
+    // consumers (running-item markers, pulsating brain) observe the terminal transition.
+    [Fact]
+    public async Task SetCompletionState_NewState_RaisesCompletionStateChanged()
+    {
+        await using var parent = CreateParentChat();
+
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.CompletionStateChanged += (_, _) => raised.TrySetResult();
+
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(AgentChatCompletionState.Succeeded, parent.CompletionState);
+    }
+
     [Fact]
     public async Task TryGet_KnownAgentId_ReturnsSink()
     {

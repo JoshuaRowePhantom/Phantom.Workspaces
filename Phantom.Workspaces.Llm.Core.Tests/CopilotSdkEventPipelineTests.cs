@@ -446,4 +446,60 @@ public sealed class CopilotSdkEventPipelineTests
             return Task.FromResult(new SubAgent(sessionId, agentChat, null));
         }
     }
+
+    // #1128: A restored (reloaded) session whose persisted sub-agents were "running" at
+    // shutdown produces no terminal SDK event on reload, so every restored sub-agent must
+    // be forced to a terminal Succeeded state; otherwise the UI running indicators never
+    // clear. This is the end-to-end reload path exercised via AgentChatFactory +
+    // AgentChat.RestoreSubAgentsAsync (issue #1128 root cause).
+    [Fact]
+    public async Task SessionReload_RestoredSubAgents_AllMarkedTerminal()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "reload-e2e";
+
+        const string echoDefJson = """
+            { "kind": "prompt", "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [] }
+            """;
+        var echoDef = AgentDefinitionLoader.LoadAgentFromJson(echoDefJson);
+        var childIds = new[] { "reload-child-a", "reload-child-b", "reload-child-c" };
+        foreach (var childId in childIds)
+        {
+            await store.StoreAsync(new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = childId,
+                    AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(echoDef.ToJson()),
+                }
+            });
+            await store.AddSubAgentLinkAsync(parentSessionId, childId);
+        }
+
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = echoDef,
+            AgentSessionId = parentSessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "reloaded-parent",
+            AgentServices = new AgentServices { RunningAgentChatFactory = factory },
+        });
+
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        Assert.Equal(childIds.Length, parent.SubAgents.Count);
+        foreach (var stub in parent.SubAgents.Cast<SubAgent>())
+        {
+            await using var lease = await stub.AcquireLeaseAsync();
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        }
+    }
 }

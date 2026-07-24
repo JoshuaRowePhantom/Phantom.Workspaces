@@ -72,6 +72,40 @@ public sealed class RunningSubAgentsHtmlTransformerTests
             op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
     }
 
+    // #1128: On session reload, restored SDK sub-agents that were "running" at shutdown
+    // must be forced to Succeeded so the running-subagents panel clears. This mirrors the
+    // observable UI behavior — the transformer must re-render into the empty state after
+    // every restored agent transitions Running -> Succeeded via SetCompletionState.
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_SessionReload_ClearsRunningPanelForRestoredAgents()
+    {
+        var agent1 = new StubSubAgent("restored-1", "Restored A", AgentChatCompletionState.Running);
+        var agent2 = new StubSubAgent("restored-2", "Restored B", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent1, agent2 };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        // Session-reload transition applied by AgentChat.RestoreSubAgentsAsync — flip both
+        // restored agents to Succeeded and clear only after both have been marked so we
+        // observe the final empty-panel state (intermediate re-renders that still show
+        // agent2 are expected while agent1 has already been marked).
+        agent1.SetCompletionState(AgentChatCompletionState.Succeeded);
+        agent1.RaiseActivityChanged();
+        agent2.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        sink.Clear();
+
+        agent2.RaiseActivityChanged();
+
+        // Final state: the inner panel is removed and no fresh panel is appended.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+    }
+
     // ── Content rendering ─────────────────────────────────────────────────────
 
     [Fact]

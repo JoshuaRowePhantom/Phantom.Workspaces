@@ -1095,7 +1095,27 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     internal void SetCompletionState(AgentChatCompletionState state)
     {
+        // #1128: Idempotent — bail if the override is already at the requested state so
+        // repeated calls (e.g. from restore + a stray terminal event) don't re-fire the
+        // completion notification and cause duplicate UI updates.
+        if (this.completionStateOverride == state)
+        {
+            return;
+        }
+
         this.completionStateOverride = state;
+        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
+
+        // #1128: SetCompletionState is the only path that flips a sub-agent to a terminal
+        // state on reload (RestoreSubAgentsAsync) and — until now — did not raise the event
+        // the UI listens on, so restored sub-agents' pulsating-brain / running markers never
+        // cleared. Marshal onto the injected foreground scheduler (#909/#913/#1122
+        // invariant) so UI subscribers observe the change on the UI thread.
+        _ = Task.Factory.StartNew(
+            () => this.CompletionStateChanged?.Invoke(this, EventArgs.Empty),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
     }
 
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
@@ -1130,6 +1150,62 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler);
+
+            // #1128: A reloaded sub-agent's SDK run is no longer executing, so no terminal
+            // Complete/Fail event will ever arrive to move it out of the default Running
+            // state; the UI would otherwise show a perpetual pulsating brain / running
+            // marker. Materialise the child eagerly, hold the lease for the lifetime of the
+            // parent chat (so subsequent lease acquisitions — e.g. AgentViewModel's
+            // AddSubAgentSlotLazy — see the same AgentChat with the terminal override
+            // already applied), and force it Succeeded via SetCompletionState (which now
+            // raises CompletionStateChanged on the child's foreground scheduler).
+            var terminalTask = this.MarkRestoredSubAgentTerminalAsync(stub, cancellationToken);
+            lock (this.restoredSubAgentTerminalTasksLock)
+            {
+                this.restoredSubAgentTerminalTasks.Add(terminalTask);
+            }
+        }
+    }
+
+    private readonly List<Task> restoredSubAgentTerminalTasks = new();
+    private readonly object restoredSubAgentTerminalTasksLock = new();
+
+    /// <summary>
+    /// Test-only: awaits completion of every fire-and-forget "mark restored sub-agent
+    /// terminal" task queued by <see cref="RestoreSubAgentsAsync"/>. Enables deterministic
+    /// verification of the #1128 restore transition without polling.
+    /// </summary>
+    internal Task WaitForRestoredSubAgentsMarkedTerminalAsync()
+    {
+        Task[] tasks;
+        lock (this.restoredSubAgentTerminalTasksLock)
+        {
+            tasks = this.restoredSubAgentTerminalTasks.ToArray();
+        }
+        return Task.WhenAll(tasks);
+    }
+
+    private async Task MarkRestoredSubAgentTerminalAsync(
+        SubAgent stub,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var lease = await stub.AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
+
+            // Keep the lease alive for as long as this parent lives so the terminal
+            // completionStateOverride persists across other lease acquisitions.
+            this.RegisterOwnedResource(lease);
+
+            lease.AgentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch
+        {
+            // Best-effort: leaving the sub-agent in its default state is preferable to
+            // faulting parent restore.
         }
     }
 
