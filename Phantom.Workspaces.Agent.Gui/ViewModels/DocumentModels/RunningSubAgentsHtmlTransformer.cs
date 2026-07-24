@@ -204,11 +204,14 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
             }
 
             var ancestor = ancestors[i];
+            var resolvedName = string.IsNullOrWhiteSpace(ancestor.DisplayName)
+                ? ancestor.AgentId
+                : ancestor.DisplayName;
             var label = i == 0
-                ? ancestor.DisplayName + " (root)"
+                ? resolvedName + " (root)"
                 : i == ancestors.Count - 1
-                    ? ancestor.DisplayName + " (current)"
-                    : ancestor.DisplayName;
+                    ? resolvedName + " (current)"
+                    : resolvedName;
 
             sb.Append("<button class=\"running-subagent-link\" data-navigate-agent-id=\"")
               .Append(ChatOutputHtmlRenderer.HtmlEscape(ancestor.AgentId))
@@ -231,10 +234,14 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
             sb.Append("<div class=\"running-subagent-row\">");
         }
 
+        var displayName = string.IsNullOrWhiteSpace(agent.DisplayName)
+            ? agent.AgentId
+            : agent.DisplayName;
+
         sb.Append("<button class=\"running-subagent-link\" data-navigate-agent-id=\"")
           .Append(ChatOutputHtmlRenderer.HtmlEscape(agent.AgentId))
           .Append("\">▷ ")
-          .Append(ChatOutputHtmlRenderer.HtmlEscape(agent.DisplayName))
+          .Append(ChatOutputHtmlRenderer.HtmlEscape(displayName))
           .Append("</button>");
 
         var activity = agent.RecentActivity;

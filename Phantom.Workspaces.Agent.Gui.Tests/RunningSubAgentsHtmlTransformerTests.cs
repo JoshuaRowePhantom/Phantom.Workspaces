@@ -627,6 +627,57 @@ public sealed class RunningSubAgentsHtmlTransformerTests
             op.Content.Contains("running-parent-agent-panel"));
     }
 
+    // ── #1132: Display-name rendering in the [Running sub-agents] panel ───────
+
+    [Fact]
+    public void RunningSubAgentsPanel_SubAgentRow_ShowsDisplayName()
+    {
+        var agent = new StubSubAgent("agent-xyz", "fix-reload1", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.Contains("▷ fix-reload1", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_MultipleSubAgents_EachShowsOwnDisplayName()
+    {
+        var a1 = new StubSubAgent("id-1", "fix-reload1", AgentChatCompletionState.Running);
+        var a2 = new StubSubAgent("id-2", "fix-reload2", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([a1, a2], []);
+
+        Assert.Contains("▷ fix-reload1", html, StringComparison.Ordinal);
+        Assert.Contains("▷ fix-reload2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_SubAgentRow_FallsBackToAgentId_WhenDisplayNameEmpty()
+    {
+        var agent = new StubSubAgent("agent-xyz-123", string.Empty, AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.Contains("▷ agent-xyz-123", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_NamedSubAgent_DoesNotRenderGenericProviderLabel()
+    {
+        var agent = new StubSubAgent("agent-xyz", "fix-reload1", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.DoesNotContain("GitHub Copilot Sub-Agent", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_NestedSubAgent_ShowsChildDisplayName()
+    {
+        var nested = new StubSubAgent("child-id", "nested-name", AgentChatCompletionState.Running);
+        var parent = new StubSubAgent("parent-id", "parent-name", AgentChatCompletionState.Running, subAgents: [nested]);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([parent], []);
+
+        Assert.Contains("▷ nested-name", html, StringComparison.Ordinal);
+        Assert.Contains("▷ parent-name", html, StringComparison.Ordinal);
+    }
+
     private sealed record Operation(string Kind, string Path, ChatOutputUpdateLocation Location, string Content);
 
     private sealed class RecordingSink : IChatOutputHtmlSink

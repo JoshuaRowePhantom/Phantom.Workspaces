@@ -224,4 +224,37 @@ public sealed class RunningSubAgentDisplayTests
 
         Assert.Equal("This is a test description", display.Description);
     }
+
+    [Fact]
+    public async Task RunningSubAgentDisplay_FromAgentChat_ExposesProvidedDisplayName()
+    {
+        // #1132: RunningSubAgentDisplay must surface the sub-agent's provided display name
+        // (from AgentChat.DisplayName) so the [Running sub-agents] panel data source
+        // carries the correct per-sub-agent label rather than a hard-coded generic label.
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "fix-reload1",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal(chat.DisplayName, display.DisplayName);
+        Assert.DoesNotContain("GitHub Copilot Sub-Agent", display.DisplayName, StringComparison.Ordinal);
+    }
 }
