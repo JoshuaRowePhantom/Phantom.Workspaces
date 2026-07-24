@@ -186,6 +186,151 @@ public sealed class AgentViewModelSubAgentBrowserTests
         Assert.Equal(viewModel.EditorItems[0], viewModel.SelectedEditorItem);
     }
 
+    // ── Issue #1134: completed sub-agents resolved via unfiltered collection ─
+
+    [Fact]
+    public async Task NavigateToAgent_CompletedSubAgentId_OpensSubAgentHtmlView()
+    {
+        // A completed sub-agent (Succeeded/Failed) is hidden from the sub-agents group's
+        // filtered Children collection by default. Navigating to it must still resolve to the
+        // sub-agent's own nav item so its Document (HTML view) is activated instead of the
+        // shared Sub-agents browser card.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "running", "Running");
+        await AddSubAgentAsync(chat, "done", "Done");
+
+        var doneChat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "done");
+        doneChat.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        viewModel.NavigateToAgentHandler!.Invoke("done");
+
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal("sub-agent-done", viewModel.SelectedEditorItem!.Id);
+        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+        var selectedSlot = viewModel.SubAgentsContainer.Slots.Single(s => s.IsSelected);
+        Assert.Equal("done", selectedSlot.AgentId);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_FailedSubAgentId_OpensSubAgentHtmlView()
+    {
+        // Failed sub-agents are also hidden by HideCompletedAgents; verify Failed state
+        // is handled symmetrically with Succeeded.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "boom", "Boom");
+        var boomChat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "boom");
+        boomChat.SetCompletionState(AgentChatCompletionState.Failed);
+
+        viewModel.NavigateToAgentHandler!.Invoke("boom");
+
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal("sub-agent-boom", viewModel.SelectedEditorItem!.Id);
+        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_RunningSubAgentId_OpensSubAgentHtmlView()
+    {
+        // A running sub-agent is present in both the filtered and unfiltered collections;
+        // navigation must still open its own transcript, not the browser card.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "run", "Running");
+
+        viewModel.NavigateToAgentHandler!.Invoke("run");
+
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal("sub-agent-run", viewModel.SelectedEditorItem!.Id);
+        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_UnknownAgentId_DoesNotThrow()
+    {
+        // An id that is neither the current agent nor any known sub-agent must be a safe
+        // no-op — no throw, and SelectedEditorItem must not fall back to the group node
+        // (which would show the browser card).
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "known", "Known");
+
+        var initialSelection = viewModel.SelectedEditorItem;
+        var exception = Record.Exception(() => viewModel.NavigateToAgentHandler!.Invoke("does-not-exist"));
+
+        Assert.Null(exception);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_MultipleSubAgents_EachIdSelectsIndependently()
+    {
+        // With several sub-agents (mix of running and completed), each navigate call must
+        // resolve to that specific sub-agent's own nav item.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "a1", "A1");
+        await AddSubAgentAsync(chat, "a2", "A2");
+        await AddSubAgentAsync(chat, "a3", "A3");
+
+        var a3Chat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "a3");
+        a3Chat.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        viewModel.NavigateToAgentHandler!.Invoke("a2");
+        Assert.Equal("sub-agent-a2", viewModel.SelectedEditorItem!.Id);
+
+        viewModel.NavigateToAgentHandler.Invoke("a3");
+        Assert.Equal("sub-agent-a3", viewModel.SelectedEditorItem!.Id);
+
+        viewModel.NavigateToAgentHandler.Invoke("a1");
+        Assert.Equal("sub-agent-a1", viewModel.SelectedEditorItem!.Id);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_SelectsSubAgentDocViaUnfilteredCollection_EvenWhenHideCompletedTrue()
+    {
+        // Regression guard for the root cause of #1134: the lookup must use the FULL
+        // (unfiltered) sub-agent nav-item set, not the group's filtered Children. When
+        // HideCompletedAgents is true and the target is Succeeded/Failed, the group's Children
+        // will not contain it, but the unfiltered set does — and navigation must still land on
+        // the sub-agent's own nav item (not fall back to the group, which would show the
+        // browser card).
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "done", "Done");
+        var doneChat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "done");
+        doneChat.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        var root = Assert.Single(viewModel.EditorItems);
+        var subAgentsGroup = root.Children.Single(c => c.Id == "chat-sub-agents");
+        // Precondition for the fix: the group node's completion-filter is on by default.
+        // #1134's regression path: if NavigateToSubAgent had consulted subAgentsGroup.Children
+        // (the completion-filtered view) it would miss any Succeeded/Failed sub-agent and fall
+        // back to the group node, showing the browser card. The fix consults the unfiltered
+        // subAgentAllChildren instead, so the resolution below MUST land on the sub-agent's
+        // own nav item — not on subAgentsGroup — even for a completed sub-agent.
+        Assert.True(subAgentsGroup.HideCompletedAgents);
+
+        viewModel.NavigateToAgentHandler!.Invoke("done");
+
+        Assert.NotNull(viewModel.SelectedEditorItem);
+        Assert.Equal("sub-agent-done", viewModel.SelectedEditorItem!.Id);
+        Assert.NotSame(subAgentsGroup, viewModel.SelectedEditorItem);
+        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+    }
+
     [Fact]
     public async Task NavigateToAgent_UnloadedAncestor_DoesNotThrow()
     {

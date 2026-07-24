@@ -850,12 +850,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             return;
         }
 
-        // Select the child nav item for this agent (or fall back to the group itself).
-        var childItem = subAgentsGroup.Children.FirstOrDefault(c =>
+        // Fix #1134: resolve against the FULL (unfiltered) set so completed (Succeeded/Failed)
+        // sub-agents — which HideCompletedAgents removes from subAgentsGroup.Children — are still
+        // found and their own AgentDetailDocumentItem (its HTML view) is activated via the
+        // SelectedEditorItem setter's ReferenceEquals scan. Using the filtered
+        // subAgentsGroup.Children caused completed sub-agents to fall back to the group node,
+        // which shows the shared browser card instead of the sub-agent's own transcript.
+        var childItem = this.subAgentAllChildren.FirstOrDefault(c =>
             c.Id == $"sub-agent-{agentId}");
 
-        this.SelectedEditorItem = childItem ?? subAgentsGroup;
         subAgentsGroup.IsExpanded = true;
+        this.SelectedEditorItem = childItem ?? subAgentsGroup;
 
         // Ensure the container shows the requested sub-agent.
         this.subAgentsContainerDetail.ShowSubAgent(agentId);
