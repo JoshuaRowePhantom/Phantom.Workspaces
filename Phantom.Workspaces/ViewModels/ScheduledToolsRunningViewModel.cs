@@ -139,7 +139,10 @@ public sealed class ToolRowViewModel : ViewModelBase
     /// <summary>Loads (or reloads) the recent run history into <see cref="RecentRuns"/>.</summary>
     public async Task LoadRecentRunsAsync(CancellationToken cancellationToken = default)
     {
-        var runs = await this.loadRecentRuns(cancellationToken).ConfigureAwait(false);
+        // Do NOT use ConfigureAwait(false): the continuation below mutates RecentRuns,
+        // which is bound to a TreeView, so it must resume on the UI synchronization
+        // context. Matches the RefreshHistoryAsync/MergeHistory convention below.
+        var runs = await this.loadRecentRuns(cancellationToken);
         this.RecentRuns.Clear();
         foreach (var run in runs)
         {

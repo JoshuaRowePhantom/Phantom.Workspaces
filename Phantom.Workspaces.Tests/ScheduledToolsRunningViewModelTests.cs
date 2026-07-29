@@ -370,6 +370,146 @@ public sealed class ScheduledToolsRunningViewModelTests
     }
 
     [Fact]
+    public async Task LoadRecentRunsAsync_PreservesSynchronizationContext_MutatesRecentRunsOnCapturedContext()
+    {
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        // Loader that always completes on a thread-pool thread so the continuation
+        // has to be marshalled back to the captured context to preserve UI-thread affinity.
+        var loaderThreadIds = new ConcurrentBag<int>();
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            async cancellationToken =>
+            {
+                await Task.Yield();
+                await Task.Run(() => { loaderThreadIds.Add(Environment.CurrentManagedThreadId); }, cancellationToken);
+                return (IReadOnlyList<RunSummaryViewModel>)new[]
+                {
+                    new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                    new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 31, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", "boom"),
+                };
+            });
+
+        var observedThreadIds = new ConcurrentBag<int>();
+        row.RecentRuns.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+        };
+
+        await pump.PostAsync(async () =>
+        {
+            await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        Assert.Equal(2, row.RecentRuns.Count);
+        var singleObserverThread = Assert.Single(observedThreadIds.Distinct());
+        Assert.Equal(pump.ThreadId, singleObserverThread);
+        // Sanity: the loader really did complete off the pump thread.
+        Assert.All(loaderThreadIds, id => Assert.NotEqual(pump.ThreadId, id));
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsAsync_WhenLoaderCompletesOffThread_DoesNotMutateCollectionOffUiThread()
+    {
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        // A loader that only completes when a background thread sets its TCS.
+        // This guarantees the awaiter would resume off the pump thread if
+        // ConfigureAwait(false) regressed into LoadRecentRunsAsync.
+        var completionThreadId = 0;
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            async cancellationToken =>
+            {
+                var completion = new TaskCompletionSource<IReadOnlyList<RunSummaryViewModel>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = Task.Run(() =>
+                {
+                    completionThreadId = Environment.CurrentManagedThreadId;
+                    completion.SetResult(new[]
+                    {
+                        new RunSummaryViewModel(
+                            new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero),
+                            TimeSpan.FromSeconds(1),
+                            "succeeded",
+                            null),
+                    });
+                }, cancellationToken);
+                return await completion.Task;
+            });
+
+        var observedThreadIds = new ConcurrentBag<int>();
+        var mutationException = default(Exception);
+        row.RecentRuns.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+            try
+            {
+                // Enumerating during the notification is what PanelContainerGenerator does;
+                // if the collection is being mutated from another thread this throws.
+                foreach (var _ in row.RecentRuns) { }
+            }
+            catch (InvalidOperationException ex)
+            {
+                mutationException = ex;
+            }
+        };
+
+        await pump.PostAsync(async () =>
+        {
+            await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        Assert.NotEqual(0, completionThreadId);
+        Assert.NotEqual(pump.ThreadId, completionThreadId);
+        Assert.Null(mutationException);
+        Assert.All(observedThreadIds, id => Assert.Equal(pump.ThreadId, id));
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsAsync_ReloadClearsAndRepopulates_ShowsMostRecentFirst()
+    {
+        var callCount = 0;
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            cancellationToken =>
+            {
+                callCount++;
+                IReadOnlyList<RunSummaryViewModel> runs = callCount == 1
+                    ? new[]
+                    {
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 29, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", null),
+                    }
+                    : new[]
+                    {
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 40, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", "later"),
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 29, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", null),
+                    };
+                return Task.FromResult(runs);
+            });
+
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, row.RecentRuns.Count);
+        Assert.Equal("succeeded", row.RecentRuns[0].Status);
+
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        // Reload replaces (does not append) and preserves the loader's ordering.
+        Assert.Equal(3, row.RecentRuns.Count);
+        Assert.Equal("later", row.RecentRuns[0].Message);
+        Assert.Equal("failed", row.RecentRuns[0].Status);
+        Assert.Equal("succeeded", row.RecentRuns[1].Status);
+        Assert.Equal("failed", row.RecentRuns[2].Status);
+    }
+
+    [Fact]
     public async Task RefreshHistoryAsync_ConcurrentWithRefresh_DoesNotThrow()
     {
         using var pump = new SingleThreadPump(installSynchronizationContext: true);

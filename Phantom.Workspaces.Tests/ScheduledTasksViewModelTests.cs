@@ -1,4 +1,6 @@
 using Avalonia.Headless.XUnit;
+using System.Collections.Concurrent;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -404,6 +406,87 @@ public sealed class ScheduledTasksViewModelTests
         viewModel.SelectedTask = null;
 
         Assert.False(viewModel.HasNoRunsForSelectedTask);
+    }
+
+    [AvaloniaFact]
+    public async Task SelectedTask_WhenSet_LoadsRecentRunsOnCapturedContext_DoesNotThrow()
+    {
+        var uiThreadId = Environment.CurrentManagedThreadId;
+
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var toolId = new EntityId("27a8b9c0-d1e2-4f5a-6b7c-8d9e0f1a2b3c");
+        var scheduleId = new EntityId("2b784371-6ba2-4e43-812f-b1ef2bef239c");
+        var targetId = new EntityId("21b2c3d4-1111-2222-3333-444455556666");
+        var relationshipId = new EntityId("2638fe05-9dd5-49f8-a0b8-c767de434b6f");
+
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "display-name": { "default": "Stub Tool" }, "tool-type": "stub" }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "schedule"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" }, "repeat": { "frequency": "00:01:00Z", "days-of-week": [], "start-at": [] } }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","test-host"]], "display-name": { "default": "Test Host" } }
+            """);
+        await SeedAsync(broker, $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "tool-relationship", "relationship"],
+              "names": [["tool-relationships","{{relationshipId}}"]],
+              "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{targetId}}"] }
+            }
+            """);
+
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var writer = new ToolExecutionResultWriter(dataAccessLayer);
+        var handle = await writer.StartAsync(["host", "machine"], "stub", TestContext.Current.CancellationToken);
+        await writer.CompleteAsync(handle, success: true, cancellationToken: TestContext.Current.CancellationToken);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+
+        using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        await viewModel.ScheduledToolsRunning!.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var task = Assert.Single(viewModel.ScheduledTasks);
+        var row = Assert.Single(viewModel.ScheduledToolsRunning.Tools);
+
+        var populated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observedThreadIds = new ConcurrentBag<int>();
+        Exception? mutationException = null;
+        row.RecentRuns.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+            try
+            {
+                foreach (var _ in row.RecentRuns) { }
+            }
+            catch (InvalidOperationException ex)
+            {
+                mutationException = ex;
+            }
+
+            if (args.Action == NotifyCollectionChangedAction.Add)
+            {
+                populated.TrySetResult();
+            }
+        };
+
+        // Setter fires _ = row.LoadRecentRunsAsync() fire-and-forget.
+        viewModel.SelectedTask = task;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+        await populated.Task.WaitAsync(timeoutCts.Token);
+
+        Assert.NotNull(viewModel.SelectedToolRow);
+        Assert.Same(row, viewModel.SelectedToolRow);
+        Assert.NotEmpty(row.RecentRuns);
+        Assert.Null(mutationException);
+        Assert.All(observedThreadIds, id => Assert.Equal(uiThreadId, id));
     }
 
     private static async Task SeedAsync(
