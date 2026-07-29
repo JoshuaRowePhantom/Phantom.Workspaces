@@ -1,8 +1,11 @@
 using Avalonia.Headless.XUnit;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using global::Dock.Model.Controls;
+using global::Dock.Model.Core;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Controls;
 using Phantom.Workspaces.Data;
@@ -448,9 +451,16 @@ public sealed class WebViewModelTests
 
         await viewModel.DuplicateBrowserTabAsync();
 
-        var tabs2 = viewModel.SelectedWorkspacePane.Tabs.ToList();
-        var indexA = tabs2.FindIndex(t => t.Id == "web-dup-a");
-        var indexDup = tabs2.FindIndex(t => t is WebViewModel wv && wv.Id != "web-dup-a" && wv.Id != "web-dup-b" && wv.AddressBarUrl == "https://a.example.com");
+        // Fix #1065: WorkspacePaneViewModel.Tabs is an order-independent membership
+        // set (#1107); assert visual ordering against the DocumentDock.VisibleDockables.
+        var documentDock = FindDocumentDockInLayout(viewModel.SelectedWorkspacePane.ContentLayout!);
+        Assert.NotNull(documentDock);
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var indexA = docs.FindIndex(d => d.Id == "web-dup-a");
+        var indexDup = docs.FindIndex(d => d.TabViewModel is WebViewModel wv
+            && wv.Id != "web-dup-a"
+            && wv.Id != "web-dup-b"
+            && wv.AddressBarUrl == "https://a.example.com");
 
         Assert.True(indexA >= 0, "Source tab A should be present");
         Assert.True(indexDup >= 0, "Duplicate tab should be present");
@@ -524,14 +534,35 @@ public sealed class WebViewModelTests
         // Allow the async void to complete.
         await Task.Yield();
 
-        var tabs4 = viewModel.SelectedWorkspacePane.Tabs.ToList();
+        // Fix #1065: assert visual ordering against the DocumentDock.VisibleDockables.
+        var documentDock = FindDocumentDockInLayout(viewModel.SelectedWorkspacePane.ContentLayout!);
+        Assert.NotNull(documentDock);
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
 
-        var indexA = tabs4.FindIndex(t => t.Id == "web-a");
-        var indexNew = tabs4.FindIndex(t => t is WebViewModel wv && wv.AddressBarUrl == "https://new.example.com");
+        var indexA = docs.FindIndex(d => d.Id == "web-a");
+        var indexNew = docs.FindIndex(d => d.TabViewModel is WebViewModel wv
+            && wv.AddressBarUrl == "https://new.example.com");
 
         Assert.True(indexA >= 0, "Source tab A should be present");
         Assert.True(indexNew >= 0, "New tab should be present");
         Assert.Equal(indexA + 1, indexNew);
+    }
+
+    private static IDocumentDock? FindDocumentDockInLayout(IDockable dockable)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            return documentDock;
+        }
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                var result = FindDocumentDockInLayout(child);
+                if (result is not null) return result;
+            }
+        }
+        return null;
     }
 
     // --- FocusUrlBarCommand ---

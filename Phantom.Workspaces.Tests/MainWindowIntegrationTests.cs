@@ -2747,9 +2747,9 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(documentDock);
 
         var targetPane = viewModel.SelectedWorkspacePane;
-        var agentTabIndex = targetPane.Tabs
-            .Select((t, i) => (t, i))
-            .First(x => x.t.Id == agentTab.Id).i;
+        var agentDoc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == agentTab.Id);
+        var agentTabIndex = documentDock!.VisibleDockables!.IndexOf(agentDoc);
 
         // Invoke the URL handler — new tab should be inserted right after the agent session tab
         const string testUrl = "https://url-insert.example.com";
@@ -2757,9 +2757,12 @@ public sealed class MainWindowIntegrationTests
 
         await WaitForWorkspaceTabAsync(documentDock!, $"web-{testUrl}");
 
-        var webTabIndex = targetPane.Tabs
-            .Select((t, i) => (t, i))
-            .First(x => x.t.Id == $"web-{testUrl}").i;
+        // Fix #1065: assert against the visual DocumentDock.VisibleDockables order —
+        // WorkspacePaneViewModel.Tabs is an order-independent membership set (#1107)
+        // and no longer reflects visual dock ordering.
+        var webDoc = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == $"web-{testUrl}");
+        var webTabIndex = documentDock!.VisibleDockables!.IndexOf(webDoc);
 
         Assert.Equal(agentTabIndex + 1, webTabIndex);
     }
@@ -8175,6 +8178,325 @@ public sealed class MainWindowIntegrationTests
         {
             await CloseWindowAsync(window);
         }
+    }
+
+    // ── Fix #1065: new tabs opened from an existing tab insert one to the right ──
+    //
+    // The insertion MUST happen at the Dock.Avalonia visual-tab-strip level (the
+    // DocumentDock that hosts the source tab and its VisibleDockables), NOT by
+    // inserting into WorkspacePaneViewModel.Tabs (which is an order-independent
+    // membership set per #1107). These tests exercise OpenTabAsync — the single
+    // funnel that every shortcut-handler open path routes through — and assert
+    // against the source document's owning DocumentDock.VisibleDockables.
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_FromExistingTab_MovesDockableOneToRightInSameStrip()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065-b", Title = "B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "fix1065-c", Title = "C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        // Activate tab B (middle) as the originator. The new tab must land at
+        // index-of-B + 1 in the visual strip, not at the end.
+        var pane = viewModel.SelectedWorkspacePane;
+        var docB = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065-b");
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        pane.SelectedTab = docB.TabViewModel;
+        dockFactory.SetActiveDockable(docB);
+
+        var indexOfB = documentDock.VisibleDockables!.IndexOf(docB);
+
+        var tabNew = new WebViewModel("https://new.example.com") { Id = "fix1065-new", Title = "New" };
+        await viewModel.OpenTabAsync(tabNew);
+
+        var docNew = documentDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065-new");
+        var indexOfNew = documentDock.VisibleDockables!.IndexOf(docNew);
+
+        Assert.Equal(indexOfB + 1, indexOfNew);
+        // The C dockable must have shifted to the right, not been overwritten.
+        Assert.Contains(
+            documentDock.VisibleDockables!.OfType<WorkspaceDocument>(),
+            d => d.Id == "fix1065-c");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_OpenedInOtherDock_MovesIntoSourceStrip()
+    {
+        // The source tab lives in a DIFFERENT DocumentDock than the ItemsSource-bound
+        // one used by the generator. The new dockable — initially created in the
+        // ItemsSource-bound dock — must be moved into the source's owning strip.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065b-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065b-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var itemsSourceDock = GetDocumentDock(viewModel);
+        Assert.NotNull(itemsSourceDock);
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+
+        var docA = itemsSourceDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065b-a");
+
+        // Build a second DocumentDock at the root and relocate tabA into it so its
+        // Owner is no longer the ItemsSource-bound dock.
+        var splitDock = new global::Dock.Model.Mvvm.Controls.DocumentDock
+        {
+            Id = "fix1065b-split",
+            VisibleDockables = dockFactory.CreateList<IDockable>(),
+        };
+        var contentRoot = (IDock)pane.ContentLayout!;
+        dockFactory.AddDockable(contentRoot, splitDock);
+        dockFactory.MoveDockable(itemsSourceDock, splitDock, docA, null);
+        Assert.Same(splitDock, docA.Owner);
+
+        // Make tabA the active/selected originator.
+        pane.SelectedTab = docA.TabViewModel;
+        dockFactory.SetActiveDockable(docA);
+
+        var tabNew = new WebViewModel("https://new.example.com") { Id = "fix1065b-new", Title = "New" };
+        await viewModel.OpenTabAsync(tabNew);
+
+        var docNew = dockFactory.GetDocumentForTab("fix1065b-new");
+        Assert.NotNull(docNew);
+        // The new document must now live in the source's strip (splitDock), directly
+        // to the right of tabA.
+        Assert.Same(splitDock, docNew!.Owner);
+        var indexOfA = splitDock.VisibleDockables!.IndexOf(docA);
+        var indexOfNew = splitDock.VisibleDockables!.IndexOf(docNew);
+        Assert.Equal(indexOfA + 1, indexOfNew);
+
+        // The new doc must NOT still be in the ItemsSource-bound dock.
+        Assert.DoesNotContain(
+            itemsSourceDock.VisibleDockables!.OfType<WorkspaceDocument>(),
+            d => d.Id == "fix1065b-new");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_NoSourceTab_AppendsToEnd()
+    {
+        // Empty strip / no originating tab active → append to end (fallback behavior).
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        pane.SelectedTab = null;
+        Assert.Empty(pane.Tabs);
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065c-a", Title = "A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Single(docs);
+        Assert.Equal("fix1065c-a", docs[0].Id);
+
+        // Clear selection and open another — must append (no anchor).
+        pane.SelectedTab = null;
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065c-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabB);
+
+        docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal(2, docs.Count);
+        Assert.Equal("fix1065c-a", docs[0].Id);
+        Assert.Equal("fix1065c-b", docs[1].Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_InsertedDockable_BecomesActiveAndFocused_WhenFocusTrue()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065d-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065d-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var pane = viewModel.SelectedWorkspacePane;
+        var docA = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065d-a");
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        pane.SelectedTab = docA.TabViewModel;
+        dockFactory.SetActiveDockable(docA);
+
+        var tabNew = new WebViewModel("https://new.example.com") { Id = "fix1065d-new", Title = "New" };
+        await viewModel.OpenTabAsync(tabNew, focus: true);
+
+        var docNew = documentDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065d-new");
+
+        Assert.Same(docNew, documentDock.ActiveDockable);
+        Assert.Same(tabNew, pane.SelectedTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_WhenSourceIsLastInStrip_InsertsAtEnd()
+    {
+        // Source is the last tab in its strip → sourceIndex + 1 clamps to Count and
+        // the new tab lands at the very end without any out-of-range error.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065e-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065e-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB); // B is now active (last)
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal("fix1065e-b", docs[^1].Id);
+
+        var tabNew = new WebViewModel("https://new.example.com") { Id = "fix1065e-new", Title = "New" };
+        await viewModel.OpenTabAsync(tabNew);
+
+        docs = documentDock.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal(3, docs.Count);
+        Assert.Equal("fix1065e-a", docs[0].Id);
+        Assert.Equal("fix1065e-b", docs[1].Id);
+        Assert.Equal("fix1065e-new", docs[2].Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_ExplicitInsertAfterTabId_TakesPrecedenceOverSelectedTab()
+    {
+        // If insertAfterTabId is passed explicitly it wins over the current SelectedTab.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065f-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065f-b", Title = "B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "fix1065f-c", Title = "C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC); // C is active
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var docA = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065f-a");
+        var indexOfA = documentDock.VisibleDockables!.IndexOf(docA);
+
+        // C is active — but caller explicitly requests insertion after A.
+        var tabNew = new WebViewModel("https://new.example.com") { Id = "fix1065f-new", Title = "New" };
+        await viewModel.OpenTabAsync(tabNew, insertAfterTabId: "fix1065f-a");
+
+        var docNew = documentDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065f-new");
+        var indexOfNew = documentDock.VisibleDockables!.IndexOf(docNew);
+        Assert.Equal(indexOfA + 1, indexOfNew);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTab_WhenOnlyOneExistingTab_InsertsToRightOfOnlyTab()
+    {
+        // Opening from the only tab — the new tab should still land immediately
+        // after it (not "before" or replacing) even though only one strip exists.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065g-a", Title = "A" };
+        await viewModel.OpenTabAsync(tabA);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+
+        var tabNew = new WebViewModel("https://new.example.com") { Id = "fix1065g-new", Title = "New" };
+        await viewModel.OpenTabAsync(tabNew);
+
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        Assert.Equal(2, docs.Count);
+        Assert.Equal("fix1065g-a", docs[0].Id);
+        Assert.Equal("fix1065g-new", docs[1].Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenExternalEntityShortcutHandler_OpensNewTabRightOfSource()
+    {
+        // Representative shortcut-handler open path: the handler routes through
+        // OpenTabAsync with no explicit insertAfterTabId, so the anchor comes from
+        // the current SelectedTab of the target pane.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "fix1065h-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "fix1065h-b", Title = "B" };
+        var tabC = new WebViewModel("https://c.example.com") { Id = "fix1065h-c", Title = "C" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+        await viewModel.OpenTabAsync(tabC);
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        var pane = viewModel.SelectedWorkspacePane;
+        var docB = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == "fix1065h-b");
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        pane.SelectedTab = docB.TabViewModel;
+        dockFactory.SetActiveDockable(docB);
+
+        var externalEntity = CreateFix1065ExternalEntity(
+            "cb1065c0-0000-4000-8000-000000000001",
+            "External Fix1065",
+            "https://fix1065-external.example.com");
+
+        var handler = new OpenExternalEntityShortcutHandler();
+        var handled = await handler.Handle(viewModel, Shortcut.Open, externalEntity);
+        Assert.True(handled);
+
+        var newTabId = "web-cb1065c0-0000-4000-8000-000000000001-default";
+        var docNew = documentDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .First(d => d.Id == newTabId);
+        var indexOfB = documentDock.VisibleDockables!.IndexOf(docB);
+        var indexOfNew = documentDock.VisibleDockables!.IndexOf(docNew);
+        Assert.Equal(indexOfB + 1, indexOfNew);
+    }
+
+    private static SubscribedEntityViewModel CreateFix1065ExternalEntity(
+        string entityId,
+        string displayName,
+        string defaultUrl)
+    {
+        var urlsJson = JsonSerializer.Serialize(new Dictionary<string, string> { ["default"] = defaultUrl });
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "external"],
+              "names": [["tests", "external", "{{entityId}}"]],
+              "display-name": { "default": "{{displayName}}" },
+              "urls": {{urlsJson}}
+            }
+            """);
+
+        return new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId(entityId),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            },
+            deleteEntityAsync: null);
     }
 
 }

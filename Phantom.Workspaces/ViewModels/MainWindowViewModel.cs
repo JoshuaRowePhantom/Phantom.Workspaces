@@ -2254,56 +2254,82 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        // When a source tab is specified, insert the new tab immediately after it.
-        if (insertAfterTabId is not null)
-        {
-            var sourceTabIndex = targetPane.Tabs.IndexOf(
-                targetPane.Tabs.FirstOrDefault(t => string.Equals(t.Id, insertAfterTabId, StringComparison.Ordinal))!);
+        // Fix #1065: New tabs opened while an existing tab is active should appear one
+        // position to the right of that originator within the SAME visual tab strip
+        // (browser-style), instead of being appended to the end.
+        //
+        // The correct layer for this is the Dock DocumentDock that actually hosts the
+        // source tab (its VisibleDockables), NOT the flat WorkspacePaneViewModel.Tabs
+        // list. In a split layout, Tabs no longer maps 1:1 to a single strip, so
+        // inserting into Tabs would target the wrong strip. WorkspacePaneViewModel.Tabs
+        // is treated as an order-independent membership set (per #1107); the dock's
+        // VisibleDockables is the sole source of visual order.
+        //
+        // Anchor resolution: an explicit insertAfterTabId always wins; otherwise the
+        // currently selected tab in the target pane is the originator.
+        var anchorTabId = insertAfterTabId
+            ?? targetPane.SelectedTab?.Id;
+        var sourceDocument = anchorTabId is not null
+            ? this.dockFactory.GetDocumentForTab(anchorTabId)
+            : null;
+        var sourceDock = sourceDocument?.Owner as IDock;
 
-            if (sourceTabIndex >= 0)
-            {
-                // Insert into pane.Tabs at the right position; ItemsSource creates the
-                // WorkspaceDocument at the correct dock position automatically.
-                var paneInsertIndex = sourceTabIndex + 1;
-                if (paneInsertIndex > targetPane.Tabs.Count) paneInsertIndex = targetPane.Tabs.Count;
-                targetPane.Tabs.Insert(paneInsertIndex, tab);
-                var newDocument = this.dockFactory.GetDocumentForTab(tab.Id);
-                if (focus)
-                {
-                    if (!ReferenceEquals(this.selectedWorkspacePane, targetPane))
-                    {
-                        this.SelectedWorkspacePane = targetPane;
-                    }
-                    if (newDocument is not null)
-                    {
-                        this.dockFactory.SetActiveDockable(newDocument);
-                        this.dockFactory.SetFocusedDockable(documentDock, newDocument);
-                    }
-                    // Set SelectedTab directly so GoToPane notification-read works even when the
-                    // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
-                    targetPane.SelectedTab = tab;
-                    if (!this.navigatingViaHistory)
-                    {
-                        this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
-                    }
-                }
-                return;
-            }
-        }
-
-        // Default: append the new tab at the end. ItemsSource creates the WorkspaceDocument automatically.
         if (focus && !ReferenceEquals(this.selectedWorkspacePane, targetPane))
         {
             this.SelectedWorkspacePane = targetPane;
         }
+
+        // Add to the pane's Tabs membership set. The ItemsSource generator on the
+        // pane's WorkspaceContentDock creates a WorkspaceDocument and appends it to
+        // that dock's VisibleDockables.
         targetPane.Tabs.Add(tab);
-        var appendedDocument = this.dockFactory.GetDocumentForTab(tab.Id);
+        var newDocument = this.dockFactory.GetDocumentForTab(tab.Id);
+
+        // If we have a valid source anchor, move the newly-created dockable to
+        // sourceIndex + 1 within the source's owning DocumentDock. This is deterministic
+        // regardless of whether the source lives in the ItemsSource-bound dock or in a
+        // split-off dock, and clamps naturally when the source is last in its strip.
+        var placementDock = documentDock;
+        if (sourceDocument is not null
+            && sourceDock is not null
+            && sourceDock.VisibleDockables is not null
+            && newDocument is not null)
+        {
+            var sourceIndex = sourceDock.VisibleDockables.IndexOf(sourceDocument);
+            if (sourceIndex >= 0)
+            {
+                // Detach the new document from wherever the generator put it (may be
+                // sourceDock itself in the single-strip case, or a different dock in
+                // the split-off case), then insert at sourceIndex + 1 within sourceDock.
+                this.dockFactory.RemoveDockable(newDocument, collapse: false);
+
+                // Re-resolve after remove: if sourceDock == prior owner and the new
+                // document was appended at the end, sourceIndex is unchanged.
+                var updatedSourceIndex = sourceDock.VisibleDockables.IndexOf(sourceDocument);
+                if (updatedSourceIndex < 0)
+                {
+                    // Source vanished during remove (defensive); fall back to append.
+                    this.dockFactory.AddDockable(sourceDock, newDocument);
+                }
+                else
+                {
+                    var targetIndex = Math.Min(updatedSourceIndex + 1, sourceDock.VisibleDockables.Count);
+                    this.dockFactory.InsertDockable(sourceDock, newDocument, targetIndex);
+                }
+
+                if (sourceDock is IDocumentDock sourceDocDock)
+                {
+                    placementDock = sourceDocDock;
+                }
+            }
+        }
+
         if (focus)
         {
-            if (appendedDocument is not null)
+            if (newDocument is not null)
             {
-                this.dockFactory.SetActiveDockable(appendedDocument);
-                this.dockFactory.SetFocusedDockable(documentDock, appendedDocument);
+                this.dockFactory.SetActiveDockable(newDocument);
+                this.dockFactory.SetFocusedDockable(placementDock, newDocument);
             }
             // Set SelectedTab directly so GoToPane notification-read works even when the
             // ItemsSource/ItemContainerGenerator pipeline is inactive (e.g. headless tests).
