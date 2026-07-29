@@ -1228,4 +1228,124 @@ public sealed class AgentChatEditorControlTests
         Assert.NotNull(container);
         Assert.True(container!.IsSelected);
     }
+
+    // --- #1108 sub-agent jump-button end-to-end tests -----------------------
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task NavigateToAgent_ProgrammaticSelection_MovesTreeSelectionToSubAgent()
+    {
+        // Issue #1108: after #1112 the transcript switch works, but the tree selection stayed on
+        // the parent because SelectedEditorItem changes weren't pushed back into the TreeView.
+        // With the #1111 VM->tree sync in place, invoking NavigateToAgentHandler (the same handler
+        // fired by the sub-agent jump button click on the chat webview) must both update the VM
+        // SelectedEditorItem and move the TreeView's selection to the target sub-agent nav item.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentNavItem = root.Children.Single(c => c.Id == "chat-sub-agents")
+            .Children.Single(c => c.Id == "sub-agent-a1");
+
+        // Start on the root so the transition to the sub-agent is observable.
+        viewModel.SelectedEditorItem = root;
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        SetTreeCollapsed(control, false);
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.NotNull(viewModel.NavigateToAgentHandler);
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Same(subAgentNavItem, viewModel.SelectedEditorItem);
+
+        var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+        Assert.Same(subAgentNavItem, tree.SelectedItem);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task NavigateToAgent_ProgrammaticSelection_MarksSubAgentTreeViewItemIsSelected()
+    {
+        // Issue #1108 headless-render variant: the realised TreeViewItem for the target sub-agent
+        // must carry IsSelected==true after NavigateToAgentHandler.Invoke — that is what the
+        // shared entity-card style keys the blue Classes.selected recolour off. This is the
+        // end-to-end proof that clicking a jump button now visibly moves the tree selection.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentNavItem = root.Children.Single(c => c.Id == "chat-sub-agents")
+            .Children.Single(c => c.Id == "sub-agent-a1");
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        SetTreeCollapsed(control, false);
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        // Baseline: root's container is selected (initial VM state after construction).
+        var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+        var rootContainer = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .First(tvi => ReferenceEquals(tvi.DataContext, root));
+        Assert.True(rootContainer.IsSelected);
+
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        Dispatcher.UIThread.RunJobs();
+
+        var subContainer = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .FirstOrDefault(tvi => ReferenceEquals(tvi.DataContext, subAgentNavItem));
+
+        Assert.NotNull(subContainer);
+        Assert.True(subContainer!.IsSelected,
+            "Expected the sub-agent's realised TreeViewItem to carry IsSelected==true after jump-button navigation (issue #1108).");
+        Assert.False(rootContainer.IsSelected, "Root container should have lost IsSelected when selection moved to the sub-agent.");
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task NavigateToAgent_JumpButtonFromCollapsedRoot_ExpandsAncestorsAndSelects()
+    {
+        // Issue #1108 edge variant: when the tree's root nav item starts collapsed (a real-world
+        // state the user can reach by collapsing the root), the jump-button flow must still reach
+        // the target sub-agent — the code-behind expands every ancestor of the newly-selected item
+        // so the sub-agent's container materialises and the two-way SelectedItem binding applies.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+
+        // Force both the root and the sub-agents group collapsed so the sub-agent's TreeViewItem
+        // would normally never materialise.
+        root.IsExpanded = false;
+        subAgentsNode.IsExpanded = false;
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        SetTreeCollapsed(control, false);
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(root.IsExpanded);
+        Assert.True(subAgentsNode.IsExpanded);
+        Assert.Same(subAgentNavItem, viewModel.SelectedEditorItem);
+
+        var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+        var subContainer = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .FirstOrDefault(tvi => ReferenceEquals(tvi.DataContext, subAgentNavItem));
+
+        Assert.NotNull(subContainer);
+        Assert.True(subContainer!.IsSelected);
+    }
 }
