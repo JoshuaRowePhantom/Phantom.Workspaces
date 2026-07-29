@@ -1102,4 +1102,130 @@ public sealed class AgentChatEditorControlTests
         });
         Assert.Same(documents[2], detailDock.ActiveDockable);
     }
+
+    // --- #1111 VM→tree selection sync tests --------------------------------
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task SelectedEditorItem_ProgrammaticSet_MarksMatchingTreeViewItemIsSelected()
+    {
+        // Issue #1111: setting AgentViewModel.SelectedEditorItem programmatically must drive
+        // the realised TreeViewItem for that item to IsSelected == true (via the SelectedItem
+        // two-way binding + ancestor expansion). Without the fix TreeViewItem.IsSelected stayed
+        // false because the tree's selection was only ever pushed view→VM.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        SetTreeCollapsed(control, false);
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.SelectedEditorItem = subAgentNavItem;
+        Dispatcher.UIThread.RunJobs();
+
+        var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+        var container = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .FirstOrDefault(tvi => ReferenceEquals(tvi.DataContext, subAgentNavItem));
+
+        Assert.NotNull(container);
+        Assert.True(container!.IsSelected,
+            "Expected the TreeViewItem for the programmatically-selected sub-agent nav item to be IsSelected==true (issue #1111).");
+        Assert.Same(subAgentNavItem, tree.SelectedItem);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task SelectedEditorItem_SubAgentNavigated_HighlightsSubAgentCardBlue()
+    {
+        // Issue #1111 headless-render variant: after a programmatic selection change, the previously
+        // selected TreeViewItem must lose IsSelected and the newly selected sub-agent's realised
+        // TreeViewItem must gain IsSelected. The blue recolour is scoped to
+        // StackPanel.entity-card-tree-item.selected (SharedStyles.axaml:325) where Classes.selected
+        // is bound to the ancestor TreeViewItem.IsSelected — SharedStylesTests already covers that
+        // final styling step, so proving IsSelected transitions correctly here is exactly what
+        // "the card turns blue on programmatic selection" reduces to.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentNavItem = root.Children.Single(c => c.Id == "chat-sub-agents")
+            .Children.Single(c => c.Id == "sub-agent-a1");
+
+        // Start with the initial (root) selection so we can observe a transition.
+        viewModel.SelectedEditorItem = root;
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        SetTreeCollapsed(control, false);
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+        var rootContainer = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .First(tvi => ReferenceEquals(tvi.DataContext, root));
+        Assert.True(rootContainer.IsSelected, "Baseline: root container must start selected.");
+
+        // Programmatic navigation to the sub-agent — the same VM state change the jump-button
+        // ultimately drives via NavigateToAgentHandler → NavigateToSubAgent.
+        viewModel.SelectedEditorItem = subAgentNavItem;
+        Dispatcher.UIThread.RunJobs();
+
+        var subContainer = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .FirstOrDefault(tvi => ReferenceEquals(tvi.DataContext, subAgentNavItem));
+
+        Assert.NotNull(subContainer);
+        Assert.True(subContainer!.IsSelected,
+            "Expected the sub-agent's TreeViewItem to be IsSelected after programmatic navigation (issue #1111 blue-highlight).");
+        Assert.False(rootContainer.IsSelected, "Expected the root container to lose IsSelected when selection moved.");
+        Assert.Same(subAgentNavItem, tree.SelectedItem);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task SelectedEditorItem_ProgrammaticSet_ExpandsAncestorsSoContainerRealises()
+    {
+        // Issue #1111 edge/error variant: even when the root nav item starts collapsed
+        // (isExpanded:false on construction), setting SelectedEditorItem to a deeply-nested
+        // sub-agent nav item must expand every ancestor so the target's TreeViewItem is realised
+        // and can carry IsSelected. Without ancestor expansion the container never materialises
+        // and no highlight can be shown.
+        var chat = await CreateAgentChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+        await AddSubAgentAsync(chat, "a1", "Sub Agent");
+
+        var root = viewModel.EditorItems.Single();
+        var subAgentsNode = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var subAgentNavItem = subAgentsNode.Children.Single(c => c.Id == "sub-agent-a1");
+
+        // Force the root collapsed to prove ancestor expansion kicks in.
+        root.IsExpanded = false;
+
+        var control = new AgentChatEditorControl { DataContext = viewModel };
+        SetTreeCollapsed(control, false);
+        _ = ShowInWindow(control, 1000, 700);
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.SelectedEditorItem = subAgentNavItem;
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(root.IsExpanded, "Root nav item ancestor should have been expanded.");
+        Assert.True(subAgentsNode.IsExpanded, "Sub-agents-group ancestor should have been expanded.");
+
+        var tree = control.GetVisualDescendants().OfType<TreeView>().First();
+        var container = tree.GetVisualDescendants()
+            .OfType<TreeViewItem>()
+            .FirstOrDefault(tvi => ReferenceEquals(tvi.DataContext, subAgentNavItem));
+
+        Assert.NotNull(container);
+        Assert.True(container!.IsSelected);
+    }
 }

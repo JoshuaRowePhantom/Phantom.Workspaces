@@ -244,8 +244,14 @@
                 <ColumnDefinition Width="*"
                                   MinWidth="240"/>
             </Grid.ColumnDefinitions>
+            <!-- Issue #1111: SelectedItem is two-way bound to AgentViewModel.SelectedEditorItem so
+                 programmatic navigation (initial selection, tree collapse, sub-agent jump-button)
+                 also drives TreeViewItem.IsSelected — the visual key for the blue .selected
+                 recolour in the shared entity-card style. Code-behind expands ancestors on VM
+                 selection changes so the target container is materialised. -->
             <TreeView x:Name="NavigationTree"
                       ItemsSource="{Binding EditorItems}"
+                      SelectedItem="{Binding SelectedEditorItem, Mode=TwoWay}"
                       ItemTemplate="{StaticResource AgentNavigationTreeHeaderItemTemplate}"
                       Classes="entity-card-tree-view entity-card-tree-sticky"
                       MinWidth="160"
