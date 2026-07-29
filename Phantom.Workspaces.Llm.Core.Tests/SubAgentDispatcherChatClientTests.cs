@@ -346,9 +346,11 @@ public sealed class SubAgentDispatcherChatClientTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
         {
-            return GetOrCreateAsync(sessionId, definition, services, ct: ct);
+            return GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
         }
     }
 
@@ -409,9 +411,11 @@ public sealed class SubAgentDispatcherChatClientTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
         {
-            return GetOrCreateAsync(sessionId, definition, services, ct: ct);
+            return GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
         }
     }
 

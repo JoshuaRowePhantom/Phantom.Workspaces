@@ -282,4 +282,91 @@ public sealed class CopilotSubAgentRouterTests
         Assert.Throws<ArgumentNullException>(() =>
             new CopilotSubAgentRouter(channel.Writer, new SubAgentTestFakes.FakeRunningAgentChatFactory(), subAgentTable: null!));
     }
+
+    [Fact]
+    public async Task SubAgentStarted_WithProvidedName_UsesProvidedNameAsAgentChatDisplayName()
+    {
+        // Fix #1133 (data/model side): the caller-provided sub-agent name arrives on the
+        // lifecycle-start "display-name" argument. The router must read it and pass it as
+        // displayNameOverride to IRunningAgentChatFactory.CreateAsync so the sub-agent's
+        // AgentChat.DisplayName carries the provided name — not a fresh session GUID.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "fix-reload1",
+            description: "reload the workspace"));
+
+        var (displayNameOverride, descriptionOverride) = Assert.Single(factory.CreateCallOverrides);
+        Assert.Equal("fix-reload1", displayNameOverride);
+        Assert.Equal("reload the workspace", descriptionOverride);
+    }
+
+    [Fact]
+    public async Task SubAgentStarted_WithProvidedName_KeepsSessionGuidAsInternalIdentity()
+    {
+        // Fix #1133: propagating the provided name into DisplayName MUST NOT change the
+        // session id / AgentId, which remain the internally-generated GUID used as the routing
+        // key (start.CallId → agentId → ChildRoutingEntry) and the persisted session identity.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "fix-reload1"));
+
+        var call = Assert.Single(factory.CreateCalls);
+        // Session id is a freshly generated 32-char hex GUID (Guid.NewGuid().ToString("n")),
+        // NOT the provided display name. The AgentId used for routing is the lifecycle
+        // callId ("agent-1"), which is likewise independent of the display name.
+        Assert.NotEqual("fix-reload1", call.SessionId.Value);
+        Assert.Matches("^[0-9a-f]{32}$", call.SessionId.Value!);
+    }
+
+    [Fact]
+    public async Task SubAgentStarted_WithoutDisplayName_FallsBackToFactoryDefault()
+    {
+        // Fix #1133 fallback: when no display-name argument is provided (null OR whitespace),
+        // the router must pass null so the AgentChat falls back to the client-info default —
+        // never throw and never invent a fake name.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        // Case 1: whitespace display-name degrades to null.
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "   ",
+            description: "   "));
+
+        var overrides = Assert.Single(factory.CreateCallOverrides);
+        Assert.Null(overrides.DisplayNameOverride);
+        Assert.Null(overrides.DescriptionOverride);
+    }
+
+    [Fact]
+    public async Task SubAgentStarted_WithAgentTypeAndName_UsesNameNotAgentType()
+    {
+        // Fix #1133 (field choice): the SDK provides both an agent 'name' (surfaced as the
+        // "display-name" argument) and an agent-type. Only the name should become the
+        // AgentChat.DisplayName; agent-type is capability, not identity, and must not leak
+        // into the sub-agent card.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        // The lifecycle stream only carries display-name/description arguments (per
+        // CopilotSdkStreamAdapter). agent-type is not among them: the caller-provided name is
+        // what the router propagates.
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "fix-reload1"));
+
+        var overrides = Assert.Single(factory.CreateCallOverrides);
+        Assert.Equal("fix-reload1", overrides.DisplayNameOverride);
+        Assert.DoesNotContain("general-purpose", overrides.DisplayNameOverride ?? string.Empty, StringComparison.Ordinal);
+    }
 }

@@ -280,7 +280,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             RunningAgentChatLease lease;
             try
             {
-                lease = await _toolset._factory.CreateAsync(definition, sessionId, null, cancellationToken);
+                lease = await _toolset._factory.CreateAsync(definition, sessionId, null, ct: cancellationToken);
             }
             catch (Exception ex)
             {

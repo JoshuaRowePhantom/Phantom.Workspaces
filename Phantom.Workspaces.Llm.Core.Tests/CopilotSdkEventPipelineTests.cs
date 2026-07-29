@@ -399,6 +399,8 @@ public sealed class CopilotSdkEventPipelineTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
+            string? displayNameOverride,
+            string? descriptionOverride,
             CancellationToken ct)
         {
             IChatClient client = new CopilotSubAgentChatClient();
@@ -410,6 +412,8 @@ public sealed class CopilotSdkEventPipelineTests
                 AgentSessionId = sessionId.Value,
                 ConfiguredStore = _store,
                 ClientOverride = client,
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
                 ForegroundScheduler = TaskScheduler.Default,
             });
 

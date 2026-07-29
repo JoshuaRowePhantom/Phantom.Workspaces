@@ -320,7 +320,9 @@ public sealed class SubAgentDispatcherPersistenceTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetOrCreateAsync(sessionId, definition, services, ct: ct);
+            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
     }
 }

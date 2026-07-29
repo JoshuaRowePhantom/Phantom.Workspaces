@@ -163,6 +163,42 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithDisplayNameOverride_PopulatesAgentChatDisplayName()
+    {
+        // Fix #1133: AgentChatFactory.CreateAsync must forward the displayNameOverride /
+        // descriptionOverride arguments into the InternalCreateAgentChatRequest so the newly
+        // created AgentChat's DisplayName/Description reflect the caller-supplied values.
+        var sessionId = new AgentSessionId("session-1133-with");
+        await using var factory = CreateFactory();
+
+        await using var lease = await factory.CreateAsync(
+            EchoAgentDefinition,
+            sessionId,
+            services: null,
+            displayNameOverride: "fix-reload1",
+            descriptionOverride: "reload the workspace");
+
+        Assert.Equal("fix-reload1", lease.AgentChat.DisplayName);
+        Assert.Equal("reload the workspace", lease.AgentChat.Description);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithoutDisplayNameOverride_UsesClientInfoDefault()
+    {
+        // Fix #1133 fallback: with no override provided, AgentChat.DisplayName degrades to the
+        // client-info default (never throws, never leaks the session GUID) so pre-existing
+        // callers that do not opt into the new arguments retain their previous behaviour.
+        var sessionId = new AgentSessionId("session-1133-without");
+        await using var factory = CreateFactory();
+
+        await using var lease = await factory.CreateAsync(EchoAgentDefinition, sessionId);
+
+        // No override was supplied ⇒ DisplayName falls back to the empty client-info default,
+        // and — critically — does NOT equal the session id (which was the observed #1133 bug).
+        Assert.NotEqual(sessionId.Value, lease.AgentChat.DisplayName);
+    }
+
+    [Fact]
     public async Task CreateAsync_PersistsSessionBeforeReturning()
     {
         var sessionId = new AgentSessionId("session-8");

@@ -449,6 +449,8 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
+            string? displayNameOverride,
+            string? descriptionOverride,
             CancellationToken ct)
         {
             CreateCalls.Add((definition, sessionId));
@@ -471,6 +473,8 @@ public sealed class CopilotSdkChatClientSubAgentFactoryTests
             {
                 AgentDefinition = null,
                 ConfiguredStore = new InMemoryAgentPersistenceStore(),
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
             });
 
             // Create a real ChatClientAgent and inject it via reflection.

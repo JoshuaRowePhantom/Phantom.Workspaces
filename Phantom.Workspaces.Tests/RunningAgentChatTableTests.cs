@@ -61,6 +61,8 @@ public sealed class RunningAgentChatTableTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
             => GetAsync(sessionId, ct);
 

@@ -187,6 +187,16 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
 
         var parentToolCallId = GetArgument(start, CopilotSdkStreamAdapter.ParentToolCallIdArgumentName);
 
+        // Fix #1133: read the caller-provided sub-agent name/description packed into the
+        // lifecycle-start arguments by CopilotSdkStreamAdapter, so we can propagate them onto
+        // the sub-agent's AgentChat below and avoid falling back to the session GUID for the
+        // display name. Whitespace-only values degrade gracefully to null so AgentChat uses the
+        // client-info default.
+        var providedDisplayName = GetArgument(start, CopilotSdkStreamAdapter.DisplayNameArgumentName);
+        var providedDescription = GetArgument(start, CopilotSdkStreamAdapter.DescriptionArgumentName);
+        var displayNameOverride = string.IsNullOrWhiteSpace(providedDisplayName) ? null : providedDisplayName;
+        var descriptionOverride = string.IsNullOrWhiteSpace(providedDescription) ? null : providedDescription;
+
         // Fix #1109: synchronously insert (or reuse) the child sink BEFORE any await, so any
         // routed update that races us cannot fall through to the parent transcript.
         ChildRoutingEntry entry;
@@ -226,7 +236,13 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         try
         {
             var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
-            var lease = await this.factory.CreateAsync(SubAgentDefinition, sessionId).ConfigureAwait(false);
+            var lease = await this.factory.CreateAsync(
+                    SubAgentDefinition,
+                    sessionId,
+                    services: null,
+                    displayNameOverride: displayNameOverride,
+                    descriptionOverride: descriptionOverride)
+                .ConfigureAwait(false);
             var agentChat = lease.AgentChat;
 
             var receiver = agentChat.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver

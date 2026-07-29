@@ -298,8 +298,10 @@ public sealed class SubAgentDispatcherIntegrationTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetOrCreateAsync(sessionId, definition, services, ct: ct);
+            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
     }
 
     /// <summary>An echo factory whose chats use a controllable client for the interrupt test.</summary>
@@ -349,7 +351,9 @@ public sealed class SubAgentDispatcherIntegrationTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetOrCreateAsync(sessionId, definition, services, ct: ct);
+            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
     }
 }

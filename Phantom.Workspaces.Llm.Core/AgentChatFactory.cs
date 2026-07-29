@@ -189,6 +189,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         AgentDefinition definition,
         AgentSessionId sessionId,
         AgentServices? services = null,
+        string? displayNameOverride = null,
+        string? descriptionOverride = null,
         CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
@@ -218,6 +220,8 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 AgentServices = effectiveServices,
                 ConfiguredStore = _store,
                 ClientOverride = effectiveServices.ChatClientOverride,
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
                 ForegroundScheduler = _foregroundScheduler,
                 CancellationToken = ct,
             }, ct);

@@ -21,11 +21,18 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
     /// <summary>
     /// Creates a new AgentChat from <paramref name="definition"/> + <paramref name="sessionId"/>,
     /// persists it, adds to RunningSessions, and returns a lease.
+    /// <paramref name="displayNameOverride"/> and <paramref name="descriptionOverride"/>, when
+    /// non-null, populate the chat's <c>DisplayName</c> and <c>Description</c> for the newly
+    /// created session (Issue #1133 — used by <c>CopilotSubAgentRouter</c> to propagate the
+    /// caller-provided sub-agent name/description onto the sub-agent's <c>AgentChat</c> instead
+    /// of falling back to a session-GUID display name).
     /// </summary>
     Task<RunningAgentChatLease> CreateAsync(
         AgentDefinition definition,
         AgentSessionId sessionId,
         AgentServices? services = null,
+        string? displayNameOverride = null,
+        string? descriptionOverride = null,
         CancellationToken ct = default);
 
     /// <summary>

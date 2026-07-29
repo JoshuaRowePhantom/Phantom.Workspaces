@@ -147,6 +147,8 @@ public sealed class SubAgentTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
             CancellationToken ct = default)
             => throw new NotImplementedException();
 

@@ -257,4 +257,47 @@ public sealed class RunningSubAgentDisplayTests
         Assert.Equal(chat.DisplayName, display.DisplayName);
         Assert.DoesNotContain("GitHub Copilot Sub-Agent", display.DisplayName, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task SubAgentDisplayName_WhenProvidedNameFlowedThroughFactory_SurfacesProvidedName()
+    {
+        // Fix #1133 (view side, over the fixed model): when the sub-agent AgentChat is
+        // constructed with a caller-provided display name (as the Copilot SDK router now does
+        // by mapping the "display-name" lifecycle argument to DisplayNameOverride), the
+        // RunningSubAgentDisplay data source must surface the provided name — never the
+        // freshly-generated session GUID that used to appear on the card header, and never
+        // the fallback definition name.
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "generic-sub-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        const string providedName = "fix-reload1";
+        var chat = await Phantom.Workspaces.Llm.AgentChat.CreateAsync(
+            new Phantom.Workspaces.Llm.InternalCreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                ConfiguredStore = new Phantom.Workspaces.Llm.InMemoryAgentPersistenceStore(),
+                ClientOverride = new Phantom.Workspaces.Llm.DeterministicTestChatClient(),
+                DisplayNameOverride = providedName,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal(providedName, display.DisplayName);
+        // The bug's fingerprint was a 32-hex GUID from Guid.NewGuid().ToString("n").
+        Assert.DoesNotMatch("^[0-9a-f]{32}$", display.DisplayName);
+        // And it must not fall back to the definition name either.
+        Assert.NotEqual("generic-sub-agent", display.DisplayName);
+    }
 }

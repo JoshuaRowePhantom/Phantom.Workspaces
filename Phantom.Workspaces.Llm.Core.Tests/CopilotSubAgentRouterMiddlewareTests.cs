@@ -215,6 +215,8 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
+            string? displayNameOverride,
+            string? descriptionOverride,
             CancellationToken ct)
         {
             CreateCalls.Add((definition, sessionId));
@@ -229,6 +231,8 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             {
                 AgentDefinition = null,
                 ConfiguredStore = new InMemoryAgentPersistenceStore(),
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
             });
 
             var chatClientAgent = new ChatClientAgent(receiver, new ChatClientAgentOptions
