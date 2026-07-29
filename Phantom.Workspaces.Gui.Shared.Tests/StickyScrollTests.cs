@@ -50,8 +50,15 @@ public sealed class StickyScrollTests
             Height = 160,
             Content = content,
         };
-        StickyScroll.SetIsEnabled(scrollViewer, true);
 
+        // NOTE: this test verifies the *static* Engine.ApplyLayer helper against the
+        // ModeledEntityCardTemplate visual tree. It intentionally does NOT enable the auto-engine
+        // (StickyScroll.SetIsEnabled) because that would subscribe a LayoutUpdated handler which
+        // races with the manual ApplyLayer call under -Mode full load: any queued layout pass
+        // that runs between ApplyLayer(...,1975) and the assertion causes Engine.Update() to
+        // reset the ZIndex chain to 0 as its first step, and if TranslatePoint transiently
+        // returns null the pin is not re-applied, leaving parentBranchHeader.ZIndex==0 so
+        // IsDrawnAbove falls back to sibling-index order (parent added first) and fails (#1105).
         var window = new Window
         {
             Width = 280,
@@ -169,8 +176,11 @@ public sealed class StickyScrollTests
             Height = 120,
             Content = canvas,
         };
-        StickyScroll.SetIsEnabled(scrollViewer, true);
 
+        // See ModeledEntityCardTemplate_ApplyLayer_MakesParentHeaderDrawAboveChildHeader for
+        // why the auto-engine is deliberately not enabled here — the LayerHelpers_* tests
+        // exercise the static Engine.ApplyLayer/ResetLayer helpers directly and must not race
+        // with LayoutUpdated-driven Engine.Update() calls under -Mode full load (#1105).
         var window = new Window
         {
             Width = 240,
