@@ -202,7 +202,9 @@ public partial class App : Application
             configuration,
             viewModel,
             (Current as App)?.UpdateController,
-            action => Dispatcher.UIThread.Post(action));
+            action => Dispatcher.UIThread.Post(action),
+            viewModel.LogDirectoryProvider,
+            new Phantom.Workspaces.Install.RealProcessLauncher());
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
         await settingsWindow.ShowDialog(mainWindow);
     }

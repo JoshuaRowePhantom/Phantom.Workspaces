@@ -33,7 +33,9 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         WorkspacesConfiguration configuration,
         IProfileAppearanceController? profileAppearance = null,
         Services.Updates.IUpdateController? updateController = null,
-        Action<Action>? updateDispatch = null)
+        Action<Action>? updateDispatch = null,
+        Services.Logging.ILogDirectoryProvider? logDirectoryProvider = null,
+        Phantom.Workspaces.Install.IProcessLauncher? processLauncher = null)
     {
         ArgumentNullException.ThrowIfNull(persistenceService);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -70,6 +72,14 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
             sections.Add(new SettingsSectionViewModel("Updates", this.Updates));
         }
 
+        // The Logs section requires both the process log-directory provider and a process launcher
+        // (both are only available in the running application, not the first-run installation wizard).
+        if (logDirectoryProvider is not null && processLauncher is not null)
+        {
+            this.Logs = new LogsSettingsViewModel(logDirectoryProvider, processLauncher);
+            sections.Add(new SettingsSectionViewModel("Logs", this.Logs));
+        }
+
         this.Sections = sections;
         this.selectedSection = this.Sections[0];
     }
@@ -91,6 +101,12 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     /// application (the installation wizard has nothing to update).
     /// </summary>
     public UpdateSettingsViewModel? Updates { get; }
+
+    /// <summary>
+    /// Logs section, present only when the dialog is opened from the running application (the
+    /// installation wizard has no <see cref="Services.Logging.ILogDirectoryProvider"/> to bind to).
+    /// </summary>
+    public LogsSettingsViewModel? Logs { get; }
 
     /// <summary>The settings sections shown in the dialog's master-detail layout.</summary>
     public IReadOnlyList<SettingsSectionViewModel> Sections { get; }

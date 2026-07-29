@@ -141,7 +141,9 @@ public partial class MainWindow : Window
             configuration,
             viewModel,
             (Application.Current as App)?.UpdateController,
-            action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
+            action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            viewModel.LogDirectoryProvider,
+            new Phantom.Workspaces.Install.RealProcessLauncher());
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
 
         await settingsWindow.ShowDialog(this);

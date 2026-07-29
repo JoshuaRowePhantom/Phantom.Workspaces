@@ -84,6 +84,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private Services.UsageMetricsService? usageMetricsService;
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
+
+    /// <summary>The process log-directory provider (the single source of truth), or <c>null</c> when unwired.</summary>
+    public Services.Logging.ILogDirectoryProvider? LogDirectoryProvider => this.logDirectoryProvider;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();

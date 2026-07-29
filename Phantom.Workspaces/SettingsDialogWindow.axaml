@@ -25,6 +25,9 @@
         <DataTemplate DataType="vm:UpdateSettingsViewModel">
             <views:UpdateSettingsView />
         </DataTemplate>
+        <DataTemplate DataType="vm:LogsSettingsViewModel">
+            <views:LogsSettingsView />
+        </DataTemplate>
     </Window.DataTemplates>
 
     <Grid RowDefinitions="*,Auto" Margin="20">

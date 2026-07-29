@@ -1,7 +1,10 @@
 using Avalonia.Headless.XUnit;
 using System.IO;
 using System.Threading.Tasks;
+using Moq;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Install;
+using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
 
@@ -266,6 +269,160 @@ public sealed class WorkspacesSettingsViewModelTests
 
         var profileSection = Assert.Single(settings.Sections, section => section.Title == "Profile");
         Assert.Same(settings.ProfileAppearance, profileSection.Content);
+    }
+
+    [AvaloniaFact]
+    public void Settings_WithLogDirectoryProvider_AddsLogsSection()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var logDirectoryProvider = new FakeLogDirectoryProvider("C:/temp/phantom-logs");
+        var processLauncher = new Mock<IProcessLauncher>().Object;
+
+        var settings = new WorkspacesSettingsViewModel(
+            service,
+            new WorkspacesConfiguration(),
+            profileAppearance: null,
+            updateController: null,
+            updateDispatch: null,
+            logDirectoryProvider: logDirectoryProvider,
+            processLauncher: processLauncher);
+
+        Assert.NotNull(settings.Logs);
+        var logsSection = Assert.Single(settings.Sections, section => section.Title == "Logs");
+        Assert.Same(settings.Logs, logsSection.Content);
+    }
+
+    [AvaloniaFact]
+    public void Settings_WithoutLogDirectoryProvider_HasNoLogsSection()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        Assert.Null(settings.Logs);
+        Assert.DoesNotContain(settings.Sections, section => section.Title == "Logs");
+    }
+
+    [AvaloniaFact]
+    public void Logs_LogDirectory_ReflectsProviderPath()
+    {
+        var provider = new FakeLogDirectoryProvider("D:/somewhere/logs");
+        var launcher = new Mock<IProcessLauncher>().Object;
+
+        var logs = new LogsSettingsViewModel(provider, launcher);
+
+        Assert.Equal("D:/somewhere/logs", logs.LogDirectory);
+    }
+
+    [AvaloniaFact]
+    public void Logs_LogDirectory_IsReadOnly()
+    {
+        // Reflection guarantees the property has no public setter, so no UI binding can mutate it.
+        var property = typeof(LogsSettingsViewModel).GetProperty(nameof(LogsSettingsViewModel.LogDirectory));
+
+        Assert.NotNull(property);
+        Assert.True(property!.CanRead);
+        Assert.Null(property.SetMethod);
+    }
+
+    [AvaloniaFact]
+    public void Logs_OpenLogDirectoryCommand_LaunchesFileBrowserWithLogDirectory()
+    {
+        var provider = new FakeLogDirectoryProvider("C:/logs/here");
+        ProcessStartRequest? captured = null;
+        var launcher = new Mock<IProcessLauncher>();
+        launcher
+            .Setup(l => l.Start(It.IsAny<ProcessStartRequest>()))
+            .Callback<ProcessStartRequest>(request => captured = request)
+            .Returns(Mock.Of<IProcessHandle>());
+
+        var logs = new LogsSettingsViewModel(provider, launcher.Object);
+        logs.OpenLogDirectoryCommand.Execute(null);
+
+        launcher.Verify(l => l.Start(It.IsAny<ProcessStartRequest>()), Times.Once);
+        Assert.NotNull(captured);
+        Assert.Contains("C:/logs/here", captured!.Arguments);
+    }
+
+    [AvaloniaFact]
+    public void Logs_OpenLogDirectoryCommand_WhenDirectoryMissing_CreatesDirectoryBeforeLaunch()
+    {
+        var configurationPath = CreateTempConfigPath();
+        var missingLogDir = Path.Combine(
+            Path.GetTempPath(),
+            $"phantom-logs-missing-{System.Guid.NewGuid():N}",
+            "nested",
+            "logs");
+
+        Assert.False(Directory.Exists(missingLogDir));
+
+        try
+        {
+            // Real provider lazily creates the directory on first LogDirectory access, matching production.
+            var provider = new LogDirectoryProvider(
+                new WorkspacesConfiguration { LogDirectory = missingLogDir },
+                configurationPath);
+
+            ProcessStartRequest? captured = null;
+            var launcher = new Mock<IProcessLauncher>();
+            launcher
+                .Setup(l => l.Start(It.IsAny<ProcessStartRequest>()))
+                .Callback<ProcessStartRequest>(request => captured = request)
+                .Returns(Mock.Of<IProcessHandle>());
+
+            var logs = new LogsSettingsViewModel(provider, launcher.Object);
+
+            var exception = Record.Exception(() => logs.OpenLogDirectoryCommand.Execute(null));
+
+            Assert.Null(exception);
+            Assert.True(Directory.Exists(missingLogDir));
+            launcher.Verify(l => l.Start(It.IsAny<ProcessStartRequest>()), Times.Once);
+            Assert.NotNull(captured);
+            Assert.Contains(missingLogDir, captured!.Arguments);
+        }
+        finally
+        {
+            var top = Path.GetDirectoryName(Path.GetDirectoryName(missingLogDir));
+            if (top is not null && Directory.Exists(top))
+            {
+                Directory.Delete(top, recursive: true);
+            }
+        }
+    }
+
+    [AvaloniaFact]
+    public void SettingsDialog_BindsLogsSectionViewModel_AndConstructs()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var provider = new FakeLogDirectoryProvider("C:/logs/bound");
+        var launcher = new Mock<IProcessLauncher>().Object;
+
+        var settings = new WorkspacesSettingsViewModel(
+            service,
+            new WorkspacesConfiguration(),
+            profileAppearance: null,
+            updateController: null,
+            updateDispatch: null,
+            logDirectoryProvider: provider,
+            processLauncher: launcher);
+
+        var dialog = new SettingsDialogWindow(settings);
+
+        Assert.Same(settings, dialog.DataContext);
+        Assert.NotNull(settings.Logs);
+        // Select the Logs section so the ContentControl resolves the LogsSettingsViewModel DataTemplate.
+        var logsSection = Assert.Single(settings.Sections, s => s.Title == "Logs");
+        settings.SelectedSection = logsSection;
+        Assert.Same(settings.Logs, settings.SelectedSection.Content);
+    }
+
+    private sealed class FakeLogDirectoryProvider : ILogDirectoryProvider
+    {
+        public FakeLogDirectoryProvider(string logDirectory)
+        {
+            this.LogDirectory = logDirectory;
+        }
+
+        public string LogDirectory { get; }
     }
 
     private static string CreateTempConfigPath()
