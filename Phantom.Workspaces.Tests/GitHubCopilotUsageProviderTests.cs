@@ -150,7 +150,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, metrics.Count);
+        Assert.Equal(3, metrics.Count);
 
         var aiCredits = metrics.Single(m => m.Title == "Copilot AI Credits");
         Assert.Equal(395199.59m, aiCredits.QuantityUsed);
@@ -392,6 +392,136 @@ public sealed class GitHubCopilotUsageProviderTests
 
         Assert.NotEmpty(metrics);
         Assert.All(metrics, m => Assert.Equal(instant.UtcDateTime, m.LastUpdatedAt));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_EmitsSeparateCostMetric_ForCopilotSkuWithNetAmount()
+    {
+        Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+        Thread.CurrentThread.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        // AI Credits: has netAmount=3754.58 → quantity + cost = 2 metrics
+        // Premium Request: netAmount=0 → quantity only = 1 metric
+        Assert.Equal(3, metrics.Count);
+
+        var costMetric = Assert.Single(metrics, m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(3754.58m, costMetric.QuantityUsed);
+        Assert.Equal(0m, costMetric.QuantityTotal);
+        Assert.Equal("{0:C2}", costMetric.QuantityPresentationFormatString);
+        Assert.Equal(string.Empty, costMetric.Unit);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_CostMetricPresentation_IsCurrencyFormatted()
+    {
+        Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+        Thread.CurrentThread.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+
+        Assert.Equal("$3,754.58", costMetric.QuantityPresentation);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_AggregatesNetAmount_AcrossRepeatedCopilotSkus()
+    {
+        const string json = """
+            {
+              "usageItems": [
+                { "product": "copilot", "sku": "Copilot AI Credits", "quantity": 100, "unitType": "AICredits", "netAmount": 12.50 },
+                { "product": "copilot", "sku": "Copilot AI Credits", "quantity": 200, "unitType": "AICredits", "netAmount": 7.25 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+
+        Assert.Equal(19.75m, costMetric.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenNetAmountZeroOrAbsent_EmitsNoCostMetric()
+    {
+        const string json = """
+            {
+              "usageItems": [
+                { "product": "copilot", "sku": "Copilot Premium Request", "quantity": 10, "unitType": "Requests", "netAmount": 0 },
+                { "product": "copilot", "sku": "Copilot Other", "quantity": 5, "unitType": "Requests" }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, metrics.Count);
+        Assert.DoesNotContain(metrics, m => m.Title.EndsWith("(Cost)", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_CostMetricTitle_IsDistinctFromQuantitySibling()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+        var quantity = metrics.Single(m => m.Title == "Copilot AI Credits");
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+
+        Assert.NotEqual(quantity.Title, cost.Title);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_ImmediatelyFollowsItsQuantityMetric()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var quantityIndex = -1;
+        var costIndex = -1;
+        for (var i = 0; i < metrics.Count; i++)
+        {
+            if (metrics[i].Title == "Copilot AI Credits") quantityIndex = i;
+            if (metrics[i].Title == "Copilot AI Credits (Cost)") costIndex = i;
+        }
+
+        Assert.True(quantityIndex >= 0);
+        Assert.Equal(quantityIndex + 1, costIndex);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenNoResetDataInSchema_LeavesAdditionalInformationNull()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.All(metrics, m => Assert.Null(m.AdditionalInformation));
     }
 
     private sealed class RequestCapturingHandler : HttpMessageHandler

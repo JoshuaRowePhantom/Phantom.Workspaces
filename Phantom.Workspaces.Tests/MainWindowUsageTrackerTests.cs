@@ -118,4 +118,134 @@ public sealed class MainWindowUsageTrackerTests
             mainWindow.Close();
         }
     }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindow_UsageTrackerPanel_ShowsCostMetricRow_WhenCopilotAccountHasNetAmount()
+    {
+        System.Threading.Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+        System.Threading.Thread.CurrentThread.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+
+        var metrics = new Phantom.Workspaces.Models.UsageMetrics();
+        var account = new Phantom.Workspaces.Models.UsageAccount
+        {
+            Product = "github.com",
+            UserName = "octocat",
+            SettingsUrl = new System.Uri("https://github.com/copilot"),
+        };
+        account.Metrics.Add(new Phantom.Workspaces.Models.UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 12345m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+        });
+        account.Metrics.Add(new Phantom.Workspaces.Models.UsageMetric
+        {
+            Title = "Copilot AI Credits (Cost)",
+            QuantityUsed = 356.00m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:C2}",
+            Unit = string.Empty,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        var control = new Phantom.Workspaces.Controls.UsageTrackerControl { DataContext = vm };
+        var window = new Avalonia.Controls.Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var textBlocks = window.GetVisualDescendants()
+                .OfType<Avalonia.Controls.TextBlock>()
+                .ToList();
+            Assert.Contains(textBlocks, tb => tb.Text == "Copilot AI Credits (Cost)");
+            Assert.Contains(textBlocks, tb => tb.Text == "$356.00");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindow_UsageTrackerPanel_ShowsAdditionalInformation_WhenMetricHasNote()
+    {
+        var metrics = new Phantom.Workspaces.Models.UsageMetrics();
+        var account = new Phantom.Workspaces.Models.UsageAccount
+        {
+            Product = "github.com",
+            UserName = "octocat",
+            SettingsUrl = new System.Uri("https://github.com/copilot"),
+        };
+        account.Metrics.Add(new Phantom.Workspaces.Models.UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            AdditionalInformation = "Resets in 2 days",
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        var control = new Phantom.Workspaces.Controls.UsageTrackerControl { DataContext = vm };
+        var window = new Avalonia.Controls.Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var noteTextBlock = window.GetVisualDescendants()
+                .OfType<Avalonia.Controls.TextBlock>()
+                .FirstOrDefault(tb => tb.Name == "AdditionalInformationText" && tb.Text == "Resets in 2 days");
+            Assert.NotNull(noteTextBlock);
+            Assert.True(noteTextBlock!.IsVisible);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindow_UsageTrackerPanel_HidesAdditionalInformation_WhenMetricHasNoNote()
+    {
+        var metrics = new Phantom.Workspaces.Models.UsageMetrics();
+        var account = new Phantom.Workspaces.Models.UsageAccount
+        {
+            Product = "github.com",
+            UserName = "octocat",
+            SettingsUrl = new System.Uri("https://github.com/copilot"),
+        };
+        account.Metrics.Add(new Phantom.Workspaces.Models.UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            // AdditionalInformation = null (default)
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        var control = new Phantom.Workspaces.Controls.UsageTrackerControl { DataContext = vm };
+        var window = new Avalonia.Controls.Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var noteTextBlocks = window.GetVisualDescendants()
+                .OfType<Avalonia.Controls.TextBlock>()
+                .Where(tb => tb.Name == "AdditionalInformationText")
+                .ToList();
+            Assert.All(noteTextBlocks, tb => Assert.False(tb.IsVisible));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 }

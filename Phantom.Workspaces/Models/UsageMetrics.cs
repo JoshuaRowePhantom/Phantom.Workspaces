@@ -62,6 +62,12 @@ public sealed class UsageMetric : ObservableObject
     }
 
     /// <summary>
+    /// Optional short context line rendered under the metric's value (for example,
+    /// "Resets in 2 days"). Null when the underlying data source provides no such note.
+    /// </summary>
+    public string? AdditionalInformation { get; init; }
+
+    /// <summary>
     /// Fraction of the quota consumed (0.0–1.0), or <see langword="null"/> when
     /// <see cref="QuantityTotal"/> is zero.
     /// </summary>

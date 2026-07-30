@@ -77,4 +77,22 @@ public sealed class UsageMetricTests
 
         Assert.Empty(raised);
     }
+
+    [Fact]
+    public void UsageMetric_AdditionalInformation_DefaultsToNull()
+    {
+        var metric = new UsageMetric { Title = "Test" };
+        Assert.Null(metric.AdditionalInformation);
+    }
+
+    [Fact]
+    public void UsageMetric_AdditionalInformation_RoundTrips()
+    {
+        var metric = new UsageMetric
+        {
+            Title = "Test",
+            AdditionalInformation = "Resets in 2 days",
+        };
+        Assert.Equal("Resets in 2 days", metric.AdditionalInformation);
+    }
 }

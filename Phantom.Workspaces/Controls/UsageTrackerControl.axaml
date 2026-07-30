@@ -41,8 +41,9 @@
                                     <ItemsControl ItemsSource="{Binding Metrics}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="models:UsageMetric">
-                                                <Grid ColumnDefinitions="120,*,120"
-                                                      Margin="0,2">
+                                                <StackPanel Margin="0,2"
+                                                            Spacing="1">
+                                                    <Grid ColumnDefinitions="120,*,120">
                                                     <!-- Metric title -->
                                                     <TextBlock Grid.Column="0"
                                                                Text="{Binding Title}"
@@ -82,7 +83,16 @@
                                                                    Text="{Binding FractionUsed,
                                                                        Converter={x:Static converters:FractionToPercentageConverter.Instance}}" />
                                                     </Panel>
-                                                </Grid>
+                                                    </Grid>
+
+                                                    <!-- Optional additional information (e.g. "Resets in 2 days") -->
+                                                    <TextBlock Name="AdditionalInformationText"
+                                                               Text="{Binding AdditionalInformation}"
+                                                               IsVisible="{Binding AdditionalInformation, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                               Classes="muted"
+                                                               FontSize="10"
+                                                               Margin="124,0,0,0" />
+                                                </StackPanel>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>

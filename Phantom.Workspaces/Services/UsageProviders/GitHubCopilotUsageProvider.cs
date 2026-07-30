@@ -174,6 +174,10 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                 && unitElement.ValueKind == JsonValueKind.String
                 ? unitElement.GetString() ?? string.Empty
                 : string.Empty;
+            var netAmount = item.TryGetProperty("netAmount", out var netElement)
+                && netElement.ValueKind == JsonValueKind.Number
+                ? netElement.GetDecimal()
+                : 0m;
 
             if (!aggregates.TryGetValue(sku, out var aggregate))
             {
@@ -187,6 +191,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             }
 
             aggregate.Quantity += quantity;
+            aggregate.NetAmount += netAmount;
         }
 
         var metrics = new List<UsageMetric>(order.Count);
@@ -202,6 +207,19 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                 Unit = aggregate.Unit,
                 LastUpdatedAt = now,
             });
+
+            if (aggregate.NetAmount != 0m)
+            {
+                metrics.Add(new UsageMetric
+                {
+                    Title = $"{aggregate.Sku} (Cost)",
+                    QuantityUsed = aggregate.NetAmount,
+                    QuantityTotal = 0m,
+                    QuantityPresentationFormatString = "{0:C2}",
+                    Unit = string.Empty,
+                    LastUpdatedAt = now,
+                });
+            }
         }
 
         return metrics;
@@ -212,5 +230,6 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         public string Sku { get; set; } = string.Empty;
         public string Unit { get; set; } = string.Empty;
         public decimal Quantity { get; set; }
+        public decimal NetAmount { get; set; }
     }
 }
