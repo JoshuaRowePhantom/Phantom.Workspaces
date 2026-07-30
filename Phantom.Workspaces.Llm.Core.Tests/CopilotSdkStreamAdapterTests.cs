@@ -168,8 +168,14 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
-    public async Task TranslateCopilotSdkSessionEvents_SubagentStartedEventWithoutAgentId_UsesToolCallIdAsId()
+    public async Task TranslateCopilotSdkSessionEvents_SubagentStartedWithoutAgentId_ExposesSpawningToolCallIdForCorrelation()
     {
+        // Fix #1139: when SubagentStartedEvent lacks a child AgentId (root-parent spawn case),
+        // the adapter surfaces the spawning tool-call id ONLY through the
+        // ParentToolCallIdArgumentName argument (for start-time correlation in the router) —
+        // it is NEVER silently promoted to the lifecycle CallId (which is the routing key)
+        // because that would key the sink under the wrong identity and diverge from where the
+        // child's runtime AgentId-tagged content eventually lands.
         var updates = await TranslateAsync(new SubagentStartedEvent
         {
             AgentId = string.Empty,
@@ -178,7 +184,108 @@ public sealed class CopilotSdkStreamAdapterTests
 
         var update = Assert.Single(updates);
         var call = Assert.IsType<FunctionCallContent>(Assert.Single(update.Contents));
-        Assert.Equal("call-9", call.CallId);
+        Assert.NotEqual("call-9", call.CallId);
+        Assert.Equal(string.Empty, call.CallId);
+        Assert.Equal("call-9", call.Arguments![CopilotSdkStreamAdapter.ParentToolCallIdArgumentName]);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SubagentStartedWithoutAgentIdOrToolCallId_Dropped()
+    {
+        // Nothing left to correlate against: no lifecycle content emitted.
+        var updates = await TranslateAsync(new SubagentStartedEvent
+        {
+            AgentId = string.Empty,
+            Data = new SubagentStartedData { ToolCallId = string.Empty, AgentName = "sub_agent", AgentDisplayName = "Sub Agent", AgentDescription = "desc" },
+        });
+
+        Assert.Empty(updates);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SubagentStartedWithAgentId_LifecycleKeyedByChildAgentId()
+    {
+        // Fix #1139: when SubagentStartedEvent carries the child AgentId, the lifecycle CallId
+        // (which becomes the sink key) is the child AgentId, and the spawning tool-call id is
+        // preserved only in the lifecycle argument. Content is tagged with the same AgentId,
+        // so start and content resolve to the same childSinks entry by construction.
+        var updates = await TranslateAsync(new SubagentStartedEvent
+        {
+            AgentId = "child-a",
+            Data = new SubagentStartedData
+            {
+                ToolCallId = "call-x",
+                AgentName = "sub_agent",
+                AgentDisplayName = "Sub Agent",
+                AgentDescription = "desc",
+            },
+        });
+
+        var update = Assert.Single(updates);
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(update.Contents));
+        Assert.Equal("child-a", call.CallId);
+        Assert.NotEqual("call-x", call.CallId);
+        Assert.Equal("call-x", call.Arguments![CopilotSdkStreamAdapter.ParentToolCallIdArgumentName]);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SubAgentReasoningDelta_TaggedWithEventAgentId()
+    {
+        // Fix #1139: AssistantReasoningDeltaData has NO ParentToolCallId field at all, but the
+        // event-level AgentId is populated and drives routing exactly like every other sub-
+        // agent event. Content routing must not depend on the deprecated per-Data member.
+        var updates = await TranslateAsync(new AssistantReasoningDeltaEvent
+        {
+            AgentId = "child-a",
+            Data = new AssistantReasoningDeltaData { DeltaContent = "thinking...", ReasoningId = "r-1" },
+        });
+
+        var update = Assert.Single(updates);
+        var reasoning = Assert.IsType<TextReasoningContent>(Assert.Single(update.Contents));
+        Assert.Equal("child-a", CopilotSdkStreamAdapter.GetParentToolCallId(reasoning));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SubAgentContent_DoesNotReadParentToolCallId()
+    {
+        // Fix #1139: content tagging reads ONLY the event-level AgentId. When AgentId is
+        // absent the tag is null even if the deprecated Data.ParentToolCallId would have
+        // supplied a value (which we intentionally do not consult — it is [Obsolete]
+        // GHCP001 and slated for removal from the SDK).
+        var updatesWithAgentId = await TranslateAsync(new AssistantMessageDeltaEvent
+        {
+            AgentId = "child-a",
+            Data = new AssistantMessageDeltaData { DeltaContent = "hi", MessageId = "msg-1" },
+        });
+        var withAgentId = Assert.IsType<TextContent>(Assert.Single(Assert.Single(updatesWithAgentId).Contents));
+        Assert.Equal("child-a", CopilotSdkStreamAdapter.GetParentToolCallId(withAgentId));
+
+        var updatesNoAgentId = await TranslateAsync(new AssistantMessageDeltaEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantMessageDeltaData { DeltaContent = "hi", MessageId = "msg-1" },
+        });
+        var noAgentId = Assert.IsType<TextContent>(Assert.Single(Assert.Single(updatesNoAgentId).Contents));
+        Assert.Null(CopilotSdkStreamAdapter.GetParentToolCallId(noAgentId));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SubagentStartedEventWithoutAgentId_UsesToolCallIdAsId()
+    {
+        // Legacy/back-compat guard: prior to Fix #1139 the adapter promoted the spawning
+        // tool-call id into the lifecycle CallId when AgentId was missing. That behaviour is
+        // gone (see TranslateCopilotSdkSessionEvents_SubagentStartedWithoutAgentId_ExposesSpawningToolCallIdForCorrelation).
+        // This test now asserts the CORRECTED behaviour so a future regression does not
+        // silently re-introduce the sink-key/content-key mismatch that produced the drop.
+        var updates = await TranslateAsync(new SubagentStartedEvent
+        {
+            AgentId = string.Empty,
+            Data = new SubagentStartedData { ToolCallId = "call-9", AgentName = "sub_agent", AgentDisplayName = "Sub Agent", AgentDescription = "desc" },
+        });
+
+        var update = Assert.Single(updates);
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(update.Contents));
+        Assert.NotEqual("call-9", call.CallId);
     }
 
     [Fact]

@@ -111,13 +111,21 @@ public static class CopilotSdkStreamAdapter
                     };
                     break;
 
-                case SubagentStartedEvent started when TryGetSubAgentId(started.AgentId, started.Data?.ToolCallId, out var startedId):
+                // Fix #1139: the lifecycle CallId is the ROUTING KEY, which must always be the
+                // child AgentId used to tag content — never the spawning tool-call id. When the
+                // started signal omits AgentId (root-parent spawn case), emit an empty CallId and
+                // rely on the spawning tool-call id (still surfaced only via the
+                // ParentToolCallIdArgumentName argument) for start-time correlation in the router.
+                // The event is dropped only when BOTH AgentId and ToolCallId are missing, since
+                // there is nothing left to correlate against.
+                case SubagentStartedEvent started when !string.IsNullOrEmpty(started.AgentId)
+                                                       || !string.IsNullOrEmpty(started.Data?.ToolCallId):
                     yield return new ChatResponseUpdate
                     {
                         Contents =
                         [
                             TagLifecycle(new FunctionCallContent(
-                                startedId,
+                                started.AgentId ?? string.Empty,
                                 SubAgentStartLifecycleName,
                                 new Dictionary<string, object?>
                                 {

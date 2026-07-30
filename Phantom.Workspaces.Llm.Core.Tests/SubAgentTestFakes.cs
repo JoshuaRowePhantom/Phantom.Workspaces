@@ -34,6 +34,7 @@ internal static class SubAgentTestFakes
 
         public RunningAgentChatLease? CreatedLease { get; private set; }
         public CopilotSubAgentChatClient? CreatedReceiver { get; private set; }
+        public List<CopilotSubAgentChatClient> CreatedReceivers { get; } = new();
 
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
 
@@ -64,6 +65,7 @@ internal static class SubAgentTestFakes
             {
                 var receiver = new CopilotSubAgentChatClient();
                 CreatedReceiver = receiver;
+                CreatedReceivers.Add(receiver);
                 client = receiver;
             }
             else

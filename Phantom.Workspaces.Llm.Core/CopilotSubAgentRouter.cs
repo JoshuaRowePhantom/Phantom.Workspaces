@@ -47,6 +47,16 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     private readonly Dictionary<string, ChildRoutingEntry> pendingChildrenByToolCall =
         new(StringComparer.Ordinal);
 
+    // Fix #1139: pending sinks whose SubagentStartedEvent lacked an AgentId, keyed by the
+    // spawning tool-call id. These entries are unbound from a routing AgentId at start time
+    // and are bound to the child AgentId in FIFO order the first time content tagged with
+    // an as-yet-unknown AgentId arrives (start-time tool-call correlation). Also consulted
+    // by HandleSubAgentResultAsync when a completed/failed lifecycle carries only the
+    // tool-call id (the SDK falls back to it as CallId for the same reason).
+    private readonly Dictionary<string, ChildRoutingEntry> pendingChildSinksByToolCall =
+        new(StringComparer.Ordinal);
+    private readonly LinkedList<string> pendingChildSinksToolCallOrder = new();
+
     // Fix #1109/#1110: single unified table of per-child sinks keyed by agentId. A ChildRoutingEntry
     // is created synchronously on the FIRST observation of an agentId (either a lifecycle start or
     // a routed update); it buffers updates until the async factory.CreateAsync completes and the
@@ -83,6 +93,13 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         {
             entries = this.childSinks.Values.ToList();
             this.childSinks.Clear();
+        }
+
+        lock (this.pendingChildSinksByToolCall)
+        {
+            entries.AddRange(this.pendingChildSinksByToolCall.Values);
+            this.pendingChildSinksByToolCall.Clear();
+            this.pendingChildSinksToolCallOrder.Clear();
         }
 
         foreach (var entry in entries)
@@ -180,12 +197,16 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     private async Task HandleSubAgentStartedAsync(FunctionCallContent start)
     {
         var agentId = start.CallId;
-        if (string.IsNullOrEmpty(agentId))
+        var parentToolCallId = GetArgument(start, CopilotSdkStreamAdapter.ParentToolCallIdArgumentName);
+
+        // Fix #1139: the SDK sometimes omits AgentId on SubagentStartedEvent (e.g. root-parent
+        // spawn). In that case we cannot key the sink by the child AgentId yet, but we still
+        // create the ChildRoutingEntry now and register it in pendingChildSinksByToolCall so
+        // that the first content update carrying an unknown AgentId can bind (FIFO) to it.
+        if (string.IsNullOrEmpty(agentId) && string.IsNullOrEmpty(parentToolCallId))
         {
             return;
         }
-
-        var parentToolCallId = GetArgument(start, CopilotSdkStreamAdapter.ParentToolCallIdArgumentName);
 
         // Fix #1133: read the caller-provided sub-agent name/description packed into the
         // lifecycle-start arguments by CopilotSdkStreamAdapter, so we can propagate them onto
@@ -200,12 +221,29 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         // Fix #1109: synchronously insert (or reuse) the child sink BEFORE any await, so any
         // routed update that races us cannot fall through to the parent transcript.
         ChildRoutingEntry entry;
-        lock (this.childSinks)
+        if (!string.IsNullOrEmpty(agentId))
         {
-            if (!this.childSinks.TryGetValue(agentId, out entry!))
+            lock (this.childSinks)
             {
-                entry = new ChildRoutingEntry(agentId, this.logger);
-                this.childSinks[agentId] = entry;
+                if (!this.childSinks.TryGetValue(agentId, out entry!))
+                {
+                    entry = new ChildRoutingEntry(agentId, this.logger);
+                    this.childSinks[agentId] = entry;
+                }
+            }
+        }
+        else
+        {
+            // AgentId-less start: park the sink under the spawning tool-call id until the first
+            // content update reveals the child AgentId.
+            lock (this.pendingChildSinksByToolCall)
+            {
+                if (!this.pendingChildSinksByToolCall.TryGetValue(parentToolCallId!, out entry!))
+                {
+                    entry = new ChildRoutingEntry(parentToolCallId!, this.logger);
+                    this.pendingChildSinksByToolCall[parentToolCallId!] = entry;
+                    this.pendingChildSinksToolCallOrder.AddLast(parentToolCallId!);
+                }
             }
         }
 
@@ -276,9 +314,50 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         var (failed, error) = ParseLifecycleResult(result);
 
         ChildRoutingEntry? entry;
+        bool removeFromChildSinks = false;
+        bool removeFromPendingToolCall = false;
         lock (this.childSinks)
         {
-            this.childSinks.TryGetValue(agentId, out entry);
+            if (this.childSinks.TryGetValue(agentId, out entry))
+            {
+                removeFromChildSinks = true;
+            }
+        }
+
+        if (entry is null)
+        {
+            // Fix #1139: if the started signal lacked an AgentId, the entry was parked in
+            // pendingChildSinksByToolCall keyed by the spawning tool-call id. Copilot SDK
+            // completed/failed events fall back to ToolCallId as CallId in the same case, so
+            // this lookup completes the correlation.
+            lock (this.pendingChildSinksByToolCall)
+            {
+                if (this.pendingChildSinksByToolCall.TryGetValue(agentId, out entry))
+                {
+                    removeFromPendingToolCall = true;
+                }
+            }
+        }
+
+        if (entry is null)
+        {
+            // Fix #1139 corner case: SubagentStartedEvent lacked an AgentId AND no content
+            // arrived between start and complete, so the pending sink is still keyed by
+            // tool-call id. The SDK's completion event carries the child AgentId at event
+            // level (SessionEvent.AgentId is populated on completed events even when it was
+            // absent on the paired started event), so adopt the oldest pending entry now.
+            lock (this.childSinks)
+            {
+                if (this.TryAdoptPendingSinkForAgentId(agentId, out entry!))
+                {
+                    this.childSinks[agentId] = entry;
+                    removeFromChildSinks = true;
+                }
+                else
+                {
+                    entry = null;
+                }
+            }
         }
 
         if (entry is null)
@@ -299,15 +378,30 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             await entry.CompleteAsync().ConfigureAwait(false);
         }
 
-        lock (this.childSinks)
+        if (removeFromChildSinks)
         {
-            this.childSinks.Remove(agentId);
+            lock (this.childSinks)
+            {
+                this.childSinks.Remove(agentId);
+            }
+        }
+
+        if (removeFromPendingToolCall)
+        {
+            lock (this.pendingChildSinksByToolCall)
+            {
+                this.pendingChildSinksByToolCall.Remove(agentId);
+                this.pendingChildSinksToolCallOrder.Remove(agentId);
+            }
         }
     }
 
-    // Fix #1109/#1110: push an update to the correct sink. For a non-empty agentId we always route
-    // to a per-child ChildRoutingEntry (creating a buffering entry on first sight if the start
-    // lifecycle has not yet arrived). Sub-agent output is NEVER pushed to the parent transcript.
+    // Fix #1109/#1110/#1139: push an update to the correct sink. For a non-empty agentId we
+    // always route to a per-child ChildRoutingEntry. If no entry exists under that AgentId,
+    // we first try to adopt the oldest pendingChildSinksByToolCall entry (which was registered
+    // by a SubagentStartedEvent that lacked an AgentId), re-keying it under this AgentId.
+    // Otherwise we create a fresh buffering entry on first sight (start lifecycle has not yet
+    // arrived). Sub-agent output is NEVER pushed to the parent transcript.
     private void PushUpdate(string? agentId, ChatResponseUpdate update)
     {
         if (string.IsNullOrEmpty(agentId))
@@ -321,12 +415,46 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         {
             if (!this.childSinks.TryGetValue(agentId, out entry!))
             {
-                entry = new ChildRoutingEntry(agentId, this.logger);
-                this.childSinks[agentId] = entry;
+                if (this.TryAdoptPendingSinkForAgentId(agentId, out entry!))
+                {
+                    this.childSinks[agentId] = entry;
+                }
+                else
+                {
+                    entry = new ChildRoutingEntry(agentId, this.logger);
+                    this.childSinks[agentId] = entry;
+                }
             }
         }
 
         entry.Push(update);
+    }
+
+    // Fix #1139: bind the oldest AgentId-less pending sink to a newly-observed child AgentId.
+    // FIFO order matches the observed spawn order; concurrent AgentId-less spawns are extremely
+    // uncommon (the SDK omits AgentId almost exclusively on root-parent spawns which happen one
+    // at a time per tool call), so FIFO is unambiguous in practice.
+    private bool TryAdoptPendingSinkForAgentId(string agentId, out ChildRoutingEntry entry)
+    {
+        lock (this.pendingChildSinksByToolCall)
+        {
+            var node = this.pendingChildSinksToolCallOrder.First;
+            if (node is null)
+            {
+                entry = null!;
+                return false;
+            }
+
+            var toolCallId = node.Value;
+            this.pendingChildSinksToolCallOrder.RemoveFirst();
+            if (this.pendingChildSinksByToolCall.Remove(toolCallId, out entry!))
+            {
+                return true;
+            }
+        }
+
+        entry = null!;
+        return false;
     }
 
     private static void InjectToolCallPrompt(ChildRoutingEntry entry, FunctionCallContent toolStart)

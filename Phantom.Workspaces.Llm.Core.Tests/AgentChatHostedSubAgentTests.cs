@@ -1,7 +1,9 @@
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm.Interfaces;
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -446,6 +448,313 @@ public sealed class AgentChatHostedSubAgentTests
             {
                 _logs.Add((logLevel, formatter(state, exception)));
             }
+        }
+    }
+
+    // ─── Fix #1139 tests ─────────────────────────────────────────────────────────
+    //
+    // These tests wire the real adapter->router->child-receiver->child AgentChat pipeline
+    // so assertions land on a real child AgentChat's History rather than on a mocked receiver
+    // stream. They reproduce the live drop described in issue #1139 and verify that with the
+    // fix in place, a running sub-agent's live assistant text, tool calls, and reasoning
+    // deltas surface in the correct child's transcript.
+
+    private sealed class Fix1139TestFactory : Phantom.Workspaces.Llm.IRunningAgentChatFactory
+    {
+        public List<AgentChat> CreatedChildren { get; } = new();
+        public List<Phantom.Workspaces.Llm.CopilotSubAgentChatClient> CreatedHostedClients { get; } = new();
+
+        public System.Collections.ObjectModel.ObservableCollection<Phantom.Workspaces.Llm.RunningAgentChat> RunningSessions { get; } = new();
+
+        public Task<RunningAgentChatLease> CreateAsync(
+            AgentDefinition definition,
+            AgentSessionId sessionId,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            CancellationToken ct = default)
+        {
+            var hostedClient = new Phantom.Workspaces.Llm.CopilotSubAgentChatClient();
+            var child = CreateHostedSubAgentChat(hostedClient);
+            CreatedHostedClients.Add(hostedClient);
+            CreatedChildren.Add(child);
+            return Task.FromResult(new RunningAgentChatLease(sessionId, child, () => ValueTask.CompletedTask));
+        }
+
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            CancellationToken ct = default)
+            => throw new NotImplementedException();
+    }
+
+    private sealed class Fix1139FakeSubAgentTable : ISubAgentTable
+    {
+        Task<SubAgent> ISubAgentTable.Add(AgentChat agentChat)
+        {
+            var sessionId = new AgentSessionId(agentChat.AgentSessionId);
+            return Task.FromResult(new SubAgent(sessionId, agentChat, null));
+        }
+    }
+
+    // Content builders that mirror what CopilotSdkStreamAdapter emits.
+    private static ChatResponseUpdate F1139_LifecycleStartWithoutAgentId(string parentToolCallId)
+    {
+        var call = new FunctionCallContent(
+            string.Empty,
+            CopilotSdkStreamAdapter.SubAgentStartLifecycleName,
+            new Dictionary<string, object?>
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdArgumentName] = parentToolCallId,
+                [CopilotSdkStreamAdapter.DisplayNameArgumentName] = "Sub Agent",
+                [CopilotSdkStreamAdapter.DescriptionArgumentName] = "desc",
+            })
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ContentTypePropertyName] = CopilotSdkStreamAdapter.SubAgentLifecycleContentType,
+            },
+        };
+        return new ChatResponseUpdate { Contents = [call] };
+    }
+
+    private static ChatResponseUpdate F1139_LifecycleStart(string agentId, string parentToolCallId)
+    {
+        var call = new FunctionCallContent(
+            agentId,
+            CopilotSdkStreamAdapter.SubAgentStartLifecycleName,
+            new Dictionary<string, object?>
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdArgumentName] = parentToolCallId,
+                [CopilotSdkStreamAdapter.DisplayNameArgumentName] = "Sub Agent",
+                [CopilotSdkStreamAdapter.DescriptionArgumentName] = "desc",
+            })
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ContentTypePropertyName] = CopilotSdkStreamAdapter.SubAgentLifecycleContentType,
+            },
+        };
+        return new ChatResponseUpdate { Contents = [call] };
+    }
+
+    private static ChatResponseUpdate F1139_SubAgentText(string agentId, string text)
+    {
+        var content = new TextContent(text)
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = agentId,
+            },
+        };
+        return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [content] };
+    }
+
+    private static ChatResponseUpdate F1139_SubAgentReasoning(string agentId, string text)
+    {
+        var content = new TextReasoningContent(text)
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = agentId,
+            },
+        };
+        return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [content] };
+    }
+
+    private static ChatResponseUpdate F1139_SubAgentToolStart(string agentId, string callId, string toolName)
+    {
+        var content = new FunctionCallContent(callId, toolName, new Dictionary<string, object?>())
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = agentId,
+            },
+        };
+        return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [content] };
+    }
+
+    private static async Task<(Phantom.Workspaces.Llm.CopilotSubAgentRouter router, System.Threading.Channels.Channel<ChatResponseUpdate> rootChannel, Fix1139TestFactory factory)> F1139_CreateRouterAsync()
+    {
+        var rootChannel = System.Threading.Channels.Channel.CreateUnbounded<ChatResponseUpdate>();
+        var factory = new Fix1139TestFactory();
+        var router = new Phantom.Workspaces.Llm.CopilotSubAgentRouter(
+            rootChannel.Writer,
+            factory,
+            new Fix1139FakeSubAgentTable());
+        await Task.CompletedTask;
+        return (router, rootChannel, factory);
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_StartedWithoutAgentId_ContentWithChildAgentId_RoutedToChildHistory()
+    {
+        // Fix #1139 crux: scripted SDK stream emits SubagentStartedEvent with NO AgentId
+        // (only Data.ToolCallId), then assistant content stamped with a distinct child
+        // runtime AgentId. The child AgentChat's History must receive that content
+        // (start-time tool-call correlation binds the sink; on first content arrival the
+        // pending entry is re-keyed under the child AgentId and its pending list is flushed
+        // into the receiver — nothing is left parked).
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStartWithoutAgentId("call-1"));
+            await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "live sub-agent text"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+            factory.CreatedHostedClients[0].Complete();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForHistoryCountAsync(child, 1, cts.Token);
+
+            var text = GetText(child.History[0].Contents);
+            Assert.Contains("live sub-agent text", text);
+        }
+        finally
+        {
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_StartedWithoutAgentId_ToolCalls_RoutedToChildHistory()
+    {
+        // Fix #1139 tool-call face: with the same AgentId-less start, tool start events
+        // stamped with the child AgentId surface as tool-call items in the child AgentChat's
+        // History (not dropped, not misrouted to the parent).
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStartWithoutAgentId("call-1"));
+            await router.RouteAsync(F1139_SubAgentToolStart("child-runtime-id", "tool-call-42", "sample_tool"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+            factory.CreatedHostedClients[0].Complete();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForHistoryCountAsync(child, 1, cts.Token);
+
+            var call = Assert.Single(child.History[0].Contents.OfType<FunctionCallContent>());
+            Assert.Equal("sample_tool", call.Name);
+            Assert.Equal("tool-call-42", call.CallId);
+        }
+        finally
+        {
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_ReasoningDelta_RoutedToChildByEventAgentId()
+    {
+        // Fix #1139: AssistantReasoningDeltaData has no ParentToolCallId field at all. The
+        // reasoning delta routes to the child AgentChat purely via the event-level AgentId,
+        // confirming no dependence on the deprecated per-Data member.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStart("child-a", "call-1"));
+            await router.RouteAsync(F1139_SubAgentReasoning("child-a", "thinking hard"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+            factory.CreatedHostedClients[0].Complete();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForHistoryCountAsync(child, 1, cts.Token);
+
+            var reasoning = Assert.Single(child.History[0].Contents.OfType<TextReasoningContent>());
+            Assert.Equal("thinking hard", reasoning.Text);
+        }
+        finally
+        {
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_RunningChildContent_NotAppendedToParentHistory()
+    {
+        // Fix #1139 negative face: the child's running content is NOT misrouted onto the
+        // parent (root) transcript AND is NOT dropped. It appears only in the child's own
+        // History. This is the direct inverse of the observed bug where the content ended
+        // up in neither.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStart("child-a", "call-1"));
+            await router.RouteAsync(F1139_SubAgentText("child-a", "child-only content"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+            factory.CreatedHostedClients[0].Complete();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForHistoryCountAsync(child, 1, cts.Token);
+
+            Assert.Contains("child-only content", GetText(child.History[0].Contents));
+
+            // Parent (root) channel got nothing sub-agent-tagged.
+            rootChannel.Writer.TryComplete();
+            var parentUpdates = new List<ChatResponseUpdate>();
+            await foreach (var u in rootChannel.Reader.ReadAllAsync())
+                parentUpdates.Add(u);
+            Assert.All(parentUpdates, u => Assert.DoesNotContain("child-only content", GetText(u.Contents)));
+        }
+        finally
+        {
+            await router.DisposeRemainingLeasesAsync();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_TwoConcurrentSubAgents_EachRoutedToOwnChildChat()
+    {
+        // Fix #1139 concurrent disambiguation: two concurrently-active children, each
+        // stamped with its own AgentId, land in their own respective child AgentChat's
+        // History with no cross-contamination.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStart("child-a", "call-a"));
+            await router.RouteAsync(F1139_LifecycleStart("child-b", "call-b"));
+
+            await router.RouteAsync(F1139_SubAgentText("child-a", "A speaks"));
+            await router.RouteAsync(F1139_SubAgentText("child-b", "B speaks"));
+            await router.RouteAsync(F1139_SubAgentText("child-a", "A again"));
+
+            Assert.Equal(2, factory.CreatedChildren.Count);
+            var childA = factory.CreatedChildren[0];
+            var childB = factory.CreatedChildren[1];
+            factory.CreatedHostedClients[0].Complete();
+            factory.CreatedHostedClients[1].Complete();
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForHistoryCountAsync(childA, 1, cts.Token);
+            await WaitForHistoryCountAsync(childB, 1, cts.Token);
+
+            var textA = GetText(childA.History[0].Contents);
+            var textB = GetText(childB.History[0].Contents);
+
+            Assert.Contains("A speaks", textA);
+            Assert.Contains("A again", textA);
+            Assert.DoesNotContain("B speaks", textA);
+
+            Assert.Contains("B speaks", textB);
+            Assert.DoesNotContain("A speaks", textB);
+            Assert.DoesNotContain("A again", textB);
+        }
+        finally
+        {
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
         }
     }
 }

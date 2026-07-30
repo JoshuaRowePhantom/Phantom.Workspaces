@@ -369,4 +369,127 @@ public sealed class CopilotSubAgentRouterTests
         Assert.Equal("fix-reload1", overrides.DisplayNameOverride);
         Assert.DoesNotContain("general-purpose", overrides.DisplayNameOverride ?? string.Empty, StringComparison.Ordinal);
     }
+
+    // ─── Fix #1139 tests ─────────────────────────────────────────────────────────
+
+    private static ChatResponseUpdate LifecycleStartWithoutAgentId(
+        string parentToolCallId,
+        string displayName = "Sub Agent",
+        string description = "desc")
+    {
+        // Mirrors the CopilotSdkStreamAdapter output when SubagentStartedEvent.AgentId is
+        // empty: CallId is empty; the spawning tool-call id is surfaced only in the
+        // ParentToolCallIdArgumentName argument for start-time correlation in the router.
+        var call = new FunctionCallContent(
+            string.Empty,
+            CopilotSdkStreamAdapter.SubAgentStartLifecycleName,
+            new Dictionary<string, object?>
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdArgumentName] = parentToolCallId,
+                [CopilotSdkStreamAdapter.DisplayNameArgumentName] = displayName,
+                [CopilotSdkStreamAdapter.DescriptionArgumentName] = description,
+            })
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ContentTypePropertyName] = CopilotSdkStreamAdapter.SubAgentLifecycleContentType,
+            },
+        };
+        return new ChatResponseUpdate { Contents = [call] };
+    }
+
+    [Fact]
+    public async Task RouteAsync_StartedOmitsAgentId_RunningContentReachesChildReceiver_NotPending()
+    {
+        // Fix #1139 crux (router side): a SubagentStartedEvent that carries no AgentId parks
+        // its ChildRoutingEntry in a pendingChildSinksByToolCall map keyed by the spawning
+        // tool-call id. When the child's running content arrives tagged with its runtime
+        // AgentId, the router adopts (re-keys) that pending entry under the AgentId and
+        // delivers the content to the ALREADY-ATTACHED receiver — nothing is left parked in
+        // ChildRoutingEntry.pending.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStartWithoutAgentId("call-1"));
+        // Content is stamped with the child's runtime AgentId, distinct from any tool-call id.
+        await router.RouteAsync(SubAgentText("child-runtime-id", "live text"));
+
+        Assert.Empty(await DrainAsync(channel));
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+        // The content must appear on the child receiver — not silently buffered in pending.
+        Assert.Contains(updates, u => u.Text == "live text");
+    }
+
+    [Fact]
+    public async Task RouteAsync_MismatchedSinkAndContentId_NeverWrittenToRootWriter()
+    {
+        // Fix #1139: prior to the fix, a mismatch between the sink key and the content's
+        // AgentId caused the update to fall into an orphan sink (never receiver-attached),
+        // giving the appearance of a dropped update. This test asserts the invariant on the
+        // NEGATIVE face: no sub-agent-tagged update ever reaches rootWriter, regardless of
+        // whether it matches an existing sink.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart("agent-known", "call-1"));
+        // Content stamped with an AgentId that doesn't match any registered sink.
+        await router.RouteAsync(SubAgentText("agent-mismatch", "child-only text"));
+
+        Assert.Empty(await DrainAsync(channel));
+    }
+
+    [Fact]
+    public async Task RouteAsync_TwoConcurrentSubAgents_EachContentRoutedByOwnAgentId()
+    {
+        // Fix #1139 concurrent-disambiguation: with two concurrently-active children, each
+        // child's content (keyed by its own AgentId) lands in its own receiver, with no
+        // cross-contamination.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart("child-a", "call-a"));
+        var receiverA = factory.CreatedReceivers[^1];
+
+        await router.RouteAsync(LifecycleStart("child-b", "call-b"));
+        var receiverB = factory.CreatedReceivers[^1];
+        Assert.NotSame(receiverA, receiverB);
+
+        await router.RouteAsync(SubAgentText("child-a", "hello from A"));
+        await router.RouteAsync(SubAgentText("child-b", "hello from B"));
+        await router.RouteAsync(SubAgentText("child-a", "more from A"));
+
+        Assert.Empty(await DrainAsync(channel));
+
+        var aUpdates = await DrainReceiverAsync(receiverA);
+        var bUpdates = await DrainReceiverAsync(receiverB);
+
+        Assert.Contains(aUpdates, u => u.Text == "hello from A");
+        Assert.Contains(aUpdates, u => u.Text == "more from A");
+        Assert.DoesNotContain(aUpdates, u => u.Text == "hello from B");
+
+        Assert.Contains(bUpdates, u => u.Text == "hello from B");
+        Assert.DoesNotContain(bUpdates, u => u.Text == "hello from A");
+        Assert.DoesNotContain(bUpdates, u => u.Text == "more from A");
+    }
+
+    [Fact]
+    public async Task RouteAsync_StartedOmitsAgentId_ThenLifecycleCompleted_CompletesChild()
+    {
+        // Edge case complement to RouteAsync_StartedOmitsAgentId_...: if no content arrived
+        // between an AgentId-less start and its completion, the pending sink is still keyed
+        // by tool-call id. The SDK's completion event carries the child AgentId at event
+        // level; the router adopts the oldest pending entry to complete it, so the child
+        // receiver is Complete()'d rather than leaked.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStartWithoutAgentId("call-1"));
+        // Completion arrives with the child AgentId now known.
+        await router.RouteAsync(LifecycleCompleted("child-runtime-id"));
+
+        // Receiver's stream terminates gracefully.
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in factory.CreatedReceiver!.GetStreamingResponseAsync([]))
+            updates.Add(u);
+    }
 }
