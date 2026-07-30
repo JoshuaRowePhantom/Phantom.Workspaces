@@ -11,7 +11,15 @@ namespace Phantom.Workspaces.ViewModels;
 [JsonDerivedType(typeof(EntityDockTabDescriptor), "entity")]
 [JsonDerivedType(typeof(AgentSessionDockTabDescriptor), "agent-session")]
 [JsonDerivedType(typeof(BrowserDockTabDescriptor), "browser")]
-public abstract record DockTabDescriptor;
+public abstract record DockTabDescriptor
+{
+    /// <summary>
+    /// The tab title captured at save time. Preferred over live entity re-derivation on restore
+    /// so that user-visible titles round-trip through the persisted dock layout even when the
+    /// referenced entity's display-name is empty or has changed.
+    /// </summary>
+    public string? Title { get; init; }
+}
 
 /// <summary>Descriptor for a generic entity view tab.</summary>
 public sealed record EntityDockTabDescriptor(string EntityId, string ShortcutName) : DockTabDescriptor;

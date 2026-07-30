@@ -3241,7 +3241,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     {
                         var agentTab = await this.openAgentSessionShortcutHandler
                             .TryCreateAgentSessionTabForRestoreAsync(
-                                this, entity, tabId, title: null, dockRegion: null);
+                                this, entity, tabId, title: agentDesc.Title, dockRegion: null);
                         if (agentTab is not null) return agentTab;
                     }
                 }
@@ -3256,10 +3256,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     var entity = entities.FirstOrDefault();
                     if (entity is not null)
                     {
+                        var restoredTitle = !string.IsNullOrEmpty(entityDesc.Title)
+                            ? entityDesc.Title
+                            : entity.DisplayName;
                         return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
                         {
                             Id = tabId,
-                            Title = entity.DisplayName,
+                            Title = restoredTitle,
                             Entity = entity,
                             DockRegion = "full",
                         };
@@ -3273,7 +3276,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     return new WebViewModel(browserDesc.Url)
                     {
                         Id = tabId,
-                        Title = browserDesc.Url,
+                        Title = !string.IsNullOrEmpty(browserDesc.Title) ? browserDesc.Title : browserDesc.Url,
                         DockRegion = "full",
                     };
                 }

@@ -3262,6 +3262,266 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(pane.Tabs, t => t is EntityWorkspaceTabViewModel);
     }
 
+    // ── #1158: DockTabDescriptor.Title round-trips through save→restore ─────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RestoreFromDockLayout_WithEntityTabs_PreservesEachTabTitle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId1 = new EntityId("11588002-0000-4000-8000-000000000001");
+        var entity1 = await UpsertEntityAndLoadAsync(entityBroker, entityId1, """
+            {
+              "entity-id": "11588002-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "entity-title-tab-1"]],
+              "display-name": { "default": "Entity One Display" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "one" } }
+            }
+            """);
+        var entityId2 = new EntityId("11588002-0000-4000-8000-000000000002");
+        var entity2 = await UpsertEntityAndLoadAsync(entityBroker, entityId2, """
+            {
+              "entity-id": "11588002-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "entity-title-tab-2"]],
+              "display-name": { "default": "Entity Two Display" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "two" } }
+            }
+            """);
+
+        var tab1 = new EntityWorkspaceTabViewModel
+        {
+            Id = "entity-title-tab-1",
+            Title = "Custom Entity Title 1",
+            Entity = entity1,
+            DockRegion = "full",
+        };
+        var tab2 = new EntityWorkspaceTabViewModel
+        {
+            Id = "entity-title-tab-2",
+            Title = "Custom Entity Title 2",
+            Entity = entity2,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(tab1);
+        await viewModel.OpenTabAsync(tab2);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "entity-title-tab-2");
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        var workspaceId = new EntityId("11588002-0000-4000-8000-0000000000f1");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "11588002-0000-4000-8000-0000000000f1",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Entity Title Restore WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restored1 = restoredPane!.Tabs.FirstOrDefault(t => t.Id == "entity-title-tab-1");
+        var restored2 = restoredPane.Tabs.FirstOrDefault(t => t.Id == "entity-title-tab-2");
+        Assert.NotNull(restored1);
+        Assert.NotNull(restored2);
+        Assert.Equal("Custom Entity Title 1", restored1!.Title);
+        Assert.Equal("Custom Entity Title 2", restored2!.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RestoreFromDockLayout_WhenEntityDisplayNameIsEmpty_FallsBackToDescriptorTitle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("11588003-0000-4000-8000-000000000001");
+        var entity = await UpsertEntityAndLoadAsync(entityBroker, entityId, """
+            {
+              "entity-id": "11588003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "empty-display-name-tab"]],
+              "display-name": { "default": "" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "empty" } }
+            }
+            """);
+
+        var tab = new EntityWorkspaceTabViewModel
+        {
+            Id = "empty-display-name-tab",
+            Title = "Meaningful User Title",
+            Entity = entity,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "empty-display-name-tab");
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        var workspaceId = new EntityId("11588003-0000-4000-8000-0000000000f1");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "11588003-0000-4000-8000-0000000000f1",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Empty DN Restore WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredTab = Assert.Single(restoredPane!.Tabs);
+        Assert.Equal("Meaningful User Title", restoredTab.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RestoreFromDockLayout_WithBrowserTab_PreservesUserSetTitle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://browser-title.example.com")
+        {
+            Id = "browser-title-tab",
+            Title = "User-Chosen Browser Title",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "browser-title-tab");
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("11588001-0000-4000-8000-0000000000f1");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "11588001-0000-4000-8000-0000000000f1",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Browser Title Restore WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredTab = Assert.Single(restoredPane!.Tabs);
+        var web = Assert.IsType<WebViewModel>(restoredTab);
+        Assert.Equal("User-Chosen Browser Title", web.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RestoreFromDockLayout_WithAgentSessionTab_PreservesTitle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("11588004-0000-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId, """
+            {
+              "entity-id": "11588004-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "title-restore-echo"]],
+              "display-name": { "default": "Title Restore Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "title-restore-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-title-tab",
+            Title = "Preserved Agent Title",
+            Entity = agentSessionEntity,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "agent-title-tab");
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        var workspaceId = new EntityId("11588004-0000-4000-8000-0000000000f1");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "11588004-0000-4000-8000-0000000000f1",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Agent Title Restore WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredTab = Assert.Single(restoredPane!.Tabs);
+        Assert.IsType<AgentSessionWorkspaceTabViewModel>(restoredTab);
+        Assert.Equal("Preserved Agent Title", restoredTab.Title);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task WaitForPanePopulatedAsync_WhenPopulateHangs_ThrowsTimeoutExceptionWithDiagnostics()
     {

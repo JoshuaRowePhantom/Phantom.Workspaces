@@ -177,16 +177,18 @@ public class WorkspaceDocument : Document
     /// </summary>
     internal static DockTabDescriptor? BuildDescriptor(WorkspaceTabViewModel tab)
     {
+        var title = string.IsNullOrEmpty(tab.Title) ? null : tab.Title;
+
         if (tab.Entity is { } entity)
         {
             if (tab is AgentSessionWorkspaceTabViewModel)
-                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString());
+                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString()) { Title = title };
 
-            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open");
+            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open") { Title = title };
         }
 
         if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
-            return new BrowserDockTabDescriptor(webVm.AddressBarUrl);
+            return new BrowserDockTabDescriptor(webVm.AddressBarUrl) { Title = title };
 
         return null;
     }

@@ -421,6 +421,95 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.DoesNotContain("WorkspacePane", json);
     }
 
+    // ── #1158: DockTabDescriptor.Title round-trips through DockSerializer ─────
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_EntityKind_PreservesTitle_OnRoundTrip()
+    {
+        var descriptor = new EntityDockTabDescriptor(
+            "11111111-1111-4111-1111-111111111111", "Open")
+        {
+            Title = "User-Visible Entity Title",
+        };
+        var tab = new StubWorkspaceTab("tab-title-entity", "User-Visible Entity Title");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<EntityDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("User-Visible Entity Title", restoredDesc.Title);
+        Assert.Equal("11111111-1111-4111-1111-111111111111", restoredDesc.EntityId);
+        Assert.Equal("Open", restoredDesc.ShortcutName);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_BrowserKind_PreservesTitle_OnRoundTrip()
+    {
+        var descriptor = new BrowserDockTabDescriptor("https://title-test.example.com")
+        {
+            Title = "Custom Browser Tab Title",
+        };
+        var tab = new StubWorkspaceTab("tab-title-browser", "Custom Browser Tab Title");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("Custom Browser Tab Title", restoredDesc.Title);
+        Assert.Equal("https://title-test.example.com", restoredDesc.Url);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_AgentSessionKind_PreservesTitle_OnRoundTrip()
+    {
+        var descriptor = new AgentSessionDockTabDescriptor("22222222-2222-4222-2222-222222222222")
+        {
+            Title = "Preserved Agent Session Title",
+        };
+        var tab = new StubWorkspaceTab("tab-title-agent", "Preserved Agent Session Title");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<AgentSessionDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("Preserved Agent Session Title", restoredDesc.Title);
+        Assert.Equal("22222222-2222-4222-2222-222222222222", restoredDesc.EntityId);
+    }
+
+    [Fact]
+    public void BuildDescriptor_WithNonEmptyTabTitle_CapturesTitleOnDescriptor()
+    {
+        // Use reflection to call the internal WorkspaceDocument.BuildDescriptor static method
+        // against a StubWorkspaceTab that carries a non-empty Title but no Entity — falls into
+        // the browser branch when combined with the entity-less path, so use a WebViewModel here
+        // to exercise the URL-bearing branch.
+        var browserTab = new WebViewModel("https://build-desc.example.com")
+        {
+            Id = "bd-tab",
+            Title = "Non-Empty Title",
+        };
+
+        var method = typeof(WorkspaceDocument).GetMethod(
+            "BuildDescriptor",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var descriptor = (DockTabDescriptor?)method!.Invoke(null, [browserTab]);
+        Assert.NotNull(descriptor);
+        var browserDesc = Assert.IsType<BrowserDockTabDescriptor>(descriptor);
+        Assert.Equal("Non-Empty Title", browserDesc.Title);
+        Assert.Equal("https://build-desc.example.com", browserDesc.Url);
+    }
+
     [Fact]
     public void WorkspaceDocument_Descriptor_IsSerialized_ByDockSerializer()
     {
