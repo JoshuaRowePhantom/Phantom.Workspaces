@@ -1015,7 +1015,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         // Projects the full (unfiltered) set of sub-agent nav items in Target into
         // subAgentsNavItem.Children, excluding completed (Succeeded/Failed) items when
-        // HideCompletedAgents is true. Preserves source order. See issue #1033.
+        // HideCompletedAgents is true. See issue #1033.
+        //
+        // Fix #1153: Applies a composite ordering to the visible children BEFORE reconciliation:
+        //   1. Running/idle items first, completed (Succeeded/Failed) items last.
+        //   2. Within each group, most-recently-updated first (descending LastUpdatedAt), so
+        //      the item the operator is actively watching stays near the top and completed
+        //      history sinks to the bottom.
+        // The reconciliation loop below moves items to their new positions in-place so
+        // Avalonia's ItemsControl sees ordinary Move/Add/Remove events, not a full reset.
         private void RefreshVisibleChildren()
         {
             var hide = this.subAgentsNavItem.HideCompletedAgents;
@@ -1028,6 +1036,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     desired.Add(item);
                 }
             }
+
+            desired = desired
+                .OrderBy(item => (item.IsSucceeded || item.IsFailed) ? 1 : 0)
+                .ThenByDescending(item => item.LastUpdatedAt ?? DateTime.MinValue)
+                .ToList();
 
             for (int i = this.visibleChildren.Count - 1; i >= 0; i--)
             {
