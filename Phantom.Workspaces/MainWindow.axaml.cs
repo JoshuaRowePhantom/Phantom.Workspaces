@@ -117,6 +117,16 @@ public partial class MainWindow : Window
             return;
         }
 
+        // Ctrl+F: open the find bar and focus the find input.
+        if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
+        {
+            viewModel.Find.OpenCommand.Execute(null);
+            var findTextBox = this.FindControl<TextBox>("FindTextBox");
+            findTextBox?.Focus();
+            e.Handled = true;
+            return;
+        }
+
     }
 
     private async void OnOpenSettingsClicked(

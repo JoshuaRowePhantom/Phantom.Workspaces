@@ -26,8 +26,9 @@
         <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding NavigateBackCommand}" />
         <KeyBinding Gesture="Ctrl+Shift+OemMinus" Command="{Binding NavigateForwardCommand}" />
         <KeyBinding Gesture="Ctrl+S" Command="{Binding SelectedWorkspacePane.SaveCommand}" />
+        <KeyBinding Gesture="Ctrl+F" Command="{Binding Find.OpenCommand}" />
     </Window.KeyBindings>
-    <Grid RowDefinitions="Auto,*">
+    <Grid RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" Classes="window-header">
             <Grid ColumnDefinitions="Auto,*,Auto">
                 <StackPanel Grid.Column="0"
@@ -152,7 +153,32 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="1">
+        <Border Grid.Row="1"
+                Classes="entity-find-bar"
+                HorizontalAlignment="Left"
+                IsVisible="{Binding Find.IsOpen}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBox x:Name="FindTextBox"
+                         Classes="entity-find-input"
+                         Text="{Binding Find.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         Watermark="Find entities…">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter"        Command="{Binding Find.NextCommand}" />
+                        <KeyBinding Gesture="Shift+Enter"  Command="{Binding Find.PreviousCommand}" />
+                        <KeyBinding Gesture="Ctrl+F"       Command="{Binding Find.NextCommand}" />
+                        <KeyBinding Gesture="Ctrl+Shift+F" Command="{Binding Find.PreviousCommand}" />
+                        <KeyBinding Gesture="Escape"       Command="{Binding Find.CloseCommand}" />
+                    </TextBox.KeyBindings>
+                </TextBox>
+                <TextBlock Classes="muted"
+                           VerticalAlignment="Center"
+                           Text="{Binding Find.MatchStatusText}" />
+                <CheckBox Content="_Hide unmatched"
+                          IsChecked="{Binding Find.HideUnmatched, Mode=TwoWay}" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="{Binding LeftPaneColumnWidth}" MinWidth="0" />
                 <ColumnDefinition Width="Auto" />
@@ -221,11 +247,11 @@
 
         <!-- Anchor for the navigation-stack popup in the lower-left corner -->
         <Border x:Name="NavStackPopupAnchor"
-                Grid.Row="1"
+                Grid.Row="2"
                 VerticalAlignment="Bottom"
                 HorizontalAlignment="Left"
                 IsHitTestVisible="False" />
-        <Popup Grid.Row="1"
+        <Popup Grid.Row="2"
                IsOpen="{Binding NavStackPopup.IsOpen, Mode=TwoWay}"
                PlacementTarget="{Binding #NavStackPopupAnchor}"
                Placement="Top"

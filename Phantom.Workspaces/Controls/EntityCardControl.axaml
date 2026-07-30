@@ -20,8 +20,16 @@
                                 Classes="workspace-entity-header-row"
                                 MinWidth="67"
                                 Margin="0,0,12,0">
-                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
-                        <TextBlock Text="{Binding EntityType}" Classes="muted" />
+                        <TextBlock Classes="workspace-entity-title">
+                            <Run Text="{Binding DisplayNameBefore}" />
+                            <Run Text="{Binding DisplayNameMatch}" Background="#FFF59D" />
+                            <Run Text="{Binding DisplayNameAfter}" />
+                        </TextBlock>
+                        <TextBlock Classes="muted">
+                            <Run Text="{Binding EntityTypeBefore}" />
+                            <Run Text="{Binding EntityTypeMatch}" Background="#FFF59D" />
+                            <Run Text="{Binding EntityTypeAfter}" />
+                        </TextBlock>
                     </StackPanel>
                     <WrapPanel Grid.Column="2"
                                Classes="workspace-entity-actions-row"

@@ -225,6 +225,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand NavigateForwardCommand { get; }
     public RelayCommand DuplicateBrowserTabCommand { get; }
 
+    /// <summary>
+    /// Find (Ctrl-F) session over the active View's <see cref="EntityListViewModel"/>. The list is
+    /// replaced when the active tab changes; the same instance persists so bindings stay live.
+    /// </summary>
+    public FindViewModel Find => this.find ??= new FindViewModel(this.findList);
+    private FindViewModel? find;
+    private readonly EntityListViewModel findList = new();
+
     public NotificationsViewModel? NotificationsViewModel
     {
         get => this.notificationsViewModel;

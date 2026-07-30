@@ -250,4 +250,38 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
 
         Assert.Contains(nameof(EntityCardViewModel.Shortcuts), raised);
     }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_WhenQueryMatchesDisplayName_HighlightsMatchedText()
+    {
+        var card = new EntityCardViewModel(
+            displayName: "hello world",
+            entityType: "note");
+
+        card.MatchQuery = "world";
+
+        Assert.True(card.IsFindMatch);
+        Assert.Equal(6, card.DisplayNameMatchStart);
+        Assert.Equal(5, card.DisplayNameMatchLength);
+        Assert.Equal("hello ", card.DisplayNameBefore);
+        Assert.Equal("world", card.DisplayNameMatch);
+        Assert.Equal(string.Empty, card.DisplayNameAfter);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_WhenQueryCleared_RemovesHighlight()
+    {
+        var card = new EntityCardViewModel(
+            displayName: "hello world",
+            entityType: "note");
+        card.MatchQuery = "world";
+        Assert.True(card.IsFindMatch);
+
+        card.MatchQuery = null;
+
+        Assert.False(card.IsFindMatch);
+        Assert.Equal("hello world", card.DisplayNameBefore);
+        Assert.Equal(string.Empty, card.DisplayNameMatch);
+        Assert.Equal(string.Empty, card.DisplayNameAfter);
+    }
 }

@@ -42,6 +42,17 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public EntityListViewModel EntityList => this.entityList;
 
+    /// <summary>
+    /// Find (Ctrl-F) session over this tab's <see cref="EntityList"/>. Bound by the view code-behind
+    /// to a <c>bringIntoView</c> callback that calls <c>TreeViewItem.BringIntoView()</c>.
+    /// </summary>
+    public FindViewModel Find
+    {
+        get => this.find ??= new FindViewModel(this.entityList);
+        internal set => this.SetProperty(ref this.find, value);
+    }
+    private FindViewModel? find;
+
     public override async ValueTask DisposeAsync()
     {
         this.rootSubscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
