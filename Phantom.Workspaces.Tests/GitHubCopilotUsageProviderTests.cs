@@ -524,6 +524,81 @@ public sealed class GitHubCopilotUsageProviderTests
         Assert.All(metrics, m => Assert.Null(m.AdditionalInformation));
     }
 
+    [Fact]
+    public async Task GetMetricsAsync_PopulatesWebUrl_ForEachCopilotMetric()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(metrics);
+        Assert.All(metrics, m => Assert.NotNull(m.WebUrl));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_MetricWebUrl_FallsBackToAccountPage_WhenNoDeepLink()
+    {
+        var accountUrl = new Uri("https://github.com/settings/billing/summary");
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = accountUrl,
+        };
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.All(metrics, m => Assert.Equal(accountUrl, m.WebUrl));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_MetricWebUrl_UsesOrgBillingPage_ForOrganizationAccount()
+    {
+        var orgBillingUrl = new Uri("https://github.com/organizations/contoso/settings/billing/summary");
+        var account = new UsageAccount
+        {
+            UserName = "contoso",
+            Product = "GitHub",
+            SettingsUrl = orgBillingUrl,
+        };
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(metrics);
+        Assert.All(metrics, m => Assert.Equal(orgBillingUrl, m.WebUrl));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_MetricWebUrl_FallsBackToAccountSettingsUrl_WhenUserNameMissing()
+    {
+        var accountUrl = new Uri("https://github.com/settings/billing/summary");
+        var account = new UsageAccount
+        {
+            UserName = string.Empty,
+            Product = "GitHub",
+            SettingsUrl = accountUrl,
+        };
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(metrics);
+        Assert.All(metrics, m => Assert.Equal(accountUrl, m.WebUrl));
+    }
+
     private sealed class RequestCapturingHandler : HttpMessageHandler
     {
         private readonly Action<HttpRequestMessage> onRequest;

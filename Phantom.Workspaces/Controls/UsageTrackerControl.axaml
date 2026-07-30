@@ -43,30 +43,44 @@
                                             <DataTemplate x:DataType="models:UsageMetric">
                                                 <StackPanel Margin="0,2"
                                                             Spacing="1">
-                                                    <Grid ColumnDefinitions="Auto,120,*,120">
-                                                    <!-- Selection radio: single-select across all rows/accounts via GroupName -->
+                                                    <Grid ColumnDefinitions="Auto,*">
+                                                    <!-- Selection radio: OUTSIDE the hyperlink so clicking the radio selects, not navigates -->
                                                     <RadioButton Grid.Column="0"
                                                                  Name="ShownUsageRadio"
                                                                  GroupName="ShownUsageMetric"
                                                                  VerticalAlignment="Center"
                                                                  Margin="0,0,4,0"
                                                                  IsChecked="{Binding IsSelectedAsShown, Mode=TwoWay}" />
+
+                                                    <!-- Hyperlink wraps title/quantity/bar so the row navigates to the web data source -->
+                                                    <HyperlinkButton Grid.Column="1"
+                                                                     Padding="0"
+                                                                     HorizontalAlignment="Stretch"
+                                                                     HorizontalContentAlignment="Stretch"
+                                                                     Name="MetricRowHyperlink">
+                                                        <HyperlinkButton.NavigateUri>
+                                                            <MultiBinding Converter="{x:Static converters:FirstNonNullConverter.Instance}">
+                                                                <Binding Path="WebUrl" />
+                                                                <Binding Path="$parent[ItemsControl].DataContext.SettingsUrl" />
+                                                            </MultiBinding>
+                                                        </HyperlinkButton.NavigateUri>
+                                                        <Grid ColumnDefinitions="120,*,120">
                                                     <!-- Metric title -->
-                                                    <TextBlock Grid.Column="1"
+                                                    <TextBlock Grid.Column="0"
                                                                Text="{Binding Title}"
                                                                Classes="muted"
                                                                VerticalAlignment="Center"
                                                                FontSize="11" />
 
                                                     <!-- Quantity presentation -->
-                                                    <TextBlock Grid.Column="2"
+                                                    <TextBlock Grid.Column="1"
                                                                Text="{Binding QuantityPresentation}"
                                                                VerticalAlignment="Center"
                                                                FontSize="11"
                                                                Margin="4,0" />
 
                                                     <!-- Progress bar: yellow used / light green remaining / black text overlay -->
-                                                    <Panel Grid.Column="3"
+                                                    <Panel Grid.Column="2"
                                                            Height="14">
                                                         <!-- Remaining (light green background) -->
                                                         <Border Name="RemainingBar"
@@ -90,6 +104,8 @@
                                                                    Text="{Binding FractionUsed,
                                                                        Converter={x:Static converters:FractionToPercentageConverter.Instance}}" />
                                                     </Panel>
+                                                        </Grid>
+                                                    </HyperlinkButton>
                                                     </Grid>
 
                                                     <!-- Optional additional information (e.g. "Resets in 2 days") -->

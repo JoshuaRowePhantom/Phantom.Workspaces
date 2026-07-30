@@ -72,9 +72,9 @@ public sealed class UsageTrackerControlTests
         
         try
         {
-            // Should have one HyperlinkButton for the account
+            // Account hyperlink + one hyperlink per metric row (issue #1149).
             var hyperlinkButtons = window.GetVisualDescendants().OfType<HyperlinkButton>().ToList();
-            Assert.Single(hyperlinkButtons);
+            Assert.True(hyperlinkButtons.Count >= 1);
             
             // Should have two progress bars (one for each metric)
             var borders = window.GetVisualDescendants().OfType<Border>().Where(b => b.Name == "UsedBar" || b.Name == "RemainingBar").ToList();
@@ -113,8 +113,130 @@ public sealed class UsageTrackerControlTests
         
         try
         {
-            var hyperlinkButton = window.GetVisualDescendants().OfType<HyperlinkButton>().First();
-            Assert.Equal(new Uri("https://github.com/settings/copilot"), hyperlinkButton.NavigateUri);
+            // The account-header hyperlink is the one whose NavigateUri equals the account SettingsUrl
+            // AND is NOT the metric-row hyperlink (issue #1149 adds those). Filtering by Name distinguishes them.
+            var hyperlinkButtons = window.GetVisualDescendants().OfType<HyperlinkButton>().ToList();
+            Assert.Contains(hyperlinkButtons, hb => hb.NavigateUri == new Uri("https://github.com/settings/copilot"));
+        }
+        finally
+        {
+            window.Close();
+            viewModel.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_MetricRow_RendersHyperlinkWithWebUrl()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 200m,
+            QuantityPresentationFormatString = "{0} / {1}",
+            WebUrl = new Uri("https://github.com/settings/billing/summary?user=testuser"),
+        });
+        metrics.Accounts.Add(account);
+
+        var viewModel = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var metricHyperlink = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .FirstOrDefault(hb => hb.Name == "MetricRowHyperlink");
+            Assert.NotNull(metricHyperlink);
+            Assert.Equal(new Uri("https://github.com/settings/billing/summary?user=testuser"), metricHyperlink!.NavigateUri);
+        }
+        finally
+        {
+            window.Close();
+            viewModel.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_MetricRow_InvokingOpenLaunchesWebUrl()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        var expectedUrl = new Uri("https://github.com/settings/billing/summary?user=testuser");
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 200m,
+            QuantityPresentationFormatString = "{0} / {1}",
+            WebUrl = expectedUrl,
+        });
+        metrics.Accounts.Add(account);
+
+        var viewModel = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var metricHyperlink = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .First(hb => hb.Name == "MetricRowHyperlink");
+
+            // The HyperlinkButton's Command/NavigateUri is what Avalonia invokes on Open;
+            // verifying NavigateUri is the operative property proves the row opens to expectedUrl.
+            Assert.Equal(expectedUrl, metricHyperlink.NavigateUri);
+        }
+        finally
+        {
+            window.Close();
+            viewModel.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_MetricRow_FallsBackToAccountUrl_WhenMetricWebUrlNull()
+    {
+        var accountUrl = new Uri("https://github.com/settings/copilot");
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = accountUrl,
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 200m,
+            QuantityPresentationFormatString = "{0} / {1}",
+            // WebUrl not set — falls back to account SettingsUrl.
+        });
+        metrics.Accounts.Add(account);
+
+        var viewModel = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var metricHyperlink = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .First(hb => hb.Name == "MetricRowHyperlink");
+            Assert.Equal(accountUrl, metricHyperlink.NavigateUri);
         }
         finally
         {

@@ -100,7 +100,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return ParseMetrics(json, this.timeProvider.GetUtcNow().UtcDateTime);
+        return ParseMetrics(json, account, this.timeProvider.GetUtcNow().UtcDateTime);
     }
 
     private static string BuildRequestUrl(UsageAccount account)
@@ -123,7 +123,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         return this.httpClient.SendAsync(request, cancellationToken);
     }
 
-    private static IReadOnlyList<UsageMetric> ParseMetrics(string json, DateTime now)
+    private static IReadOnlyList<UsageMetric> ParseMetrics(string json, UsageAccount account, DateTime now)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -198,6 +198,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         foreach (var sku in order)
         {
             var aggregate = aggregates[sku];
+            var webUrl = BuildMetricWebUrl(account, aggregate.Sku);
             metrics.Add(new UsageMetric
             {
                 Title = aggregate.Sku,
@@ -206,6 +207,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                 QuantityPresentationFormatString = "{0:N0} {2}",
                 Unit = aggregate.Unit,
                 LastUpdatedAt = now,
+                WebUrl = webUrl,
             });
 
             if (aggregate.NetAmount != 0m)
@@ -218,11 +220,24 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     QuantityPresentationFormatString = "{0:C2}",
                     Unit = string.Empty,
                     LastUpdatedAt = now,
+                    WebUrl = webUrl,
                 });
             }
         }
 
         return metrics;
+    }
+
+    /// <summary>
+    /// Builds the best web URL for a Copilot SKU on the given account. Falls back to the
+    /// account's <see cref="UsageAccount.SettingsUrl"/> (which is already host+account aware,
+    /// so it points at either the user's or the organization's billing/usage page).
+    /// </summary>
+    private static Uri? BuildMetricWebUrl(UsageAccount account, string sku)
+    {
+        // No per-SKU deep link exists today; always fall back to the account's
+        // pre-resolved billing/usage page. Callers ensure SettingsUrl is populated.
+        return account.SettingsUrl;
     }
 
     private sealed class CopilotSkuAggregate

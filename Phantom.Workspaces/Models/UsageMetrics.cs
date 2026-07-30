@@ -69,6 +69,13 @@ public sealed class UsageMetric : ObservableObject
     public string? AdditionalInformation { get; init; }
 
     /// <summary>
+    /// Optional web page URL that shows the source data behind this metric (billing
+    /// page, per-SKU deep link, etc.). Null when no per-metric link is known; the view
+    /// then falls back to the owning account's SettingsUrl.
+    /// </summary>
+    public Uri? WebUrl { get; init; }
+
+    /// <summary>
     /// Whether this metric is the one pinned as the top-right indicator label.
     /// Two-way bound to the row's RadioButton. The <see cref="UsageTrackerViewModel"/>
     /// enforces single-selection semantics across all rows and accounts.

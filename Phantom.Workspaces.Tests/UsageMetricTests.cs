@@ -95,4 +95,11 @@ public sealed class UsageMetricTests
         };
         Assert.Equal("Resets in 2 days", metric.AdditionalInformation);
     }
+
+    [Fact]
+    public void UsageMetric_WebUrl_DefaultsToNull()
+    {
+        var metric = new UsageMetric { Title = "Test" };
+        Assert.Null(metric.WebUrl);
+    }
 }
