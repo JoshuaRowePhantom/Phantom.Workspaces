@@ -112,6 +112,60 @@ public sealed class UsageAccount
     public ObservableCollection<UsageMetric> Metrics { get; } = [];
 
     /// <summary>
+    /// Organisation (e.g. GitHub org) that owns / bills this account when the account is an
+    /// org-managed seat. Null for personal accounts. The GitHub Copilot provider uses this to
+    /// decide whether to call the org-scoped budgets endpoint (§B.1 of #1159); personal
+    /// accounts must NOT call the budgets endpoint since there is no user-scoped budgets GET.
+    /// </summary>
+    public string? Org { get; init; }
+
+    /// <summary>
+    /// Configured "included premium requests per month" quota for this account. Used as the
+    /// count-metric denominator (<see cref="UsageMetric.QuantityTotal"/>) for Premium Request
+    /// rows, because the REST usage/budgets endpoints do not expose an included-quantity value.
+    /// </summary>
+    public decimal? IncludedPremiumRequests { get; init; }
+
+    /// <summary>
+    /// Configured "included AI credits per month" quota for this account. Used as the
+    /// count-metric denominator for AI Credit rows, because the REST endpoints do not expose
+    /// an included-quantity value for count metrics.
+    /// </summary>
+    public decimal? IncludedAiCredits { get; init; }
+
+    /// <summary>
+    /// Configured monthly dollar budget cap for the account, used as the fallback cost-metric
+    /// denominator when the REST budgets endpoint returns no matching budget (or 403/404).
+    /// </summary>
+    public decimal? MonthlyBudget { get; init; }
+
+    /// <summary>
+    /// Returns the configured included quantity for the given SKU (Premium Request /
+    /// AI Credit), or null when no configuration is available. Case-insensitive matching on
+    /// the SKU label to tolerate provider variations (e.g. "Copilot Premium Request",
+    /// "Copilot AI Credits").
+    /// </summary>
+    public decimal? GetIncludedQuantity(string sku)
+    {
+        if (string.IsNullOrEmpty(sku))
+        {
+            return null;
+        }
+
+        if (sku.Contains("Premium Request", StringComparison.OrdinalIgnoreCase))
+        {
+            return this.IncludedPremiumRequests;
+        }
+
+        if (sku.Contains("AI Credit", StringComparison.OrdinalIgnoreCase))
+        {
+            return this.IncludedAiCredits;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Composes a stable key for a metric identified by its owning account's product
     /// and the metric's title. Titles are not globally unique, so the account product
     /// is required to disambiguate metrics across accounts.

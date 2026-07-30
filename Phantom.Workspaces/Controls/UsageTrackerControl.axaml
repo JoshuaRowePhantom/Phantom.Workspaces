@@ -12,8 +12,18 @@
         <Grid RowDefinitions="Auto,*">
             <Border Grid.Row="0"
                     Padding="12,8">
-                <TextBlock Text="AI Usage"
-                           FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0"
+                               Text="AI Usage"
+                               FontWeight="SemiBold" />
+                    <!-- Tracker-level deep-link (#1159 Fix C): view/manage Copilot metrics on GitHub. -->
+                    <HyperlinkButton Grid.Column="1"
+                                     Name="ManageOnGitHubHyperlink"
+                                     NavigateUri="https://github.com/settings/copilot/features"
+                                     Padding="0"
+                                     FontSize="11"
+                                     Content="Manage on GitHub" />
+                </Grid>
             </Border>
 
             <ScrollViewer Grid.Row="1"
@@ -82,16 +92,33 @@
                                                     <!-- Progress bar: yellow used / light green remaining / black text overlay -->
                                                     <Panel Grid.Column="2"
                                                            Height="14">
-                                                        <!-- Remaining (light green background) -->
+                                                        <!-- Unknown-limit indicator (#1159 Fix B): shown when FractionUsed is null so the
+                                                             row does not read as "100% full green". Hyperlinks to the Copilot features page. -->
+                                                        <HyperlinkButton Name="UnknownLimitLink"
+                                                                         NavigateUri="https://github.com/settings/copilot/features"
+                                                                         Padding="0"
+                                                                         HorizontalAlignment="Stretch"
+                                                                         HorizontalContentAlignment="Stretch"
+                                                                         IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Inverse}}">
+                                                            <Border Name="UnknownLimitBar"
+                                                                    Background="#40808080"
+                                                                    BorderBrush="#808080"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="3"
+                                                                    HorizontalAlignment="Stretch" />
+                                                        </HyperlinkButton>
+                                                        <!-- Remaining (light green background) — hidden when the limit is unknown. -->
                                                         <Border Name="RemainingBar"
                                                                 Background="#90EE90"
                                                                 CornerRadius="3"
-                                                                HorizontalAlignment="Stretch" />
+                                                                HorizontalAlignment="Stretch"
+                                                                IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Instance}}" />
                                                         <!-- Used (yellow fill, left-aligned, width proportional) -->
                                                         <Border Name="UsedBar"
                                                                 Background="#FFDD00"
                                                                 CornerRadius="3"
                                                                 HorizontalAlignment="Left"
+                                                                IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Instance}}"
                                                                 Width="{Binding FractionUsed,
                                                                     Converter={x:Static converters:FractionToWidthConverter.Instance},
                                                                     ConverterParameter=120}" />

@@ -626,4 +626,298 @@ public sealed class GitHubCopilotUsageProviderTests
             });
         }
     }
+
+    // ---------- #1159 Fix A tests: budgets endpoint and QuantityTotal population ----------
+
+    private const string PremiumRequestOnlyUsageJson = """
+        {
+          "usageItems": [
+            {
+              "product": "copilot",
+              "sku": "Copilot Premium Request",
+              "quantity": 400,
+              "unitType": "Requests",
+              "netAmount": 250.00
+            }
+          ]
+        }
+        """;
+
+    private const string AiCreditsOnlyUsageJson = """
+        {
+          "usageItems": [
+            {
+              "product": "copilot",
+              "sku": "Copilot AI Credits",
+              "quantity": 100,
+              "unitType": "AICredits",
+              "netAmount": 50.00
+            }
+          ]
+        }
+        """;
+
+    private sealed class SequencedRequestHandler : HttpMessageHandler
+    {
+        private readonly List<Func<HttpRequestMessage, (HttpStatusCode Status, string Body)>> responders;
+
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        public SequencedRequestHandler(params Func<HttpRequestMessage, (HttpStatusCode, string)>[] responders)
+        {
+            this.responders = new List<Func<HttpRequestMessage, (HttpStatusCode, string)>>(responders);
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            this.Requests.Add(request);
+            var index = this.Requests.Count - 1;
+            (HttpStatusCode status, string body) = index < this.responders.Count
+                ? this.responders[index](request)
+                : (HttpStatusCode.InternalServerError, string.Empty);
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body),
+            });
+        }
+    }
+
+    private static UsageAccount OrgAccount(string userName = "alice", string org = "acme", decimal? monthlyBudget = null)
+        => new()
+        {
+            UserName = userName,
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            Org = org,
+            MonthlyBudget = monthlyBudget,
+        };
+
+    [Fact]
+    public async Task GetMetricsAsync_CallsBudgetsEndpoint_WithApiVersionHeader()
+    {
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
+
+        var budgetsRequest = handler.Requests.FirstOrDefault(
+            r => r.RequestUri!.AbsolutePath.Contains("/settings/billing/budgets", StringComparison.Ordinal));
+        Assert.NotNull(budgetsRequest);
+        Assert.Contains("/organizations/acme/settings/billing/budgets", budgetsRequest!.RequestUri!.AbsoluteUri);
+        Assert.True(budgetsRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var apiVer));
+        Assert.Contains("2026-03-10", apiVer!);
+        Assert.Contains(budgetsRequest.Headers.Accept, h => h.MediaType == "application/vnd.github+json");
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_BudgetsResponseWithPremiumRequestsSku_PopulatesCostQuantityTotal()
+    {
+        const string budgetsJson = """
+            {
+              "budgets": [
+                {
+                  "budget_type": "SkuPricing",
+                  "budget_product_skus": ["premium_requests"],
+                  "budget_scope": "user",
+                  "budget_entity_name": "alice",
+                  "budget_amount": 500
+                }
+              ]
+            }
+            """;
+
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
+            _ => (HttpStatusCode.OK, budgetsJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        Assert.Equal(500m, costMetric.QuantityTotal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_BudgetsResponseWithAiCreditsBundle_PopulatesCostQuantityTotal()
+    {
+        const string budgetsJson = """
+            {
+              "budgets": [
+                {
+                  "budget_type": "BundlePricing",
+                  "budget_product_skus": ["ai_credits"],
+                  "budget_scope": "user",
+                  "budget_entity_name": "alice",
+                  "budget_amount": 200
+                }
+              ]
+            }
+            """;
+
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, AiCreditsOnlyUsageJson),
+            _ => (HttpStatusCode.OK, budgetsJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(200m, costMetric.QuantityTotal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_BudgetsEndpointReturns403_FallsBackToConfiguredMonthlyBudget()
+    {
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
+            _ => (HttpStatusCode.Forbidden, string.Empty),
+            _ => (HttpStatusCode.Forbidden, string.Empty),
+            _ => (HttpStatusCode.Forbidden, string.Empty));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var metrics = await provider.GetMetricsAsync(
+            OrgAccount(monthlyBudget: 750m),
+            TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        Assert.Equal(750m, costMetric.QuantityTotal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_NoOrgOnAccount_DoesNotCallBudgetsEndpoint()
+    {
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            // Org intentionally null — personal account, MUST NOT hit budgets endpoint.
+        };
+
+        await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.Single(handler.Requests);
+        Assert.DoesNotContain(handler.Requests, r =>
+            r.RequestUri!.AbsolutePath.Contains("/settings/billing/budgets", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_ConfiguredIncludedPremiumRequests_PopulatesCountQuantityTotal()
+    {
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            IncludedPremiumRequests = 1500m,
+        };
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var countMetric = metrics.Single(m => m.Title == "Copilot Premium Request");
+        Assert.Equal(1500m, countMetric.QuantityTotal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_NoBudgetAndNoConfig_LeavesQuantityTotalZero()
+    {
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var count = metrics.Single(m => m.Title == "Copilot Premium Request");
+        var cost = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        Assert.Equal(0m, count.QuantityTotal);
+        Assert.Equal(0m, cost.QuantityTotal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_BudgetSelection_PrefersUserScopeOverOrgScope()
+    {
+        const string userScopeJson = """
+            {
+              "budgets": [
+                {
+                  "budget_type": "SkuPricing",
+                  "budget_product_skus": ["premium_requests"],
+                  "budget_scope": "user",
+                  "budget_entity_name": "alice",
+                  "budget_amount": 100
+                }
+              ]
+            }
+            """;
+        const string orgScopeJson = """
+            {
+              "budgets": [
+                {
+                  "budget_type": "SkuPricing",
+                  "budget_product_skus": ["premium_requests"],
+                  "budget_scope": "organization",
+                  "budget_entity_name": "acme",
+                  "budget_amount": 5000
+                }
+              ]
+            }
+            """;
+
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
+            _ => (HttpStatusCode.OK, userScopeJson),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, orgScopeJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        Assert.Equal(100m, costMetric.QuantityTotal);
+    }
 }

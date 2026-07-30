@@ -62,6 +62,51 @@ public sealed class UsageMetricsTests
     }
 
     [Fact]
+    public void UsageMetric_FractionUsed_UsedLessThanTotal_ReturnsPartialFraction()
+    {
+        var metric = new UsageMetric
+        {
+            Title = "Test",
+            QuantityUsed = 25,
+            QuantityTotal = 100,
+            QuantityPresentationFormatString = "{0} / {1}",
+            Unit = ""
+        };
+
+        Assert.Equal(0.25, metric.FractionUsed);
+    }
+
+    [Fact]
+    public void UsageMetric_FractionUsed_UsedEqualsTotal_ReturnsOne()
+    {
+        var metric = new UsageMetric
+        {
+            Title = "Test",
+            QuantityUsed = 500,
+            QuantityTotal = 500,
+            QuantityPresentationFormatString = "{0} / {1}",
+            Unit = ""
+        };
+
+        Assert.Equal(1.0, metric.FractionUsed);
+    }
+
+    [Fact]
+    public void UsageMetric_FractionUsed_TotalIsZero_ReturnsNull()
+    {
+        var metric = new UsageMetric
+        {
+            Title = "Test",
+            QuantityUsed = 100,
+            QuantityTotal = 0,
+            QuantityPresentationFormatString = "{0} / {1}",
+            Unit = ""
+        };
+
+        Assert.Null(metric.FractionUsed);
+    }
+
+    [Fact]
     public void UsageMetric_QuantityPresentation_Minutes()
     {
         var metric = new UsageMetric

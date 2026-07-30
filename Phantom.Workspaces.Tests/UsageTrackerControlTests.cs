@@ -244,4 +244,97 @@ public sealed class UsageTrackerControlTests
             viewModel.Dispose();
         }
     }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_RowWithKnownFraction_UsedBarHasProportionalWidth()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 60m,
+            QuantityTotal = 120m,
+            QuantityPresentationFormatString = "{0} / {1}",
+        });
+        metrics.Accounts.Add(account);
+
+        var viewModel = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var usedBar = window.GetVisualDescendants().OfType<Border>()
+                .First(b => b.Name == "UsedBar");
+            // Fraction = 0.5, ConverterParameter total width = 120 → expected width = 60.
+            Assert.Equal(60.0, usedBar.Width);
+            Assert.True(usedBar.IsVisible);
+        }
+        finally
+        {
+            window.Close();
+            viewModel.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_RowWithUnknownFraction_DoesNotAppearFullyFilled()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 0m, // FractionUsed = null → unknown-limit state
+            QuantityPresentationFormatString = "{0}",
+        });
+        metrics.Accounts.Add(account);
+
+        var viewModel = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var remaining = window.GetVisualDescendants().OfType<Border>()
+                .First(b => b.Name == "RemainingBar");
+            var used = window.GetVisualDescendants().OfType<Border>()
+                .First(b => b.Name == "UsedBar");
+            var unknown = window.GetVisualDescendants().OfType<Border>()
+                .First(b => b.Name == "UnknownLimitBar");
+
+            // The green "remaining" bar and yellow "used" bar must not be shown when the
+            // limit is unknown — otherwise the row visually reads as "100% full green".
+            Assert.False(remaining.IsVisible);
+            Assert.False(used.IsVisible);
+            // A distinct unknown-limit indicator is shown instead, linking to the GitHub
+            // Copilot features page (#1159 Fix B/C).
+            Assert.True(unknown.IsVisible);
+
+            var unknownLink = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .First(hb => hb.Name == "UnknownLimitLink");
+            Assert.Equal(
+                new Uri("https://github.com/settings/copilot/features"),
+                unknownLink.NavigateUri);
+        }
+        finally
+        {
+            window.Close();
+            viewModel.Dispose();
+        }
+    }
 }
