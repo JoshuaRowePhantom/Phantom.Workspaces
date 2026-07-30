@@ -53,6 +53,12 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
     }
 
     /// <summary>
+    /// The underlying <see cref="UsageMetrics"/> model. Exposed for tests that need to
+    /// mutate accounts on the same instance that drives this view model.
+    /// </summary>
+    internal UsageMetrics Metrics => this.usageMetrics;
+
+    /// <summary>
     /// The QuantityPresentation of the most recently updated metric from the most recently charged account.
     /// Falls back to the first account's first metric if no charge has been detected yet.
     /// Returns null when Accounts is empty.

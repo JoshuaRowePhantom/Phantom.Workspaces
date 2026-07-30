@@ -13,12 +13,12 @@ using Phantom.Workspaces.Models;
 namespace Phantom.Workspaces.Services.UsageProviders;
 
 /// <summary>
-/// Fetches GitHub Copilot billing usage via:
-/// GET https://api.github.com/copilot/billing/usage
+/// Fetches GitHub Copilot billing usage via the enhanced billing endpoint:
+/// GET https://api.github.com/users/{username}/settings/billing/usage
 ///
-/// Maps response to two metrics:
-/// - Included Usage: seat_breakdown.active_this_cycle / seat_breakdown.total (unit: "AIC")
-/// - Additional Usage: billed overage dollars (format: "{0:C2} / {1:C2}")
+/// Parses the documented <c>usageItems[]</c> schema, filters items whose
+/// <c>product</c> is <c>"copilot"</c>, and maps each Copilot SKU (e.g.
+/// "Copilot Premium Request", "Copilot AI Credits") into a <see cref="UsageMetric"/>.
 /// </summary>
 public sealed class GitHubCopilotUsageProvider : IUsageProvider
 {
@@ -53,13 +53,14 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         UsageAccount account,
         CancellationToken cancellationToken)
     {
+        var url = BuildRequestUrl(account);
         var token = this.tokenResolver();
-        var response = await this.SendRequestAsync(token, cancellationToken).ConfigureAwait(false);
+        var response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             token = this.tokenResolver();
-            response = await this.SendRequestAsync(token, cancellationToken).ConfigureAwait(false);
+            response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
 
             if (response.StatusCode == HttpStatusCode.Unauthorized)
             {
@@ -75,7 +76,16 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             this.logger.LogWarning(
                 "GitHub Copilot usage provider returned {StatusCode} for {Endpoint}; returning empty metrics.",
                 (int)response.StatusCode,
-                "https://api.github.com/copilot/billing/usage");
+                url);
+            return [];
+        }
+
+        if (response.StatusCode == HttpStatusCode.Forbidden)
+        {
+            this.logger.LogWarning(
+                "GitHub Copilot usage provider returned {StatusCode} for {Endpoint}; the access token likely lacks the required 'Plan' user permission (read). Returning empty metrics.",
+                (int)response.StatusCode,
+                url);
             return [];
         }
 
@@ -84,7 +94,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             this.logger.LogError(
                 "GitHub Copilot usage provider returned non-success {StatusCode} for {Endpoint}.",
                 (int)response.StatusCode,
-                "https://api.github.com/copilot/billing/usage");
+                url);
         }
 
         response.EnsureSuccessStatusCode();
@@ -93,13 +103,17 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         return ParseMetrics(json, this.timeProvider.GetUtcNow().UtcDateTime);
     }
 
-    private Task<HttpResponseMessage> SendRequestAsync(string? token, CancellationToken cancellationToken)
+    private static string BuildRequestUrl(UsageAccount account)
     {
-        var request = new HttpRequestMessage(
-            HttpMethod.Get,
-            "https://api.github.com/copilot/billing/usage");
+        var userName = account.UserName ?? string.Empty;
+        return $"https://api.github.com/users/{Uri.EscapeDataString(userName)}/settings/billing/usage";
+    }
+
+    private Task<HttpResponseMessage> SendRequestAsync(string url, string? token, CancellationToken cancellationToken)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+        request.Headers.Add("X-GitHub-Api-Version", "2026-03-10");
         request.Headers.Add("User-Agent", "phantom-workspaces");
         if (!string.IsNullOrWhiteSpace(token))
         {
@@ -114,48 +128,89 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
 
-        var metrics = new List<UsageMetric>();
-
-        // Included Usage: seat_breakdown.active_this_cycle / seat_breakdown.total
-        if (root.TryGetProperty("seat_breakdown", out var seatBreakdown))
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("usageItems", out var usageItems) ||
+            usageItems.ValueKind != JsonValueKind.Array)
         {
-            var activeThisCycle = seatBreakdown.TryGetProperty("active_this_cycle", out var atc)
-                && atc.ValueKind == JsonValueKind.Number
-                ? atc.GetDecimal()
-                : 0m;
-            var total = seatBreakdown.TryGetProperty("total", out var tot)
-                && tot.ValueKind == JsonValueKind.Number
-                ? tot.GetDecimal()
-                : 0m;
+            return [];
+        }
 
+        // Aggregate Copilot items by SKU. Non-Copilot products (e.g. "actions", "models")
+        // are filtered out.
+        var aggregates = new Dictionary<string, CopilotSkuAggregate>(StringComparer.OrdinalIgnoreCase);
+        var order = new List<string>();
+
+        foreach (var item in usageItems.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var product = item.TryGetProperty("product", out var productElement)
+                && productElement.ValueKind == JsonValueKind.String
+                ? productElement.GetString()
+                : null;
+
+            if (!string.Equals(product, "copilot", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var sku = item.TryGetProperty("sku", out var skuElement)
+                && skuElement.ValueKind == JsonValueKind.String
+                ? skuElement.GetString() ?? string.Empty
+                : string.Empty;
+            if (string.IsNullOrEmpty(sku))
+            {
+                sku = "Copilot";
+            }
+
+            var quantity = item.TryGetProperty("quantity", out var qElement)
+                && qElement.ValueKind == JsonValueKind.Number
+                ? qElement.GetDecimal()
+                : 0m;
+            var unitType = item.TryGetProperty("unitType", out var unitElement)
+                && unitElement.ValueKind == JsonValueKind.String
+                ? unitElement.GetString() ?? string.Empty
+                : string.Empty;
+
+            if (!aggregates.TryGetValue(sku, out var aggregate))
+            {
+                aggregate = new CopilotSkuAggregate { Sku = sku, Unit = unitType };
+                aggregates[sku] = aggregate;
+                order.Add(sku);
+            }
+            else if (string.IsNullOrEmpty(aggregate.Unit) && !string.IsNullOrEmpty(unitType))
+            {
+                aggregate.Unit = unitType;
+            }
+
+            aggregate.Quantity += quantity;
+        }
+
+        var metrics = new List<UsageMetric>(order.Count);
+        foreach (var sku in order)
+        {
+            var aggregate = aggregates[sku];
             metrics.Add(new UsageMetric
             {
-                Title = "Included Usage",
-                QuantityUsed = activeThisCycle,
-                QuantityTotal = total,
-                QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
-                Unit = "AIC",
+                Title = aggregate.Sku,
+                QuantityUsed = aggregate.Quantity,
+                QuantityTotal = 0m,
+                QuantityPresentationFormatString = "{0:N0} {2}",
+                Unit = aggregate.Unit,
                 LastUpdatedAt = now,
             });
         }
 
-        // Additional Usage: billed overage dollars
-        var billedAmount = root.TryGetProperty("total_billed_amount", out var billed)
-            && billed.ValueKind == JsonValueKind.Number
-            ? billed.GetDecimal()
-            : 0m;
-        var cap = root.TryGetProperty("plan_type", out _) ? 0m : 0m; // cap not always available
-
-        metrics.Add(new UsageMetric
-        {
-            Title = "Additional Usage",
-            QuantityUsed = billedAmount,
-            QuantityTotal = cap,
-            QuantityPresentationFormatString = "{0:C2} / {1:C2}",
-            Unit = string.Empty,
-            LastUpdatedAt = now,
-        });
-
         return metrics;
+    }
+
+    private sealed class CopilotSkuAggregate
+    {
+        public string Sku { get; set; } = string.Empty;
+        public string Unit { get; set; } = string.Empty;
+        public decimal Quantity { get; set; }
     }
 }

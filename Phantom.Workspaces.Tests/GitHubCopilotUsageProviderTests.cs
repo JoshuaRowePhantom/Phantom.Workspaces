@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Models;
 using Phantom.Workspaces.Services.UsageProviders;
 using Xunit;
@@ -12,9 +14,38 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class GitHubCopilotUsageProviderTests
 {
-    private static HttpClient MakeHttpClient(
-        HttpStatusCode status,
-        string responseBody)
+    private const string CopilotUsageItemsJson = """
+        {
+          "usageItems": [
+            {
+              "date": "2026-07-01T00:00:00Z",
+              "product": "copilot",
+              "sku": "Copilot AI Credits",
+              "quantity": 395199.59,
+              "unitType": "AICredits",
+              "pricePerUnit": 0.01,
+              "grossAmount": 3951.99,
+              "discountAmount": 197.41,
+              "netAmount": 3754.58,
+              "repositoryName": ""
+            },
+            {
+              "date": "2026-05-01T00:00:00Z",
+              "product": "copilot",
+              "sku": "Copilot Premium Request",
+              "quantity": 1244,
+              "unitType": "Requests",
+              "pricePerUnit": 0.04,
+              "grossAmount": 49.76,
+              "discountAmount": 49.76,
+              "netAmount": 0.0,
+              "repositoryName": ""
+            }
+          ]
+        }
+        """;
+
+    private static HttpClient MakeHttpClient(HttpStatusCode status, string responseBody)
     {
         return new HttpClient(new StubHandler(status, responseBody));
     }
@@ -56,15 +87,90 @@ public sealed class GitHubCopilotUsageProviderTests
     };
 
     [Fact]
-    public async Task GetMetricsAsync_ParsesIncludedAndAdditionalUsage()
+    public async Task GetMetricsAsync_UsesUserScopedBillingUsageEndpoint_ForSignedInAccount()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new RequestCapturingHandler(
+            req => capturedRequest = req,
+            HttpStatusCode.OK,
+            CopilotUsageItemsJson);
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "fake-token");
+
+        var account = new UsageAccount
+        {
+            UserName = "JoshuaRowePhantom",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+        await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(
+            "https://api.github.com/users/JoshuaRowePhantom/settings/billing/usage",
+            capturedRequest!.RequestUri!.ToString());
+        Assert.DoesNotContain("/copilot/billing/usage", capturedRequest.RequestUri.ToString());
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_UsesUserScopedBillingUsageEndpoint_EscapesUserName()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new RequestCapturingHandler(
+            req => capturedRequest = req,
+            HttpStatusCode.OK,
+            """{ "usageItems": [] }""");
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "fake-token");
+
+        var account = new UsageAccount
+        {
+            UserName = "user with space",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+        await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Contains("user%20with%20space", capturedRequest!.RequestUri!.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_ParsesUsageItems_IntoCopilotMetrics()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, metrics.Count);
+
+        var aiCredits = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.Equal(395199.59m, aiCredits.QuantityUsed);
+        Assert.Equal("AICredits", aiCredits.Unit);
+
+        var premium = metrics.Single(m => m.Title == "Copilot Premium Request");
+        Assert.Equal(1244m, premium.QuantityUsed);
+        Assert.Equal("Requests", premium.Unit);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_IgnoresNonCopilotUsageItems()
     {
         const string json = """
             {
-              "seat_breakdown": {
-                "active_this_cycle": 7,
-                "total": 10
-              },
-              "total_billed_amount": 12.50
+              "usageItems": [
+                { "product": "actions", "sku": "Ubuntu 2-core", "quantity": 1000, "unitType": "Minutes" },
+                { "product": "models", "sku": "GPT-4o", "quantity": 500, "unitType": "Requests" },
+                { "product": "copilot", "sku": "Copilot Premium Request", "quantity": 250, "unitType": "Requests" }
+              ]
             }
             """;
 
@@ -72,19 +178,59 @@ public sealed class GitHubCopilotUsageProviderTests
             MakeHttpClient(HttpStatusCode.OK, json),
             () => "fake-token");
 
-        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, metrics.Count);
+        var metric = Assert.Single(metrics);
+        Assert.Equal("Copilot Premium Request", metric.Title);
+        Assert.Equal(250m, metric.QuantityUsed);
+    }
 
-        var included = metrics[0];
-        Assert.Equal("Included Usage", included.Title);
-        Assert.Equal(7m, included.QuantityUsed);
-        Assert.Equal(10m, included.QuantityTotal);
-        Assert.Equal("AIC", included.Unit);
+    [Fact]
+    public async Task GetMetricsAsync_AggregatesRepeatedCopilotSkus()
+    {
+        const string json = """
+            {
+              "usageItems": [
+                { "product": "copilot", "sku": "Copilot Premium Request", "quantity": 100, "unitType": "Requests" },
+                { "product": "copilot", "sku": "Copilot Premium Request", "quantity": 44,  "unitType": "Requests" }
+              ]
+            }
+            """;
 
-        var additional = metrics[1];
-        Assert.Equal("Additional Usage", additional.Title);
-        Assert.Equal(12.50m, additional.QuantityUsed);
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var metric = Assert.Single(metrics);
+        Assert.Equal("Copilot Premium Request", metric.Title);
+        Assert.Equal(144m, metric.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_SendsEnhancedBillingHeaders()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new RequestCapturingHandler(
+            req => capturedRequest = req,
+            HttpStatusCode.OK,
+            """{ "usageItems": [] }""");
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "test-token");
+
+        await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
+        Assert.Equal("test-token", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.Contains(capturedRequest.Headers.Accept, h => h.MediaType == "application/vnd.github+json");
+        Assert.True(capturedRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var apiVersionValues));
+        Assert.Contains("2026-03-10", apiVersionValues!);
+        Assert.True(capturedRequest.Headers.TryGetValues("User-Agent", out var userAgentValues));
+        Assert.Contains("phantom-workspaces", userAgentValues!);
     }
 
     [Fact]
@@ -94,13 +240,13 @@ public sealed class GitHubCopilotUsageProviderTests
             MakeHttpClient(HttpStatusCode.NotFound, string.Empty),
             () => "fake-token");
 
-        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
         Assert.Empty(metrics);
     }
 
     [Fact]
-    public async Task GetMetricsAsync_WhenNotFound_LogsWarningWithStatusAndEndpoint()
+    public async Task GetMetricsAsync_WhenNotFound_LogsWarningWithResolvedUrl()
     {
         var logger = new TestLogger<GitHubCopilotUsageProvider>();
         var provider = new GitHubCopilotUsageProvider(
@@ -108,11 +254,50 @@ public sealed class GitHubCopilotUsageProviderTests
             () => "fake-token",
             logger);
 
-        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+        var account = new UsageAccount
+        {
+            UserName = "octocat",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
 
-        var entry = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
         Assert.Contains("404", entry.Message, StringComparison.Ordinal);
-        Assert.Contains("copilot/billing/usage", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "https://api.github.com/users/octocat/settings/billing/usage",
+            entry.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenForbidden_LogsPermissionWarning()
+    {
+        var logger = new TestLogger<GitHubCopilotUsageProvider>();
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.Forbidden, string.Empty),
+            () => "fake-token",
+            logger);
+
+        var account = new UsageAccount
+        {
+            UserName = "octocat",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        Assert.Empty(metrics);
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("403", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("Plan", entry.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "https://api.github.com/users/octocat/settings/billing/usage",
+            entry.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -125,9 +310,9 @@ public sealed class GitHubCopilotUsageProviderTests
             logger);
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => provider.GetMetricsAsync(TestAccount, CancellationToken.None));
+            () => provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken));
 
-        var entry = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+        var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Error);
         Assert.Contains("500", entry.Message, StringComparison.Ordinal);
     }
 
@@ -137,12 +322,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var callCount = 0;
         var handler = new StubHandler(
             (HttpStatusCode.Unauthorized, string.Empty),
-            (HttpStatusCode.OK, """
-                {
-                  "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
-                  "total_billed_amount": 0
-                }
-                """));
+            (HttpStatusCode.OK, CopilotUsageItemsJson));
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
@@ -152,10 +332,10 @@ public sealed class GitHubCopilotUsageProviderTests
                 return "token";
             });
 
-        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
         Assert.NotEmpty(metrics);
-        Assert.Equal(2, Volatile.Read(ref callCount)); // token resolver called twice
+        Assert.Equal(2, Volatile.Read(ref callCount));
     }
 
     [Fact]
@@ -170,7 +350,7 @@ public sealed class GitHubCopilotUsageProviderTests
             () => "token");
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => provider.GetMetricsAsync(TestAccount, CancellationToken.None));
+            () => provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -185,79 +365,15 @@ public sealed class GitHubCopilotUsageProviderTests
     }
 
     [Fact]
-    public async Task GetMetricsAsync_FractionUsed_CorrectForIncluded()
+    public async Task GetMetricsAsync_EmptyUsageItems_ReturnsEmpty()
     {
-        const string json = """
-            {
-              "seat_breakdown": {
-                "active_this_cycle": 100,
-                "total": 200
-              },
-              "total_billed_amount": 0
-            }
-            """;
-
         var provider = new GitHubCopilotUsageProvider(
-            MakeHttpClient(HttpStatusCode.OK, json),
+            MakeHttpClient(HttpStatusCode.OK, """{ "usageItems": [] }"""),
             () => "fake-token");
 
-        var metrics = await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var included = metrics[0];
-        Assert.Equal(0.5, included.FractionUsed);
-    }
-
-    [Fact]
-    public async Task GetMetricsAsync_AcquiresToken_BeforeRequest()
-    {
-        var tokenAcquired = false;
-        var requestSent = false;
-
-        var handler = new TokenOrderTrackingHandler(() =>
-        {
-            tokenAcquired = true;
-            Assert.False(requestSent, "Token should be acquired before sending request");
-        },
-        () =>
-        {
-            requestSent = true;
-            Assert.True(tokenAcquired, "Token should be acquired before sending request");
-        });
-
-        var provider = new GitHubCopilotUsageProvider(
-            new HttpClient(handler),
-            () =>
-            {
-                tokenAcquired = true;
-                return "token";
-            });
-
-        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
-
-        Assert.True(tokenAcquired);
-        Assert.True(requestSent);
-    }
-
-    [Fact]
-    public async Task GetMetricsAsync_SetsCorrectHeaders()
-    {
-        HttpRequestMessage? capturedRequest = null;
-        var handler = new RequestCapturingHandler(req => capturedRequest = req);
-
-        var provider = new GitHubCopilotUsageProvider(
-            new HttpClient(handler),
-            () => "test-token");
-
-        await provider.GetMetricsAsync(TestAccount, CancellationToken.None);
-
-        Assert.NotNull(capturedRequest);
-        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
-        Assert.Equal("test-token", capturedRequest.Headers.Authorization?.Parameter);
-        Assert.Contains(capturedRequest.Headers.Accept, h => h.MediaType == "application/vnd.github+json");
-        Assert.True(capturedRequest.Headers.TryGetValues("X-GitHub-Api-Version", out var apiVersionValues));
-        Assert.Contains("2022-11-28", apiVersionValues!);
-        Assert.True(capturedRequest.Headers.TryGetValues("User-Agent", out var userAgentValues));
-        Assert.Contains("phantom-workspaces", userAgentValues!);
+        Assert.Empty(metrics);
     }
 
     [Fact]
@@ -265,15 +381,9 @@ public sealed class GitHubCopilotUsageProviderTests
     {
         var instant = new DateTimeOffset(2024, 2, 15, 8, 30, 0, TimeSpan.Zero);
         var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(instant);
-        const string json = """
-            {
-              "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
-              "total_billed_amount": 3.25
-            }
-            """;
 
         var provider = new GitHubCopilotUsageProvider(
-            MakeHttpClient(HttpStatusCode.OK, json),
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
             () => "fake-token",
             logger: null,
             timeProvider: timeProvider);
@@ -284,67 +394,20 @@ public sealed class GitHubCopilotUsageProviderTests
         Assert.All(metrics, m => Assert.Equal(instant.UtcDateTime, m.LastUpdatedAt));
     }
 
-    [Fact]
-    public async Task GetMetricsAsync_AfterAdvance_StampsLastUpdatedAtFromAdvancedTime()
-    {
-        var start = new DateTimeOffset(2024, 2, 1, 0, 0, 0, TimeSpan.Zero);
-        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(start);
-        const string json = """
-            {
-              "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
-              "total_billed_amount": 0
-            }
-            """;
-
-        var provider = new GitHubCopilotUsageProvider(
-            MakeHttpClient(HttpStatusCode.OK, json),
-            () => "fake-token",
-            logger: null,
-            timeProvider: timeProvider);
-
-        timeProvider.Advance(TimeSpan.FromDays(1));
-
-        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
-
-        Assert.NotEmpty(metrics);
-        Assert.All(metrics, m => Assert.Equal(start.UtcDateTime.AddDays(1), m.LastUpdatedAt));
-    }
-
-    private sealed class TokenOrderTrackingHandler : HttpMessageHandler
-    {
-        private readonly Action onTokenAcquired;
-        private readonly Action onRequestSent;
-
-        public TokenOrderTrackingHandler(Action onTokenAcquired, Action onRequestSent)
-        {
-            this.onTokenAcquired = onTokenAcquired;
-            this.onRequestSent = onRequestSent;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            this.onRequestSent();
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""
-                    {
-                      "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
-                      "total_billed_amount": 0
-                    }
-                    """),
-            });
-        }
-    }
-
     private sealed class RequestCapturingHandler : HttpMessageHandler
     {
         private readonly Action<HttpRequestMessage> onRequest;
+        private readonly HttpStatusCode status;
+        private readonly string body;
 
-        public RequestCapturingHandler(Action<HttpRequestMessage> onRequest)
+        public RequestCapturingHandler(
+            Action<HttpRequestMessage> onRequest,
+            HttpStatusCode status = HttpStatusCode.OK,
+            string body = """{ "usageItems": [] }""")
         {
             this.onRequest = onRequest;
+            this.status = status;
+            this.body = body;
         }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -352,14 +415,9 @@ public sealed class GitHubCopilotUsageProviderTests
             CancellationToken cancellationToken)
         {
             this.onRequest(request);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            return Task.FromResult(new HttpResponseMessage(this.status)
             {
-                Content = new StringContent("""
-                    {
-                      "seat_breakdown": { "active_this_cycle": 1, "total": 5 },
-                      "total_billed_amount": 0
-                    }
-                    """),
+                Content = new StringContent(this.body),
             });
         }
     }
