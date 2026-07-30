@@ -59,12 +59,15 @@ public sealed class OpenShellEntityShortcutHandler : ShortcutHandler
 
         var session = await this.OpenSessionAsync(targetClientInstance, spec, CancellationToken.None);
 
-        var tab = new ShellTabViewModel(session)
-        {
-            // Stable per-entity id so opening the same shell entity twice reuses the existing tab.
-            Id = $"shell-entity-{entityViewModel.EntityId}",
-            Title = $"{spec.Command} — {entityViewModel.DisplayName}",
-        };
+        var tab = this.BuildShellTab(
+            session,
+            spec,
+            mainWindowViewModel,
+            entityViewModel,
+            targetClientInstance,
+            tabId: $"shell-entity-{entityViewModel.EntityId}",
+            title: $"{spec.Command} — {entityViewModel.DisplayName}",
+            dockRegion: null);
 
         await mainWindowViewModel.OpenTabAsync(tab);
         return true;
@@ -88,12 +91,77 @@ public sealed class OpenShellEntityShortcutHandler : ShortcutHandler
 
         var session = await this.OpenSessionAsync(targetClientInstance, spec, CancellationToken.None);
 
-        return new ShellTabViewModel(session)
+        return this.BuildShellTab(
+            session,
+            spec,
+            mainWindowViewModel,
+            entityViewModel,
+            targetClientInstance,
+            tabId: tabId ?? $"shell-entity-{entityViewModel.EntityId}",
+            title: title ?? $"{spec.Command} — {entityViewModel.DisplayName}",
+            dockRegion: dockRegion ?? "full");
+    }
+
+    private ShellTabViewModel BuildShellTab(
+        ITerminalSession session,
+        ShellEntityOpenSpec spec,
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel,
+        string targetClientInstance,
+        string tabId,
+        string title,
+        string? dockRegion)
+    {
+        // Reusable session factory so Restart can relaunch with the current (possibly edited) spec.
+        Func<ShellEntityOpenSpec, CancellationToken, Task<ITerminalSession>> sessionFactory =
+            (updatedSpec, ct) => this.OpenSessionAsync(targetClientInstance, updatedSpec, ct);
+
+        Func<UpdateRequest, CancellationToken, Task<UpdateResult>>? entityWriter = null;
+        try
         {
-            Id = tabId ?? $"shell-entity-{entityViewModel.EntityId}",
-            Title = title ?? $"{spec.Command} — {entityViewModel.DisplayName}",
+            var broker = mainWindowViewModel.EntityBroker;
+            entityWriter = (req, ct) => broker.UpdateAsync(req, ct);
+        }
+        catch
+        {
+            // EntityBroker not yet initialised (design-time / early startup). Save stays disabled.
+        }
+
+        Func<ShellSettingsDialogViewModel, Task<ShellEntityOpenSpec?>> dialogOpener =
+            async dialogVm =>
+            {
+                var window = new ShellSettingsDialogWindow(dialogVm);
+                var owner = Avalonia.Application.Current?.ApplicationLifetime
+                    is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
+                    ? desktop.MainWindow
+                    : null;
+                if (owner is not null)
+                {
+                    await window.ShowDialog(owner);
+                }
+                else
+                {
+                    window.Show();
+                }
+                return window.Saved ? window.Result : null;
+            };
+
+        var tab = new ShellTabViewModel(
+            session,
+            spec,
+            sessionFactory,
+            entityViewModel.EntityId,
+            entityViewModel.ConcurrencyTag,
+            entityViewModel.Data,
+            entityWriter,
+            dialogOpener)
+        {
+            Id = tabId,
+            Title = title,
             DockRegion = dockRegion ?? "full",
         };
+
+        return tab;
     }
 
     private static ShellEntityOpenSpec ReadShellSpec(SubscribedEntityViewModel entityViewModel)

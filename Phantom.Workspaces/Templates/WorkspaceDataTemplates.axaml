@@ -111,7 +111,34 @@
     </DataTemplate>
 
     <DataTemplate DataType="vm:ShellTabViewModel">
-        <controls:TerminalControl Session="{Binding TerminalSession}" />
+        <Grid RowDefinitions="Auto,*">
+            <Grid Grid.Row="0" ColumnDefinitions="Auto,Auto,*,Auto,Auto" Margin="4,4,4,2">
+                <Button Grid.Column="0"
+                        Content="■"
+                        ToolTip.Tip="Stop the running shell (SIGTERM)"
+                        Command="{Binding StopCommand}" />
+                <Button Grid.Column="1"
+                        Content="↻"
+                        ToolTip.Tip="Restart the shell with the current command"
+                        Command="{Binding RestartCommand}"
+                        Margin="4,0,0,0" />
+                <TextBox Grid.Column="2"
+                         Text="{Binding CommandLine, Mode=TwoWay}"
+                         Watermark="command line"
+                         Margin="4,0,0,0" />
+                <Button Grid.Column="3"
+                        Content="…"
+                        ToolTip.Tip="Shell settings"
+                        Command="{Binding OpenSettingsCommand}"
+                        Margin="4,0,0,0" />
+                <Button Grid.Column="4"
+                        Content="💾"
+                        ToolTip.Tip="Save shell configuration to entity"
+                        Command="{Binding SaveCommand}"
+                        Margin="4,0,0,0" />
+            </Grid>
+            <controls:TerminalControl Grid.Row="1" Session="{Binding TerminalSession}" />
+        </Grid>
     </DataTemplate>
 
     <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
