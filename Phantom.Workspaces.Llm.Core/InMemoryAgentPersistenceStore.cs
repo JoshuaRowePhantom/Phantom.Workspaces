@@ -14,6 +14,17 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
 
     private readonly ConcurrentDictionary<string, SessionData> sessions = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string ParentSessionId, string ChildSessionId), byte> subAgentLinks = new();
+    private readonly TimeProvider timeProvider;
+
+    public InMemoryAgentPersistenceStore()
+        : this(TimeProvider.System)
+    {
+    }
+
+    public InMemoryAgentPersistenceStore(TimeProvider timeProvider)
+    {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     internal void Reset()
     {
@@ -29,11 +40,18 @@ internal sealed class InMemoryAgentPersistenceStore : IAgentPersistenceStore
         SessionData session = this.sessions.GetOrAdd(request.Agent.AgentSessionId, static _ => new SessionData());
         lock (session)
         {
+            // Stamp LastUpdatedUtc on every write so restore can surface the original
+            // last-activity time (issue #1140). Callers should not have to supply it; if they
+            // do, honour it so tests can inject deterministic timestamps.
+            var stampedLastUpdatedUtc = request.Agent.LastUpdatedUtc
+                ?? this.timeProvider.GetUtcNow().UtcDateTime;
+
             session.Agent = request.Agent with
             {
                 AgentSessionJson = request.Agent.AgentSessionJson ?? session.Agent?.AgentSessionJson,
                 AgentDefinitionJson = request.Agent.AgentDefinitionJson ?? session.Agent?.AgentDefinitionJson,
                 CopilotSdkSessionId = request.Agent.CopilotSdkSessionId ?? session.Agent?.CopilotSdkSessionId,
+                LastUpdatedUtc = stampedLastUpdatedUtc,
             };
             if (newMessages.Length > 0)
             {

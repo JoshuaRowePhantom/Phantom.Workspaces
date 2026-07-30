@@ -131,6 +131,74 @@ public sealed class AgentChatSubAgentRegistryTests
         Assert.Equal(AgentChatCompletionState.Succeeded, parent.CompletionState);
     }
 
+    // #1140: SetCompletionState(state, preserveLastUpdatedAt: true) must leave LastUpdatedAt
+    // untouched so the restore-time forced-terminal transition on already-completed
+    // sub-agents does not overwrite the seeded persisted timestamp with the reload time.
+    // The event still fires (UI running markers still clear per #1128).
+    [Fact]
+    public async Task SetCompletionState_PreserveLastUpdatedAt_LeavesTimestampUnchanged()
+    {
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero));
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent-chat",
+            TimeProvider = timeProvider,
+        });
+
+        var beforeStamp = parent.LastUpdatedAt;
+
+        // Advance the clock so a bump would be visible if it happened.
+        timeProvider.Advance(TimeSpan.FromHours(3));
+
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.CompletionStateChanged += (_, _) => raised.TrySetResult();
+
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded, preserveLastUpdatedAt: true);
+
+        // Event must still fire so UI clears (issue #1128 requirement).
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(AgentChatCompletionState.Succeeded, parent.CompletionState);
+        // Timestamp must NOT have been bumped to the advanced clock (issue #1140).
+        Assert.Equal(beforeStamp, parent.LastUpdatedAt);
+    }
+
+    // #1140: The default SetCompletionState(state) call (no preserve flag) is genuine
+    // activity and must still advance LastUpdatedAt. This proves the fix did not break the
+    // default bump path — only the explicit preserve-timestamp overload skips the stamp.
+    [Fact]
+    public async Task SetCompletionState_DefaultCall_AdvancesLastUpdatedAt()
+    {
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero));
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent-chat",
+            TimeProvider = timeProvider,
+        });
+
+        var beforeStamp = parent.LastUpdatedAt;
+        timeProvider.Advance(TimeSpan.FromHours(2));
+        var expectedAfter = timeProvider.GetUtcNow().UtcDateTime;
+
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.CompletionStateChanged += (_, _) => raised.TrySetResult();
+
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(expectedAfter, parent.LastUpdatedAt);
+        Assert.True(parent.LastUpdatedAt > beforeStamp);
+    }
+
     [Fact]
     public async Task TryGet_KnownAgentId_ReturnsSink()
     {

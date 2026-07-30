@@ -244,6 +244,38 @@ public abstract class AgentPersistenceStoreContractTests
         Assert.Equal("copilot-sdk-session-xyz", restoredAgent.Value.CopilotSdkSessionId);
     }
 
+    // #1140: Every IAgentPersistenceStore implementation must surface a persisted
+    // last-activity timestamp on restore so AgentChat can seed lastUpdatedAt from it rather
+    // than the reload time. Stores that do not track a timestamp may return null; stores
+    // that do (Mongo's UpdatedUtc, InMemory) must return a non-null value once a write has
+    // occurred.
+    [Fact]
+    public async Task RestoreAsync_ReturnsPersistedLastUpdatedUtc()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var persistedAgent = CreatePersistedAgent("session-contract-lastupdated", "contract-agent-lastupdated");
+
+        var beforeUtc = DateTime.UtcNow;
+        await store.StoreAsync(
+            new StoreRequestAgent { Agent = persistedAgent },
+            CancellationToken.None);
+        var afterUtc = DateTime.UtcNow;
+
+        var restoredAgent = await store.RestoreAsync(
+            new RestoreRequest { AgentSessionId = persistedAgent.AgentSessionId },
+            CancellationToken.None);
+
+        Assert.NotNull(restoredAgent);
+        Assert.NotNull(restoredAgent.Value.LastUpdatedUtc);
+        // The stamped timestamp must lie within the window bracketing the StoreAsync call.
+        // Allow a 5-second slack on the upper bound to tolerate Mongo/round-trip skew.
+        Assert.InRange(
+            restoredAgent.Value.LastUpdatedUtc!.Value,
+            beforeUtc.AddSeconds(-1),
+            afterUtc.AddSeconds(5));
+    }
+
     private static PersistedAgent CreatePersistedAgent(string agentSessionId, string agentName)
     {
         return new PersistedAgent

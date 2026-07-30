@@ -549,6 +549,39 @@ public sealed class AgentChatEditorControlTests
         window.Close();
     }
 
+    // #1140: After a session reload, a completed sub-agent's persisted last-activity
+    // timestamp flows through IRunningSubAgent.LastUpdatedAt into the nav card's
+    // AgoTextBlock. The rendered text must reflect the persisted "N days ago" time, not
+    // "just now" (the pre-fix symptom where reload stamped lastUpdatedAt = now).
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SubAgentItem_AfterReload_AgoLabelReflectsPersistedTime()
+    {
+        // Simulate a restored sub-agent whose persisted UpdatedUtc is well in the past.
+        // The DateTimeAgoConverter buckets by TimeSpan since UtcNow: > 24h => "N days ago".
+        var persistedTime = DateTime.UtcNow.AddDays(-5);
+
+        var (window, nameBlock, agoBlock) = RenderNavHeader(
+            name: "restored-sub-agent",
+            lastUpdatedAt: persistedTime,
+            width: 320);
+
+        try
+        {
+            Assert.NotNull(agoBlock.Text);
+            // Must NOT show reload-time "just now" — the bug's user-visible symptom.
+            Assert.NotEqual("just now", agoBlock.Text);
+            // Must show a days-ago bucket for a 5-day-old persisted timestamp.
+            Assert.Contains("day", agoBlock.Text, StringComparison.Ordinal);
+            Assert.Contains("ago", agoBlock.Text, StringComparison.Ordinal);
+            // The Value binding must be the persisted DateTime, not now.
+            Assert.Equal(persistedTime, agoBlock.Value);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static (Window window, TextBlock name, Phantom.Workspaces.Agent.Gui.Controls.AgoTextBlock ago) RenderNavHeader(
         string name,
         DateTime lastUpdatedAt,

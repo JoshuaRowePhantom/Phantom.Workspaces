@@ -506,4 +506,72 @@ public sealed class CopilotSdkEventPipelineTests
             Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
         }
     }
+
+    // #1140 (end-to-end reload path): the observable "N ago" label a sub-agent navigation
+    // card displays is bound (via AgentEditorNavigationItemViewModel -> IRunningSubAgent ->
+    // SubAgent -> AgentChat.LastUpdatedAt) to the child chat's LastUpdatedAt. After a
+    // session reload, that value must be the persisted last-activity timestamp, not the
+    // reload time. This test drives the full restore path through the real
+    // AgentChatFactory and asserts the materialised child chat's LastUpdatedAt matches the
+    // persisted UpdatedUtc while #1128's forced-terminal transition still fires.
+    [Fact]
+    public async Task SessionReload_CompletedSubAgents_CardShowsPersistedTime()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        const string parentSessionId = "reload-parent-card";
+        const string childSessionId = "reload-child-card";
+
+        const string echoDefJson = """
+            { "kind": "prompt", "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [] }
+            """;
+        var echoDef = AgentDefinitionLoader.LoadAgentFromJson(echoDefJson);
+        var echoDefBson = MongoDB.Bson.BsonDocument.Parse(echoDef.ToJson());
+
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = parentSessionId,
+                AgentDefinitionJson = echoDefBson,
+            },
+        });
+        var childPersistedTime = new DateTime(2021, 9, 8, 7, 6, 5, DateTimeKind.Utc);
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = echoDefBson,
+                LastUpdatedUtc = childPersistedTime,
+            },
+        });
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = echoDef,
+            AgentSessionId = parentSessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "reloaded-parent",
+            AgentServices = new AgentServices { RunningAgentChatFactory = factory },
+        });
+
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
+        await using var lease = await stub.AcquireLeaseAsync();
+
+        // The card's ago-label reads LastUpdatedAt through this chain — it must show the
+        // persisted time, not the reload time. And the running marker must clear (#1128).
+        Assert.Equal(childPersistedTime, lease.AgentChat.LastUpdatedAt);
+        Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+    }
 }

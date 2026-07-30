@@ -133,6 +133,9 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             AgentSessionJson = sessionDocument.AgentSessionJson,
             AgentDefinitionJson = definitionDocument?.AgentDefinitionJson,
             CopilotSdkSessionId = sessionDocument.CopilotSdkSessionId,
+            LastUpdatedUtc = sessionDocument.UpdatedUtc == default
+                ? null
+                : sessionDocument.UpdatedUtc,
         };
     }
 

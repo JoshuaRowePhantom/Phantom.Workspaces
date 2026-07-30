@@ -187,6 +187,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        var restoredAgentDefinitionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentDefinitionJson : null;
        var restoredAgentSessionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentSessionJson : null;
 
+       // #1140: Seed the in-memory last-activity timestamp from the persisted UpdatedUtc so
+       // restored (already-completed) sub-agent cards show the true "N days ago" time rather
+       // than the reload time. Without this, construction stamps lastUpdatedAt = now (see
+       // ctor) and RestoreSubAgentsAsync's #1128 forced SetCompletionState would then re-stamp
+       // it. Stores that don't track a timestamp return null and we keep the construction-time
+       // value.
+       if (restoredAgent is { LastUpdatedUtc: { } persistedUpdatedUtc })
+       {
+           this.lastUpdatedAt = persistedUpdatedUtc;
+       }
+
        var resolvedAgentDefinition = this.request.AgentDefinition
            ?? (restoredAgentDefinitionJson is not null
                ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
@@ -1094,6 +1105,22 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     internal void SetCompletionState(AgentChatCompletionState state)
+        => this.SetCompletionState(state, preserveLastUpdatedAt: false);
+
+    /// <summary>
+    /// Sets the sub-agent completion-state override.
+    /// </summary>
+    /// <param name="state">The new completion state.</param>
+    /// <param name="preserveLastUpdatedAt">
+    /// When <see langword="true"/>, the transition does NOT bump
+    /// <see cref="LastUpdatedAt"/>. Used by the restore path so that forcing a persisted
+    /// (already-completed) sub-agent to its terminal state on reload does not overwrite the
+    /// seeded, persisted last-activity timestamp with the reload time (issue #1140). The event
+    /// still fires so UI subscribers (running-item markers) clear as required by #1128.
+    /// </param>
+    internal void SetCompletionState(
+        AgentChatCompletionState state,
+        bool preserveLastUpdatedAt)
     {
         // #1128: Idempotent — bail if the override is already at the requested state so
         // repeated calls (e.g. from restore + a stray terminal event) don't re-fire the
@@ -1104,7 +1131,11 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         this.completionStateOverride = state;
-        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
+        if (!preserveLastUpdatedAt)
+        {
+            // #1140: Only stamp lastUpdatedAt for genuine activity-driven state changes.
+            this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
+        }
 
         // #1128: SetCompletionState is the only path that flips a sub-agent to a terminal
         // state on reload (RestoreSubAgentsAsync) and — until now — did not raise the event
@@ -1197,7 +1228,9 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             // completionStateOverride persists across other lease acquisitions.
             this.RegisterOwnedResource(lease);
 
-            lease.AgentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
+            lease.AgentChat.SetCompletionState(
+                AgentChatCompletionState.Succeeded,
+                preserveLastUpdatedAt: true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
