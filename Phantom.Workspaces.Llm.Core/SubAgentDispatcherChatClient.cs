@@ -176,6 +176,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             _subAgentServices,
             displayNameOverride: id,
             descriptionOverride: Truncate(create.Prompt, MaxTruncatedPromptLength),
+            registerAsRunningAgent: false,
             ct: cancellationToken);
 
         // Compute description embedding

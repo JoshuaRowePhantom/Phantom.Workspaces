@@ -49,6 +49,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         AgentServices? services = null,
         string? displayNameOverride = null,
         string? descriptionOverride = null,
+        bool registerAsRunningAgent = true,
         CancellationToken ct = default)
     {
         while (true)
@@ -120,7 +121,10 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             if (existingLease is not null)
                 return existingLease;
 
-            await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            if (registerAsRunningAgent)
+            {
+                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            }
             return MakeLease(sessionId, newChat!);
         }
     }

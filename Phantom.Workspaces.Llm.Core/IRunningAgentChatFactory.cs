@@ -43,6 +43,9 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
     /// <see cref="GetAsync"/> (which loads from persistence).
     /// <paramref name="displayNameOverride"/> and <paramref name="descriptionOverride"/> are used
     /// to populate the chat's DisplayName and Description when creating a new session.
+    /// <paramref name="registerAsRunningAgent"/> — when <see langword="false"/>, the newly-created
+    /// session is NOT added to <see cref="RunningSessions"/> (issue #1150 — dispatcher-created
+    /// sub-agents opt out so they don't appear in the top-right "Running agents" popup).
     /// </summary>
     Task<RunningAgentChatLease> GetOrCreateAsync(
         AgentSessionId sessionId,
@@ -50,5 +53,6 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
         AgentServices? services = null,
         string? displayNameOverride = null,
         string? descriptionOverride = null,
+        bool registerAsRunningAgent = true,
         CancellationToken ct = default);
 }

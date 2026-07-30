@@ -131,7 +131,7 @@ public sealed class SubAgentLeaseLifetimeTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
             => GetAsync(sessionId, ct);
     }
 }

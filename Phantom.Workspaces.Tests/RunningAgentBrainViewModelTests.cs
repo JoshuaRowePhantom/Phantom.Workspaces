@@ -419,7 +419,7 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.DoesNotContain("<Border Classes=\"interactive-row\"", axaml, StringComparison.Ordinal);
         
         // Verify the header text is correct
-        Assert.Contains("Running sub-agents", axaml, StringComparison.Ordinal);
+        Assert.Contains("Running agents", axaml, StringComparison.Ordinal);
     }
     // ── Sorting by activity ───────────────────────────────────────────────────
 
@@ -1009,5 +1009,71 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.False(row.IsThinking);
 
         vm.Dispose();
+    }
+
+    [Fact]
+    public void WithTopLevelSessionOnly_HasRowForTopLevelAgent()
+    {
+        // Issue #1150: top-level agents appear in RunningSessions and produce a row.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("top-level-1", "Top Level Agent");
+        var tab = CreateReadyTab("tab-1", "Top Level Agent", agentSessionId: "top-level-1");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("top-level-1", row.SessionKey);
+    }
+
+    [Fact]
+    public void WithSubAgentRunningUnderTopLevel_ListsOnlyTopLevelAgent()
+    {
+        // Issue #1150: sub-agents opt out at the factory via registerAsRunningAgent:false, so
+        // they never appear in the table's RunningSessions. Only the top-level agent produces a row.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("top-level-1", "Top Level Agent");
+        // Sub-agent intentionally NOT added: registerAsRunningAgent:false at the source.
+        var tab = CreateReadyTab("tab-1", "Top Level Agent", agentSessionId: "top-level-1");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("top-level-1", row.SessionKey);
+    }
+
+    [Fact]
+    public void WithOnlySubAgentSessions_HasNoRows()
+    {
+        // Issue #1150: if every running session is a dispatcher-created sub-agent, they all opt
+        // out of RunningSessions, so the popup shows the empty state.
+        var table = new FakeRunningAgentChatTable();
+        // No sessions added: sub-agents don't register.
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.Empty(vm.Rows);
+        Assert.False(vm.HasRows);
+    }
+
+    [Fact]
+    public void WithOnlySubAgentSessions_IsAnyRunning_IsFalse()
+    {
+        // Issue #1150: IsAnyRunning is driven off RunningSessions.Count. When all live sessions are
+        // sub-agents that opted out of registration, IsAnyRunning must remain false.
+        var table = new FakeRunningAgentChatTable();
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.False(vm.IsAnyRunning);
     }
 }

@@ -481,6 +481,35 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
+    public async Task GetOrCreateAsync_WhenRegisterAsRunningAgentFalse_DoesNotAppearInRunningSessions()
+    {
+        // Issue #1150: sub-agents dispatched via SubAgentDispatcherChatClient must not appear in
+        // the top-right "Running agents" popup. They opt out via registerAsRunningAgent: false.
+        var sessionId = new AgentSessionId("session-noregister");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetOrCreateAsync(sessionId, registerAsRunningAgent: false);
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task GetOrCreateAsync_WhenRegisterAsRunningAgentTrue_AppearsInRunningSessions()
+    {
+        // Issue #1150: top-level agents (the default) must still show up in RunningSessions.
+        var sessionId = new AgentSessionId("session-register");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetOrCreateAsync(sessionId, registerAsRunningAgent: true);
+
+        Assert.Single(factory.RunningSessions);
+        Assert.Equal(sessionId, factory.RunningSessions[0].SessionId);
+    }
+
+    [Fact]
     public async Task CreateAsync_CreatedChat_ExposesFactoryAsRunningAgentChatFactory()
     {
         var sessionId = new AgentSessionId("session-selffactory-create");

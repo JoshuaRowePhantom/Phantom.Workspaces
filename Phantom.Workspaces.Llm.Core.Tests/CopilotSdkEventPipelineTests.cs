@@ -435,7 +435,7 @@ public sealed class CopilotSdkEventPipelineTests
             AgentServices? services,
             string? displayNameOverride,
             string? descriptionOverride,
-            CancellationToken ct) =>
+            bool registerAsRunningAgent, CancellationToken ct) =>
             throw new NotImplementedException();
     }
 

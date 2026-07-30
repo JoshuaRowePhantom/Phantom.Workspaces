@@ -490,7 +490,7 @@ public sealed class AgentChatHostedSubAgentTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
             => throw new NotImplementedException();
     }
 

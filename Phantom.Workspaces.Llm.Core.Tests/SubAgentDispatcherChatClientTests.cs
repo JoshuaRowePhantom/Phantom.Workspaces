@@ -143,6 +143,41 @@ public sealed class SubAgentDispatcherChatClientTests
     }
 
     [Fact]
+    public async Task HandleCreateSubAgent_DoesNotAddSubAgentToRunningSessions()
+    {
+        // Issue #1150: dispatcher-created sub-agents must opt out of RunningSessions so the
+        // top-right "Running agents" popup lists only top-level agents.
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var embeddingsProvider = new DeterministicEmbeddingsProvider();
+        var dataAccessLayer = new FakeDataAccessLayer();
+        var dispatcherEntityName = new EntityName("dispatchers", "test-dispatcher");
+        var options = CreateOptions();
+        var factory = new RealAgentChatFactory();
+
+        var client = new SubAgentDispatcherChatClient(
+            factory,
+            embeddingsProvider,
+            dataAccessLayer,
+            dispatcherEntityName,
+            options);
+
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.User, "new: hello"),
+        };
+
+        await foreach (var _ in client.GetStreamingResponseAsync(messages, cancellationToken: timeout.Token))
+        {
+        }
+
+        Assert.NotEmpty(factory.RegisterAsRunningAgentCalls);
+        Assert.All(factory.RegisterAsRunningAgentCalls, v => Assert.False(v));
+        Assert.Empty(factory.RunningSessions);
+
+        client.Dispose();
+    }
+
+    [Fact]
     public async Task Route_ToExistingSubAgent_EnqueuesToThatAgent()
     {
         // Arrange
@@ -303,6 +338,7 @@ public sealed class SubAgentDispatcherChatClientTests
     {
         public Dictionary<AgentSessionId, RunningAgentChatLease> Leases { get; } = new();
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
+        public List<bool> RegisterAsRunningAgentCalls { get; } = new();
 
         public async Task<RunningAgentChatLease> GetOrCreateAsync(
             AgentSessionId sessionId,
@@ -310,8 +346,10 @@ public sealed class SubAgentDispatcherChatClientTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
+            RegisterAsRunningAgentCalls.Add(registerAsRunningAgent);
+
             if (Leases.TryGetValue(sessionId, out var existingLease))
             {
                 return existingLease;
@@ -330,6 +368,10 @@ public sealed class SubAgentDispatcherChatClientTests
 
             var lease = new RunningAgentChatLease(sessionId, chat, () => ValueTask.CompletedTask);
             Leases[sessionId] = lease;
+            if (registerAsRunningAgent)
+            {
+                RunningSessions.Add(new RunningAgentChat(sessionId, this));
+            }
             return lease;
         }
 
@@ -350,7 +392,7 @@ public sealed class SubAgentDispatcherChatClientTests
             string? descriptionOverride = null,
             CancellationToken ct = default)
         {
-            return GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
+            return GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
         }
     }
 
@@ -374,7 +416,7 @@ public sealed class SubAgentDispatcherChatClientTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (Leases.TryGetValue(sessionId, out var existingLease))
             {
@@ -415,7 +457,7 @@ public sealed class SubAgentDispatcherChatClientTests
             string? descriptionOverride = null,
             CancellationToken ct = default)
         {
-            return GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
+            return GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
         }
     }
 

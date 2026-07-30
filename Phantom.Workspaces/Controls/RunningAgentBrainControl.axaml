@@ -10,7 +10,7 @@
         <Grid RowDefinitions="Auto,*">
             <Border Grid.Row="0"
                     Padding="12,8">
-                <TextBlock Text="Running sub-agents"
+                <TextBlock Text="Running agents"
                            FontWeight="SemiBold" />
             </Border>
 

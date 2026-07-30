@@ -366,7 +366,7 @@ public sealed class AgentViewModelTests
         public Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, CancellationToken ct = default)
             => throw new NotImplementedException();
 
-        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => throw new NotImplementedException();
     }
 
@@ -394,7 +394,7 @@ public sealed class AgentViewModelTests
         public Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, CancellationToken ct = default)
             => throw new NotImplementedException();
 
-        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => throw new NotImplementedException();
     }
 
@@ -408,7 +408,7 @@ public sealed class AgentViewModelTests
         public Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, CancellationToken ct = default)
             => throw new NotImplementedException();
 
-        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => throw new NotImplementedException();
     }
 }

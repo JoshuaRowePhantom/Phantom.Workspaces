@@ -72,7 +72,7 @@ public sealed class RunningAgentChatTableTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             LastDefinition = definition;
             return GetAsync(sessionId, ct);

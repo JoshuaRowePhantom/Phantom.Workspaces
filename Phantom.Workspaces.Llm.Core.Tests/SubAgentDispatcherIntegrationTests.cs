@@ -271,7 +271,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (Leases.TryGetValue(sessionId, out var existing))
             {
@@ -301,7 +301,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             string? displayNameOverride = null,
             string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
+            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
     }
 
     /// <summary>An echo factory whose chats use a controllable client for the interrupt test.</summary>
@@ -323,7 +323,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (Leases.TryGetValue(sessionId, out var existing))
             {
@@ -354,6 +354,6 @@ public sealed class SubAgentDispatcherIntegrationTests
             string? displayNameOverride = null,
             string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
+            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
     }
 }

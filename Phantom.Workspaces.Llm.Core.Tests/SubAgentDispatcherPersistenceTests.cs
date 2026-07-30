@@ -290,7 +290,7 @@ public sealed class SubAgentDispatcherPersistenceTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (Leases.TryGetValue(sessionId, out var existing))
             {
@@ -323,6 +323,6 @@ public sealed class SubAgentDispatcherPersistenceTests
             string? displayNameOverride = null,
             string? descriptionOverride = null,
             CancellationToken ct = default)
-            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct);
+            => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
     }
 }

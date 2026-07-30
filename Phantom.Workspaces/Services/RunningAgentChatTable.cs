@@ -55,7 +55,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             request.AgentServices,
             request.EntityDisplayName,
             request.EntityDescription,
-            ct);
+            ct: ct);
     }
 
     private async Task<AgentDefinition?> ResolveDefinitionIfNeededAsync(

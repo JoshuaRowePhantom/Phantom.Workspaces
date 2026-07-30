@@ -750,7 +750,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             throw new NotImplementedException();
         }
