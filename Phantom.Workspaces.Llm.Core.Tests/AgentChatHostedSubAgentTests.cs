@@ -472,7 +472,7 @@ public sealed class AgentChatHostedSubAgentTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            string? nameOverride = null, CancellationToken ct = default)
         {
             var hostedClient = new Phantom.Workspaces.Llm.CopilotSubAgentChatClient();
             var child = CreateHostedSubAgentChat(hostedClient);

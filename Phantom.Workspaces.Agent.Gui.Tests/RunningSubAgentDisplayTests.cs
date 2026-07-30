@@ -300,4 +300,48 @@ public sealed class RunningSubAgentDisplayTests
         // And it must not fall back to the definition name either.
         Assert.NotEqual("generic-sub-agent", display.DisplayName);
     }
+
+    [Fact]
+    public async Task SubAgentName_WhenCallerNameSet_SurfacesCallerNameNotGuid()
+    {
+        // Fix #1151: when the sub-agent AgentChat carries a caller-supplied name (e.g.
+        // "fix-crash1142" from SubagentStartedData.AgentName, threaded through
+        // InternalCreateAgentChatRequest.NameOverride), the RunningSubAgentDisplay must expose
+        // that name via IRunningSubAgentDisplay.Name — distinct from the type-level DisplayName —
+        // instead of leaving it empty and forcing the operator to correlate GUIDs.
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "generic-sub-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        const string callerName = "fix-crash1142";
+        var chat = await Phantom.Workspaces.Llm.AgentChat.CreateAsync(
+            new Phantom.Workspaces.Llm.InternalCreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                ConfiguredStore = new Phantom.Workspaces.Llm.InMemoryAgentPersistenceStore(),
+                ClientOverride = new Phantom.Workspaces.Llm.DeterministicTestChatClient(),
+                DisplayNameOverride = "General purpose",
+                NameOverride = callerName,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal(callerName, display.Name);
+        // The bug's fingerprint was a 32-hex GUID surface. The caller-supplied name must not be it.
+        Assert.DoesNotMatch("^[0-9a-f]{32}$", display.Name);
+        // And it must remain independent of the type-level display name.
+        Assert.Equal("General purpose", display.DisplayName);
+        Assert.NotEqual(display.DisplayName, display.Name);
+    }
 }

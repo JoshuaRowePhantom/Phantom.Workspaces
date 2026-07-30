@@ -47,6 +47,14 @@ public static class CopilotSdkStreamAdapter
     /// <summary>Lifecycle-start argument: the sub-agent's display name.</summary>
     public const string DisplayNameArgumentName = "display-name";
 
+    /// <summary>
+    /// Lifecycle-start argument: the caller-supplied sub-agent name/id (issue #1151), which
+    /// maps to <c>SubagentStartedData.AgentName</c>. Distinct from <see cref="DisplayNameArgumentName"/>
+    /// (which carries the type-level display name); used to surface the caller-chosen identity
+    /// (e.g. <c>fix-crash1142</c>) in the UI without overwriting the type display.
+    /// </summary>
+    public const string AgentNameArgumentName = "agent-name";
+
     /// <summary>Lifecycle-start argument: the sub-agent's description.</summary>
     public const string DescriptionArgumentName = "description";
 
@@ -132,6 +140,7 @@ public static class CopilotSdkStreamAdapter
                                     [ParentToolCallIdArgumentName] = started.Data?.ToolCallId,
                                     [DisplayNameArgumentName] = started.Data?.AgentDisplayName,
                                     [DescriptionArgumentName] = started.Data?.AgentDescription,
+                                    [AgentNameArgumentName] = started.Data?.AgentName,
                                 })),
                         ],
                     };

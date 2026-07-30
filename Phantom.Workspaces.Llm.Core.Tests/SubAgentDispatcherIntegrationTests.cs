@@ -300,7 +300,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            string? nameOverride = null, CancellationToken ct = default)
             => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
     }
 
@@ -353,7 +353,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            string? nameOverride = null, CancellationToken ct = default)
             => GetOrCreateAsync(sessionId, definition, services, displayNameOverride, descriptionOverride, ct: ct);
     }
 }

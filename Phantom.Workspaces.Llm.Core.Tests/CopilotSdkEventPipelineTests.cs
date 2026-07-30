@@ -401,7 +401,7 @@ public sealed class CopilotSdkEventPipelineTests
             AgentServices? services,
             string? displayNameOverride,
             string? descriptionOverride,
-            CancellationToken ct)
+            string? nameOverride, CancellationToken ct)
         {
             IChatClient client = new CopilotSubAgentChatClient();
 

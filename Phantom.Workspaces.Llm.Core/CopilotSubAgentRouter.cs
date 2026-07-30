@@ -215,8 +215,13 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         // client-info default.
         var providedDisplayName = GetArgument(start, CopilotSdkStreamAdapter.DisplayNameArgumentName);
         var providedDescription = GetArgument(start, CopilotSdkStreamAdapter.DescriptionArgumentName);
+        var providedName = GetArgument(start, CopilotSdkStreamAdapter.AgentNameArgumentName);
         var displayNameOverride = string.IsNullOrWhiteSpace(providedDisplayName) ? null : providedDisplayName;
         var descriptionOverride = string.IsNullOrWhiteSpace(providedDescription) ? null : providedDescription;
+        // Fix #1151: caller-supplied name/id (e.g. fix-crash1142) flows through independently of
+        // the type-level DisplayName; whitespace degrades to null so downstream falls back
+        // gracefully.
+        var nameOverride = string.IsNullOrWhiteSpace(providedName) ? null : providedName;
 
         // Fix #1109: synchronously insert (or reuse) the child sink BEFORE any await, so any
         // routed update that races us cannot fall through to the parent transcript.
@@ -279,7 +284,8 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     sessionId,
                     services: null,
                     displayNameOverride: displayNameOverride,
-                    descriptionOverride: descriptionOverride)
+                    descriptionOverride: descriptionOverride,
+                    nameOverride: nameOverride)
                 .ConfigureAwait(false);
             var agentChat = lease.AgentChat;
 

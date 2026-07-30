@@ -63,7 +63,7 @@ public sealed class RunningAgentChatTableTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            string? nameOverride = null, CancellationToken ct = default)
             => GetAsync(sessionId, ct);
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(

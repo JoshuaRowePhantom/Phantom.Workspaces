@@ -217,7 +217,7 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             AgentServices? services,
             string? displayNameOverride,
             string? descriptionOverride,
-            CancellationToken ct)
+            string? nameOverride, CancellationToken ct)
         {
             CreateCalls.Add((definition, sessionId));
 

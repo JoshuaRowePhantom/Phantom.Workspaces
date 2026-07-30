@@ -24,6 +24,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     private readonly string agentId;
     private readonly string displayName;
     private readonly string description;
+    private readonly string name;
     private readonly Func<AgentChatCompletionState> getCompletionState;
     private readonly AgentChatRunningItemCollection runningItems;
     private readonly INotifyCollectionChanged subAgentsSource;
@@ -46,7 +47,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             agentChat.RunningItems,
             (INotifyCollectionChanged)agentChat.SubAgents,
             subAgent => new RunningSubAgentDisplay((AgentChat)subAgent),
-            agentChat)
+            agentChat,
+            name: agentChat.Name)
     {
     }
 
@@ -58,7 +60,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         AgentChatRunningItemCollection runningItems,
         string agentId = "",
         string displayName = "",
-        string description = "")
+        string description = "",
+        string name = "")
         : this(
             agentId,
             displayName,
@@ -67,7 +70,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             runningItems,
             new System.Collections.ObjectModel.ObservableCollection<IRunningSubAgent>(),
             _ => throw new NotSupportedException("Child factory not provided in test constructor."),
-            null)
+            null,
+            name: name)
     {
     }
 
@@ -86,7 +90,8 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
             agentChat.RunningItems,
             new ObservableCollection<IRunningSubAgent>(),
             _ => throw new NotSupportedException("Parent-activity display does not wrap sub-agents."),
-            agentChat);
+            agentChat,
+            name: agentChat.Name);
 
     private RunningSubAgentDisplay(
         string agentId,
@@ -96,11 +101,13 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
         AgentChatRunningItemCollection runningItems,
         INotifyCollectionChanged subAgentsSource,
         Func<IRunningSubAgent, RunningSubAgentDisplay> childFactory,
-        AgentChat? agentChat)
+        AgentChat? agentChat,
+        string name = "")
     {
         this.agentId = agentId;
         this.displayName = displayName;
         this.description = description;
+        this.name = name;
         this.getCompletionState = getCompletionState;
         this.runningItems = runningItems;
         this.subAgentsSource = subAgentsSource;
@@ -133,6 +140,7 @@ public sealed class RunningSubAgentDisplay : IRunningSubAgentDisplay, IDisposabl
     public string AgentId => this.agentId;
     public string DisplayName => this.displayName;
     public string Description => this.description;
+    public string Name => this.name;
     public AgentChatCompletionState CompletionState => this.getCompletionState();
     public IReadOnlyList<SubAgentActivityLine> RecentActivity => this.recentActivity;
     public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgents { get; }

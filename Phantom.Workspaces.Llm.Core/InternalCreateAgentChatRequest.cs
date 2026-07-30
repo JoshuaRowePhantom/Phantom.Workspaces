@@ -23,6 +23,14 @@ internal sealed record InternalCreateAgentChatRequest
 
     public string? DescriptionOverride { get; init; }
 
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (issue #1151). Independent of
+    /// <see cref="DisplayNameOverride"/> — the display-name is the agent-type label; the
+    /// name-override carries the invoker-chosen identity (e.g. <c>fix-crash1142</c>). Surfaced on
+    /// <c>AgentChat.Name</c>.
+    /// </summary>
+    public string? NameOverride { get; init; }
+
     public IReadOnlyList<IAsyncDisposable>? OwnedResources { get; init; }
 
     public CancellationToken CancellationToken { get; init; } = default;

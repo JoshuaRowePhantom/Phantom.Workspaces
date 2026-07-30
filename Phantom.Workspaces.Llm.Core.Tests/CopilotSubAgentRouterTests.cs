@@ -82,7 +82,8 @@ public sealed class CopilotSubAgentRouterTests
         string agentId,
         string parentToolCallId,
         string displayName = "Sub Agent",
-        string description = "desc")
+        string description = "desc",
+        string? agentName = null)
     {
         var call = new FunctionCallContent(
             agentId,
@@ -92,6 +93,7 @@ public sealed class CopilotSubAgentRouterTests
                 [CopilotSdkStreamAdapter.ParentToolCallIdArgumentName] = parentToolCallId,
                 [CopilotSdkStreamAdapter.DisplayNameArgumentName] = displayName,
                 [CopilotSdkStreamAdapter.DescriptionArgumentName] = description,
+                [CopilotSdkStreamAdapter.AgentNameArgumentName] = agentName,
             })
         {
             AdditionalProperties = new()
@@ -299,9 +301,9 @@ public sealed class CopilotSubAgentRouterTests
             displayName: "fix-reload1",
             description: "reload the workspace"));
 
-        var (displayNameOverride, descriptionOverride) = Assert.Single(factory.CreateCallOverrides);
-        Assert.Equal("fix-reload1", displayNameOverride);
-        Assert.Equal("reload the workspace", descriptionOverride);
+        var overrides302 = Assert.Single(factory.CreateCallOverrides);
+        Assert.Equal("fix-reload1", overrides302.DisplayNameOverride);
+        Assert.Equal("reload the workspace", overrides302.DescriptionOverride);
     }
 
     [Fact]
@@ -370,12 +372,77 @@ public sealed class CopilotSubAgentRouterTests
         Assert.DoesNotContain("general-purpose", overrides.DisplayNameOverride ?? string.Empty, StringComparison.Ordinal);
     }
 
+    // ─── Fix #1151 tests ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task SubAgentStarted_WithCallerName_CapturesNameOntoAgentChat()
+    {
+        // Fix #1151: the caller-supplied AgentName arrives on the lifecycle-start
+        // "agent-name" argument and must reach IRunningAgentChatFactory.CreateAsync as the
+        // separate nameOverride so it can be stamped onto AgentChat.Name.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "General purpose",
+            description: "desc",
+            agentName: "fix-crash1142"));
+
+        var overrides = Assert.Single(factory.CreateCallOverrides);
+        Assert.Equal("fix-crash1142", overrides.NameOverride);
+    }
+
+    [Fact]
+    public async Task SubAgentStarted_WithAgentNameAndDisplayName_KeepsBothDistinct()
+    {
+        // Fix #1151: the caller-supplied name is orthogonal to the type-level display name;
+        // both must flow through independently to preserve the type label (Fix #1133) and the
+        // invoker-chosen identity.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "General purpose",
+            description: "desc",
+            agentName: "fix-crash1142"));
+
+        var overrides = Assert.Single(factory.CreateCallOverrides);
+        Assert.Equal("General purpose", overrides.DisplayNameOverride);
+        Assert.Equal("fix-crash1142", overrides.NameOverride);
+        Assert.NotEqual(overrides.DisplayNameOverride, overrides.NameOverride);
+    }
+
+    [Fact]
+    public async Task SubAgentStarted_WithoutAgentName_FallsBackGracefully()
+    {
+        // Fix #1151 fallback: when the agent-name argument is absent or whitespace, the router
+        // must pass null (not throw, not synthesize a fake value) so downstream UI can fall back
+        // to DisplayName / session id.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1",
+            parentToolCallId: "call-1",
+            displayName: "General purpose",
+            description: "desc",
+            agentName: "   "));
+
+        var overrides = Assert.Single(factory.CreateCallOverrides);
+        Assert.Null(overrides.NameOverride);
+    }
+
     // ─── Fix #1139 tests ─────────────────────────────────────────────────────────
 
     private static ChatResponseUpdate LifecycleStartWithoutAgentId(
         string parentToolCallId,
         string displayName = "Sub Agent",
-        string description = "desc")
+        string description = "desc",
+        string? agentName = null)
     {
         // Mirrors the CopilotSdkStreamAdapter output when SubagentStartedEvent.AgentId is
         // empty: CallId is empty; the spawning tool-call id is surfaced only in the
@@ -388,6 +455,7 @@ public sealed class CopilotSubAgentRouterTests
                 [CopilotSdkStreamAdapter.ParentToolCallIdArgumentName] = parentToolCallId,
                 [CopilotSdkStreamAdapter.DisplayNameArgumentName] = displayName,
                 [CopilotSdkStreamAdapter.DescriptionArgumentName] = description,
+                [CopilotSdkStreamAdapter.AgentNameArgumentName] = agentName,
             })
         {
             AdditionalProperties = new()

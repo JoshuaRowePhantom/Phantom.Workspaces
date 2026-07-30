@@ -8,6 +8,7 @@ public sealed class AgentChatDetailsViewModel : ViewModelBase
     {
         this.Agent = agent;
         this.DisplayName = agent.DisplayName;
+        this.AgentName = agent.Name;
         this.agentSessionId = agent.AgentSessionId;
         this.Agent.PropertyChanged += this.OnAgentPropertyChanged;
     }
@@ -15,6 +16,13 @@ public sealed class AgentChatDetailsViewModel : ViewModelBase
     public AgentViewModel Agent { get; }
 
     public string DisplayName { get; }
+
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (issue #1151), e.g. <c>fix-crash1142</c>. Independent of
+    /// <see cref="DisplayName"/>: the display name is the agent-type label; the agent name is the
+    /// invoker-chosen identity. Empty when no caller name was supplied.
+    /// </summary>
+    public string AgentName { get; }
 
     public string AgentSessionId
     {

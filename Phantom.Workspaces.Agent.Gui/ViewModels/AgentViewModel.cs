@@ -176,6 +176,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public string Description { get; }
 
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (issue #1151) sourced from <c>AgentChat.Name</c>. Empty
+    /// for root agents and for sub-agents whose caller did not supply a name.
+    /// </summary>
+    public string Name => this.agentChat.Name;
+
     public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;

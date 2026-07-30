@@ -2407,4 +2407,45 @@ public sealed class AgentChatTests
         Assert.True(result.IsTransient);
     }
 
+    [Fact]
+    public async Task CreateAsync_WithNameOverride_SetsAgentChatName()
+    {
+        // Fix #1151: NameOverride on the internal creation request flows onto AgentChat.Name,
+        // independent of the DisplayName (which remains the type-level label from client info /
+        // DisplayNameOverride).
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new DeterministicTestChatClient();
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "General purpose",
+            NameOverride = "fix-crash1142",
+        });
+
+        Assert.Equal("fix-crash1142", chat.Name);
+        Assert.Equal("General purpose", chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithoutNameOverride_HasEmptyName()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new DeterministicTestChatClient();
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "General purpose",
+        });
+
+        Assert.Equal(string.Empty, chat.Name);
+    }
+
 }

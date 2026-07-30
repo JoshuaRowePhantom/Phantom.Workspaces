@@ -158,7 +158,7 @@ public sealed class AgentFactorySubAgentDispatcherIntegrationTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            string? nameOverride = null, CancellationToken ct = default)
             => throw new NotSupportedException();
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(

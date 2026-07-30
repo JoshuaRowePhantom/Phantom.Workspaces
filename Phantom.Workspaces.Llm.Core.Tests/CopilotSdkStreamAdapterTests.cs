@@ -168,6 +168,30 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
+    public async Task SubagentStarted_WithAgentName_PacksAgentNameArgument()
+    {
+        // Fix #1151: the caller-supplied SubagentStartedData.AgentName ("fix-crash1142" etc.) must
+        // ride the lifecycle-start FunctionCallContent under the new agent-name argument so the
+        // router (and downstream UI) can distinguish it from the type-level display name.
+        var updates = await TranslateAsync(new SubagentStartedEvent
+        {
+            AgentId = "agent-1",
+            Data = new SubagentStartedData
+            {
+                ToolCallId = "call-1",
+                AgentName = "fix-crash1142",
+                AgentDisplayName = "General purpose",
+                AgentDescription = "desc",
+            },
+        });
+
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Equal("fix-crash1142", call.Arguments![CopilotSdkStreamAdapter.AgentNameArgumentName]);
+        // AgentName must be independent of the type-level display name.
+        Assert.Equal("General purpose", call.Arguments[CopilotSdkStreamAdapter.DisplayNameArgumentName]);
+    }
+
+    [Fact]
     public async Task TranslateCopilotSdkSessionEvents_SubagentStartedWithoutAgentId_ExposesSpawningToolCallIdForCorrelation()
     {
         // Fix #1139: when SubagentStartedEvent lacks a child AgentId (root-parent spawn case),

@@ -33,6 +33,7 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
         AgentServices? services = null,
         string? displayNameOverride = null,
         string? descriptionOverride = null,
+        string? nameOverride = null,
         CancellationToken ct = default);
 
     /// <summary>

@@ -26,11 +26,11 @@ internal static class SubAgentTestFakes
         public List<(AgentDefinition Definition, AgentSessionId SessionId)> CreateCalls { get; } = new();
 
         /// <summary>
-        /// Records the (displayNameOverride, descriptionOverride) tuple for each
+        /// Records the (displayNameOverride, descriptionOverride, nameOverride) tuple for each
         /// <c>CreateAsync</c> call so tests can assert on the values the router propagates from
-        /// the sub-agent-started lifecycle arguments (Issue #1133).
+        /// the sub-agent-started lifecycle arguments (Issues #1133 / #1151).
         /// </summary>
-        public List<(string? DisplayNameOverride, string? DescriptionOverride)> CreateCallOverrides { get; } = new();
+        public List<(string? DisplayNameOverride, string? DescriptionOverride, string? NameOverride)> CreateCallOverrides { get; } = new();
 
         public RunningAgentChatLease? CreatedLease { get; private set; }
         public CopilotSubAgentChatClient? CreatedReceiver { get; private set; }
@@ -55,10 +55,11 @@ internal static class SubAgentTestFakes
             AgentServices? services,
             string? displayNameOverride,
             string? descriptionOverride,
+            string? nameOverride,
             CancellationToken ct)
         {
             CreateCalls.Add((definition, sessionId));
-            CreateCallOverrides.Add((displayNameOverride, descriptionOverride));
+            CreateCallOverrides.Add((displayNameOverride, descriptionOverride, nameOverride));
 
             IChatClient client;
             if (_exposeReceiver)
@@ -79,6 +80,7 @@ internal static class SubAgentTestFakes
                 ConfiguredStore = new InMemoryAgentPersistenceStore(),
                 DisplayNameOverride = displayNameOverride,
                 DescriptionOverride = descriptionOverride,
+                NameOverride = nameOverride,
             });
 
             var chatClientAgent = new ChatClientAgent(client, new ChatClientAgentOptions

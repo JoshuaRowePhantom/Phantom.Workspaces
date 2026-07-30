@@ -168,7 +168,7 @@ public sealed class RunningAgentChatTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            string? nameOverride = null, CancellationToken ct = default)
             => throw new NotImplementedException();
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(

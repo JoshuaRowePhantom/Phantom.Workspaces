@@ -104,6 +104,14 @@
                              IsReadOnly="True"
                              Classes="agent-detail-value copyable-text"/>
                 </StackPanel>
+                <StackPanel Spacing="4"
+                            IsVisible="{Binding AgentName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="Agent name"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding AgentName}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
                 <StackPanel Spacing="4">
                     <TextBlock Text="Session ID"
                                Classes="muted"/>

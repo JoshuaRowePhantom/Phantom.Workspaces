@@ -255,6 +255,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
        this.Description = this.request.DescriptionOverride ?? resolvedAgentDefinition.Description ?? string.Empty;
+       // #1151: caller-supplied sub-agent name/id (e.g. fix-crash1142) is distinct from the
+       // type-level DisplayName. Blank when no caller name was supplied so downstream UI can
+       // fall back to DisplayName / session id without inventing a fake value.
+       this.Name = this.request.NameOverride ?? string.Empty;
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -530,6 +534,14 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public string DisplayName { get; private set; } = string.Empty;
 
     public string Description { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (e.g. <c>fix-crash1142</c>) from
+    /// <c>SubagentStartedData.AgentName</c>. Empty for root chats and for sub-agents whose
+    /// caller did not supply a name. Distinct from <see cref="DisplayName"/>, which carries the
+    /// agent-type label.
+    /// </summary>
+    public string Name { get; private set; } = string.Empty;
 
     public string AgentSessionId => this.agentSessionId;
 
