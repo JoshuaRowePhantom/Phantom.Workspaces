@@ -42,5 +42,9 @@
     "actionText": "Mark blocked"
   },
   "display-entity-types": [],
+  "target-participant": "target",
+  "applies-to": [
+    { "participant-property-name": "user", "entity-types": ["user"], "session-value": "user-entity-id" }
+  ],
   "default-name-prefixes": []
 }

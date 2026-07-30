@@ -12,8 +12,21 @@ public sealed class SubViewRelationshipMergeTests
         RelationshipTypeNames = new RelationshipTypeNameSet(["related"]),
     };
 
+    private static InterestTypeDefinition StandardInterest(string name) =>
+        new(name, "●", "○", "", "", "", "", null,
+            TargetParticipant: "target",
+            AppliesTo: [new InterestAppliesTo("user", new HashSet<string> { "user" }, InterestSessionValue.UserEntityId)]);
+
+    private static InterestTypeDefinition DefaultInterest() =>
+        new("default", "⭐", "☆", "", "", "", "", new HashSet<string> { "workspace" },
+            TargetParticipant: "value",
+            AppliesTo: [new InterestAppliesTo("applied-to", new HashSet<string> { "user-computer-profile" }, InterestSessionValue.UserComputerProfileEntityId)]);
+
     private static InterestCatalog CatalogWithInterestA() =>
-        new([new InterestTypeDefinition("interest-a", "●", "○", "", "", "", "", null)]);
+        new([StandardInterest("interest-a")]);
+
+    private static InterestCatalog CatalogWithAllExistingInterests() =>
+        new([StandardInterest("actionable"), StandardInterest("blocked"), StandardInterest("assigned-to"), StandardInterest("not-interesting"), DefaultInterest()]);
 
     private static QueryRequest MinimalQuery(IReadOnlyCollection<GetRelationshipRequest>? relationships) =>
         new()
@@ -65,5 +78,49 @@ public sealed class SubViewRelationshipMergeTests
 
         var relationship = Assert.Single(result.RelationshipsToReturn!);
         Assert.Contains("related", relationship.RelationshipTypeNames?.Values ?? []);
+    }
+
+    [Fact]
+    public void WithInterestRelationships_WithAllExistingInterests_RequestsEveryInterestRelationshipType()
+    {
+        var query = MinimalQuery(null);
+        var catalog = CatalogWithAllExistingInterests();
+
+        var result = MainWindowViewModel.WithInterestRelationships(query, catalog);
+
+        var typeNames = result.RelationshipsToReturn!
+            .Select(static r => r.RelationshipTypeNames?.Values ?? [])
+            .SelectMany(static v => v)
+            .ToHashSet();
+
+        Assert.Contains("related", typeNames);
+        Assert.Contains("actionable", typeNames);
+        Assert.Contains("blocked", typeNames);
+        Assert.Contains("assigned-to", typeNames);
+        Assert.Contains("not-interesting", typeNames);
+        Assert.Contains("default", typeNames);
+    }
+
+    [Fact]
+    public void WithInterestRelationships_WithJsonDeclaredRelationships_PreservesThemAlongsideInterests()
+    {
+        var jsonDeclared = new GetRelationshipRequest
+        {
+            RelationshipTypeNames = new RelationshipTypeNameSet(["custom-declared"]),
+        };
+        var query = MinimalQuery([jsonDeclared]);
+        var catalog = CatalogWithAllExistingInterests();
+
+        var result = MainWindowViewModel.WithInterestRelationships(query, catalog);
+
+        var typeNames = result.RelationshipsToReturn!
+            .Select(static r => r.RelationshipTypeNames?.Values ?? [])
+            .SelectMany(static v => v)
+            .ToHashSet();
+
+        Assert.Contains("custom-declared", typeNames);
+        Assert.Contains("related", typeNames);
+        Assert.Contains("actionable", typeNames);
+        Assert.Contains("default", typeNames);
     }
 }

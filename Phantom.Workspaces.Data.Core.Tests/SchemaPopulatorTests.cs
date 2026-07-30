@@ -558,6 +558,87 @@ public sealed class SchemaPopulatorTests
     }
 
     [Fact]
+    public async Task Populate_RegistersDefaultAsInterestTypeWithValueAppliedToMapping()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var defaultDefinition = await FindInterestTypeDefinitionAsync(inMemoryDataAccessLayer, "default");
+
+        var entityTypes = defaultDefinition.GetProperty("entity-types").EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("interest-type", entityTypes);
+        Assert.Contains("relationship-type", entityTypes);
+
+        Assert.Equal("value", defaultDefinition.GetProperty("target-participant").GetString());
+
+        var appliesTo = defaultDefinition.GetProperty("applies-to");
+        var scope = Assert.Single(appliesTo.EnumerateArray());
+        Assert.Equal("applied-to", scope.GetProperty("participant-property-name").GetString());
+        Assert.Equal("user-computer-profile-entity-id", scope.GetProperty("session-value").GetString());
+        var scopeEntityTypes = scope.GetProperty("entity-types").EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+        Assert.Contains("user-computer-profile", scopeEntityTypes);
+
+        var displayEntityTypes = defaultDefinition.GetProperty("display-entity-types").EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+        Assert.Equal(new[] { "workspace" }, displayEntityTypes);
+    }
+
+    [Fact]
+    public async Task Populate_ExistingInterestTypes_DeclareTargetAndUserAppliesTo()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        foreach (var name in new[] { "actionable", "blocked", "assigned-to", "not-interesting" })
+        {
+            var definition = await FindInterestTypeDefinitionAsync(inMemoryDataAccessLayer, name);
+
+            Assert.Equal("target", definition.GetProperty("target-participant").GetString());
+
+            var appliesTo = definition.GetProperty("applies-to");
+            var scope = Assert.Single(appliesTo.EnumerateArray());
+            Assert.Equal("user", scope.GetProperty("participant-property-name").GetString());
+            Assert.Equal("user-entity-id", scope.GetProperty("session-value").GetString());
+        }
+    }
+
+    private static async Task<JsonElement> FindInterestTypeDefinitionAsync(InMemoryDataAccessLayer inMemoryDataAccessLayer, string interestTypeName)
+    {
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        return exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray()
+                        .Select(static part => part.GetString())
+                        .SequenceEqual(new[] { "entity-types", interestTypeName })));
+    }
+
+    [Fact]
     public async Task Populate_WhenRunTwiceThroughRepositoryPipeline_IsIdempotent()
     {
         var pipelineDataAccessLayer = new MergeProcessingDataAccessLayer(

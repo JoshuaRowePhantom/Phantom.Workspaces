@@ -821,7 +821,10 @@ public sealed class EntityBrokerTests
 
         await broker.RefreshAsync(ct);
 
-        Assert.Equal(0, broker.ActiveSubscribedQueryCount);
+        // The broker auto-registers a persistent subscription for the interest-type catalog during
+        // initialization, so exactly one subscribed query survives after the GC-collected one is
+        // reclaimed.
+        Assert.Equal(1, broker.ActiveSubscribedQueryCount);
     }
 
     private static Task<EntityBroker> CreateBrokerAsync(CancellationToken cancellationToken)

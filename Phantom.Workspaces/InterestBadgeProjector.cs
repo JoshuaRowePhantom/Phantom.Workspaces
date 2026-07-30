@@ -18,11 +18,12 @@ public static class InterestBadgeProjector
     public static IReadOnlyList<BadgeModel> Project(
         InterestCatalog interestCatalog, 
         EntityTypeCatalog entityTypeCatalog,
-        EntitySnapshot entity)
+        EntitySnapshot entity,
+        EntityId userId,
+        EntityId userComputerProfileId)
     {
         var entityTypeNames = ReadEntityTypes(entity.Data ?? JsonDocument.Parse("{}").RootElement).ToHashSet();
-        var interestTypeNames = interestCatalog.InterestTypeNames;
-        var appliedNotesByType = GetAppliedInterests(entity, interestTypeNames);
+        var appliedNotesByType = GetAppliedInterests(entity, interestCatalog.InterestTypes, userId, userComputerProfileId);
 
         return interestCatalog.InterestTypes
             .Where(interestType => ShouldShowBadge(interestType, entityTypeNames, entityTypeCatalog))
@@ -110,42 +111,82 @@ public static class InterestBadgeProjector
     private static string FirstNonEmpty(params string[] values)
         => values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
 
-    private static Dictionary<string, string?> GetAppliedInterests(EntitySnapshot entity, IReadOnlySet<string> interestTypeNames)
+    private static Dictionary<string, string?> GetAppliedInterests(
+        EntitySnapshot entity,
+        IReadOnlyList<InterestTypeDefinition> interestTypes,
+        EntityId userId,
+        EntityId userComputerProfileId)
     {
         var appliedNotesByType = new Dictionary<string, string?>(System.StringComparer.Ordinal);
         foreach (var relationship in entity.Relationships)
         {
-            if (relationship.Data is not { } relationshipData
-                || !IsTargetOf(relationshipData, entity.EntityId))
+            if (relationship.Data is not { } relationshipData)
             {
                 continue;
             }
 
-            var note = ReadNote(relationshipData);
-            foreach (var typeName in ReadEntityTypes(relationshipData))
+            var relationshipEntityTypes = ReadEntityTypes(relationshipData).ToHashSet();
+            foreach (var interestType in interestTypes)
             {
-                if (interestTypeNames.Contains(typeName))
+                if (!relationshipEntityTypes.Contains(interestType.Name))
                 {
-                    appliedNotesByType[typeName] = note;
+                    continue;
                 }
+
+                if (!IsAppliedTo(relationshipData, entity.EntityId, interestType, userId, userComputerProfileId))
+                {
+                    continue;
+                }
+
+                appliedNotesByType[interestType.Name] = ReadNote(relationshipData);
             }
         }
 
         return appliedNotesByType;
     }
 
-    private static bool IsTargetOf(JsonElement relationshipData, EntityId entityId)
+    private static bool IsAppliedTo(
+        JsonElement relationshipData,
+        EntityId entityId,
+        InterestTypeDefinition interestType,
+        EntityId userId,
+        EntityId userComputerProfileId)
     {
-        if (relationshipData.ValueKind != JsonValueKind.Object
-            || !relationshipData.TryGetProperty("participants", out var participants)
-            || participants.ValueKind != JsonValueKind.Object
-            || !participants.TryGetProperty("target", out var target)
-            || target.ValueKind != JsonValueKind.String)
+        if (!TryReadParticipant(relationshipData, interestType.TargetParticipant, out var targetValue)
+            || !string.Equals(targetValue, entityId.ToString(), System.StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        return string.Equals(target.GetString(), entityId.ToString(), System.StringComparison.OrdinalIgnoreCase);
+        foreach (var scope in interestType.AppliesTo)
+        {
+            var expected = scope.SessionValue == InterestSessionValue.UserComputerProfileEntityId
+                ? userComputerProfileId.ToString()
+                : userId.ToString();
+            if (!TryReadParticipant(relationshipData, scope.ParticipantPropertyName, out var actual)
+                || !string.Equals(actual, expected, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryReadParticipant(JsonElement relationshipData, string participantName, out string? value)
+    {
+        value = null;
+        if (relationshipData.ValueKind != JsonValueKind.Object
+            || !relationshipData.TryGetProperty("participants", out var participants)
+            || participants.ValueKind != JsonValueKind.Object
+            || !participants.TryGetProperty(participantName, out var participantElement)
+            || participantElement.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = participantElement.GetString();
+        return value is not null;
     }
 
     private static string? ReadNote(JsonElement relationshipData)

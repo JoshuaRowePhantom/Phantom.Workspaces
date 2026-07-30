@@ -3,6 +3,8 @@
   "entity-display-order": 95,
   "entity-types": [
     "entity",
+    "interest-type",
+    "relationship-type",
     "entity-type",
     "json-schema",
     "note"
@@ -29,5 +31,20 @@
   "schema": {
     "$ref": "/JsonSchemas/default.json"
   },
+  "applied": {
+    "indicator": "⭐ Default",
+    "description": "Default workspace",
+    "actionText": "Clear default workspace"
+  },
+  "notApplied": {
+    "indicator": "☆ Not Default",
+    "description": "Not the default workspace",
+    "actionText": "Make default workspace"
+  },
+  "display-entity-types": ["workspace"],
+  "target-participant": "value",
+  "applies-to": [
+    { "participant-property-name": "applied-to", "entity-types": ["user-computer-profile"], "session-value": "user-computer-profile-entity-id" }
+  ],
   "default-name-prefixes": []
 }

@@ -433,6 +433,50 @@ public sealed class InterestViewQueryTests
             }
             """);
 
+    [AvaloniaFact]
+    public async Task InboxView_GeneratedQuery_RetrievesAllInterestRelationshipTypesIncludingDefault()
+    {
+        // Boot an EntityBroker whose schema populator has seeded every interest-type entity
+        // (actionable, blocked, assigned-to, not-interesting, default). The catalog discovers each of
+        // them dynamically.
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource());
+        using var catalog = await InterestCatalog.CreateAsync(broker);
+
+        // A view-definition-style query for the inbox view: entities targeted by an 'actionable'
+        // interest where the user participant matches the current session user (a subset of the real
+        // inbox query used by the view model).
+        var inboxQuery = new QueryRequest
+        {
+            Clauses =
+            [
+                new TopLevelQueryClause
+                {
+                    ClauseIdentifier = new QueryClauseIdentifier("inbox"),
+                    Clause = TargetsOfInterestForUser(
+                        "actionable",
+                        broker.EntityRepository.WorkspaceEntitySession.UserEntityId),
+                },
+            ],
+        };
+
+        // The view-model's shared augmentation must add every interest relationship type (plus related)
+        // to the request so every interest badge (including the newly-registered 'default') reflects
+        // current state on the inbox view.
+        var augmented = MainWindowViewModel.WithInterestRelationships(inboxQuery, catalog);
+
+        var typeNames = augmented.RelationshipsToReturn!
+            .Select(static r => r.RelationshipTypeNames?.Values ?? [])
+            .SelectMany(static v => v)
+            .ToHashSet();
+
+        Assert.Contains("related", typeNames);
+        Assert.Contains("actionable", typeNames);
+        Assert.Contains("blocked", typeNames);
+        Assert.Contains("assigned-to", typeNames);
+        Assert.Contains("not-interesting", typeNames);
+        Assert.Contains("default", typeNames);
+    }
+
     private static async Task<EntityId> SeedAsync(IDataAccessLayer dataAccessLayer, string json)
     {
         var guid = Guid.NewGuid();

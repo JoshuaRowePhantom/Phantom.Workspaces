@@ -28,6 +28,15 @@ public sealed class EntityBroker
     public EntityRepository EntityRepository => this.entityRepository;
 
     /// <summary>
+    /// The interest-type catalog used by <see cref="ToggleInterestAsync"/> to resolve an interest-type
+    /// name (received via the entity-badge callback) into the fully-declared
+    /// <see cref="InterestTypeDefinition"/> whose <c>target-participant</c> and <c>applies-to</c>
+    /// participants describe the relationship shape to write. Set by the composition root
+    /// (<see cref="ViewModels.MainWindowViewModel"/>) after the catalog is initialised.
+    /// </summary>
+    public InterestCatalog? InterestCatalog { get; set; }
+
+    /// <summary>
     /// Marshals UI-bound mutations onto the UI thread. <see cref="UpdateAsync"/> runs the write and the
     /// subsequent subscription refresh off the UI thread (thread pool), so mutations to the subscribed
     /// result collections (<see cref="SubscribedResults.Merge"/>) and to <see cref="SubscribedEntityViewModel"/>
@@ -70,6 +79,7 @@ public sealed class EntityBroker
 
         var broker = new EntityBroker(repository);
         await broker.InitializeAsync(cancellationToken);
+        broker.InterestCatalog = await InterestCatalog.CreateAsync(broker, cancellationToken);
         return broker;
     }
 
@@ -612,7 +622,21 @@ public sealed class EntityBroker
         SubscribedEntityViewModel entity,
         string interestTypeName)
     {
-        await InterestToggle.ToggleAsync(this, entity.Snapshot, interestTypeName);
+        if (this.InterestCatalog is not { } catalog)
+        {
+            throw new InvalidOperationException(
+                $"Cannot toggle interest '{interestTypeName}': no interest catalog is attached to the entity broker.");
+        }
+
+        var definition = catalog.InterestTypes.FirstOrDefault(
+            type => string.Equals(type.Name, interestTypeName, StringComparison.Ordinal));
+        if (definition is null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot toggle interest '{interestTypeName}': no interest-type definition with that name is registered in the catalog.");
+        }
+
+        await InterestToggle.ToggleAsync(this, entity.Snapshot, definition);
     }
 
     private async Task DeleteSubscribedEntityAsync(

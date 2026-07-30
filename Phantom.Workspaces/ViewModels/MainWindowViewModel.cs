@@ -572,6 +572,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.entityBroker.Changed += this.OnEntityBrokerChanged;
         this.interestCatalog = await InterestCatalog.CreateAsync(this.entityBroker);
         this.interestCatalog.Changed += this.OnInterestCatalogChanged;
+        this.entityBroker.InterestCatalog = this.interestCatalog;
         this.entityTypeCatalog = await EntityTypeCatalog.CreateAsync(this.entityBroker);
         this.entityTypeCatalog.Changed += this.OnEntityTypeCatalogChanged;
         this.entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(this.entityBroker);
@@ -1288,7 +1289,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     continue;
                 }
 
-                if (TryReadSubViewGetRequest(subView, out var getRequest))
+                if (TryReadSubViewGetRequest(subView, this.interestCatalog, out var getRequest))
                 {
                     var getEntities = await this.LoadGetSubViewEntitiesAsync(next, getRequest);
                     if (next.CancellationToken.IsCancellationRequested) return;
@@ -1297,7 +1298,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     continue;
                 }
 
-                if (TryReadSubViewQueryRequest(subView, out var queryRequest))
+                if (TryReadSubViewQueryRequest(subView, this.interestCatalog, out var queryRequest))
                 {
                     var queryEntities = await this.LoadQuerySubViewEntitiesAsync(next, queryRequest);
                     if (next.CancellationToken.IsCancellationRequested) return;
@@ -1363,9 +1364,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             ? queryRequest
             : NotInterestingQuery.ExcludingNotInteresting(queryRequest);
 
-        // Also fetch each matched entity's interest relationships so its badge glyphs can be rendered.
-        effectiveQuery = WithInterestRelationships(effectiveQuery, this.interestCatalog);
-
+        // The interest-relationship augmentation is performed by TryReadSubViewQueryRequest itself so
+        // every view (query, get, or get-entity) always requests every interest relationship type. No
+        // additional WithInterestRelationships call is needed here.
         var subscribedQuery = await this.EntityBroker.SubscribeQueryAsync(effectiveQuery);
         population.AddQuerySubscription(subscribedQuery, () => this.RebindPopulationAsync(population));
 
@@ -1377,18 +1378,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return subscribedQuery.Results.ToArray();
     }
 
+    /// <summary>
+    /// Merges the JSON-declared <c>relationships-to-return</c> collection with the interest catalog's
+    /// interest relationship types (plus <c>related</c>) so every view can display and toggle every
+    /// interest, not only those named in the view JSON. Shared with <see cref="WithInterestRelationships"/>
+    /// so both the query sub-view path and the get / get-entity view-definition builders produce the
+    /// same relationship-type coverage.
+    /// </summary>
+    internal static IReadOnlyCollection<GetRelationshipRequest> MergeInterestRelationships(
+        IReadOnlyCollection<GetRelationshipRequest>? existing,
+        InterestCatalog? catalog)
+    {
+        var merged = new List<GetRelationshipRequest>(existing ?? []);
+        merged.Add(new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["related"]) });
+        if (catalog is { InterestTypeNames.Count: > 0 } validCatalog)
+        {
+            merged.Add(new GetRelationshipRequest
+            {
+                RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]),
+            });
+        }
+
+        return merged;
+    }
+
     internal static QueryRequest WithInterestRelationships(QueryRequest query, InterestCatalog? catalog)
     {
         return query with
         {
-            RelationshipsToReturn =
-            [
-                ..(query.RelationshipsToReturn ?? []),
-                new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet(["related"]) },
-                ..(catalog is { InterestTypeNames.Count: > 0 } validCatalog
-                    ? [new GetRelationshipRequest { RelationshipTypeNames = new RelationshipTypeNameSet([.. validCatalog.InterestTypeNames]) }]
-                    : Array.Empty<GetRelationshipRequest>()),
-            ],
+            RelationshipsToReturn = MergeInterestRelationships(query.RelationshipsToReturn, catalog),
         };
     }
 
@@ -1536,7 +1554,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // Project the entity's interests (from its loaded relationships) into toggleable badge glyphs.
         if (this.interestCatalog is { } interestCatalog && this.entityTypeCatalog is { } entityTypeCatalog)
         {
-            entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot));
+            var session = this.entityBroker!.EntityRepository.WorkspaceEntitySession;
+            var userId = session.UserEntityId;
+            var profileId = session.UserComputerProfileEntityId;
+            entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot, userId, profileId));
 
             // Re-project interest badges whenever the entity's snapshot changes so relationship-only
             // updates (for example toggling an interest, which the broker now pushes live) refresh the
@@ -1545,7 +1566,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             {
                 if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
                 {
-                    entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot));
+                    entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot, userId, profileId));
                 }
             };
         }
@@ -3689,6 +3710,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private static bool TryReadSubViewGetRequest(
         JsonElement subView,
+        InterestCatalog? interestCatalog,
         out GetRequest getRequest)
     {
         getRequest = null!;
@@ -3701,7 +3723,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var getEntities = new List<GetEntityRequest>();
         foreach (var getEntityElement in getEntitiesElement.EnumerateArray())
         {
-            if (TryReadGetEntityRequest(getEntityElement, out var getEntityRequest))
+            if (TryReadGetEntityRequest(getEntityElement, interestCatalog, out var getEntityRequest))
             {
                 getEntities.Add(getEntityRequest);
             }
@@ -3712,12 +3734,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return false;
         }
 
+        var declared = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
+            ? relationshipsToReturn
+            : null;
+
         getRequest = new GetRequest
         {
             Entities = getEntities,
-            RelationshipsToReturn = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
-                ? relationshipsToReturn
-                : null,
+            RelationshipsToReturn = MergeInterestRelationships(declared, interestCatalog),
             Timestamps = TryReadTimestamps(subView, "timestamps", out var timestamps)
                 ? timestamps
                 : [null],
@@ -3727,6 +3751,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private static bool TryReadSubViewQueryRequest(
         JsonElement subView,
+        InterestCatalog? interestCatalog,
         out QueryRequest queryRequest)
     {
         queryRequest = null!;
@@ -3742,17 +3767,20 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return false;
         }
 
+        var declared = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
+            ? relationshipsToReturn
+            : null;
+
         queryRequest = deserialized with
         {
-            RelationshipsToReturn = TryReadGetRelationshipRequests(subView, "relationships-to-return", out var relationshipsToReturn)
-                ? relationshipsToReturn
-                : null,
+            RelationshipsToReturn = MergeInterestRelationships(declared, interestCatalog),
         };
         return true;
     }
 
     private static bool TryReadGetEntityRequest(
         JsonElement getEntityElement,
+        InterestCatalog? interestCatalog,
         out GetEntityRequest getEntityRequest)
     {
         getEntityRequest = null!;
@@ -3794,15 +3822,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return false;
         }
 
+        var declared = TryReadGetRelationshipRequests(getEntityElement, "relationships-to-return", out var relationshipsToReturn)
+            ? relationshipsToReturn
+            : null;
+
         getEntityRequest = new GetEntityRequest
         {
             EntityId = entityId,
             EntityName = entityName,
             EnumerateChildren = enumerateChildren,
             EntityTypeNames = entityTypeNameSet,
-            RelationshipsToReturn = TryReadGetRelationshipRequests(getEntityElement, "relationships-to-return", out var relationshipsToReturn)
-                ? relationshipsToReturn
-                : null,
+            RelationshipsToReturn = MergeInterestRelationships(declared, interestCatalog),
         };
         return true;
     }

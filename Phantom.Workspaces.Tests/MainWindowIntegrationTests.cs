@@ -4817,6 +4817,56 @@ public sealed class MainWindowIntegrationTests
             pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task InitializeAsync_AfterTogglingDefaultInterest_OpensDefaultWorkspace()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
+
+        var entityBroker = await GetEntityBrokerBeforeInitAsync(viewModel);
+
+        var workspaceId = new EntityId("de1a0110-0000-4000-8000-000000000005");
+        await SeedEntityAsync(
+            entityBroker,
+            workspaceId,
+            $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "toggle-default"]],
+              "display-name": { "default": "Toggle Default Workspace" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.InitializeAsync();
+
+        // Toggle the default interest ON for the workspace using the same code path the badge uses:
+        // the interest catalog is populated by InitializeAsync from the data-driven default-entity-type
+        // registration, and InterestToggle writes the {value, applied-to} participants declared there.
+        var workspaceEntities = await entityBroker.GetEntitiesAsync([workspaceId]);
+        var workspaceSnapshot = workspaceEntities.Single().Snapshot;
+        var defaultDefinition = entityBroker.InterestCatalog!.InterestTypes
+            .Single(interestType => string.Equals(interestType.Name, "default", StringComparison.Ordinal));
+        await InterestToggle.ToggleAsync(entityBroker, workspaceSnapshot, defaultDefinition);
+
+        // Closing the last workspace re-runs QueryDefaultWorkspaceIdsAsync (the same data-layer query
+        // used by InitializeAsync at startup). The toggled default must be picked up and opened
+        // instead of the Getting Started fallback.
+        var openPane = viewModel.WorkspacePanes.FirstOrDefault();
+        if (openPane is not null)
+        {
+            await viewModel.CloseWorkspacePaneAsync(openPane);
+        }
+
+        Assert.Contains(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes,
+            pane => string.Equals(pane.Id, GettingStartedWorkspaceId, StringComparison.Ordinal));
+    }
+
     private const string GettingStartedWorkspaceId = "6cc39f41-2a36-4be6-ab95-3f3fd355e463";
 
     private static async Task<EntityBroker> GetEntityBrokerBeforeInitAsync(MainWindowViewModel viewModel)
