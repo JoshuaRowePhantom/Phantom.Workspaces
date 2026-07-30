@@ -145,6 +145,24 @@ public sealed class RunningSubAgentsHtmlTransformerTests
     }
 
     [Fact]
+    public void RunningSubAgentsPanel_DirectChild_EmitsNonEmptyDataNavigateAgentId()
+    {
+        // Fix #1152: a direct-child sub-agent's rendered `data-navigate-agent-id` attribute
+        // must not be empty. When the child was registered via ISubAgentTable.Add and its
+        // AgentChat.agentId was left blank, the panel used to emit `data-navigate-agent-id=""`
+        // and the resulting anchor click would land in NavigateToSubAgent("") — a silent no-op
+        // or worse, a fall-through to the current-agent view. This test asserts every rendered
+        // navigate-id is non-empty.
+        var agent1 = new StubSubAgent("session-guid-1", "Alpha", AgentChatCompletionState.Running);
+        var agent2 = new StubSubAgent("session-guid-2", "Beta", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent1, agent2], []);
+
+        Assert.DoesNotContain("data-navigate-agent-id=\"\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-navigate-agent-id=\"session-guid-1\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-navigate-agent-id=\"session-guid-2\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunningSubAgentsPanel_NestedSubAgent_RenderedAsIndentedChild()
     {
         var nested = new StubSubAgent("a2", "Nested", AgentChatCompletionState.Running);

@@ -509,7 +509,15 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public bool IsBusy => this.isBusy;
 
     /// <summary>The agent ID used to identify this chat within its parent's sub-agent registry.</summary>
-    public string AgentId => this.agentId;
+    /// <remarks>
+    /// Fix #1152: Falls back to <see cref="AgentSessionId"/> when the tool-call-driven
+    /// <c>agentId</c> field has never been assigned. This ensures every AgentChat exposes a
+    /// stable, non-empty navigation key — needed for root chats (whose <c>agentId</c> is only
+    /// set by AddSubAgent's tool-call path, which the root never enters) and for sub-agents
+    /// registered through <see cref="ISubAgentTable.Add"/>. Without this, the UI emitted
+    /// empty <c>data-navigate-agent-id</c> attributes and clicks collapsed into no-ops.
+    /// </remarks>
+    public string AgentId => string.IsNullOrEmpty(this.agentId) ? this.agentSessionId : this.agentId;
 
     /// <summary>The parent chat that spawned this sub-agent, or <see langword="null"/> for root agents.</summary>
     public AgentChat? ParentAgent => this.parentAgent;
@@ -1073,6 +1081,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// <inheritdoc/>
     async Task<SubAgent> ISubAgentTable.Add(AgentChat agentChat)
     {
+        // Fix #1152: When a sub-agent is registered via ISubAgentTable.Add (the manual path,
+        // used by hosted sub-agents and tests) rather than through AddSubAgent's tool-call flow,
+        // its ``agentId`` field is never seeded and AgentId returns "". The UI's
+        // NavigateToSubAgent then can't route to it (and RunningSubAgents HTML emits an empty
+        // ``data-navigate-agent-id`` attribute). Fall back to AgentSessionId so every registered
+        // sub-agent has a stable, non-empty navigation id.
+        if (string.IsNullOrEmpty(agentChat.agentId))
+        {
+            agentChat.agentId = agentChat.AgentSessionId;
+        }
+
         var sessionId = new AgentSessionId(agentChat.AgentSessionId);
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
         var subAgent = new SubAgent(sessionId, agentChat, factory);

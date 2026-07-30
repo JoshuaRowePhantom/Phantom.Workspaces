@@ -297,6 +297,46 @@ public sealed class AgentViewModelSubAgentBrowserTests
     }
 
     [Fact]
+    public async Task NavigateToAgent_EmptyAgentId_IsNoOp()
+    {
+        // Fix #1152: An empty id (e.g. from a running sub-agent whose ISubAgentTable.Add-registered
+        // AgentChat still had a blank agentId, or from an HTML anchor with a blank data-attribute)
+        // must not silently select the root or fall through as "navigate to self". Prior to the
+        // fix, string.Equals("", this.agentChat.AgentId) would trigger the self-navigation branch
+        // once the parent hadn't set its own AgentId either, or would traverse unrelated matches.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "a1", "A1");
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        var priorSelection = viewModel.SelectedEditorItem;
+
+        var exception = Record.Exception(() => viewModel.NavigateToAgentHandler!.Invoke(""));
+
+        Assert.Null(exception);
+        Assert.Same(priorSelection, viewModel.SelectedEditorItem);
+    }
+
+    [Fact]
+    public async Task NavigateToAgent_WhitespaceAgentId_IsNoOp()
+    {
+        // Same guard applies to whitespace-only ids.
+        var chat = await CreateChatAsync();
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
+
+        await AddSubAgentAsync(chat, "a1", "A1");
+        viewModel.NavigateToAgentHandler!.Invoke("a1");
+        var priorSelection = viewModel.SelectedEditorItem;
+
+        var exception = Record.Exception(() => viewModel.NavigateToAgentHandler!.Invoke("   "));
+
+        Assert.Null(exception);
+        Assert.Same(priorSelection, viewModel.SelectedEditorItem);
+    }
+
+    [Fact]
     public async Task NavigateToAgent_SelectsSubAgentDocViaUnfilteredCollection_EvenWhenHideCompletedTrue()
     {
         // Regression guard for the root cause of #1134: the lookup must use the FULL

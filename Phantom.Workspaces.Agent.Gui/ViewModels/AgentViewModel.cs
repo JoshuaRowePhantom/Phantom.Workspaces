@@ -811,6 +811,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private AgentViewModel? FindInTreeById(string agentId)
     {
+        // Fix #1152: An empty/whitespace id must never match. Two unrelated sub-agents whose
+        // agentId is empty (e.g. seeded before the AgentChat.agentId fallback landed, or in
+        // partially initialized states) would otherwise silently collide here.
+        if (string.IsNullOrWhiteSpace(agentId))
+        {
+            return null;
+        }
+
         if (string.Equals(this.agentChat.AgentId, agentId, StringComparison.Ordinal) ||
             string.Equals(this.agentChat.AgentSessionId, agentId, StringComparison.Ordinal))
         {
@@ -831,6 +839,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private void NavigateToSubAgent(string agentId)
     {
+        // Fix #1152: Guard against empty/whitespace ids before the string.Equals check below,
+        // which would otherwise treat "empty == this agent's empty AgentId" as "navigate to self"
+        // and dismiss the click silently. A blank id has no meaningful target — do nothing.
+        if (string.IsNullOrWhiteSpace(agentId))
+        {
+            return;
+        }
+
         // If the target is this agent itself, show the conversation view (navigate to self/root).
         if (string.Equals(agentId, this.agentChat.AgentId, StringComparison.Ordinal))
         {

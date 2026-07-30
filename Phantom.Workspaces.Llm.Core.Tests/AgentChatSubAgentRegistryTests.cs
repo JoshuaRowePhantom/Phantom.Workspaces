@@ -485,4 +485,41 @@ public sealed class AgentChatSubAgentRegistryTests
         var childId = Assert.Single(childIds);
         Assert.Equal(childChat.AgentSessionId, childId.Value);
     }
+
+    [Fact]
+    public async Task SubAgentTable_Add_SeedsAgentIdFromSessionIdWhenUnset()
+    {
+        // Fix #1152: ISubAgentTable.Add is the manual registration path used by hosted sub-agents
+        // and the sub-agent HTML panel. Previously the child AgentChat.agentId stayed empty in
+        // that flow, so the UI couldn't route to it and NavigateToSubAgent("") was a no-op.
+        // Adding a child via this path must seed agentId from AgentSessionId when unset so
+        // AgentId is a stable non-empty navigation key.
+        var store = new InMemoryAgentPersistenceStore();
+        var parentChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent",
+        });
+        var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = CreateSubAgentDefinition(),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "child",
+        });
+
+        await using var parentDispose = parentChat;
+        await using var childDispose = childChat;
+
+        // Before Add, the child has never been registered under a parent; AgentId falls back to
+        // the always-non-empty AgentSessionId (per #1152 getter fallback).
+        Assert.Equal(childChat.AgentSessionId, childChat.AgentId);
+
+        await ((ISubAgentTable)parentChat).Add(childChat);
+
+        Assert.False(string.IsNullOrEmpty(childChat.AgentId));
+        Assert.Equal(childChat.AgentSessionId, childChat.AgentId);
+    }
 }
