@@ -110,7 +110,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
-    public ObservableCollection<EntityShortcutViewModel> Shortcuts => this.entityCardNode.Card.Shortcuts;
+    public IReadOnlyList<EntityShortcutViewModel> Shortcuts => this.entityCardNode.Card.Shortcuts;
 
     public ObservableCollection<ViewEntityViewModel> Children { get; } = [];
 

@@ -4,8 +4,10 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using Avalonia.Threading;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -41,6 +43,8 @@ public sealed class EntityCardViewModel : ViewModelBase
     private string? editModeRawJsonSnapshot;
     private MainWindowViewModel? shortcutMainWindowViewModel;
     private ShortcutManager? shortcutManager;
+    private IReadOnlyList<EntityShortcutViewModel> shortcuts = Array.Empty<EntityShortcutViewModel>();
+    private CancellationTokenSource? shortcutResolutionCts;
 
     public EntityCardViewModel(
         SubscribedEntityViewModel entity,
@@ -128,7 +132,26 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public StatusBadgesViewModel StatusBadges { get; private set; }
 
-    public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
+    /// <summary>
+    /// The shortcuts currently applicable to this card. Reassigned wholesale on every resolution
+    /// so the ItemsControl rebinds atomically (fix #1144 — the previous in-place Clear()/Add loop
+    /// duplicated shortcuts when overlapping resolution runs interleaved).
+    /// </summary>
+    public IReadOnlyList<EntityShortcutViewModel> Shortcuts
+    {
+        get => this.shortcuts;
+        private set
+        {
+            if (!this.SetProperty(ref this.shortcuts, value))
+            {
+                return;
+            }
+
+            this.RaisePropertyChanged(nameof(this.HasShortcuts));
+            this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+            this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+        }
+    }
 
     public RelayCommand? ActivateShortcutCommand { get; private set; }
 
@@ -250,16 +273,8 @@ public sealed class EntityCardViewModel : ViewModelBase
         RelayCommand activateShortcutCommand)
     {
         this.ActivateShortcutCommand = activateShortcutCommand;
-        this.Shortcuts.Clear();
-        foreach (var shortcut in shortcuts)
-        {
-            this.Shortcuts.Add(shortcut);
-        }
-
-        this.RaisePropertyChanged(nameof(this.HasShortcuts));
+        this.Shortcuts = shortcuts.ToList();
         this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
-        this.RaisePropertyChanged(nameof(this.ShowJsonButton));
-        this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
     }
 
     /// <summary>
@@ -281,8 +296,11 @@ public sealed class EntityCardViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Resolves the card's shortcuts from the current entity and shortcut context, replacing the
-    /// contents of <see cref="Shortcuts"/>. No-op when no shortcut context or entity is available.
+    /// Resolves the card's shortcuts from the current entity and shortcut context, then
+    /// atomically reassigns <see cref="Shortcuts"/>. Fix #1144 — every resolution builds a fresh
+    /// local list, checks <paramref name="ct"/> before assigning, and marshals the assignment
+    /// (which raises PropertyChanged observed by the bound ItemsControl) onto the UI thread.
+    /// No-op when no shortcut context or entity is available.
     /// </summary>
     public async Task ResolveShortcutsAsync(CancellationToken ct = default)
     {
@@ -293,14 +311,34 @@ public sealed class EntityCardViewModel : ViewModelBase
             return;
         }
 
-        await EntityShortcutViewModel.PopulateShortcutsAsync(
-            this.Shortcuts,
-            mainWindowViewModel,
-            this.entity,
-            manager);
-        this.RaisePropertyChanged(nameof(this.HasShortcuts));
-        this.RaisePropertyChanged(nameof(this.ShowJsonButton));
-        this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+        var resolved = new List<EntityShortcutViewModel>();
+        await foreach (var shortcut in manager
+            .GetShortcutsForAsync(mainWindowViewModel, this.entity)
+            .WithCancellation(ct)
+            .ConfigureAwait(false))
+        {
+            resolved.Add(new EntityShortcutViewModel
+            {
+                Shortcut = shortcut,
+                Entity = this.entity,
+                ShortcutManager = manager,
+            });
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        // Atomic single-reference swap on the UI thread. No await between build and assignment.
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            this.Shortcuts = resolved;
+        }
+        else
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => this.Shortcuts = resolved);
+        }
     }
 
     private void QueueShortcutResolution()
@@ -312,7 +350,14 @@ public sealed class EntityCardViewModel : ViewModelBase
             return;
         }
 
-        Lifetime.Run(this.ResolveShortcutsAsync);
+        // Supersession guard (#1144): cancel any in-flight resolution so a stale older-snapshot
+        // run can't finish last and assign a superseded shortcut set.
+        this.shortcutResolutionCts?.Cancel();
+        this.shortcutResolutionCts?.Dispose();
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(this.Lifetime.Token);
+        this.shortcutResolutionCts = linked;
+
+        Lifetime.Run(_ => this.ResolveShortcutsAsync(linked.Token));
     }
 
     /// <summary>

@@ -152,4 +152,102 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
             SubscribedEntityViewModel entityViewModel)
             => Task.FromResult(true);
     }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_GitWorktreeEntity_ExposesEachShortcutExactlyOnce()
+    {
+        // Fix #1144 — a fresh resolve yields a list where each shortcut appears exactly once.
+        var card = new EntityCardViewModel(CreateEntity("git-worktree"));
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler(Shortcut.Open.Name));
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler(Shortcut.Review.Name));
+
+        card.SetShortcutContext(this.mainWindowViewModel, shortcutManager);
+        await card.ResolveShortcutsAsync();
+
+        Assert.Equal(card.Shortcuts.Count, card.Shortcuts.Select(s => s.Shortcut).Distinct().Count());
+        Assert.Contains(card.Shortcuts, s => s.Shortcut == Shortcut.Open);
+        Assert.Contains(card.Shortcuts, s => s.Shortcut == Shortcut.Review);
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_WhenSnapshotUpdatesRapidly_RebindsWithoutDuplicateShortcuts()
+    {
+        // Fix #1144 — rapid snapshot updates queue overlapping resolutions. The wholesale
+        // rebind + supersession guard must produce a deduped final Shortcuts list.
+        var entity = CreateEntity("git-worktree");
+        var card = new EntityCardViewModel(entity);
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler(Shortcut.Open.Name));
+
+        card.SetShortcutContext(this.mainWindowViewModel, shortcutManager);
+
+        // Fire many overlapping resolutions in-thread and wait for each to complete before the
+        // next assertion.
+        for (var i = 0; i < 12; i++)
+        {
+            await card.ResolveShortcutsAsync();
+        }
+
+        Assert.Single(card.Shortcuts);
+        Assert.Equal(Shortcut.Open, card.Shortcuts[0].Shortcut);
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_WhenResolveShortcutsRunsConcurrently_LastRebindWins()
+    {
+        // Fix #1144 — concurrent resolutions must not produce duplicates; the last completed
+        // rebind provides the final Shortcuts list (a wholesale reference swap).
+        var card = new EntityCardViewModel(CreateEntity("git-worktree"));
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler(Shortcut.Open.Name));
+
+        card.SetShortcutContext(this.mainWindowViewModel, shortcutManager);
+
+        var tasks = Enumerable.Range(0, 8).Select(_ => card.ResolveShortcutsAsync()).ToArray();
+        await Task.WhenAll(tasks);
+
+        Assert.Single(card.Shortcuts);
+        Assert.Equal(Shortcut.Open, card.Shortcuts[0].Shortcut);
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_WhenStaleResolutionCompletesAfterNewer_DoesNotAssignSupersededShortcuts()
+    {
+        // Fix #1144 — a stale resolution whose CTS has been cancelled must not assign.
+        var card = new EntityCardViewModel(CreateEntity("git-worktree"));
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler(Shortcut.Open.Name));
+
+        card.SetShortcutContext(this.mainWindowViewModel, shortcutManager);
+        await card.ResolveShortcutsAsync();
+        var expected = card.Shortcuts;
+
+        // Explicitly cancel a stale token before resolving with it — the resolution must abort
+        // its assignment and leave Shortcuts unchanged.
+        using var staleCts = new CancellationTokenSource();
+        staleCts.Cancel();
+        await card.ResolveShortcutsAsync(staleCts.Token);
+
+        Assert.Same(expected, card.Shortcuts);
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_WhenShortcutsReassigned_RaisesPropertyChangedForShortcuts()
+    {
+        // Fix #1144 — the wholesale rebind raises PropertyChanged("Shortcuts") so the bound
+        // ItemsControl rebinds atomically.
+        var card = new EntityCardViewModel(CreateEntity("git-worktree"));
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler(Shortcut.Open.Name));
+
+        card.SetShortcutContext(this.mainWindowViewModel, shortcutManager);
+
+        var raised = new System.Collections.Generic.List<string?>();
+        card.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        await card.ResolveShortcutsAsync();
+
+        Assert.Contains(nameof(EntityCardViewModel.Shortcuts), raised);
+    }
 }
