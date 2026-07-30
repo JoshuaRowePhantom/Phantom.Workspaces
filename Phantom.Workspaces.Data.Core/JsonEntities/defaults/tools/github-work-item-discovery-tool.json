@@ -1,9 +1,17 @@
 {
   "entity-id": "b3c4d5e6-f7a8-4b5c-9d0e-1f2a3b4c5d6e",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "github-work-item-discovery"]
   ],
   "display-name": "GitHub Work Item Discovery",
-  "tool-type": "github-work-item-discovery"
+  "tool-type": "github-work-item-discovery",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# GitHub Work Item Discovery\n\nScans participant `git-repository` entities that point at GitHub, calls the GitHub API (via the `gh` CLI) to list open issues in each repository, and upserts each issue as a `git-work-item` entity keyed by the stable name path `[\"github\", owner, repo, \"work-items\", number]`. Pull requests are skipped. Issue timelines are optionally walked to link commits and other artifacts.\n\n## Configuration\n\nRead from the tool entity's top-level properties:\n\n| Key | Type | Semantics |\n|---|---|---|\n| `max-items` | integer | Maximum issues to fetch per repository. Defaults to `200`. |\n\nAuthentication is delegated to the ambient `gh` CLI (or the injected `issueListRunner`/`timelineRunner` in tests); no token is stored on the tool entity.\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.target` \u2014 one or more `git-repository` entities whose owner/repo point at github.com.\n- `participants.schedule` \u2014 a `schedule` entity governing how often issues are refreshed.\n\nSet `paused: true` on the relationship to disable it. Non-GitHub `git-repository` participants are silently skipped, so the same relationship can safely span a mixed portfolio."
+      }
+    }
+  }
 }

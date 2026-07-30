@@ -1,9 +1,17 @@
 {
   "entity-id": "a8b9c0d1-e2f3-4a5b-7c8d-9e0f1a2b3c4d",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "entity-classifier"]
   ],
   "display-name": "Entity Classifier",
-  "tool-type": "entity-classifier"
+  "tool-type": "entity-classifier",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Entity Classifier\n\nRuns the per-entity classification agent on a schedule. On each run the tool drains batches of recently-changed entities from the `entity-classification` queue, assembles a prompt for each entity, and invokes the classification agent (without recording chat history). The prompt is assembled in KV-cache-friendly order: the classifier prompt, the full set of entity-type names, any interest instructions, the entity's own types, its content, and the relationships it currently has. See `docs/design/scheduled-tools.md`.\n\n## Configuration\n\nRead from the tool entity's top-level properties:\n\n| Key | Type | Semantics |\n|---|---|---|\n| `classifier-prompt` | string | The prompt prepended to every classification request. Typically describes the classification task (\"decide which entity-types apply to the entity below\u2026\"). Empty by default. |\n\nBatch size (default `50`) is a code-level constructor parameter and is not exposed on the tool entity. The queue name is fixed to `entity-classification`.\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.schedule` \u2014 a `schedule` entity controlling run cadence. The tool advances the queue head per batch so a later run resumes where this one stopped; frequent short runs are fine.\n- `participants.target` \u2014 typically not needed; the tool operates over the classification queue for the whole workspace.\n\nSet `paused: true` on the relationship to disable classification without deleting the wiring. A running classifier can be temporarily quiesced by pausing without losing queue position."
+      }
+    }
+  }
 }

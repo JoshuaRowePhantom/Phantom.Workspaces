@@ -1,9 +1,17 @@
 {
   "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "run-vscode-tunnel"]
   ],
   "display-name": { "default": "Run VS Code Tunnel" },
-  "tool-type": "run-vscode-tunnel"
+  "tool-type": "run-vscode-tunnel",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Run VS Code Tunnel\n\nEnsures the VS Code dev tunnel service is installed and running on the target machine. On each run the tool queries the VS Code CLI (`code tunnel service status`); when the service is not installed or not running, it performs a GitHub token pre-login, installs (or uninstalls-then-reinstalls) the tunnel service under the configured tunnel name, and re-checks that it is running. On success the result includes `code tunnel status` output.\n\n## Configuration\n\nRead from the tool entity's top-level properties:\n\n| Key | Type | Semantics |\n|---|---|---|\n| `cli-path` | string | Overrides the VS Code CLI executable path. Defaults to the value resolved by `VsCodeCliLocator.ResolveDefaultCliPath()`. |\n| `tunnel-name` | string | Overrides the tunnel name (`--name` passed to `tunnel service install`). Defaults to the current machine's short hostname. |\n\nAuthentication uses the GitHub token resolved by `Phantom.Workspaces.Llm.GitHubAuthTokenResolver` (either the app's stored token or `GITHUB_TOKEN`); it is passed to the CLI via the `VSCODE_CLI_ACCESS_TOKEN` environment variable rather than the command line.\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.schedule` \u2014 a `schedule` entity controlling how often the tunnel state is reconciled (a low-frequency schedule is fine; the tool is idempotent when the service is already running).\n- `participants.target` \u2014 typically not needed; the tool operates on the local machine derived from the current execution context.\n\nSet `paused: true` on the relationship to disable it. Install/uninstall/status operations use a 5-minute timeout; a timeout returns a failure result and the schedule retries on the next tick."
+      }
+    }
+  }
 }

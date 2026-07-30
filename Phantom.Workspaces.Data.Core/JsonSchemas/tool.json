@@ -25,6 +25,10 @@
       "type": "object",
       "description": "Tool-specific configuration settings.",
       "additionalProperties": true
+    },
+    "content": {
+      "$ref": "mime-attachment.json",
+      "x-default-mime-type": "text/markdown"
     }
   },
   "required": [

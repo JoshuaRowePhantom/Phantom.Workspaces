@@ -1,9 +1,17 @@
 {
   "entity-id": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "vscode-tunnel-discovery"]
   ],
   "display-name": { "default": "VS Code Tunnel Discovery" },
-  "tool-type": "vscode-tunnel-discovery"
+  "tool-type": "vscode-tunnel-discovery",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# VS Code Tunnel Discovery\n\nDiscovers any active VS Code dev tunnel for the current user + machine and upserts a single `vscode-tunnel` entity under `computer-user-profiles/users/username/<user>/computers/hostname/<host>/vscode-tunnel`. The tunnel name is read from the CLI's `code_tunnel.json` file, and the tool runs `code tunnel status` to determine whether the tunnel is currently active. The entity records the tunnel name, the `https://vscode.dev/tunnel/<name>` URL, and the active/inactive state.\n\n## Configuration\n\nRead from the tool entity's top-level properties:\n\n| Key | Type | Semantics |\n|---|---|---|\n| `cli-path` | string | Overrides the VS Code CLI executable path. Defaults to the value resolved by `VsCodeCliLocator.ResolveDefaultCliPath()`. |\n| `tunnel-json-path` | string | Overrides the VS Code tunnel JSON file path. Defaults to `<user home>/.vscode/cli/code_tunnel.json`. |\n\nThe entity-id of the produced `vscode-tunnel` entity is deterministic per machine + user, so re-runs upsert rather than duplicate.\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.schedule` \u2014 a `schedule` entity controlling run cadence. Because the tool only touches a local file and runs a fast CLI check, a short interval is fine.\n- `participants.target` \u2014 typically not needed; the tool derives the machine and user from the current execution context.\n\nSet `paused: true` on the relationship to disable it. If the tunnel JSON file is missing or unreadable, the run fails cleanly and no entity is written."
+      }
+    }
+  }
 }
