@@ -12,6 +12,7 @@ public sealed class UsageMetric : ObservableObject
     private decimal quantityUsed;
     private decimal quantityTotal;
     private DateTime? lastUpdatedAt;
+    private bool isSelectedAsShown;
 
     public string Title { get; init; } = string.Empty;
 
@@ -68,6 +69,17 @@ public sealed class UsageMetric : ObservableObject
     public string? AdditionalInformation { get; init; }
 
     /// <summary>
+    /// Whether this metric is the one pinned as the top-right indicator label.
+    /// Two-way bound to the row's RadioButton. The <see cref="UsageTrackerViewModel"/>
+    /// enforces single-selection semantics across all rows and accounts.
+    /// </summary>
+    public bool IsSelectedAsShown
+    {
+        get => this.isSelectedAsShown;
+        set => SetProperty(ref this.isSelectedAsShown, value);
+    }
+
+    /// <summary>
     /// Fraction of the quota consumed (0.0–1.0), or <see langword="null"/> when
     /// <see cref="QuantityTotal"/> is zero.
     /// </summary>
@@ -91,6 +103,13 @@ public sealed class UsageAccount
     public string UserName { get; init; } = string.Empty;
     public Uri SettingsUrl { get; init; } = new Uri("about:blank");
     public ObservableCollection<UsageMetric> Metrics { get; } = [];
+
+    /// <summary>
+    /// Composes a stable key for a metric identified by its owning account's product
+    /// and the metric's title. Titles are not globally unique, so the account product
+    /// is required to disambiguate metrics across accounts.
+    /// </summary>
+    public static string ComposeKey(string product, string title) => $"{product}/{title}";
 }
 
 /// <summary>

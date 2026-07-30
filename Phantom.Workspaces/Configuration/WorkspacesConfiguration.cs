@@ -197,6 +197,13 @@ public sealed record WorkspacesConfiguration
     public bool SkipStartupWorkspace { get; init; }
 
     /// <summary>
+    /// The stable key of the AI-usage metric the user has pinned to appear as the
+    /// top-right indicator label. Null (default) means auto: fall back to the most
+    /// recently updated metric. Composed via <see cref="UsageAccount.ComposeKey"/>.
+    /// </summary>
+    public string? SelectedUsageMetric { get; init; }
+
+    /// <summary>
     /// Projects the configured data-access profile into a <see cref="RepositorySource"/>
     /// consumable by <see cref="EntityRepository"/>.
     /// </summary>

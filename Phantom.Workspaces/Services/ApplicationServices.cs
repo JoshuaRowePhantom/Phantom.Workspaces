@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Updates;
 
@@ -11,13 +12,15 @@ public sealed class ApplicationServices
         IAgentPersistenceStoreCache agentPersistenceStoreCache,
         IUpdateController? updateController = null,
         ILoggerFactory? loggerFactory = null,
-        ILogDirectoryProvider? logDirectoryProvider = null)
+        ILogDirectoryProvider? logDirectoryProvider = null,
+        ConfigurationPersistenceService? configurationPersistence = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
         this.UpdateController = updateController;
         this.LoggerFactory = loggerFactory;
         this.LogDirectoryProvider = logDirectoryProvider;
+        this.ConfigurationPersistence = configurationPersistence;
     }
 
     public IRunningAgentChatTable RunningAgentChats { get; }
@@ -35,4 +38,10 @@ public sealed class ApplicationServices
 
     /// <summary>The single log-directory resolver for this process, or <c>null</c> when unwired.</summary>
     public ILogDirectoryProvider? LogDirectoryProvider { get; }
+
+    /// <summary>
+    /// The configuration persistence service used to save runtime user preferences (for example,
+    /// the pinned AI-usage metric selection). Null in tests that don't exercise persistence.
+    /// </summary>
+    public ConfigurationPersistenceService? ConfigurationPersistence { get; }
 }

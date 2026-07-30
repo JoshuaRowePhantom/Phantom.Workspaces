@@ -232,6 +232,49 @@ public sealed class ConfigurationPersistenceServiceTests
         }
     }
 
+    [AvaloniaFact]
+    public async Task SaveThenLoad_RoundTripsSelectedUsageMetric()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            SelectedUsageMetric = "github.com/Copilot AI Credits",
+        };
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Equal("github.com/Copilot AI Credits", reloaded.SelectedUsageMetric);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task LoadAsync_WhenSelectedUsageMetricMissing_DefaultsToNull()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration();
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Null(reloaded.SelectedUsageMetric);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
     private static string CreateTempConfigPath()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{System.Guid.NewGuid():N}");

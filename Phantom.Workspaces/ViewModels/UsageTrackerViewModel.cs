@@ -23,7 +23,10 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 {
     private readonly UsageMetrics usageMetrics;
     private readonly ILogger<UsageTrackerViewModel> logger;
+    private readonly Func<string?, Task>? persistSelectionAsync;
     private string? topRightLabel;
+    private string? selectedUsageMetricKey;
+    private bool suppressSelectionSync;
     private bool isOpen;
     private IReadOnlyList<UsageAccount> accounts;
     private bool disposed;
@@ -35,10 +38,16 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public UsageTrackerViewModel(UsageMetrics usageMetrics, ILogger<UsageTrackerViewModel>? logger = null)
+    public UsageTrackerViewModel(
+        UsageMetrics usageMetrics,
+        ILogger<UsageTrackerViewModel>? logger = null,
+        string? initialSelectedUsageMetricKey = null,
+        Func<string?, Task>? persistSelectionAsync = null)
     {
         this.usageMetrics = usageMetrics;
         this.logger = logger ?? NullLogger<UsageTrackerViewModel>.Instance;
+        this.selectedUsageMetricKey = initialSelectedUsageMetricKey;
+        this.persistSelectionAsync = persistSelectionAsync;
         this.accounts = [.. usageMetrics.Accounts];
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
 
@@ -99,6 +108,62 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
     public ICommand ToggleOpenCommand { get; }
 
+    /// <summary>
+    /// The stable key (see <see cref="UsageAccount.ComposeKey"/>) of the metric the
+    /// user has pinned as the top-right indicator. Setting this raises PropertyChanged,
+    /// re-runs <see cref="RecomputeTopRightLabel"/>, and (when provided) persists the
+    /// value via the configured save callback. Null means auto (most-recently-updated).
+    /// </summary>
+    public string? SelectedUsageMetricKey
+    {
+        get => this.selectedUsageMetricKey;
+        set
+        {
+            if (string.Equals(this.selectedUsageMetricKey, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            this.selectedUsageMetricKey = value;
+            this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.SelectedUsageMetricKey)));
+            this.SyncSelectionFlagsFromKey();
+            this.RecomputeTopRightLabel();
+
+            if (this.persistSelectionAsync is { } persist)
+            {
+                _ = persist(value);
+            }
+        }
+    }
+
+    private void SyncSelectionFlagsFromKey()
+    {
+        if (this.suppressSelectionSync) return;
+        this.suppressSelectionSync = true;
+        try
+        {
+            foreach (var account in this.usageMetrics.Accounts)
+            {
+                foreach (var metric in account.Metrics)
+                {
+                    var isMatch = !string.IsNullOrEmpty(this.selectedUsageMetricKey)
+                        && string.Equals(
+                            UsageAccount.ComposeKey(account.Product, metric.Title),
+                            this.selectedUsageMetricKey,
+                            StringComparison.Ordinal);
+                    if (metric.IsSelectedAsShown != isMatch)
+                    {
+                        metric.IsSelectedAsShown = isMatch;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            this.suppressSelectionSync = false;
+        }
+    }
+
     private void ToggleOpen() => this.IsOpen = !this.IsOpen;
 
     private void OnAccountsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -133,7 +198,7 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
         foreach (var metric in account.Metrics)
         {
-            this.SubscribeMetric(metric, metricSubscriptions);
+            this.SubscribeMetric(account, metric, metricSubscriptions);
         }
 
         NotifyCollectionChangedEventHandler metricsHandler = (_, me) =>
@@ -154,18 +219,23 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
                 foreach (var item in me.NewItems)
                 {
                     if (item is UsageMetric m)
-                        this.SubscribeMetric(m, metricSubscriptions);
+                        this.SubscribeMetric(account, m, metricSubscriptions);
                 }
             }
 
+            this.SyncSelectionFlagsFromKey();
             this.RecomputeTopRightLabel();
         };
 
         account.Metrics.CollectionChanged += metricsHandler;
         this.accountSubscriptions.Add((account, metricsHandler, metricSubscriptions));
+
+        // Apply any pinned selection to the freshly-subscribed metrics.
+        this.SyncSelectionFlagsFromKey();
     }
 
     private void SubscribeMetric(
+        UsageAccount account,
         UsageMetric metric,
         List<(UsageMetric, PropertyChangedEventHandler)> subscriptions)
     {
@@ -176,6 +246,14 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
                 || string.Equals(pe.PropertyName, nameof(UsageMetric.LastUpdatedAt), StringComparison.Ordinal))
             {
                 this.RecomputeTopRightLabel();
+            }
+            else if (string.Equals(pe.PropertyName, nameof(UsageMetric.IsSelectedAsShown), StringComparison.Ordinal))
+            {
+                if (this.suppressSelectionSync) return;
+                if (metric.IsSelectedAsShown)
+                {
+                    this.SelectedUsageMetricKey = UsageAccount.ComposeKey(account.Product, metric.Title);
+                }
             }
         };
 
@@ -231,6 +309,27 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
         this.logger.LogInformation(
             "Usage panel shown for {AccountCount} account(s).",
             allAccounts.Count);
+
+        // Explicit user pin: if a saved key matches an existing account+metric, use it.
+        if (!string.IsNullOrEmpty(this.selectedUsageMetricKey))
+        {
+            foreach (var account in allAccounts)
+            {
+                foreach (var metric in account.Metrics)
+                {
+                    if (string.Equals(
+                        UsageAccount.ComposeKey(account.Product, metric.Title),
+                        this.selectedUsageMetricKey,
+                        StringComparison.Ordinal))
+                    {
+                        this.TopRightLabel = metric.QuantityPresentation;
+                        return;
+                    }
+                }
+            }
+            // Fall through: saved key does not match any current metric. Leave the
+            // stored key intact so the pin re-applies if the metric reappears.
+        }
 
         // Find the metric with the most recent non-null LastUpdatedAt across all accounts
         UsageMetric? mostRecentMetric = null;

@@ -276,7 +276,8 @@ public partial class App : Application
                 new RunningAgentChatTable(agentChatFactory),
                 agentPersistenceStoreCache,
                 loggerFactory: loggerFactory,
-                logDirectoryProvider: logDirectoryProvider);
+                logDirectoryProvider: logDirectoryProvider,
+                configurationPersistence: persistenceService);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             loadingViewModel.StatusText = "Loading repository data and profile.";

@@ -84,6 +84,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private Services.UsageMetricsService? usageMetricsService;
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
+    private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
 
     /// <summary>The process log-directory provider (the single source of truth), or <c>null</c> when unwired.</summary>
     public Services.Logging.ILogDirectoryProvider? LogDirectoryProvider => this.logDirectoryProvider;
@@ -105,6 +106,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.loggerFactory = services.LoggerFactory
             ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
         this.logDirectoryProvider = services.LogDirectoryProvider;
+        this.configurationPersistence = services.ConfigurationPersistence;
         this.RepositorySource = repositorySource;
         this.configuration = configuration;
         this.entityBrokerTask = EntityBroker.CreateInitializedAsync(
@@ -696,9 +698,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
         var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
         var metrics = new Models.UsageMetrics(foregroundScheduler);
+
+        var persistence = this.configurationPersistence;
+        Func<string?, Task>? persistSelection = null;
+        if (persistence is not null)
+        {
+            persistSelection = async newKey =>
+            {
+                var current = persistence.ConfigurationExists()
+                    ? await persistence.LoadAsync().ConfigureAwait(false)
+                    : new WorkspacesConfiguration();
+                await persistence.SaveAsync(current with { SelectedUsageMetric = newKey }).ConfigureAwait(false);
+            };
+        }
+
         var vm = new UsageTrackerViewModel(
             metrics,
-            this.loggerFactory.CreateLogger<UsageTrackerViewModel>());
+            this.loggerFactory.CreateLogger<UsageTrackerViewModel>(),
+            initialSelectedUsageMetricKey: this.configuration?.SelectedUsageMetric,
+            persistSelectionAsync: persistSelection);
         this.UsageTracker = vm;
 
         var providers = new List<Services.UsageProviders.IUsageProvider>

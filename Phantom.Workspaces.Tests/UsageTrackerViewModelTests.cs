@@ -340,4 +340,135 @@ public sealed class UsageTrackerViewModelTests
         
         Assert.Equal(originalLabel, vm.TopRightLabel);
     }
+
+    [Fact]
+    public void SelectedUsageMetricKey_WhenSetToMetric_TopRightLabelShowsThatMetric()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 100m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0),
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0),
+        });
+        metrics.Accounts.Add(account);
+
+        vm.SelectedUsageMetricKey = UsageAccount.ComposeKey("github.com", "Copilot AI Credits");
+
+        Assert.Equal("100 AICredits", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void SelectedUsageMetricKey_WhenChanged_PersistsKeyToConfiguration()
+    {
+        var metrics = new UsageMetrics();
+        string? persistedKey = null;
+        var tcs = new System.Threading.Tasks.TaskCompletionSource();
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: null,
+            persistSelectionAsync: k => { persistedKey = k; tcs.TrySetResult(); return System.Threading.Tasks.Task.CompletedTask; });
+
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric { Title = "M", QuantityPresentationFormatString = "{0}" });
+        metrics.Accounts.Add(account);
+
+        vm.SelectedUsageMetricKey = "github.com/M";
+
+        Assert.True(tcs.Task.IsCompletedSuccessfully);
+        Assert.Equal("github.com/M", persistedKey);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_WhenSeededFromConfig_RestoresSelectedMetricAsDefault()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 100m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0),
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0),
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: UsageAccount.ComposeKey("github.com", "Copilot AI Credits"));
+
+        Assert.Equal("100 AICredits", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void RecomputeTopRightLabel_WhenSelectedMetricAbsent_FallsBackGracefully()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0),
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: "github.com/Does Not Exist");
+
+        // Falls back to most-recently-updated metric.
+        Assert.Equal("42 Requests", vm.TopRightLabel);
+        // Key is preserved so pin re-applies if the metric reappears.
+        Assert.Equal("github.com/Does Not Exist", vm.SelectedUsageMetricKey);
+    }
+
+    [Fact]
+    public void SelectedUsageMetric_WhenTwoMetricsExist_OnlyOneRadioIsSelected()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        var m1 = new UsageMetric { Title = "A", QuantityPresentationFormatString = "{0}" };
+        var m2 = new UsageMetric { Title = "B", QuantityPresentationFormatString = "{0}" };
+        account.Metrics.Add(m1);
+        account.Metrics.Add(m2);
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        vm.SelectedUsageMetricKey = UsageAccount.ComposeKey("github.com", "A");
+        Assert.True(m1.IsSelectedAsShown);
+        Assert.False(m2.IsSelectedAsShown);
+
+        vm.SelectedUsageMetricKey = UsageAccount.ComposeKey("github.com", "B");
+        Assert.False(m1.IsSelectedAsShown);
+        Assert.True(m2.IsSelectedAsShown);
+    }
 }

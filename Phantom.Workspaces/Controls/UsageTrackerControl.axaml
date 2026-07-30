@@ -43,23 +43,30 @@
                                             <DataTemplate x:DataType="models:UsageMetric">
                                                 <StackPanel Margin="0,2"
                                                             Spacing="1">
-                                                    <Grid ColumnDefinitions="120,*,120">
+                                                    <Grid ColumnDefinitions="Auto,120,*,120">
+                                                    <!-- Selection radio: single-select across all rows/accounts via GroupName -->
+                                                    <RadioButton Grid.Column="0"
+                                                                 Name="ShownUsageRadio"
+                                                                 GroupName="ShownUsageMetric"
+                                                                 VerticalAlignment="Center"
+                                                                 Margin="0,0,4,0"
+                                                                 IsChecked="{Binding IsSelectedAsShown, Mode=TwoWay}" />
                                                     <!-- Metric title -->
-                                                    <TextBlock Grid.Column="0"
+                                                    <TextBlock Grid.Column="1"
                                                                Text="{Binding Title}"
                                                                Classes="muted"
                                                                VerticalAlignment="Center"
                                                                FontSize="11" />
 
                                                     <!-- Quantity presentation -->
-                                                    <TextBlock Grid.Column="1"
+                                                    <TextBlock Grid.Column="2"
                                                                Text="{Binding QuantityPresentation}"
                                                                VerticalAlignment="Center"
                                                                FontSize="11"
                                                                Margin="4,0" />
 
                                                     <!-- Progress bar: yellow used / light green remaining / black text overlay -->
-                                                    <Panel Grid.Column="2"
+                                                    <Panel Grid.Column="3"
                                                            Height="14">
                                                         <!-- Remaining (light green background) -->
                                                         <Border Name="RemainingBar"
