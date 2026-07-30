@@ -68,6 +68,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private volatile string? workingDirectoryOverride;
 
     /// <summary>
+    /// Gate used by the live-turn's <c>OnQueueChanged</c> handler. Set to <see langword="true"/>
+    /// at the start of <see cref="AbortAndInvalidateSessionAsync"/> (before the session is
+    /// invalidated) so a user message enqueued during teardown is neither steered to the dying
+    /// CLI session nor dequeued-and-dropped. Reset per turn in <c>BeginTurnAsync</c>. See
+    /// GitHub issue #1142.
+    /// </summary>
+    private volatile bool steeringSuspended;
+
+    /// <summary>
+    /// Test hook: exposes <see cref="steeringSuspended"/> so tests can assert teardown ordering
+    /// and simulate the teardown gate without spinning up a real Copilot CLI session.
+    /// </summary>
+    internal bool SteeringSuspendedForTest
+    {
+        get => this.steeringSuspended;
+        set => this.steeringSuspended = value;
+    }
+
+    /// <summary>
     /// Raised when a steering message is forwarded to the live Copilot session so the owning
     /// <c>AgentChat</c> can record it in its visible chat history.
     /// </summary>
@@ -579,32 +598,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
             }, turnCancellationToken);
 
+            // Reset the teardown gate for this turn: a previous turn's cancellation may have
+            // left steeringSuspended=true (issue #1142). The new turn must start unsuspended so
+            // its OnQueueChanged forwards Immediate items to the live session.
+            this.steeringSuspended = false;
+
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
             void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-            {
-                if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
-                {
-                    return;
-                }
-
-                while (this.queueManager!.TryDequeueNextImmediate(out var item))
-                {
-                    foreach (var message in item.Messages ?? [])
-                    {
-                        var immediateOptions = BuildImmediateMessageOptions(message);
-                        if (immediateOptions is not null)
-                        {
-                            // Record the forwarded steering message in history before sending it.
-                            this.SteeringMessageForwarded?.Invoke(message);
-
-                            // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
-                            // returns promptly. Errors are non-fatal for steering.
-                            _ = session.SendAsync(immediateOptions, CancellationToken.None);
-                        }
-                    }
-                }
-            }
+                => this.ForwardPendingImmediateMessages(
+                    (options, ct) => session.SendAsync(options, ct),
+                    e);
 
             if (this.queueManager is not null)
             {
@@ -721,6 +725,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // channel (a silent empty response), so the session is also invalidated and recreated next turn.
     private async Task AbortAndInvalidateSessionAsync(CopilotSession session)
     {
+        // Suspend steering BEFORE aborting/invalidating the session (GitHub issue #1142). Once
+        // this flag is set, OnQueueChanged early-returns without calling TryDequeueNextImmediate,
+        // so a user message enqueued while teardown runs is neither routed to the dying session
+        // (which would produce a "Session not found" fault whose unobserved Task crashed the
+        // finalizer thread) nor dequeued-and-dropped. Leaving the Immediate item in place lets
+        // AgentChat's processing loop promote it to a fresh turn on the recovered session.
+        this.steeringSuspended = true;
+
         try
         {
             await session.AbortAsync(CancellationToken.None).ConfigureAwait(false);
@@ -733,6 +745,73 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         this.InvalidateCopilotSession(session);
+    }
+
+    /// <summary>
+    /// Body of the per-turn <c>OnQueueChanged</c> subscription. Split out so tests can exercise
+    /// the gating and fault-observation behaviour without a real Copilot CLI session.
+    /// GitHub issue #1142.
+    /// </summary>
+    internal void ForwardPendingImmediateMessages(
+        Func<MessageOptions, CancellationToken, Task> sendAsync,
+        AgentInputQueueManager.QueueStateChangedEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(sendAsync);
+        ArgumentNullException.ThrowIfNull(e);
+
+        // Do NOT dequeue during teardown (steeringSuspended) — the Immediate item must remain in
+        // the queue so AgentChat's processing loop can promote it to a fresh turn on the
+        // recovered session (issue #1142). Also ignore non-additions.
+        if (this.steeringSuspended || e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
+        {
+            return;
+        }
+
+        while (this.queueManager!.TryDequeueNextImmediate(out var item))
+        {
+            foreach (var message in item.Messages ?? [])
+            {
+                var immediateOptions = BuildImmediateMessageOptions(message);
+                if (immediateOptions is null)
+                {
+                    continue;
+                }
+
+                // Record the forwarded steering message in history before sending it.
+                this.SteeringMessageForwarded?.Invoke(message);
+
+                // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and returns
+                // promptly. Errors are non-fatal for steering, but the returned Task's exception
+                // MUST be observed — otherwise a "Session not found" fault (issue #1142) is
+                // rethrown by the finalizer thread and crashes the process.
+                _ = ForwardSteeringAsync(
+                    ct => sendAsync(immediateOptions, ct),
+                    this.loggerFactory?.CreateLogger<CopilotSdkChatClient>());
+            }
+        }
+    }
+
+    /// <summary>
+    /// Awaits a fire-and-forget steering <see cref="CopilotSession.SendAsync"/> call and swallows
+    /// any exception (logging it at Debug). This observes the returned Task so an unobserved
+    /// fault cannot be rethrown by the finalizer thread. GitHub issue #1142.
+    /// </summary>
+    internal static async Task ForwardSteeringAsync(
+        Func<CancellationToken, Task> sendAsync,
+        ILogger? logger)
+    {
+        ArgumentNullException.ThrowIfNull(sendAsync);
+
+        try
+        {
+            await sendAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // Steering is best-effort: the session may have been aborted/invalidated (e.g. after
+            // Ctrl-Break). Observe the fault so it cannot crash the finalizer thread.
+            logger?.LogDebug(exception, "Forwarding steering message to the Copilot session failed.");
+        }
     }
 
     // Drops the cached session (disposing it in the background) so the next turn creates a fresh one.

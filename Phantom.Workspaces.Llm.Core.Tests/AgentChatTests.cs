@@ -821,6 +821,81 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task Interrupt_ThenNextMessage_RunsNewTurnOnRecoveredSession()
+    {
+        // GitHub issue #1142: after Ctrl-Break interrupts a live run, the user's NEXT typed
+        // message must not be dropped — the AgentChat processing loop must dequeue it (from the
+        // Immediate queue, per AgentChat's enqueue path) and run a full turn to completion on
+        // the recovered session. This is the end-to-end recovery guarantee that pairs with the
+        // CopilotSdkChatClient teardown-gate fix (which prevents the crash and prevents the
+        // interrupting message from being dequeued-and-dropped by the dying turn's
+        // OnQueueChanged handler).
+        var client = new DeterministicTestChatClient();
+
+        // First response: hangs on an unready update so the turn stays "in progress" until the
+        // interrupt cancels it — mirroring Interrupt_DuringRun_RecordsInterruptedDiagnosticAndCompletes.
+        var firstStream = client.EnqueueStreamingResponse();
+        firstStream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "thinking... "));
+        firstStream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "more")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        firstStream.Complete(isReady: false);
+
+        // Second response: the recovery turn. Runs to completion normally.
+        var secondStream = client.EnqueueStreamingResponse();
+        secondStream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "recovered answer.")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            });
+        secondStream.Complete();
+
+        await using var chat = CreateChat(client);
+        chat.EnqueueUserMessage("first user message");
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 1,
+            "first run to start");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(c => c.Text.Contains("thinking", StringComparison.Ordinal)),
+            "first run to stream initial content");
+
+        chat.Interrupt();
+
+        await WaitForConditionAsync(
+            [chat.RunningItems, chat.History],
+            () => chat.RunningItems.Count == 0
+                && chat.History.Any(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                    && GetText(item.Contents).Contains("Interrupted", StringComparison.Ordinal)),
+            "interrupt to complete the first run");
+
+        var historyCountAfterInterrupt = chat.History.Count;
+
+        // Type a NEW message after the interrupt. This is the exact scenario from issue #1142.
+        chat.EnqueueUserMessage("second user message after interrupt");
+
+        // The new turn must run to completion — the message must not be silently dropped, and
+        // the app must not crash (regression protection lives in CopilotSdkChatClientTests).
+        await WaitForConditionAsync(
+            [chat.RunningItems, chat.History],
+            () => chat.RunningItems.Count == 0
+                && chat.History.Count > historyCountAfterInterrupt
+                && chat.History.Any(item => item.Role == ChatRole.Assistant
+                    && GetText(item.Contents).Contains("recovered answer", StringComparison.Ordinal)),
+            "second turn to run to completion after the interrupt");
+
+        Assert.Contains(chat.History, item => item.Role == ChatRole.User
+            && GetText(item.Contents).Contains("second user message after interrupt", StringComparison.Ordinal));
+        Assert.Contains(chat.History, item => item.Role == ChatRole.Assistant
+            && GetText(item.Contents).Contains("recovered answer", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Completion_WritesFullyCoalescedStreamingResponseToHistory()
     {
         // Streaming updates are conflated (intermediate frames may be skipped while a coalesce is in
