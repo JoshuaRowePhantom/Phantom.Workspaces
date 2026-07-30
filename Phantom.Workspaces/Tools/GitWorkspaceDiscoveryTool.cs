@@ -88,7 +88,10 @@ public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
                 context.CancellationToken);
         }
 
-        return new WorkspaceToolExecutionResult();
+        var summary = $"Scanned {scanRoots.Length} root(s); found {discoveredWorktreePaths.Count} repositories, " +
+            $"indexed {allWorktrees.Count} worktree(s).";
+        this.logger.LogInformation("{Summary}", summary);
+        return WorkspaceToolExecutionResult.Success() with { ResultContent = summary };
     }
 
     private IEnumerable<string> GetScanRoots(

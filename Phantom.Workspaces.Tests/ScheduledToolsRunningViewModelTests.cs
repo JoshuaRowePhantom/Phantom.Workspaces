@@ -550,4 +550,37 @@ public sealed class ScheduledToolsRunningViewModelTests
 
         Assert.False(exceptionCaught, "ObservableCollection was mutated from multiple threads");
     }
+
+    [Fact]
+    public void RunSummaryViewModel_WhenRunSucceeded_ShowsCheckGlyphNotHourglass()
+    {
+        var run = new RunSummaryViewModel(
+            new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero),
+            TimeSpan.FromSeconds(3),
+            "succeeded",
+            "Scanned 1 root(s); found 2 repositories.");
+
+        Assert.Equal("✓", run.StatusGlyph);
+        Assert.NotEqual("⏳", run.StatusGlyph);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForTool_WhenRunFailed_ShowsFailedGlyphAndMessage()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "disk full");
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        var run = Assert.Single(row.RecentRuns);
+        Assert.Equal("failed", run.Status);
+        Assert.Equal("✗", run.StatusGlyph);
+        Assert.Equal("disk full", run.Message);
+    }
 }

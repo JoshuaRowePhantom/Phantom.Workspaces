@@ -779,6 +779,84 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             });
         return getResult.Batches.SelectMany(static batch => batch.Entities).FirstOrDefault();
     }
+
+    [Fact]
+    public async Task GitWorkspaceDiscoveryTool_WhenScanStarts_LogsScanningTopLevelDirectory()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "scan-starts"));
+        Directory.CreateDirectory(scanRoot);
+
+        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
+
+        var tool = new GitWorkspaceDiscoveryTool(
+            new FixedLocalDriveRootProvider([scanRoot]),
+            logger);
+
+        await tool.ExecuteAsync(context);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("Scanning top-level directory", StringComparison.Ordinal)
+            && e.Message.Contains(scanRoot, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task GitWorkspaceDiscoveryTool_WhenScanCompletes_LogsRepositoryCountSummary()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "summary-scan"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "summary-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/summary.git");
+
+        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
+
+        var tool = new GitWorkspaceDiscoveryTool(
+            new FixedLocalDriveRootProvider([scanRoot]),
+            logger);
+
+        await tool.ExecuteAsync(context);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("Scanned", StringComparison.Ordinal)
+            && e.Message.Contains("repositories", StringComparison.Ordinal)
+            && e.Message.Contains("worktree", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GitWorkspaceDiscoveryTool_WhenScanCompletes_ReturnsResultSummaryContent()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "result-scan"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "result-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/result.git");
+
+        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
+
+        var tool = new GitWorkspaceDiscoveryTool(
+            new FixedLocalDriveRootProvider([scanRoot]),
+            logger);
+
+        var result = await tool.ExecuteAsync(context);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("Scanned", result.ResultContent, StringComparison.Ordinal);
+        Assert.Contains("repositories", result.ResultContent, StringComparison.Ordinal);
+    }
 }
 
 internal sealed class TestLogger<T> : ILogger<T>

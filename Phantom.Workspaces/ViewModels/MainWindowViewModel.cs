@@ -619,7 +619,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var registry = new ScheduledTools.ScheduledToolRegistry(
         [
             new Tools.VectorIndexerTool(),
-            new Tools.GitWorkspaceDiscoveryTool(),
+            new Tools.GitWorkspaceDiscoveryTool(logger: this.loggerFactory.CreateLogger<Tools.GitWorkspaceDiscoveryTool>()),
             new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),
@@ -627,7 +627,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
             new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);
-        this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(dataAccessLayer, registry);
+        this.scheduledToolHost = new ScheduledTools.ScheduledToolHost(
+            dataAccessLayer,
+            registry,
+            logger: this.loggerFactory.CreateLogger<ScheduledTools.ScheduledToolHost>());
         this.scheduledToolPauseStateService = new ScheduledTools.ScheduledToolPauseStateService(
             dataAccessLayer,
             this.scheduledToolHost);
@@ -647,7 +650,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.scheduledToolHost,
             hostEntityId,
             hostNameComponents,
-            pollInterval: TimeSpan.FromMinutes(1));
+            pollInterval: TimeSpan.FromMinutes(1),
+            logger: this.loggerFactory.CreateLogger<ScheduledTools.ScheduledToolRunner>());
         this.scheduledToolRunner.Start();
     }
 

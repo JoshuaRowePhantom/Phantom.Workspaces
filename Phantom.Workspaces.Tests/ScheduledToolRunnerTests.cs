@@ -251,4 +251,46 @@ public sealed class ScheduledToolRunnerTests
 
         Assert.Equal(1, Volatile.Read(ref runCount));
     }
+
+    [Fact]
+    public async Task ScheduledToolRunner_WhenEvaluationFaults_LogsErrorAndContinues()
+    {
+        var faultRaised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRun = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runCount = 0;
+        var gate = new TickGate();
+        var logger = new TestLogger<ScheduledToolRunner>();
+
+        await using var runner = new ScheduledToolRunner(
+            runOnce: _ =>
+            {
+                var index = Interlocked.Increment(ref runCount);
+                if (index == 1)
+                {
+                    throw new InvalidOperationException("evaluation-fault");
+                }
+
+                if (index == 2)
+                {
+                    secondRun.SetResult();
+                }
+
+                return Task.CompletedTask;
+            },
+            waitForNextTick: gate.WaitAsync,
+            logger: logger);
+
+        runner.RunFaulted += (_, _) => faultRaised.TrySetResult();
+
+        runner.Start();
+        await faultRaised.Task;
+        await gate.WaitUntilParkedAsync();
+        gate.Release();
+        await secondRun.Task;
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && e.Exception is InvalidOperationException
+            && e.Message.Contains("faulted", StringComparison.OrdinalIgnoreCase));
+    }
 }

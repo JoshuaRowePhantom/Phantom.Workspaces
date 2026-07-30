@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ScheduledTools;
@@ -17,18 +19,22 @@ public sealed class ScheduledToolRunner : IAsyncDisposable
 {
     private readonly Func<CancellationToken, Task> runOnce;
     private readonly Func<CancellationToken, Task> waitForNextTick;
+    private readonly ILogger<ScheduledToolRunner> logger;
     private readonly CancellationTokenSource cancellation = new();
     private readonly object startLock = new();
     private Task? loopTask;
 
     /// <param name="runOnce">Performs a single scheduled-tools evaluation.</param>
     /// <param name="waitForNextTick">Waits until the next poll should occur.</param>
+    /// <param name="logger">Logs evaluation faults; defaults to a null logger.</param>
     public ScheduledToolRunner(
         Func<CancellationToken, Task> runOnce,
-        Func<CancellationToken, Task> waitForNextTick)
+        Func<CancellationToken, Task> waitForNextTick,
+        ILogger<ScheduledToolRunner>? logger = null)
     {
         this.runOnce = runOnce ?? throw new ArgumentNullException(nameof(runOnce));
         this.waitForNextTick = waitForNextTick ?? throw new ArgumentNullException(nameof(waitForNextTick));
+        this.logger = logger ?? NullLogger<ScheduledToolRunner>.Instance;
     }
 
     /// <summary>Raised when an evaluation faults; the loop logs the fault and continues.</summary>
@@ -43,14 +49,16 @@ public sealed class ScheduledToolRunner : IAsyncDisposable
         EntityId hostEntityId,
         IReadOnlyList<string> hostNameComponents,
         TimeSpan pollInterval,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger<ScheduledToolRunner>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(hostNameComponents);
         var resolvedTimeProvider = timeProvider ?? TimeProvider.System;
         return new ScheduledToolRunner(
             cancellationToken => host.RunDueToolsAsync(hostEntityId, hostNameComponents, cancellationToken),
-            cancellationToken => Task.Delay(pollInterval, resolvedTimeProvider, cancellationToken));
+            cancellationToken => Task.Delay(pollInterval, resolvedTimeProvider, cancellationToken),
+            logger);
     }
 
     /// <summary>Starts the loop. Subsequent calls are no-ops.</summary>
@@ -100,6 +108,7 @@ public sealed class ScheduledToolRunner : IAsyncDisposable
         catch (Exception exception)
         {
             // A single failed evaluation must not stop the periodic loop; surface and continue.
+            this.logger.LogError(exception, "Scheduled tools evaluation faulted; continuing at next tick.");
             this.RunFaulted?.Invoke(this, exception);
         }
     }

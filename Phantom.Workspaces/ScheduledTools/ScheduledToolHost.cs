@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Tools;
@@ -25,6 +28,7 @@ public sealed class ScheduledToolHost
     private readonly ToolExecutionResultWriter resultWriter;
     private readonly TimeProvider timeProvider;
     private readonly IReadOnlyList<ITrustedExecutor> executors;
+    private readonly ILogger<ScheduledToolHost> logger;
     private readonly HashSet<EntityId> runningRelationships = new();
     private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
     private readonly Dictionary<EntityId, CancellationTokenSource> runningCancellations = new();
@@ -35,13 +39,15 @@ public sealed class ScheduledToolHost
         ScheduledToolRegistry registry,
         ToolExecutionResultWriter? resultWriter = null,
         TimeProvider? timeProvider = null,
-        IReadOnlyList<ITrustedExecutor>? executors = null)
+        IReadOnlyList<ITrustedExecutor>? executors = null,
+        ILogger<ScheduledToolHost>? logger = null)
     {
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.resultWriter = resultWriter ?? new ToolExecutionResultWriter(dataAccessLayer, this.timeProvider);
         this.executors = executors ?? [];
+        this.logger = logger ?? NullLogger<ScheduledToolHost>.Instance;
     }
 
     /// <summary>Raised whenever the set of currently-running scheduled tools changes.</summary>
@@ -265,6 +271,9 @@ public sealed class ScheduledToolHost
         var executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
         this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents, executionCancellation);
+        var hostLabel = string.Join(" / ", hostNameComponents);
+        this.logger.LogInformation("Scheduled tool {Tool} starting on host {Host}.", toolType, hostLabel);
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             // Route via a registered executor when one can handle the target client instance (e.g.
@@ -282,6 +291,11 @@ public sealed class ScheduledToolHost
                             TargetClientInstance = targetInstanceId,
                         },
                         executionCancellation.Token).ConfigureAwait(false);
+
+                    stopwatch.Stop();
+                    this.logger.LogInformation(
+                        "Scheduled tool {Tool} completed in {Elapsed}. {Summary}",
+                        toolType, stopwatch.Elapsed, "routed via remote executor");
 
                     // Use CancellationToken.None so that recording the outcome always succeeds even when
                     // the outer token is cancelled (e.g. during shutdown). A result entity left in the
@@ -306,6 +320,20 @@ public sealed class ScheduledToolHost
             }
 
             var result = await tool!.ExecuteAsync(executionContext).ConfigureAwait(false);
+            stopwatch.Stop();
+            if (result.IsSuccess)
+            {
+                this.logger.LogInformation(
+                    "Scheduled tool {Tool} completed in {Elapsed}. {Summary}",
+                    toolType, stopwatch.Elapsed, result.ResultContent);
+            }
+            else
+            {
+                this.logger.LogError(
+                    "Scheduled tool {Tool} failed in {Elapsed}: {Error}",
+                    toolType, stopwatch.Elapsed, result.ErrorMessage);
+            }
+
             // Use CancellationToken.None so that recording the outcome always succeeds even when
             // the outer token is cancelled (e.g. during shutdown). A result entity left in the
             // "running" state would otherwise appear as a phantom in-progress entry on next startup.
@@ -314,6 +342,9 @@ public sealed class ScheduledToolHost
         }
         catch (Exception exception)
         {
+            stopwatch.Stop();
+            this.logger.LogError(exception,
+                "Scheduled tool {Tool} threw after {Elapsed}.", toolType, stopwatch.Elapsed);
             await this.resultWriter.CompleteAsync(handle, success: false, content: exception.Message, CancellationToken.None).ConfigureAwait(false);
             throw;
         }
