@@ -7073,6 +7073,237 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("closed-ws-tab", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
     }
 
+    // ── #1157: notification click switches workspace when target pane is open but not selected ──
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ActivateTabById_WhenTargetWorkspaceIsOpenButNotSelected_SelectsTargetWorkspaceAndActivatesTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceAId = new EntityId("11570001-0000-4000-8000-00000000000a");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            { "entity-id": "11570001-0000-4000-8000-00000000000a",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-a"]],
+              "display-name": { "default": "1157 A" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+
+        var workspaceBId = new EntityId("11570001-0000-4000-8000-00000000000b");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            { "entity-id": "11570001-0000-4000-8000-00000000000b",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-b"]],
+              "display-name": { "default": "1157 B" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        // Select B, open a tab there, then switch back to A so B is open-but-not-selected.
+        var paneB = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabInB = new AgentSessionWorkspaceTabViewModel { Id = "1157-tab-in-b", Title = "Tab in B" };
+        await viewModel.OpenTabAsync(tabInB);
+
+        var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        await viewModel.ActivateTabByIdAsync("1157-tab-in-b", workspaceBId.ToString());
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Same(paneB, viewModel.SelectedWorkspacePane);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("1157-tab-in-b", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ActivateTabById_WhenTargetWorkspaceIsCurrentlySelected_ActivatesTabInCurrentWorkspace()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceAId = new EntityId("11570002-0000-4000-8000-00000000000a");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            { "entity-id": "11570002-0000-4000-8000-00000000000a",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-current-a"]],
+              "display-name": { "default": "1157 Current A" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        var tabA1 = new AgentSessionWorkspaceTabViewModel { Id = "1157-current-tab-1", Title = "Tab 1" };
+        var tabA2 = new AgentSessionWorkspaceTabViewModel { Id = "1157-current-tab-2", Title = "Tab 2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+        // tabA2 is active. Activate tabA1 via ActivateTabByIdAsync in the same (currently-selected) pane.
+        await viewModel.ActivateTabByIdAsync("1157-current-tab-1", workspaceAId.ToString());
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Same(paneA, viewModel.SelectedWorkspacePane);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("1157-current-tab-1", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NotificationNavigate_WhenTargetWorkspaceIsOpenButNotSelected_SwitchesToTargetWorkspaceAndTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceAId = new EntityId("11570003-0000-4000-8000-00000000000a");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            { "entity-id": "11570003-0000-4000-8000-00000000000a",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-notif-a"]],
+              "display-name": { "default": "1157 Notif A" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+
+        var workspaceBId = new EntityId("11570003-0000-4000-8000-00000000000b");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            { "entity-id": "11570003-0000-4000-8000-00000000000b",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-notif-b"]],
+              "display-name": { "default": "1157 Notif B" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneB = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabInB = new AgentSessionWorkspaceTabViewModel { Id = "1157-notif-tab-in-b", Title = "Tab in B" };
+        await viewModel.OpenTabAsync(tabInB);
+
+        var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "1157-notif-tab-in-b", WorkspaceId = workspaceBId.ToString() },
+            "Heading", "text", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var notifRow = Assert.Single(viewModel.NotificationsViewModel!.Rows,
+            r => r.TabKey == "1157-notif-tab-in-b");
+        notifRow.NavigateCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Same(paneB, viewModel.SelectedWorkspacePane);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("1157-notif-tab-in-b", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NotificationNavigate_WhenTargetWorkspaceIsCurrent_ActivatesTabWithoutChangingWorkspace()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceAId = new EntityId("11570004-0000-4000-8000-00000000000a");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            { "entity-id": "11570004-0000-4000-8000-00000000000a",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-notif-current-a"]],
+              "display-name": { "default": "1157 Notif Current A" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+        var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        var tabA1 = new AgentSessionWorkspaceTabViewModel { Id = "1157-notif-current-tab-1", Title = "Tab 1" };
+        var tabA2 = new AgentSessionWorkspaceTabViewModel { Id = "1157-notif-current-tab-2", Title = "Tab 2" };
+        await viewModel.OpenTabAsync(tabA1);
+        await viewModel.OpenTabAsync(tabA2);
+        // tabA2 is active; notification targets tabA1 in the same (currently-selected) pane.
+
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "1157-notif-current-tab-1", WorkspaceId = workspaceAId.ToString() },
+            "Heading", "text", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var notifRow = Assert.Single(viewModel.NotificationsViewModel!.Rows,
+            r => r.TabKey == "1157-notif-current-tab-1");
+        notifRow.NavigateCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Same(paneA, viewModel.SelectedWorkspacePane);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("1157-notif-current-tab-1", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ActivateTabById_WhenWorkspacePaneIdIsStale_FallsBackToAllPanesSearch()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceAId = new EntityId("11570005-0000-4000-8000-00000000000a");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceAId,
+            """
+            { "entity-id": "11570005-0000-4000-8000-00000000000a",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-stale-a"]],
+              "display-name": { "default": "1157 Stale A" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceAId });
+
+        var workspaceBId = new EntityId("11570005-0000-4000-8000-00000000000b");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceBId,
+            """
+            { "entity-id": "11570005-0000-4000-8000-00000000000b",
+              "entity-types": ["entity","workspace"],
+              "names": [["tests","workspaces","1157-stale-b"]],
+              "display-name": { "default": "1157 Stale B" },
+              "regions": [] }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceBId });
+
+        var paneB = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneB;
+        var tabInB = new AgentSessionWorkspaceTabViewModel { Id = "1157-stale-tab-in-b", Title = "Tab in B" };
+        await viewModel.OpenTabAsync(tabInB);
+
+        var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
+        viewModel.SelectedWorkspacePane = paneA;
+
+        // Stale (non-GUID) workspacePaneId that matches no open pane — must fall through
+        // to the all-panes search rather than silently no-op.
+        await viewModel.ActivateTabByIdAsync("1157-stale-tab-in-b", "not-a-guid-stale-id");
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Same(paneB, viewModel.SelectedWorkspacePane);
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        Assert.Equal("1157-stale-tab-in-b", (documentDock!.ActiveDockable as WorkspaceDocument)?.Id);
+    }
+
     // ── PopulateWorkspacePaneTabsAsync — new tabs[] format ───────────────────
 
     [AvaloniaFact(Timeout = 15_000)]

@@ -2078,38 +2078,41 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal));
 
             // If the pane is not open yet, open it first
+            var openedJustNow = false;
             if ((targetPane is null || targetPane.ContentLayout is null)
                 && Guid.TryParse(workspacePaneId, out var paneGuid))
             {
                 await this.OpenWorkspaceAsync(new GetEntityRequest { EntityId = new EntityId(paneGuid) });
                 targetPane = this.WorkspacePanes.FirstOrDefault(
                     p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal));
+                openedJustNow = true;
             }
 
-            if (targetPane is not null)
+            if (targetPane is not null && targetPane.ContentLayout is not null)
             {
-                var tab = targetPane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
-                if (tab is not null)
+                // Use the dock factory as the authoritative source of truth: the pane's
+                // Tabs view-model collection lags for unselected panes (populated when the
+                // pane's document dock hydrates), but the underlying document exists in the
+                // dock factory as soon as the tab is opened anywhere.
+                var doc = this.dockFactory.GetDocumentForTab(tabId);
+                if (doc is not null)
                 {
-                    var doc = this.dockFactory.GetDocumentForTab(tabId);
-                    if (doc is not null && targetPane.ContentLayout is not null)
-                    {
-                        var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
-                        this.SelectedWorkspacePane = targetPane;
-                        this.dockFactory.SetActiveDockable(doc);
-                        if (documentDock is not null)
-                            this.dockFactory.SetFocusedDockable(documentDock, doc);
-                        return;
-                    }
+                    var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
+                    this.SelectedWorkspacePane = targetPane;
+                    this.dockFactory.SetActiveDockable(doc);
+                    if (documentDock is not null)
+                        this.dockFactory.SetFocusedDockable(documentDock, doc);
+                    return;
                 }
 
-                if (targetPane.ContentLayout is not null)
+                if (openedJustNow)
                 {
-                    // Tab not yet in pane.Tabs (async population in progress after workspace open).
+                    // Workspace was just opened; tab list is still hydrating.
                     // Subscribe and activate the tab once it appears.
                     this.ActivateTabWhenLoaded(targetPane, tabId);
                     return;
                 }
+                // else: fall through to all-panes search so a stale WorkspaceId still navigates.
             }
         }
 
