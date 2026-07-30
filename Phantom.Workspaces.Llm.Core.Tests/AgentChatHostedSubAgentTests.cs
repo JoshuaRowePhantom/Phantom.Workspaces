@@ -757,4 +757,322 @@ public sealed class AgentChatHostedSubAgentTests
             rootChannel.Writer.TryComplete();
         }
     }
+
+    // ─── Fix #1154 tests ─────────────────────────────────────────────────────────
+    //
+    // These tests close the live-incrementality regression gap left by #1139: they
+    // assert on the child AgentChat's transcript (RunningItems + History) BEFORE
+    // calling .Complete() on the scripted hosted client, proving that a running
+    // sub-agent's assistant text and tool calls are visible while the stream is
+    // still open — not batched at completion.
+
+    private static string GetText(System.Collections.Generic.IEnumerable<AIContent> contents, bool includeReasoning)
+    {
+        var text = string.Empty;
+        foreach (var content in contents)
+        {
+            if (content is TextContent tc)
+            {
+                text += tc.Text;
+            }
+            else if (includeReasoning && content is TextReasoningContent rc)
+            {
+                text += rc.Text;
+            }
+        }
+        return text;
+    }
+
+    private static bool TranscriptContains(AgentChat chat, string expected)
+    {
+        foreach (var h in chat.History)
+        {
+            if (GetText(h.Contents, includeReasoning: true).Contains(expected))
+            {
+                return true;
+            }
+            foreach (var c in h.Contents)
+            {
+                if (c is FunctionCallContent fc && (fc.Name == expected || fc.CallId == expected))
+                {
+                    return true;
+                }
+            }
+        }
+
+        foreach (var r in chat.RunningItems)
+        {
+            foreach (var item in r.Items)
+            {
+                if (GetText(item.Contents, includeReasoning: true).Contains(expected))
+                {
+                    return true;
+                }
+                foreach (var c in item.Contents)
+                {
+                    if (c is FunctionCallContent fc && (fc.Name == expected || fc.CallId == expected))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task WaitForRunningOrHistoryContainsAsync(
+        AgentChat chat,
+        string expected,
+        CancellationToken cancellationToken)
+    {
+        var running = (System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems;
+        var history = (System.Collections.Specialized.INotifyCollectionChanged)chat.History;
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var innerSubscribed = new List<AgentChatRunningItem>();
+
+        void Check()
+        {
+            try
+            {
+                if (TranscriptContains(chat, expected))
+                {
+                    signal.TrySetResult();
+                }
+            }
+            catch (System.InvalidOperationException)
+            {
+                // Collection mutated during enumeration — the change that mutated it will
+                // fire another CollectionChanged event, so we will re-check then.
+            }
+        }
+
+        void OnInner(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => Check();
+
+        void SubscribeInner(AgentChatRunningItem item)
+        {
+            ((System.Collections.Specialized.INotifyCollectionChanged)item.Items).CollectionChanged += OnInner;
+            innerSubscribed.Add(item);
+        }
+
+        void OnRunning(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (e.NewItems is not null)
+            {
+                foreach (AgentChatRunningItem it in e.NewItems)
+                {
+                    SubscribeInner(it);
+                }
+            }
+            Check();
+        }
+
+        void OnHistory(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e) => Check();
+
+        running.CollectionChanged += OnRunning;
+        history.CollectionChanged += OnHistory;
+        try
+        {
+            foreach (var it in chat.RunningItems)
+            {
+                SubscribeInner(it);
+            }
+            Check();
+            if (signal.Task.IsCompleted)
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            running.CollectionChanged -= OnRunning;
+            history.CollectionChanged -= OnHistory;
+            foreach (var it in innerSubscribed)
+            {
+                ((System.Collections.Specialized.INotifyCollectionChanged)it.Items).CollectionChanged -= OnInner;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_RunningStream_ContentVisibleBeforeCompletion()
+    {
+        // Fix #1154: after a started signal + one content event, the child AgentChat's
+        // transcript (RunningItems/History) must contain the text WHILE the hosted stream
+        // is still open (no .Complete() called) — proving live, not batched-at-completion.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStartWithoutAgentId("call-1"));
+            await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "live sub-agent text"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+
+            // Explicitly do NOT Complete() — the assertion must be true mid-run.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForRunningOrHistoryContainsAsync(child, "live sub-agent text", cts.Token);
+
+            Assert.True(TranscriptContains(child, "live sub-agent text"));
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_IncrementalDeltas_EachVisibleAsPushed()
+    {
+        // Fix #1154: two successive assistant deltas each become observable in the child
+        // transcript as they are pushed. We assert visibility of the first BEFORE pushing
+        // the second (and both before any .Complete()), confirming per-event incremental
+        // visibility — not a single end-of-stream flush.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStartWithoutAgentId("call-1"));
+            await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "partial one"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForRunningOrHistoryContainsAsync(child, "partial one", cts.Token);
+            Assert.True(TranscriptContains(child, "partial one"));
+            Assert.False(TranscriptContains(child, "partial two"));
+
+            await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "partial two"));
+            await WaitForRunningOrHistoryContainsAsync(child, "partial two", cts.Token);
+
+            Assert.True(TranscriptContains(child, "partial one"));
+            Assert.True(TranscriptContains(child, "partial two"));
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_ToolStart_VisibleBeforeCompletion()
+    {
+        // Fix #1154: a sub-agent tool-start event surfaces as a running tool-call item in
+        // the child transcript BEFORE the stream completes — tool progress is live, not
+        // coalesced to the end.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStartWithoutAgentId("call-1"));
+            await router.RouteAsync(F1139_SubAgentToolStart("child-runtime-id", "tool-call-42", "sample_tool"));
+
+            var child = Assert.Single(factory.CreatedChildren);
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForRunningOrHistoryContainsAsync(child, "sample_tool", cts.Token);
+
+            Assert.True(TranscriptContains(child, "sample_tool"));
+            Assert.True(TranscriptContains(child, "tool-call-42"));
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_RunningItem_RaisesCollectionChanged_PerEvent()
+    {
+        // Fix #1154: a CollectionChanged notification on the child's RunningItems (or a
+        // running item's inner Items) fires as each event arrives mid-run, not once at
+        // completion. We count notifications observed between successive pushes to prove
+        // per-event live signalling.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStartWithoutAgentId("call-1"));
+            var child = factory.CreatedChildren.Count > 0
+                ? factory.CreatedChildren[0]
+                : throw new InvalidOperationException("child not created");
+
+            var running = (System.Collections.Specialized.INotifyCollectionChanged)child.RunningItems;
+            var innerSubscribed = new List<AgentChatRunningItem>();
+            int notifications = 0;
+
+            void OnInner(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs __) =>
+                Interlocked.Increment(ref notifications);
+
+            void SubscribeInner(AgentChatRunningItem it)
+            {
+                ((System.Collections.Specialized.INotifyCollectionChanged)it.Items).CollectionChanged += OnInner;
+                innerSubscribed.Add(it);
+            }
+
+            void OnRunning(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+            {
+                if (e.NewItems is not null)
+                {
+                    foreach (AgentChatRunningItem it in e.NewItems)
+                    {
+                        SubscribeInner(it);
+                    }
+                }
+                Interlocked.Increment(ref notifications);
+            }
+
+            running.CollectionChanged += OnRunning;
+            foreach (var it in child.RunningItems)
+            {
+                SubscribeInner(it);
+            }
+
+            try
+            {
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+                await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "delta-one"));
+                await WaitForRunningOrHistoryContainsAsync(child, "delta-one", cts.Token);
+                var afterFirst = Volatile.Read(ref notifications);
+                Assert.True(afterFirst > 0, "Expected at least one CollectionChanged notification after the first delta.");
+
+                await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "delta-two"));
+                await WaitForRunningOrHistoryContainsAsync(child, "delta-two", cts.Token);
+                var afterSecond = Volatile.Read(ref notifications);
+                Assert.True(afterSecond > afterFirst,
+                    $"Expected additional CollectionChanged notifications after the second delta; before={afterFirst}, after={afterSecond}.");
+            }
+            finally
+            {
+                running.CollectionChanged -= OnRunning;
+                foreach (var it in innerSubscribed)
+                {
+                    ((System.Collections.Specialized.INotifyCollectionChanged)it.Items).CollectionChanged -= OnInner;
+                }
+            }
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
 }

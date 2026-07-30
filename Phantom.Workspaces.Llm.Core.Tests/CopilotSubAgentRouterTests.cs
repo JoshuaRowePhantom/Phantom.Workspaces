@@ -560,4 +560,79 @@ public sealed class CopilotSubAgentRouterTests
         await foreach (var u in factory.CreatedReceiver!.GetStreamingResponseAsync([]))
             updates.Add(u);
     }
+
+    // ─── Fix #1154 tests ─────────────────────────────────────────────────────────
+    //
+    // Router-level live-incrementality regression coverage: prove that content routed
+    // to an attached child receiver reaches the receiver at PUSH time, not only when
+    // a terminal/complete signal drains a pending buffer. We consume the receiver's
+    // stream via an IAsyncEnumerator so we can observe items WITHOUT calling
+    // .Complete() on the receiver — a mid-run visibility test that the #1139 suite
+    // (which always DrainReceiverAsync-then-Complete's first) does not perform.
+
+    private static async Task<ChatResponseUpdate> ReadOneFromReceiverAsync(
+        CopilotSubAgentChatClient receiver,
+        CancellationToken cancellationToken)
+    {
+        await foreach (var update in receiver.GetStreamingResponseAsync([], cancellationToken: cancellationToken))
+        {
+            return update;
+        }
+
+        throw new InvalidOperationException("Receiver stream completed without emitting any update.");
+    }
+
+    [Fact]
+    public async Task RouteAsync_StartedOmitsAgentId_RunningContent_ForwardedLive_PendingEmpty()
+    {
+        // Fix #1154 router-level crux: with an AgentId-less start correlated at start
+        // time, a content update tagged with the child AgentId reaches the ALREADY-
+        // ATTACHED receiver immediately — never held in ChildRoutingEntry.pending until
+        // some terminal signal drains it. We observe the receiver's stream WITHOUT
+        // calling Complete(), so if the router were still buffering content until
+        // completion, the read would time out.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStartWithoutAgentId("call-1"));
+
+        var receiver = factory.CreatedReceiver!;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var readTask = ReadOneFromReceiverAsync(receiver, cts.Token);
+
+        // Content stamped with the child's runtime AgentId, distinct from any tool-call id.
+        await router.RouteAsync(SubAgentText("child-runtime-id", "live text"));
+
+        var update = await readTask;
+        Assert.Equal("live text", update.Text);
+
+        // Parent transcript stays empty.
+        Assert.Empty(await DrainAsync(channel));
+    }
+
+    [Fact]
+    public async Task RouteAsync_RunningContent_NotHeldUntilCompleteSignal()
+    {
+        // Fix #1154: content pushed before ANY terminal/complete signal reaches the child
+        // receiver at push time; the receiver observes it prior to Complete(), confirming
+        // updates are not released only when the sub-agent completes.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
+
+        var receiver = factory.CreatedReceiver!;
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var readTask = ReadOneFromReceiverAsync(receiver, cts.Token);
+
+        // No LifecycleCompleted, no Complete() on the receiver — content must still arrive
+        // live because ChildRoutingEntry.Push forwards straight to the attached receiver.
+        await router.RouteAsync(SubAgentText("agent-1", "live before complete"));
+
+        var update = await readTask;
+        Assert.Equal("live before complete", update.Text);
+
+        // Parent transcript is untouched.
+        Assert.Empty(await DrainAsync(channel));
+    }
 }
