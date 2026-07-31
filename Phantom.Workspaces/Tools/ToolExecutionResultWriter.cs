@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.Tools;
 /// name path <c>[ host..., "tool-executions", tool-name, start-time ]</c>; child results (sub-tasks
 /// and progress) are nested beneath their parent result's name path.
 /// </summary>
-public sealed class ToolExecutionResultWriter
+public class ToolExecutionResultWriter
 {
     /// <summary>The name segment under a host entity beneath which tool runs are recorded.</summary>
     public const string ToolExecutionsSegment = "tool-executions";
@@ -75,7 +75,7 @@ public sealed class ToolExecutionResultWriter
     }
 
     /// <summary>Marks a result complete, recording its end time, status, and optional content.</summary>
-    public async Task CompleteAsync(
+    public virtual async Task CompleteAsync(
         ToolExecutionResultHandle handle,
         bool success,
         string? content = null,

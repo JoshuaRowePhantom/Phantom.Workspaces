@@ -583,4 +583,48 @@ public sealed class ScheduledToolsRunningViewModelTests
         Assert.Equal("✗", run.StatusGlyph);
         Assert.Equal("disk full", run.Message);
     }
+
+    [Fact]
+    public async Task LoadRecentRunsForTool_WhenOrphanRunningReconciled_ShowsFailedGlyphAndReconciliationMessage()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        // Seed an orphan running result (as a prior process would have left it).
+        var orphanId = Guid.NewGuid();
+        var startTime = new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
+        using (var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{orphanId}}",
+              "entity-types": ["entity", "tool-execution-result"],
+              "names": [["computer","this-machine","tool-executions","stub","20260617T093000000Z"]],
+              "tool-name": "stub",
+              "start-time": "{{startTime:O}}",
+              "status": "running"
+            }
+            """))
+        {
+            var seedResult = await dataAccessLayer.UpdateAsync(new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed orphan" } },
+                Changes = [new EntityChange { EntityId = new EntityId(orphanId), ConcurrencyTag = null, Data = document.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+            }, TestContext.Current.CancellationToken);
+            Assert.DoesNotContain(seedResult.EntityResults, r => r.UpdateState == UpdateState.Failed);
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        await host.ReconcileOrphanRunningResultsAsync(HostName, TestContext.Current.CancellationToken);
+
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        var run = Assert.Single(row.RecentRuns);
+        Assert.Equal("failed", run.Status);
+        Assert.Equal("✗", run.StatusGlyph);
+        Assert.NotNull(run.Message);
+        Assert.Contains("reconciled", run.Message!, StringComparison.OrdinalIgnoreCase);
+    }
 }

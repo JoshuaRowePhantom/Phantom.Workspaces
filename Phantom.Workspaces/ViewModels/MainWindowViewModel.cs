@@ -554,7 +554,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.scheduledToolPauseStateService,
                 this.HostProfileEntityId,
                 this.scheduledToolHost,
-                action => Dispatcher.UIThread.Post(action))
+                action => Dispatcher.UIThread.Post(action),
+                this.logDirectoryProvider,
+                new Phantom.Workspaces.Install.RealProcessLauncher())
             : null;
 
     private EntityId HostProfileEntityId =>
@@ -647,6 +649,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.scheduledToolPauseStateService,
             hostEntityId,
             action => Dispatcher.UIThread.Post(action));
+
+        // Reconcile any per-run tool-execution-result entities orphaned in "running" state by a
+        // prior process termination or completion-write failure. See #1155.
+        try
+        {
+            await this.scheduledToolHost.ReconcileOrphanRunningResultsAsync(hostNameComponents);
+        }
+        catch (Exception exception)
+        {
+            this.loggerFactory
+                .CreateLogger<ScheduledTools.ScheduledToolHost>()
+                .LogError(exception, "Failed to reconcile orphan running tool-execution-result entities on startup.");
+        }
 
         this.ScheduledToolsRunning = new ScheduledToolsRunningViewModel(
             this.scheduledToolHost,
