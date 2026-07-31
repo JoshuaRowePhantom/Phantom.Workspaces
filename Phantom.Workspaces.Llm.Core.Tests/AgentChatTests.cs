@@ -1014,6 +1014,26 @@ public sealed class AgentChatTests
         Assert.True(typeof(ISelfInvokingToolChatClient).IsAssignableFrom(typeof(CopilotSdkChatClient)));
     }
 
+    [Fact]
+    public void CopilotSubAgentChatClient_ImplementsISelfInvokingToolChatClient()
+    {
+        Assert.True(typeof(ISelfInvokingToolChatClient).IsAssignableFrom(typeof(CopilotSubAgentChatClient)));
+    }
+
+    [Fact]
+    public void CopilotSubAgentChatClient_GetService_ReturnsSelfInvokingToolChatClientMarker()
+    {
+        var client = new CopilotSubAgentChatClient();
+        Assert.NotNull(client.GetService(typeof(ISelfInvokingToolChatClient)));
+    }
+
+    [Fact]
+    public void ResolveUseProvidedChatClientAsIs_HostedSubAgentClient_ReturnsTrue()
+    {
+        var client = new CopilotSubAgentChatClient();
+        Assert.True(AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride: false, client));
+    }
+
     private sealed class SelfInvokingTestChatClient : IChatClient, ISelfInvokingToolChatClient
     {
         public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)

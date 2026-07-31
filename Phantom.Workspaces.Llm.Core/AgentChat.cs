@@ -45,6 +45,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private IncrementalPersistenceChatHistoryProvider? persistenceProvider;
     private ChatClientAgent? chatClientAgent;
     private ChatClientAgentOptions? chatOptions;
+
+#pragma warning disable MAAI001
+    /// <summary>
+    /// Test hook: exposes the resolved <c>UseProvidedChatClientAsIs</c> flag from the
+    /// underlying <see cref="ChatClientAgentOptions"/> so tests can verify that hosted
+    /// sub-agent pipelines do not have <c>FunctionInvokingChatClient</c> wrapped around
+    /// them (bug #1174).
+    /// </summary>
+    internal bool? UseProvidedChatClientAsIs => this.chatOptions?.UseProvidedChatClientAsIs;
+#pragma warning restore MAAI001
+
     private IReadOnlyList<RuntimeContextProviderRegistration> runtimeContextProviderRegistrations = [];
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;

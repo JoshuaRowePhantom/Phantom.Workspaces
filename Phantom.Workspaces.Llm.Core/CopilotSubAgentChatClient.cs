@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Llm;
 /// can forward sub-agent events by resolving the receiver via
 /// <c>GetService&lt;ICopilotSubAgentReceiver&gt;()</c>.
 /// </summary>
-internal sealed class CopilotSubAgentChatClient : IChatClient, ICopilotSubAgentReceiver, IHostedAgentChatClient
+internal sealed class CopilotSubAgentChatClient : IChatClient, ICopilotSubAgentReceiver, IHostedAgentChatClient, ISelfInvokingToolChatClient
 {
     private readonly Channel<ChatResponseUpdate> _channel =
         Channel.CreateUnbounded<ChatResponseUpdate>();
@@ -51,11 +51,17 @@ internal sealed class CopilotSubAgentChatClient : IChatClient, ICopilotSubAgentR
         throw new NotSupportedException("Hosted sub-agent chat clients do not accept direct calls.");
 
     /// <summary>
-    /// Returns <c>this</c> when <paramref name="serviceType"/> is <see cref="ICopilotSubAgentReceiver"/>;
-    /// otherwise returns <c>null</c>.
+    /// Returns <c>this</c> when <paramref name="serviceType"/> is <see cref="ICopilotSubAgentReceiver"/>
+    /// or <see cref="ISelfInvokingToolChatClient"/> (so the marker survives
+    /// <see cref="DelegatingChatClient"/> propagation and <c>ResolveUseProvidedChatClientAsIs</c>
+    /// selects the as-is path); otherwise returns <c>null</c>.
     /// </summary>
-    public object? GetService(Type serviceType, object? key = null) =>
-        serviceType == typeof(ICopilotSubAgentReceiver) ? this : null;
+    public object? GetService(Type serviceType, object? key = null)
+    {
+        if (serviceType == typeof(ICopilotSubAgentReceiver)) return this;
+        if (serviceType == typeof(ISelfInvokingToolChatClient)) return this;
+        return null;
+    }
 
     /// <inheritdoc/>
     public void Dispose() { }

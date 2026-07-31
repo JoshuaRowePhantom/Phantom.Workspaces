@@ -251,6 +251,94 @@ public sealed class AgentChatHostedSubAgentTests
     }
 
     [Fact]
+    public async Task AgentChat_HostedSubAgent_PipelineDoesNotWrapWithFunctionInvokingChatClient()
+    {
+        var hostedClient = new CopilotSubAgentChatClient();
+        await using var chat = CreateHostedSubAgentChat(hostedClient);
+
+        // With CopilotSubAgentChatClient marked as ISelfInvokingToolChatClient (#1174),
+        // ResolveUseProvidedChatClientAsIs returns true — instructing ChatClientAgent
+        // to use the sub-agent stub as-is and omit FunctionInvokingChatClient wrapping.
+        Assert.Equal(true, chat.UseProvidedChatClientAsIs);
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_ParentTaskFunctionCallInjected_ChildTranscriptDoesNotThrowFunctionNotFound()
+    {
+        var hostedClient = new CopilotSubAgentChatClient();
+        await using var chat = CreateHostedSubAgentChat(hostedClient);
+
+        // Simulates CopilotSubAgentRouter.InjectToolCallPrompt pushing the parent's
+        // FunctionCallContent(Name="task") into the child sink. Before #1174 this
+        // FunctionInvokingChatClient middleware wrapping the child throws
+        // "Requested function 'task' not found" because the child's ChatOptions.Tools
+        // is empty. After #1174 the middleware is not installed and the content
+        // flows through the receive-only stub.
+        hostedClient.Push(new ChatResponseUpdate
+        {
+            Role = ChatRole.User,
+            Contents = [new FunctionCallContent("call_task_1", "task", new Dictionary<string, object?>
+            {
+                ["prompt"] = "spawn sub-agent"
+            })]
+        });
+        hostedClient.Push(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("sub-agent response")]
+        });
+        hostedClient.Complete();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitForCompletionStateAsync(chat, AgentChatCompletionState.Succeeded, cts.Token);
+
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+        Assert.DoesNotContain(
+            chat.History,
+            item => GetText(item.Contents).Contains("Requested function", StringComparison.Ordinal)
+                 && GetText(item.Contents).Contains("not found", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_ParentTaskInvocation_TaskToolCallAttributedToParentTranscriptOnly()
+    {
+        var hostedClient = new CopilotSubAgentChatClient();
+        await using var chat = CreateHostedSubAgentChat(hostedClient);
+
+        // Router-injected copy of the parent's task tool call in the child sink is
+        // preserved as-is in the child history but must never trigger a
+        // function-registry lookup (bug #1174). It is retained purely for
+        // attribution.
+        hostedClient.Push(new ChatResponseUpdate
+        {
+            Role = ChatRole.User,
+            Contents = [new FunctionCallContent("call_task_1", "task", new Dictionary<string, object?>
+            {
+                ["prompt"] = "spawn"
+            })]
+        });
+        hostedClient.Push(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("child text")]
+        });
+        hostedClient.Complete();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await WaitForCompletionStateAsync(chat, AgentChatCompletionState.Succeeded, cts.Token);
+
+        Assert.Equal(AgentChatCompletionState.Succeeded, chat.CompletionState);
+        // The injected FunctionCallContent(Name="task") is preserved somewhere in the child's history.
+        Assert.Contains(
+            chat.History.SelectMany(item => item.Contents).OfType<FunctionCallContent>(),
+            fc => fc.Name == "task" && fc.CallId == "call_task_1");
+        // No FunctionResultContent for the parent's task call is attributed to the child.
+        Assert.DoesNotContain(
+            chat.History.SelectMany(item => item.Contents).OfType<FunctionResultContent>(),
+            fr => fr.CallId == "call_task_1");
+    }
+
+    [Fact]
     public async Task AgentChat_UserDrivenAgent_ProcessLoop_StillRequiresUserInput()
     {
         await using var chat = CreateUserDrivenChat();
