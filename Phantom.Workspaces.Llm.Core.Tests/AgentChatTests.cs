@@ -1009,6 +1009,32 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithCopilotSdkClientAndNoFactory_ThrowsRunningAgentChatFactoryRequired()
+    {
+        // Regression pin for issue #1109 / #1180: when an AgentChat is constructed with a Copilot
+        // SDK client but AgentServices.RunningAgentChatFactory is null, AgentChat.CreateAsync must
+        // throw the "must be supplied at construction time" InvalidOperationException. Weakening
+        // this guard would re-open the manifest-launchpad crash from #1180.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        using var copilotClient = new CopilotSdkChatClient(
+            "gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                ConfiguredStore = persistenceStore,
+                ClientOverride = copilotClient,
+                DisplayNameOverride = "test-chat",
+                AgentServices = new AgentServices { RunningAgentChatFactory = null },
+            }));
+
+        Assert.Contains("RunningAgentChatFactory", ex.Message);
+        Assert.Contains("must be supplied at construction time", ex.Message);
+    }
+
+    [Fact]
     public void CopilotSdkChatClient_IsSelfInvokingToolChatClient()
     {
         Assert.True(typeof(ISelfInvokingToolChatClient).IsAssignableFrom(typeof(CopilotSdkChatClient)));

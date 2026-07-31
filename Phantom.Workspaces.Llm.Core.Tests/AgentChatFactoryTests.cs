@@ -468,6 +468,39 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
+    public async Task GetOrCreateAsync_ManifestRequest_ExposesFactoryAsRunningAgentChatFactory()
+    {
+        // Issue #1180 regression pin: the manifest-open path in AgentManifestLaunchpadViewModel
+        // resolves an AgentDefinition from an AgentManifest (via RunningAgentChatTable) and then
+        // calls AgentChatFactory.GetOrCreateAsync with bare AgentServices (no RunningAgentChatFactory
+        // pre-set). The factory must self-inject via WithSelfAsFactory so AgentServices reaching
+        // AgentChat.CreateAsync carries the factory — otherwise the #1109 guard in AgentChat
+        // throws "must be supplied at construction time" as soon as a Copilot SDK client resolves,
+        // which is exactly the crash reported in #1180.
+        var sessionId = new AgentSessionId("session-manifest-1180");
+        var store = new InMemoryAgentPersistenceStore();
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        var bareServices = new AgentServices
+        {
+            ChatClientOverride = new DeterministicTestChatClient(),
+            // Intentionally not setting RunningAgentChatFactory — the factory MUST self-inject.
+        };
+        Assert.Null(bareServices.RunningAgentChatFactory);
+
+        await using var lease = await factory.GetOrCreateAsync(
+            sessionId,
+            definition: EchoAgentDefinition,
+            services: bareServices);
+
+        var services = GetRequestServices(lease.AgentChat);
+        Assert.Same(factory, services.RunningAgentChatFactory);
+    }
+
+    [Fact]
     public async Task GetOrCreateAsync_CreatedChat_ExposesFactoryAsRunningAgentChatFactory()
     {
         var sessionId = new AgentSessionId("session-selffactory-getorcreate");

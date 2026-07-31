@@ -3288,7 +3288,7 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(agentTabIndex + 1, webTabIndex);
     }
 
-    private static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
+    internal static ITrustedExecutorSelector CreateLocalTrustedExecutorSelector()
         => new DeferredTrustedExecutorSelector();
 
     // ── Float-tab disposal guard (issue #635) ─────────────────────────────────
@@ -4476,7 +4476,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    private static async Task<T> WaitForSelectedTabAsync<T>(WorkspacePaneViewModel pane)
+    internal static async Task<T> WaitForSelectedTabAsync<T>(WorkspacePaneViewModel pane)
         where T : WorkspaceTabViewModel
     {
         if (pane.SelectedTab is T alreadyReady)
@@ -4510,7 +4510,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    private static async Task WaitForAgentReadyAsync(AgentSessionWorkspaceTabViewModel tab)    {
+    internal static async Task WaitForAgentReadyAsync(AgentSessionWorkspaceTabViewModel tab)    {
         if (tab.State is AgentTabState.Ready or AgentTabState.Failed)
         {
             return;
@@ -4933,7 +4933,7 @@ public sealed class MainWindowIntegrationTests
         return new UnknownRepositorySource();
     }
 
-    private static MainWindowViewModel CreateTestMainWindowViewModel(
+    internal static MainWindowViewModel CreateTestMainWindowViewModel(
         ProfileStore? profileStore = null,
         ApplicationServices? applicationServices = null,
         WorkspacesConfiguration? configuration = null)
@@ -4954,7 +4954,7 @@ public sealed class MainWindowIntegrationTests
             "profile.json");
     }
 
-    private static RunningAgentChatTable CreateTestRunningAgentChatTable()
+    internal static RunningAgentChatTable CreateTestRunningAgentChatTable()
     {
         var store = new InMemoryAgentPersistenceStore();
         var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
@@ -4971,7 +4971,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    private static EntityBroker GetEntityBroker(
+    internal static EntityBroker GetEntityBroker(
         MainWindowViewModel viewModel)
     {
         var entityBrokerProperty = typeof(MainWindowViewModel).GetProperty(
@@ -4981,7 +4981,7 @@ public sealed class MainWindowIntegrationTests
         return Assert.IsType<EntityBroker>(entityBrokerProperty!.GetValue(viewModel));
     }
 
-    private static async Task<SubscribedEntityViewModel> UpsertEntityAndLoadAsync(
+    internal static async Task<SubscribedEntityViewModel> UpsertEntityAndLoadAsync(
         EntityBroker entityBroker,
         EntityId entityId,
         string json)

@@ -29,6 +29,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable runningAgentChatTable;
 
+    /// <summary>
+    /// The running-agent-chat table used by this handler. Exposed so co-located view models that
+    /// share the launchpad → session flow (see <c>AgentManifestLaunchpadViewModel</c>) can acquire
+    /// chats through the same factory-mediated path required by #1109 / #1180 rather than the
+    /// static <see cref="AgentFactory.CreateAgentChatAsync"/> helper, which bypasses
+    /// <see cref="AgentChatFactory"/>'s <c>WithSelfAsFactory</c> self-injection.
+    /// </summary>
+    internal IRunningAgentChatTable RunningAgentChatTable => this.runningAgentChatTable;
+
     public OpenAgentSessionShortcutHandler(
         AgentSessionShortcutContext agentSessionShortcutContext,
         ITrustedExecutorSelector trustedExecutorSelector,
