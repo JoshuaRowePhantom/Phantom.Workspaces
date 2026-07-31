@@ -294,16 +294,19 @@
          (so a horizontal scrollbar appears and the minimum-width card is scrollable when the
          viewport is narrower than the minimum). The tree's own inner scroller supplies vertical
          scrolling; no surrounding ScrollViewer is required. -->
+    <!-- Issue #1177: use VirtualizingStackPanel so trees with thousands of entity cards realize
+         only viewport-sized batches. VirtualizingStackPanel in Avalonia 12.1 is a pixel-scrolling
+         panel driven by the enclosing ScrollViewer's EffectiveViewportChanged, so smooth per-pixel
+         scrolling is preserved. The MaxWidth/MinWidth binding to the parent ScrollViewer's viewport
+         width is removed here — the virtualizing panel needs a real, bounded viewport rather than a
+         panel-level width cap; width behavior lives on the item content template. -->
     <Style Selector="TreeView.entity-card-tree">
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
         <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
-                <StackPanel Orientation="Vertical"
-                            HorizontalAlignment="Stretch"
-                            MinWidth="160"
-                            MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+                <VirtualizingStackPanel Orientation="Vertical" />
             </ItemsPanelTemplate>
         </Setter>
     </Style>
@@ -314,10 +317,7 @@
         <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
-                <StackPanel Orientation="Vertical"
-                            HorizontalAlignment="Stretch"
-                            MinWidth="160"
-                            MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+                <VirtualizingStackPanel Orientation="Vertical" />
             </ItemsPanelTemplate>
         </Setter>
     </Style>

@@ -673,4 +673,196 @@ public sealed class EntityCardFieldBuildingTests
 
         Assert.Single(fieldEditors, editor => editor.FieldName == "content");
     }
+
+    // Issue #1177: constructor must NOT eagerly kick off BuildFieldEditorsAsync; realization drives
+    // the build via EnsureFieldEditorsBuilt / EntityCardControl.OnAttachedToVisualTree.
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_Constructor_DoesNotEagerlyBuildFieldEditors()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+        var card = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+
+        // Give any spurious background continuation a chance to run.
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(card.FieldEditors);
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_EnsureFieldEditorsBuilt_BuildsFieldEditorsOnce()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+        var card = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+
+        card.EnsureFieldEditorsBuilt();
+        await WaitForFieldEditorsAsync(card);
+        var firstBuildCount = card.FieldEditors.Count;
+        Assert.NotEqual(0, firstBuildCount);
+        var firstBuild = card.FieldEditors;
+
+        card.EnsureFieldEditorsBuilt();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Same(firstBuild, card.FieldEditors);
+    }
+
+    // Issue #1177: even when a child card is added to a ViewEntityViewModel via AddChild, the child
+    // card's field editors are built lazily; construction alone must not trigger the schema work.
+    [AvaloniaFact]
+    public async Task ViewEntityViewModel_AddChild_DoesNotEagerlyBuildFieldEditorsForChildCard()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+        var mainWindow = new MainWindowViewModel(new UnknownRepositorySource());
+        try
+        {
+            var parentEntity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+            var childEntity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+            var parentView = new ViewEntityViewModel(
+                parentEntity,
+                mainWindow,
+                mainWindow.ShortcutManager,
+                indentLevel: 0,
+                fieldEditorFactory: factory);
+            var childView = new ViewEntityViewModel(
+                childEntity,
+                mainWindow,
+                mainWindow.ShortcutManager,
+                indentLevel: 1,
+                fieldEditorFactory: factory);
+
+            parentView.AddChild(childView);
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            await Task.Yield();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            Assert.Empty(childView.EntityCardNode.Card.FieldEditors);
+        }
+        finally
+        {
+            await mainWindow.DisposeAsync();
+        }
+    }
+
+    // Issue #1177: laying out a tree bound to thousands of items only realizes a viewport-sized
+    // batch of cards, so field editors are built only for that small set.
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task EntityCardTreeView_WhenBoundToThousandsOfItems_DoesNotBuildFieldEditorsForOffScreenCards()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        const int total = 1000;
+        var cards = new EntityCardViewModel[total];
+        for (var i = 0; i < total; i++)
+        {
+            var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshot(new Guid(i, 0, 0, new byte[8])));
+            cards[i] = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+        }
+
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        // No card was realized, so no card should have built field editors.
+        var builtCount = 0;
+        foreach (var card in cards)
+        {
+            if (card.FieldEditors.Count > 0)
+            {
+                builtCount++;
+            }
+        }
+
+        Assert.Equal(0, builtCount);
+    }
+
+    private static async Task WaitForFieldEditorsAsync(EntityCardViewModel card)
+    {
+        var tcs = new TaskCompletionSource();
+        void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(EntityCardViewModel.FieldEditors) && card.FieldEditors.Count > 0)
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        card.PropertyChanged += OnChanged;
+        try
+        {
+            if (card.FieldEditors.Count > 0)
+            {
+                return;
+            }
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            await Task.Yield();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            if (card.FieldEditors.Count > 0)
+            {
+                return;
+            }
+
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await Task.WhenAny(tcs.Task, Task.Delay(System.Threading.Timeout.Infinite, cts.Token));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            card.PropertyChanged -= OnChanged;
+        }
+    }
+
+    private static EntitySnapshot BuildToolNoteSnapshot(Guid? id = null)
+    {
+        var entityId = id ?? Guid.NewGuid();
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "t-{{entityId:N}}"]],
+              "display-name": { "default": "Tool Note" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Body" }
+                }
+              }
+            }
+            """);
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+    }
 }

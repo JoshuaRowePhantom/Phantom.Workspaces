@@ -335,6 +335,9 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
         var card = new EntityCardViewModel(
             entity,
             fieldEditorFactory: fieldEditorFactory);
+        // Issue #1177: field editors are now built lazily; realization normally kicks this via
+        // EntityCardControl.OnAttachedToVisualTree — trigger it directly for this VM-only test.
+        card.EnsureFieldEditorsBuilt();
 
         // BuildFieldEditorsAsync is kicked off from the constructor as fire-and-forget work owned by
         // the VM's ViewModelLifetime. Wait for the resulting PropertyChanged notification to fire so
@@ -491,6 +494,9 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
 
     private static async Task WaitForContentFieldEditorAsync(EntityCardViewModel card)
     {
+        // Issue #1177: field editors are built lazily on realization. VM-only tests must trigger
+        // the build directly since no EntityCardControl is being attached.
+        card.EnsureFieldEditorsBuilt();
         var built = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnChanged(object? _, PropertyChangedEventArgs e)
         {

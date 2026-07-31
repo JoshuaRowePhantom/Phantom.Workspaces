@@ -246,8 +246,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         var noteItem = await WaitForItemAsync(
             viewModel,
-            item => string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal)
-                && item.FieldEditors.Any(static fieldEditor => fieldEditor.FieldName == "content"));
+            item => string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal));
+        // Issue #1177: field editors are built lazily on first realization. Simulate realization
+        // by explicitly asking the card to build its editors, then wait for them to appear.
+        noteItem.Node.Card.EnsureFieldEditorsBuilt();
+        await WaitForCardFieldEditorsAsync(noteItem, editors => editors.Any(fe => fe.FieldName == "content"));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
@@ -317,9 +320,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         var noteItem = await WaitForItemAsync(
             viewModel,
-            item => (string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
-                    || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal))
-                && item.FieldEditors.Any(static fieldEditor => fieldEditor.FieldName == "content"));
+            item => string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
+                || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal));
+        // Issue #1177: field editors are built lazily on first realization.
+        noteItem.Node.Card.EnsureFieldEditorsBuilt();
+        await WaitForCardFieldEditorsAsync(noteItem, editors => editors.Any(fe => fe.FieldName == "content"));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
@@ -389,8 +394,10 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         var noteTypeItem = await WaitForItemAsync(
             viewModel,
-            item => item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
-                && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema"));
+            item => item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal));
+        // Issue #1177: field editors are built lazily on first realization.
+        noteTypeItem.Node.Card.EnsureFieldEditorsBuilt();
+        await WaitForCardFieldEditorsAsync(noteTypeItem, editors => editors.Any(fe => fe.FieldName == "schema"));
         var schemaField = Assert.Single(noteTypeItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "schema");
         var schemaEditor = Assert.IsType<JsonSchemaFieldEditorViewModel>(schemaField);
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
@@ -704,6 +711,44 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         finally
         {
             viewModel.EntityList.Items.CollectionChanged -= handler;
+        }
+    }
+
+    // Issue #1177: field editors are built lazily on first realization, so tests inspecting
+    // FieldEditors must first invoke EnsureFieldEditorsBuilt on the target card and then wait for
+    // the card's PropertyChanged notification for FieldEditors before asserting.
+    private static async Task WaitForCardFieldEditorsAsync(
+        EntityListItemViewModel item,
+        Func<IReadOnlyCollection<EntityFieldEditorViewModel>, bool> predicate)
+    {
+        if (predicate(item.FieldEditors))
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (string.Equals(e.PropertyName, nameof(EntityListItemViewModel.FieldEditors), StringComparison.Ordinal)
+                && predicate(item.FieldEditors))
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        item.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            if (predicate(item.FieldEditors))
+            {
+                return;
+            }
+
+            await signal.Task;
+        }
+        finally
+        {
+            item.PropertyChanged -= OnPropertyChanged;
         }
     }
 }

@@ -19,6 +19,7 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;
     private readonly EntityReferenceSearch entityReferenceSearch;
+    private readonly FieldEditorFactory? fieldEditorFactory;
     private readonly SubscribedGet rootSubscribedGet;
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
@@ -28,12 +29,14 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public EntityBrowserWorkspaceTabViewModel(
         EntityBroker entityBroker,
-        SubscribedGet subscribedGet)
+        SubscribedGet subscribedGet,
+        FieldEditorFactory? fieldEditorFactory = null)
     {
         this.entityBroker = entityBroker;
         this.schemaAccessor = new SchemaAccessor(this.entityBroker.EntityRepository.DataAccessLayer);
         this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
         this.entityReferenceSearch = new EntityReferenceSearch(this.entityBroker);
+        this.fieldEditorFactory = fieldEditorFactory;
         this.rootSubscribedGet = subscribedGet;
         this.rootSubscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
         this.entityList.Items.CollectionChanged += this.OnEntityListItemsCollectionChanged;
@@ -121,6 +124,14 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.isRebuildPending = false;
                 ct.ThrowIfCancellationRequested();
 
+                // Issue #1177: yield to the dispatcher between rebuild iterations so async
+                // subscription completions (fire-and-forget from EnsureChildSubscription) can be
+                // observed. Previously the per-entity await BuildFieldEditorsAsync provided this
+                // scheduling gap implicitly; now that field-editor construction is deferred, we
+                // must yield explicitly or the rebuild loop can starve the dispatcher.
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+
                 var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
                 foreach (var item in this.entityList.Items)
                 {
@@ -182,12 +193,19 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                     continue;
                 }
 
+                // Issue #1177: do NOT await this.BuildFieldEditorsAsync per-entity here — for a
+                // browser tree with thousands of entities this serialized N schema lookups before
+                // the tree ever published. Instead, register a lazy builder on the card so it is
+                // invoked by EnsureFieldEditorsBuilt (called by EntityCardControl.OnAttachedToVisualTree)
+                // once the virtualized item is realized.
+                var capturedEntity = entity;
                 var node = new EntityListNodeViewModel(
                     entity,
                     nameComponents,
                     sortKey,
-                    await this.BuildFieldEditorsAsync(entity, ct),
-                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
+                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName),
+                    fieldEditorFactory: this.fieldEditorFactory);
+                node.Card.SetLazyFieldEditorBuilder(lazyCt => this.BuildFieldEditorsAsync(capturedEntity, lazyCt));
                 children.Add(sortKey, node);
             }
         }

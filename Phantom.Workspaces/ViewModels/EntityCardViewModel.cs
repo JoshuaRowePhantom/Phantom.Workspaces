@@ -46,6 +46,15 @@ public sealed class EntityCardViewModel : ViewModelBase
     private ShortcutManager? shortcutManager;
     private IReadOnlyList<EntityShortcutViewModel> shortcuts = Array.Empty<EntityShortcutViewModel>();
     private CancellationTokenSource? shortcutResolutionCts;
+    // Issue #1177: field editors are built lazily on first realization instead of eagerly in the
+    // constructor. This flag guards EnsureFieldEditorsBuilt so the build is scheduled at most once,
+    // and it also gates the snapshot-change rebuild so unrealized cards do not re-launch schema work
+    // when their entity data changes.
+    private int fieldEditorsBuildRequested;
+    // Issue #1177: optional caller-supplied lazy builder. When set (see SetLazyFieldEditorBuilder),
+    // it is invoked by BuildFieldEditorsAsync instead of the FieldEditorFactory path so the entity
+    // browser can defer its own FieldTypeResolver-based schema work until the card is realized.
+    private Func<CancellationToken, Task<IReadOnlyCollection<EntityFieldEditorViewModel>>>? lazyFieldEditorBuilder;
 
     public EntityCardViewModel(
         SubscribedEntityViewModel entity,
@@ -78,7 +87,41 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
         this.DeleteEntityCommand = entity.DeleteEntityCommand;
         this.externalCard = this.cardViewName == "external" ? ExternalEntityCardViewModel.Create(entity) : null;
+        // Issue #1177: do NOT eagerly build field editors here. Realizing the card control triggers
+        // EnsureFieldEditorsBuilt via EntityCardControl.OnAttachedToVisualTree, so off-screen cards
+        // in a virtualized tree pay no schema/type-resolution cost.
+        if (fieldEditors is { Count: > 0 })
+        {
+            // Callers that supplied pre-built editors intend the card to display them as-is; mark
+            // the build as already satisfied so subsequent EnsureFieldEditorsBuilt calls are no-ops.
+            this.fieldEditorsBuildRequested = 1;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1177: schedules a one-shot background build of this card's field editors. Called by
+    /// <c>EntityCardControl.OnAttachedToVisualTree</c> on first realization, so off-screen cards in
+    /// a virtualized tree pay no schema/type-resolution cost. Subsequent calls are no-ops.
+    /// </summary>
+    public void EnsureFieldEditorsBuilt()
+    {
+        if (Interlocked.Exchange(ref this.fieldEditorsBuildRequested, 1) == 1)
+        {
+            return;
+        }
+
         Lifetime.Run(this.BuildFieldEditorsAsync);
+    }
+
+    /// <summary>
+    /// Issue #1177: registers a lazy builder that produces this card's field editors when the card
+    /// is first realized. The entity browser uses this to hand off its own resolver-based build
+    /// closure so the browser's tree rebuild does not have to await schema work per entity.
+    /// </summary>
+    public void SetLazyFieldEditorBuilder(
+        Func<CancellationToken, Task<IReadOnlyCollection<EntityFieldEditorViewModel>>> builder)
+    {
+        this.lazyFieldEditorBuilder = builder;
     }
 
     public EntityCardViewModel(
@@ -536,6 +579,17 @@ public sealed class EntityCardViewModel : ViewModelBase
     /// </summary>
     private async Task BuildFieldEditorsAsync(CancellationToken ct = default)
     {
+        // Issue #1177: prefer a caller-supplied lazy builder when present. This lets the entity
+        // browser hand its own FieldTypeResolver-based build closure to each card so realized cards
+        // populate their editors on demand without the browser having to await schema work per
+        // entity during rebuild.
+        if (this.lazyFieldEditorBuilder is not null)
+        {
+            var lazyBuilt = await this.lazyFieldEditorBuilder(ct).ConfigureAwait(true);
+            this.SetFieldEditors(lazyBuilt);
+            return;
+        }
+
         if (this.fieldEditorFactory is null
             || this.entity?.Data is not JsonElement entityData
             || entityData.ValueKind != JsonValueKind.Object)
@@ -713,7 +767,13 @@ public sealed class EntityCardViewModel : ViewModelBase
             {
                 this.rawJsonText = BuildRawJsonText(this.entity?.Data);
                 this.RaisePropertyChanged(nameof(this.RawJsonText));
-                Lifetime.Run(this.BuildFieldEditorsAsync);
+                // Issue #1177: only re-run the field-editor build if the card has previously been
+                // realized (i.e. its editors were built). Non-realized cards skip this to avoid
+                // waking up thousands of virtualized cards on every snapshot change.
+                if (Volatile.Read(ref this.fieldEditorsBuildRequested) == 1)
+                {
+                    Lifetime.Run(this.BuildFieldEditorsAsync);
+                }
             }
 
             if (this.cardViewName == "external" && this.entity is not null)

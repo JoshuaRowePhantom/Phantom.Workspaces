@@ -3015,7 +3015,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 Timestamps = [null],
             });
 
-        var entityBrowserTab = new EntityBrowserWorkspaceTabViewModel(this.EntityBroker, subscribedGet)
+        var entityBrowserTab = new EntityBrowserWorkspaceTabViewModel(
+            this.EntityBroker,
+            subscribedGet,
+            this.fieldEditorFactory)
         {
             Id = entityBrowserTabId,
             Title = "Entity Browser",

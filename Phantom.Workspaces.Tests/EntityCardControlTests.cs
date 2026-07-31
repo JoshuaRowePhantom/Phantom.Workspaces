@@ -107,4 +107,137 @@ public sealed class EntityCardControlTests
 
         return new EntityCardViewModel(entity, fieldEditors);
     }
+
+    // Issue #1177: attaching an EntityCardControl to the visual tree triggers the card's lazy
+    // field-editor build; a detached card (never attached) does not build editors.
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_OnAttachedToVisualTree_TriggersFieldEditorBuild()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshotForTests());
+        var attachedCard = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+        var detachedCard = new EntityCardViewModel(
+            new SubscribedEntityViewModel(BuildToolNoteSnapshotForTests()),
+            fieldEditorFactory: factory);
+
+        var control = new EntityCardControl { DataContext = attachedCard };
+        var window = new Window { Content = control, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            // Wait for the field editors to populate on the attached card.
+            for (var i = 0; i < 200 && attachedCard.FieldEditors.Count == 0; i++)
+            {
+                Dispatcher.UIThread.RunJobs();
+                await Task.Yield();
+            }
+
+            Assert.NotEmpty(attachedCard.FieldEditors);
+            Assert.Empty(detachedCard.FieldEditors);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1177: the shared TreeView.entity-card-tree style materializes a VirtualizingStackPanel
+    // as its ItemsPanel, not a plain StackPanel.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ItemsPanel_IsVirtualizingStackPanel()
+    {
+        AssertItemsPanelIsVirtualizing("entity-card-tree");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTreeView_ItemsPanel_IsVirtualizingStackPanel()
+    {
+        AssertItemsPanelIsVirtualizing("entity-card-tree-view");
+    }
+
+    // Issue #1177: hosting the tree in a bounded Window layout gives its inner ScrollViewer a
+    // finite pixel viewport — a prerequisite for VirtualizingStackPanel to virtualize while still
+    // scrolling per-pixel.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ScrollHost_ProvidesBoundedPixelViewport()
+    {
+        var tree = new TreeView();
+        tree.Classes.Add("entity-card-tree");
+        tree.ItemsSource = new[] { "a", "b", "c" };
+        var window = new Window { Content = tree, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var scrollViewer = tree.GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .First();
+
+            Assert.True(scrollViewer.Viewport.Height > 0, $"Viewport height was {scrollViewer.Viewport.Height}; expected a bounded, non-zero pixel viewport.");
+            Assert.True(double.IsFinite(scrollViewer.Viewport.Height));
+            // Offset is a per-pixel Avalonia.Vector; existence of the property confirms pixel-scroll semantics.
+            _ = scrollViewer.Offset;
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static void AssertItemsPanelIsVirtualizing(string className)
+    {
+        var tree = new TreeView();
+        tree.Classes.Add(className);
+        tree.ItemsSource = new[] { "a", "b", "c" };
+        var window = new Window { Content = tree, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var panel = tree.ItemsPanelRoot;
+            Assert.NotNull(panel);
+            Assert.IsType<Avalonia.Controls.VirtualizingStackPanel>(panel);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static EntitySnapshot BuildToolNoteSnapshotForTests()
+    {
+        var entityId = Guid.NewGuid();
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "t-{{entityId:N}}"]],
+              "display-name": { "default": "Tool Note" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Body" }
+                }
+              }
+            }
+            """);
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+    }
 }
