@@ -374,6 +374,13 @@
         <Setter Property="FontSize" Value="18" />
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
+    <Style Selector="Button.settings-gear.top-right">
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="8,4" />
+    </Style>
     <Style Selector="Border.pane-header">
         <Setter Property="Padding" Value="12,10" />
         <Setter Property="BorderThickness" Value="0,0,0,1" />

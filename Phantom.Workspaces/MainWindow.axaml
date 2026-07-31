@@ -61,9 +61,13 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <WrapPanel Grid.Column="2" Orientation="Horizontal">
-                    <Panel IsVisible="{Binding ConnectionStatus, Converter={x:Static ObjectConverters.IsNotNull}}">
-                        <Button Classes="settings-gear"
+                <StackPanel x:Name="TopRightBar"
+                            Grid.Column="2"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Panel VerticalAlignment="Stretch"
+                           IsVisible="{Binding ConnectionStatus, Converter={x:Static ObjectConverters.IsNotNull}}">
+                        <Button Classes="settings-gear top-right"
                                 Content="🌐"
                                 ToolTip.Tip="Network connections"
                                 Click="OnOpenConnectionStatusClicked" />
@@ -79,7 +83,7 @@
                                    ToolTip.Tip="{Binding ConnectionStatus.ProblemText}" />
                     </Panel>
 
-                    <Button Classes="settings-gear"
+                    <Button Classes="settings-gear top-right"
                             ToolTip.Tip="{Binding ScheduledToolsPause.ToolTip, FallbackValue=Scheduled tasks, TargetNullValue=Scheduled tasks}"
                             Click="OnOpenScheduledTasksClicked">
                         <ProgressBar Classes="glyph-indicator vibrating-alarm-clock"
@@ -88,9 +92,10 @@
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
                     </Button>
 
-                    <Panel IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <Panel VerticalAlignment="Stretch"
+                           IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <Button x:Name="RunningAgentBrainButton"
-                                Classes="settings-gear"
+                                Classes="settings-gear top-right"
                                 ToolTip.Tip="Running agents"
                                 Command="{Binding RunningAgentBrain.ToggleOpenCommand}">
                             <ProgressBar Classes="glyph-indicator pulsating-brain"
@@ -104,9 +109,10 @@
                         </Popup>
                     </Panel>
 
-                    <Panel IsVisible="{Binding UsageTracker.TopRightLabel, Converter={x:Static ObjectConverters.IsNotNull}}">
+                    <Panel VerticalAlignment="Stretch"
+                           IsVisible="{Binding UsageTracker.TopRightLabel, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <Button x:Name="UsageTrackerButton"
-                                Classes="settings-gear"
+                                Classes="settings-gear top-right"
                                 ToolTip.Tip="AI Usage"
                                 Command="{Binding UsageTracker.ToggleOpenCommand}">
                             <TextBlock Text="{Binding UsageTracker.TopRightLabel}"
@@ -120,9 +126,9 @@
                         </Popup>
                     </Panel>
 
-                    <Panel>
+                    <Panel VerticalAlignment="Stretch">
                         <Button x:Name="NotificationBellButton"
-                                Classes="settings-gear"
+                                Classes="settings-gear top-right"
                                 ToolTip.Tip="Notifications"
                                 Command="{Binding NotificationsViewModel.ToggleOpenCommand}">
                             <ProgressBar Classes="glyph-indicator swinging-bell"
@@ -145,11 +151,11 @@
                         </Popup>
                     </Panel>
 
-                    <Button Classes="settings-gear"
+                    <Button Classes="settings-gear top-right"
                             Content="⚙"
                             ToolTip.Tip="Settings"
                             Click="OnOpenSettingsClicked" />
-                </WrapPanel>
+                </StackPanel>
             </Grid>
         </Border>
 

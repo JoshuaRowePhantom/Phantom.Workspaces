@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
 using Avalonia.Headless;
@@ -62,6 +63,184 @@ public sealed class MainWindowIntegrationTests
 
         Assert.True(Avalonia.Application.Current!.Resources.TryGetValue("Theme.FontFamily", out var fontFamilyResource));
         Assert.IsType<FontFamily>(fontFamilyResource);
+    }
+
+    // Regression tests for issue #1162: the top-right button cluster (network status,
+    // scheduled tasks, running-agents brain, AI usage, notifications bell, settings gear)
+    // must share a single uniform, content-driven height (no hard-coded pixel constant).
+
+    private static List<Button> GetTopRightButtons(Window window) =>
+        window.GetVisualDescendants()
+            .OfType<Button>()
+            .Where(b => b.Classes.Contains("top-right") && b.IsEffectivelyVisible)
+            .ToList();
+
+    private static void ForceLayoutPass(Window window)
+    {
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
+        Dispatcher.UIThread.RunJobs();
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_TopRightButtons_AllShareSameRenderedHeight()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var buttons = GetTopRightButtons(window);
+            Assert.NotEmpty(buttons);
+
+            var referenceHeight = buttons[0].Bounds.Height;
+            Assert.True(referenceHeight > 0, "Top-right buttons rendered with zero height.");
+            foreach (var b in buttons)
+            {
+                Assert.True(
+                    Math.Abs(b.Bounds.Height - referenceHeight) < 0.5,
+                    $"Top-right button '{b.Name ?? b.Classes.ToString()}' has Bounds.Height={b.Bounds.Height}, " +
+                    $"expected {referenceHeight}. All top-right buttons must share the same rendered height.");
+            }
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_TopRightButtons_HeightMatchesTallestChildContent()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var buttons = GetTopRightButtons(window);
+            Assert.True(buttons.Count >= 2,
+                $"Expected at least two visible top-right buttons; got {buttons.Count}.");
+
+            var initialHeight = buttons[0].Bounds.Height;
+
+            // Artificially replace one button's content with a much taller element.
+            // A content-driven strip must grow so that every button matches the new tallest content.
+            const double TallContentHeight = 60d;
+            buttons[0].Content = new Border { Width = 20, Height = TallContentHeight };
+
+            ForceLayoutPass(window);
+
+            var updated = GetTopRightButtons(window);
+            var referenceHeight = updated[0].Bounds.Height;
+            Assert.True(
+                referenceHeight >= TallContentHeight,
+                $"Expected shared height to grow to at least {TallContentHeight} after injecting tall content; " +
+                $"got {referenceHeight}. The strip's height must be driven by the tallest child, not a fixed value.");
+            Assert.True(
+                referenceHeight > initialHeight,
+                $"Shared height did not grow: initial={initialHeight}, after tall content={referenceHeight}.");
+
+            foreach (var b in updated)
+            {
+                Assert.True(
+                    Math.Abs(b.Bounds.Height - referenceHeight) < 0.5,
+                    $"After injecting tall content, button '{b.Name ?? b.Classes.ToString()}' has Bounds.Height={b.Bounds.Height}, " +
+                    $"expected {referenceHeight}. All buttons must track the tallest child.");
+            }
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_TopRightButtons_NoExplicitHeightSetter()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var buttons = GetTopRightButtons(window);
+            Assert.NotEmpty(buttons);
+
+            foreach (var b in buttons)
+            {
+                // Height must remain unset (double.NaN) — a fixed Height would reintroduce a
+                // hard-coded pixel constant that #1162 explicitly prohibits.
+                Assert.True(
+                    double.IsNaN(b.Height),
+                    $"Top-right button '{b.Name ?? b.Classes.ToString()}' has explicit Height={b.Height}. " +
+                    "Height must be content-driven; do not pin it to a constant.");
+
+                // MinHeight must be 0 (or unset) — Button.settings-gear.top-right must override the
+                // Button.settings-gear MinHeight=34 floor, otherwise the strip cannot shrink when content shrinks.
+                Assert.True(
+                    b.MinHeight <= 0.001,
+                    $"Top-right button '{b.Name ?? b.Classes.ToString()}' has MinHeight={b.MinHeight}. " +
+                    "MinHeight must be 0 so the shared height is fully content-driven.");
+            }
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_TopRightButtons_ContentIsVerticallyCentered()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var buttons = GetTopRightButtons(window);
+            Assert.NotEmpty(buttons);
+
+            foreach (var b in buttons)
+            {
+                var contentPresenter = b.GetVisualDescendants()
+                    .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                    .FirstOrDefault(cp => cp.Name == "PART_ContentPresenter");
+                Assert.NotNull(contentPresenter);
+
+                var topLeftInButton = contentPresenter!.TranslatePoint(new Point(0, 0), b);
+                Assert.True(topLeftInButton.HasValue,
+                    $"Could not translate content presenter coordinates for button '{b.Name ?? b.Classes.ToString()}'.");
+
+                var buttonHeight = b.Bounds.Height;
+                var cpHeight = contentPresenter.Bounds.Height;
+                var topGap = topLeftInButton!.Value.Y;
+                var bottomGap = buttonHeight - (topLeftInButton.Value.Y + cpHeight);
+
+                Assert.True(
+                    Math.Abs(topGap - bottomGap) < 1.5,
+                    $"Content of button '{b.Name ?? b.Classes.ToString()}' is not vertically centered: " +
+                    $"topGap={topGap}, bottomGap={bottomGap}, buttonHeight={buttonHeight}, cpHeight={cpHeight}.");
+            }
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
     }
 
     [AvaloniaFact(Timeout = 15_000)]
