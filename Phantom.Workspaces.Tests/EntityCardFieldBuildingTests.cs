@@ -598,4 +598,79 @@ public sealed class EntityCardFieldBuildingTests
 
         Assert.Empty(fieldEditors);
     }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_NoteEntity_ContentFieldRendersMarkdownInline()
+    {
+        // Fix #1171 — the surviving FieldEditors channel still renders note content inline
+        // (regression guard for the FieldEditorFactory_RendersNoteContentInline behavior).
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "c0d1e2f3-7a8b-4c9d-9e0f-6a7b8c9d0e1f",
+              "entity-types": ["entity", "note"],
+              "names": [["views", "sessions", "notes", "agent-manifests"]],
+              "display-name": { "default": "Agent Manifests" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Agent Manifests\n\nBody text here." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "note");
+
+        var contentEditor = fieldEditors.Single(editor => editor.FieldName == "content");
+        var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentEditor);
+        var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
+        Assert.True(markdownEditor.IsInline);
+        Assert.True(markdownEditor.ShowInlineMarkdownReadMode);
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_ToolAndNoteEntityTypes_ContentContributedOnceByNoteView()
+    {
+        // Fix #1171 — multi-type composition yields a single content contribution, attributed to the
+        // note view (first-contributing type wins in BuildMultiTypeContributions). Guards against
+        // reintroducing a duplicate render channel.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(
+            [new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") })]);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Run VS Code Tunnel\n\nUsage." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "tool", "note" });
+
+        Assert.Single(fieldEditors, editor => editor.FieldName == "content");
+    }
 }

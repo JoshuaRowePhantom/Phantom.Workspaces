@@ -116,12 +116,6 @@
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list"
                               IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNull}}" />
-                <!-- Issue #1164: multi-typed entities (e.g. tool+note) also contribute display items
-                     such as the note's markdown body. Rendering DisplayItems here composes the note
-                     content with the tool chrome/field editors above rather than silently hiding it. -->
-                <ItemsControl ItemsSource="{Binding DisplayItems}"
-                              Classes="workspace-entity-display-items"
-                              IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNull}}" />
                 <ContentControl Content="{Binding ExternalCard}"
                                 IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNotNull}}" />
                 <TextBox Text="{Binding RawJsonText, Mode=TwoWay}"

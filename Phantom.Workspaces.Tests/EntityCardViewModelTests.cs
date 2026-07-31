@@ -377,8 +377,72 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
     }
 
     [AvaloniaFact]
-    public void EntityCardViewModel_MultiTyped_DisplayItemsContainNoteMarkdown()
+    public async Task EntityCardViewModel_NoteEntity_RendersContentMarkdownExactlyOnce()
     {
+        // Fix #1171 — the single surviving FieldEditors channel must render note content markdown
+        // exactly once. Prior to the fix, DisplayItems also produced the same markdown, leading to
+        // a duplicate render.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(new[]
+        {
+            new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") }),
+        });
+        var fieldEditorFactory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "56565656-5656-5656-5656-565656565656",
+              "entity-types": ["entity", "note"],
+              "names": [["documentation", "agent-manifests"]],
+              "title": { "default": "Agent Manifests" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Agent Manifests\n\nThis is the body." }
+                }
+              }
+            }
+            """);
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId("56565656-5656-5656-5656-565656565656"),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var entity = new SubscribedEntityViewModel(snapshot);
+        var card = new EntityCardViewModel(entity, fieldEditorFactory: fieldEditorFactory);
+
+        await WaitForContentFieldEditorAsync(card);
+
+        Assert.Single(card.FieldEditors, fe => fe.FieldName == "content");
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_MultiTypedToolAndNote_RendersNoteContentExactlyOnce()
+    {
+        // Fix #1171 — regression guard for #1164. A tool+note entity must still render note markdown
+        // (from note-entity-type-view.json's inline "content" field via the FieldEditors channel),
+        // but exactly once — no duplicate DisplayItems channel.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(new[]
+        {
+            new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") }),
+        });
+        var fieldEditorFactory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
         using var document = JsonDocument.Parse(
             """
             {
@@ -403,9 +467,61 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
             Relationships = Array.Empty<EntitySnapshot>(),
         };
         var entity = new SubscribedEntityViewModel(snapshot);
-        var card = new EntityCardViewModel(entity);
+        var card = new EntityCardViewModel(entity, fieldEditorFactory: fieldEditorFactory);
 
-        var item = Assert.Single(card.DisplayItems);
-        Assert.Contains("# Run VS Code Tunnel", item.Text, StringComparison.Ordinal);
+        await WaitForContentFieldEditorAsync(card);
+
+        Assert.Single(card.FieldEditors, fe => fe.FieldName == "content");
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_DoesNotExposeDisplayItemsChannel()
+    {
+        // Fix #1171 — the redundant DisplayItems channel was removed. FieldEditors is now the sole
+        // display/editing channel bound by EntityCardControl.
+        Assert.Null(typeof(EntityCardViewModel).GetProperty("DisplayItems"));
+    }
+
+    [AvaloniaFact]
+    public void SubscribedEntityViewModel_DoesNotExposeDisplayItemsChannel()
+    {
+        // Fix #1171 — note markdown reaches the card only through FieldEditorFactory.
+        Assert.Null(typeof(SubscribedEntityViewModel).GetProperty("DisplayItems"));
+    }
+
+    private static async Task WaitForContentFieldEditorAsync(EntityCardViewModel card)
+    {
+        var built = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? _, PropertyChangedEventArgs e)
+        {
+            if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.FieldEditors), StringComparison.Ordinal))
+            {
+                built.TrySetResult(true);
+            }
+        }
+        card.PropertyChanged += OnChanged;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while (!card.FieldEditors.Any(fe => fe.FieldName == "content"))
+            {
+                var completed = await Task.WhenAny(
+                    built.Task,
+                    Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }).GetTask());
+                Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                if (completed == built.Task && built.Task.IsCompleted)
+                {
+                    built = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+                if (timeout.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            card.PropertyChanged -= OnChanged;
+        }
     }
 }

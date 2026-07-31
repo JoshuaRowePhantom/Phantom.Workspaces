@@ -141,10 +141,6 @@
         </Grid>
     </DataTemplate>
 
-    <DataTemplate x:DataType="vm:EntityDisplayItemViewModel">
-        <controls:WorkspaceMarkdownView Markdown="{Binding Text}" Classes="workspace-markdown-viewer" />
-    </DataTemplate>
-
     <DataTemplate DataType="vm:EntityReferenceFieldEditorViewModel">
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*"

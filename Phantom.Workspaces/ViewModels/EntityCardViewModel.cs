@@ -33,7 +33,6 @@ public sealed class EntityCardViewModel : ViewModelBase
     private readonly string displayName;
     private readonly string entityType;
     private readonly JsonValidationViewModel validation;
-    private readonly List<EntityDisplayItemViewModel> displayItems = [];
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
     private ExternalEntityCardViewModel? externalCard;
     private string rawJsonText;
@@ -66,7 +65,6 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.Badges = new BadgesViewModel(new BadgesModel());
         this.StatusBadges = new StatusBadgesViewModel(new StatusBadgesModel());
         this.SetFieldEditorEditMode(false);
-        this.RefreshDisplayItems();
         entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.ToggleEditModeCommand = new RelayCommand(
             _ => this.EnterEditMode(),
@@ -123,8 +121,6 @@ public sealed class EntityCardViewModel : ViewModelBase
     public string CardViewName => this.cardViewName;
 
     public ExternalEntityCardViewModel? ExternalCard => this.externalCard;
-
-    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.fieldEditors;
 
@@ -657,15 +653,6 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.SaveEditModeCommand.RaiseCanExecuteChanged();
     }
 
-    private void RefreshDisplayItems()
-    {
-        this.displayItems.Clear();
-        if (this.entity?.Snapshot.Data is JsonElement)
-        {
-            this.displayItems.AddRange(this.entity.DisplayItems);
-        }
-    }
-
     private static string BuildRawJsonText(
         JsonElement? data)
     {
@@ -722,8 +709,6 @@ public sealed class EntityCardViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
             this.RaisePropertyChanged(nameof(this.EntityTypeLabels));
-            this.RefreshDisplayItems();
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
             if (!this.IsEditMode)
             {
                 this.rawJsonText = BuildRawJsonText(this.entity?.Data);

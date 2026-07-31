@@ -59,8 +59,6 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public string EntityType => this.Card.EntityType;
 
-    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.Card.DisplayItems;
-
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.Card.FieldEditors;
 
     public bool IsEditMode => this.Card.IsEditMode;
@@ -182,11 +180,6 @@ public sealed class EntityListItemViewModel : ViewModelBase
         if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.FieldEditors), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.FieldEditors));
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
-        }
-        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.DisplayItems), StringComparison.Ordinal))
-        {
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
         }
         else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.DisplayName), StringComparison.Ordinal))
         {

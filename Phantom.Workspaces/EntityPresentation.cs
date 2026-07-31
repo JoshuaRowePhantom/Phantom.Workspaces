@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces;
 
@@ -106,24 +105,6 @@ public static class EntityPresentation
             .ToArray();
     }
 
-    public static IReadOnlyCollection<EntityDisplayItemViewModel> GetDisplayItems(
-        EntitySnapshot snapshot)
-    {
-        var items = new List<EntityDisplayItemViewModel>();
-        if (snapshot.Data is not JsonElement data)
-        {
-            return items;
-        }
-
-        var markdown = GetMarkdownText(data);
-        if (!string.IsNullOrWhiteSpace(markdown))
-        {
-            items.Add(new EntityDisplayItemViewModel(markdown));
-        }
-
-        return items;
-    }
-
     private static string? ReadLocalString(
         JsonElement element,
         string propertyName)
@@ -189,34 +170,6 @@ public static class EntityPresentation
             return string.Join("/", parts!);
         }
 
-        return null;
-    }
-
-    private static string? GetMarkdownText(
-        JsonElement entityData)
-    {
-        if (entityData.TryGetProperty("markdown", out var markdown)
-            && markdown.ValueKind == JsonValueKind.String)
-        {
-            return markdown.GetString();
-        }
-
-        if (!entityData.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.Object
-            || !content.TryGetProperty("default", out var defaultContent)
-            || defaultContent.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        if (defaultContent.TryGetProperty("content", out var inlineContent)
-            && inlineContent.ValueKind == JsonValueKind.Object
-            && inlineContent.TryGetProperty("text", out var text)
-            && text.ValueKind == JsonValueKind.String)
-        {
-            return text.GetString();
-        }
-        
         return null;
     }
 }

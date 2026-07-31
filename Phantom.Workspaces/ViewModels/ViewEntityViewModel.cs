@@ -11,7 +11,6 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class ViewEntityViewModel : ViewModelBase
 {
-    private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
     private readonly EntityListNodeViewModel entityCardNode;
     private bool hasTraversedChildren;
     private bool isExpanded = true;
@@ -47,7 +46,6 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.ToggleExpandCommand = new RelayCommand(
             execute: _ => this.IsExpanded = !this.IsExpanded,
             canExecute: _ => this.HasTraversedChildren);
-        this.RefreshCollections();
     }
 
     public async Task InitializeAsync()
@@ -108,8 +106,6 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public StatusBadgesViewModel StatusBadges { get; }
 
-    public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
-
     public IReadOnlyList<EntityShortcutViewModel> Shortcuts => this.entityCardNode.Card.Shortcuts;
 
     public ObservableCollection<ViewEntityViewModel> Children { get; } = [];
@@ -161,25 +157,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
-            this.RefreshCollections();
+            this.RaisePropertyChanged(nameof(this.HasShortcuts));
         }
-    }
-
-    private void RefreshCollections()
-    {
-        this.displayItems.Clear();
-
-        if (this.Entity.Snapshot.Data is not JsonElement)
-        {
-            return;
-        }
-
-        foreach (var displayItem in this.Entity.DisplayItems)
-        {
-            this.displayItems.Add(displayItem);
-        }
-
-        this.RaisePropertyChanged(nameof(this.HasShortcuts));
     }
 
     private static IReadOnlyList<string> ResolveNameComponents(
