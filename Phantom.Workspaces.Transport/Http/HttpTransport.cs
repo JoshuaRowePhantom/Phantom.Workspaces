@@ -183,7 +183,15 @@ public sealed class HttpTransport : ITransport
         var buffer = new byte[64 * 1024];
         try
         {
-            while (this.socket.State is WebSocketState.Open or WebSocketState.CloseSent)
+            // Loop until the socket returns a Close frame or ReceiveAsync throws
+            // (which happens when the socket is disposed / aborted). Do NOT gate
+            // on this.socket.State: DisposeAsync calls socket.Dispose() to force
+            // this loop to unblock, but any frames already buffered on the
+            // transport (e.g. a ChannelMessage the peer sent right before
+            // TransportClose) must still be dispatched to their channels before
+            // we exit. A state-based check races with dispose and drops those
+            // buffered frames, which is the #1183 dispose race.
+            while (true)
             {
                 using var message = new MemoryStream();
                 WebSocketReceiveResult result;

@@ -107,6 +107,45 @@ public class HttpTransportTests
         await Assert.ThrowsAsync<ObjectDisposedException>(async () => await channel.Reader.Completion.WaitAsync(TestTimeout));
     }
 
+    [Fact]
+    public async Task HttpTransport_Dispose_DrainsAllBufferedInboundFramesBeforeFaulting()
+    {
+        // Regression for #1183: DisposeAsync must dispatch every frame that was
+        // already buffered on the socket before it faults channel readers.
+        // Previously the read loop's `while (socket.State is Open or CloseSent)`
+        // check raced with `socket.Dispose()` (state -> Closed) inside
+        // DisposeAsync, causing already-received ChannelMessage frames to be
+        // dropped and the reader to observe ObjectDisposedException instead.
+        using var socket = new TestWebSocket();
+        var transport = new HttpTransport(socket, TimeSpan.FromHours(1));
+
+        var channel = await transport.ConnectToMessageChannelAsync(Json("{}"));
+        var openFrame = await socket.ReadSentFrameAsync();
+
+        const int bufferedMessageCount = 25;
+        for (var i = 0; i < bufferedMessageCount; i++)
+        {
+            await socket.ReceiveTextAsync(new TransportFrame
+            {
+                Type = TransportFrame.Types.ChannelMessage,
+                ChannelId = openFrame.ChannelId,
+                Payload = Json($"{{\"index\":{i}}}"),
+            });
+        }
+
+        // Dispose immediately without giving the read loop any opportunity to
+        // drain — this is exactly the race that #1183 describes.
+        await transport.DisposeAsync();
+
+        for (var i = 0; i < bufferedMessageCount; i++)
+        {
+            var message = await channel.Reader.ReadAsync(TestCancellationToken());
+            Assert.Equal(i, message.GetProperty("index").GetInt32());
+        }
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () => await channel.Reader.Completion.WaitAsync(TestTimeout));
+    }
+
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
 
     private static CancellationToken TestCancellationToken()
