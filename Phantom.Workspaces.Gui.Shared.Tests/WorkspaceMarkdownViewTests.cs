@@ -81,6 +81,107 @@ public sealed class WorkspaceMarkdownViewTests
         Assert.True(view.Renderer.SelectionEnabled);
     }
 
+    // --- Issue #1173: native markdown code styling must match the HTML chat view. ---
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public void WorkspaceMarkdownView_InlineCode_UsesMonospaceCodeFontFamily()
+    {
+        var view = Render("This has an inline `code` span.");
+
+        var codeInline = Flatten(view).OfType<CCode>().FirstOrDefault();
+        Assert.NotNull(codeInline);
+
+        var expected = ExpectedCodeFontFamily(view);
+        Assert.Equal(expected, codeInline!.FontFamily);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public void WorkspaceMarkdownView_InlineCode_UsesLegibleForegroundNotPurple()
+    {
+        var view = Render("Inline `x` here.");
+
+        var codeInline = Flatten(view).OfType<CCode>().FirstOrDefault();
+        Assert.NotNull(codeInline);
+
+        var expected = ExpectedCodeForeground(view);
+        Assert.Equal(BrushColor(expected), BrushColor(codeInline!.Foreground));
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public void WorkspaceMarkdownView_FencedCodeBlock_UsesMonospaceCodeFontFamily()
+    {
+        // Plain (no language) fenced block renders as a TextBlock.CodeBlock, not the AvaloniaEdit
+        // syntax-highlight variant — so the FontFamily setter on TextBlock.CodeBlock applies.
+        var view = Render("```\nplain code\n```\n");
+
+        var textBlock = view.GetVisualDescendants()
+            .OfType<TextBlock>()
+            .FirstOrDefault(t => t.Classes.Contains("CodeBlock"));
+        Assert.NotNull(textBlock);
+
+        var expected = ExpectedCodeFontFamily(view);
+        Assert.Equal(expected, textBlock!.FontFamily);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public void WorkspaceMarkdownView_FencedCodeBlock_UsesMatchingBackgroundBrush()
+    {
+        var view = Render("```\nplain code\n```\n");
+
+        var border = view.GetVisualDescendants()
+            .OfType<Border>()
+            .FirstOrDefault(b => b.Classes.Contains("CodeBlock"));
+        Assert.NotNull(border);
+
+        var expected = ExpectedCodeBlockBackground(view);
+        Assert.Equal(BrushColor(expected), BrushColor(border!.Background));
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public void WorkspaceMarkdownView_CodeStyleResources_MatchHtmlChatOutputTokens()
+    {
+        // View lives inside a window that hosts SharedStyles.axaml. Resources resolve on the tree.
+        var view = Render("test");
+
+        Assert.True(view.TryFindResource("Markdown.CodeFontFamily", null, out var fontFamilyValue));
+        var fontFamily = Assert.IsType<FontFamily>(fontFamilyValue);
+
+        // chat-font-family in chat-output-shell.html: "Cascadia Code", Consolas, "Courier New", monospace.
+        // Assert every entry appears in order; FontFamily.ToString() emits the full family list.
+        var source = fontFamily.ToString();
+        Assert.Contains("Cascadia Code", source);
+        Assert.Contains("Consolas", source);
+        Assert.Contains("Courier New", source);
+        Assert.Contains("monospace", source);
+
+        Assert.True(view.TryFindResource("Markdown.CodeForeground", null, out var foregroundValue));
+        Assert.IsType<SolidColorBrush>(foregroundValue);
+
+        Assert.True(view.TryFindResource("Markdown.CodeBlockBackground", null, out var backgroundValue));
+        Assert.IsType<SolidColorBrush>(backgroundValue);
+    }
+
+    private static FontFamily ExpectedCodeFontFamily(WorkspaceMarkdownView view)
+    {
+        Assert.True(view.TryFindResource("Markdown.CodeFontFamily", null, out var value));
+        return Assert.IsType<FontFamily>(value);
+    }
+
+    private static IBrush ExpectedCodeForeground(WorkspaceMarkdownView view)
+    {
+        Assert.True(view.TryFindResource("Markdown.CodeForeground", null, out var value));
+        return Assert.IsAssignableFrom<IBrush>(value);
+    }
+
+    private static IBrush ExpectedCodeBlockBackground(WorkspaceMarkdownView view)
+    {
+        Assert.True(view.TryFindResource("Markdown.CodeBlockBackground", null, out var value));
+        return Assert.IsAssignableFrom<IBrush>(value);
+    }
+
+    private static Color? BrushColor(IBrush? brush) =>
+        brush is ISolidColorBrush s ? s.Color : (Color?)null;
+
     private static IEnumerable<CInline> Flatten(WorkspaceMarkdownView view)
         => view.GetVisualDescendants().OfType<CTextBlock>().SelectMany(b => FlattenInlines(b.Content));
 
@@ -108,9 +209,10 @@ public sealed class WorkspaceMarkdownViewTests
     {
         var view = new WorkspaceMarkdownView { Markdown = markdown };
         var window = new Window { Width = 600, Height = 400, Content = view };
-        window.Styles.Add(Load("avares://Markdown.Avalonia/StyleCollections/MarkdownStyleFluentTheme.axaml"));
-        window.Styles.Add(Load("avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml"));
-        window.Styles.Add(Load("avares://Markdown.Avalonia.SyntaxHigh/StyleCollections/AppendixOfFluentTheme.axaml"));
+        // Load the app's SharedStyles.axaml so the issue #1173 code-styling overrides and
+        // the Markdown.CodeFontFamily / Markdown.CodeForeground / Markdown.CodeBlockBackground
+        // resources are present, not just the raw upstream Markdown.Avalonia Fluent theme.
+        window.Styles.Add(Load("avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml"));
         window.Show();
         Dispatcher.UIThread.RunJobs();
         return view;

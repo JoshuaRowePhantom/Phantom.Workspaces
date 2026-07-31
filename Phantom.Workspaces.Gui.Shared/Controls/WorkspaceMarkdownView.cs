@@ -1,5 +1,7 @@
+using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Markup.Xaml.Styling;
 using Markdown.Avalonia;
 using Markdown.Avalonia.SyntaxHigh;
 
@@ -22,6 +24,10 @@ public sealed class WorkspaceMarkdownView : Decorator
     public static readonly StyledProperty<string?> MarkdownProperty =
         AvaloniaProperty.Register<WorkspaceMarkdownView, string?>(nameof(Markdown));
 
+    private static readonly Uri s_baseUri = new("avares://Phantom.Workspaces.Gui.Shared/");
+    private static readonly Uri s_codeStylesUri =
+        new("avares://Phantom.Workspaces.Gui.Shared/Styles/MarkdownCodeStyles.axaml");
+
     private readonly MarkdownScrollViewer _viewer;
 
     public WorkspaceMarkdownView()
@@ -31,6 +37,11 @@ public sealed class WorkspaceMarkdownView : Decorator
             SelectionEnabled = true,
         };
         _viewer.Plugins.Plugins.Add(new SyntaxHighlight());
+        // Issue #1173: Markdown.Avalonia installs its Fluent theme into the viewer's local Styles
+        // collection at construction time (see MarkdownScrollViewer.MarkdownStyle). External
+        // ancestor styles cannot outrank those local setters, so we attach our code-styling
+        // overrides to the same local Styles collection to guarantee they win.
+        _viewer.Styles.Add(new StyleInclude(s_baseUri) { Source = s_codeStylesUri });
         Child = _viewer;
     }
 

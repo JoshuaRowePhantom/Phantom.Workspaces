@@ -9,7 +9,18 @@
     <StyleInclude Source="avares://Markdown.Avalonia/StyleCollections/MarkdownStyleFluentTheme.axaml" />
     <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
     <StyleInclude Source="avares://Markdown.Avalonia.SyntaxHigh/StyleCollections/AppendixOfFluentTheme.axaml" />
+
     <Styles.Resources>
+        <!-- WorkspaceMarkdownView code styling resources (issue #1173). Values mirror the WebView
+             chat-output-shell.html tokens (chat-font-family, chat-foreground, chat-tool-body-background).
+             Brushes are aliased to Fluent-theme color keys so they swap with light/dark theming just
+             like the HTML view's .light class swap. The Style overrides that consume these keys live
+             in MarkdownCodeStyles.axaml, attached directly to MarkdownScrollViewer.Styles so they
+             outrank the Fluent theme's own code selectors. -->
+        <FontFamily x:Key="Markdown.CodeFontFamily">Cascadia Code,Consolas,Courier New,monospace</FontFamily>
+        <SolidColorBrush x:Key="Markdown.CodeForeground" Color="{DynamicResource SystemBaseHighColor}" />
+        <SolidColorBrush x:Key="Markdown.CodeBlockBackground" Color="{DynamicResource SystemChromeMediumLowColor}" />
+
         <!-- Default theme fallbacks for apps that do not inject profile resources. -->
         <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
         <x:Double x:Key="Theme.FontSize.Base">13</x:Double>
