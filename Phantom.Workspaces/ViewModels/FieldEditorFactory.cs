@@ -44,50 +44,77 @@ public sealed class FieldEditorFactory
         string? entityTypeName = null,
         bool expandAll = false)
     {
-        // Check if there's an entity-type-view that specifies which fields to show
-        // Priority: view-specific > catalog > all fields. When expandAll is set, always use all
-        // fields (the entity-browser rendering) rather than the curated view.
-        EntityTypeViewDefinition? entityTypeView = null;
-        if (!expandAll && entityTypeName is not null)
-        {
-            // Check view-specific entity-type-views first
-            if (this.viewSpecificEntityTypeViews?.TryGetValue(entityTypeName, out entityTypeView) != true)
-            {
-                // Fall back to catalog
-                entityTypeView = this.entityTypeViewCatalog.GetEntityTypeView(entityTypeName);
-            }
-        }
+        var typeNames = entityTypeName is null
+            ? Array.Empty<string>()
+            : new[] { entityTypeName };
+        return await this.BuildFieldEditorsAsync(entityData, typeNames, expandAll).ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Composes field editors across all of the entity's non-abstract entity types (issue #1164).
+    /// Each type's <c>entity-type-view</c> contributes its <c>fields</c> array; duplicate field paths
+    /// are collapsed to the first-contributing type. The merged list is ordered by
+    /// <see cref="FieldOrdering.ComputeKey"/> using the contributing type's <c>entity-display-order</c>,
+    /// so a tool+note entity renders tool-contributed fields (<c>entity-display-order: 260</c>) before
+    /// note-contributed fields (no <c>entity-display-order</c>, defaults last).
+    /// </summary>
+    public async Task<IReadOnlyCollection<EntityFieldEditorViewModel>> BuildFieldEditorsAsync(
+        JsonElement entityData,
+        IReadOnlyList<string> entityTypeNames,
+        bool expandAll = false)
+    {
         IReadOnlyList<IReadOnlyList<string>> fieldPaths;
         IReadOnlyDictionary<string, string?>? displayFormats = null;
-        
-        if (entityTypeView?.Fields is { } viewFields)
+        // Per-field contributing type (used for cross-type ordering).
+        Dictionary<string, string>? contributingTypeByPath = null;
+        // Per-field within-view index (used as fallback relative order so the entity-type-view's
+        // fields array order is preserved as the intra-type priority).
+        Dictionary<string, int>? relativeIndexByPath = null;
+
+        if (expandAll)
         {
-            // Use fields specified in entity-type-view. A present-but-empty list means show no fields
-            // (the display name alone is enough); a null Fields means fall back to all schema fields.
-            fieldPaths = viewFields.Select(f => f.FieldPath).ToArray();
-            displayFormats = viewFields.ToDictionary(
-                f => string.Join(".", f.FieldPath),
-                f => f.DisplayFormat,
-                StringComparer.Ordinal);
-        }
-        else if (expandAll || entityTypeView is not null)
-        {
-            // Show all schema fields when: (a) expandAll is set (entity-browser rendering), or
-            // (b) a view was found but omits the fields property (explicit opt-in to show all fields).
+            // Entity-browser rendering: enumerate all schema fields, ignore views.
             var fieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
                 entityData,
                 Array.Empty<string>(),
                 entityData).ConfigureAwait(false);
             fieldPaths = fieldNames.Select(name => (IReadOnlyList<string>)[name]).ToArray();
         }
-        else
+        else if (entityTypeNames.Count == 0)
         {
-            // No entity-type-view registered for this entity type — default to empty (show no fields).
             fieldPaths = Array.Empty<IReadOnlyList<string>>();
         }
+        else if (entityTypeNames.Count == 1)
+        {
+            // Preserve the historical single-type behavior for callers that pass exactly one type.
+            var singleResult = this.BuildSingleTypeContributions(entityTypeNames[0]);
+            if (singleResult is { } single)
+            {
+                (fieldPaths, displayFormats, contributingTypeByPath, relativeIndexByPath) = single;
+            }
+            else
+            {
+                // View was registered but declared no `fields` array — fall back to all schema fields.
+                var fieldNames = await this.fieldTypeResolver.EnumerateObjectFieldNamesAsync(
+                    entityData,
+                    Array.Empty<string>(),
+                    entityData).ConfigureAwait(false);
+                fieldPaths = fieldNames.Select(name => (IReadOnlyList<string>)[name]).ToArray();
+            }
+        }
+        else
+        {
+            // Multi-type composition: merge each type's entity-type-view.fields, dedup by path,
+            // preserving first-contributing type + intra-view index for ordering.
+            (fieldPaths, displayFormats, contributingTypeByPath, relativeIndexByPath) =
+                this.BuildMultiTypeContributions(entityTypeNames);
+        }
 
-        fieldPaths = await this.OrderFieldPathsAsync(entityData, fieldPaths).ConfigureAwait(false);
+        fieldPaths = await this.OrderFieldPathsAsync(
+            entityData,
+            fieldPaths,
+            contributingTypeByPath,
+            relativeIndexByPath).ConfigureAwait(false);
 
         var fieldEditorTasks = fieldPaths
             .Select(fieldPath => this.CreateFieldEditorAsync(entityData, fieldPath, displayFormats))
@@ -95,6 +122,94 @@ public sealed class FieldEditorFactory
 
         var fieldEditors = await Task.WhenAll(fieldEditorTasks).ConfigureAwait(false);
         return fieldEditors;
+    }
+
+    private (IReadOnlyList<IReadOnlyList<string>> FieldPaths,
+             IReadOnlyDictionary<string, string?>? DisplayFormats,
+             Dictionary<string, string>? ContributingTypeByPath,
+             Dictionary<string, int>? RelativeIndexByPath)?
+        BuildSingleTypeContributions(string entityTypeName)
+    {
+        EntityTypeViewDefinition? entityTypeView = null;
+        if (this.viewSpecificEntityTypeViews?.TryGetValue(entityTypeName, out entityTypeView) != true)
+        {
+            entityTypeView = this.entityTypeViewCatalog.GetEntityTypeView(entityTypeName);
+        }
+
+        if (entityTypeView?.Fields is { } viewFields)
+        {
+            var paths = viewFields.Select(f => f.FieldPath).ToArray();
+            var formats = viewFields.ToDictionary(
+                f => string.Join(".", f.FieldPath),
+                f => f.DisplayFormat,
+                StringComparer.Ordinal);
+            var contributingType = new Dictionary<string, string>(StringComparer.Ordinal);
+            var relativeIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (var i = 0; i < viewFields.Count; i++)
+            {
+                var key = string.Join(".", viewFields[i].FieldPath);
+                contributingType[key] = entityTypeName;
+                relativeIndex[key] = i;
+            }
+            return (paths, formats, contributingType, relativeIndex);
+        }
+
+        if (entityTypeView is not null)
+        {
+            // View exists but omits `fields` — signal to the caller to fall back to all schema fields.
+            return null;
+        }
+
+        return ((IReadOnlyList<IReadOnlyList<string>>)Array.Empty<IReadOnlyList<string>>(),
+                (IReadOnlyDictionary<string, string?>?)null,
+                (Dictionary<string, string>?)null,
+                (Dictionary<string, int>?)null);
+    }
+
+    private (IReadOnlyList<IReadOnlyList<string>> FieldPaths,
+             IReadOnlyDictionary<string, string?>? DisplayFormats,
+             Dictionary<string, string>? ContributingTypeByPath,
+             Dictionary<string, int>? RelativeIndexByPath)
+        BuildMultiTypeContributions(IReadOnlyList<string> entityTypeNames)
+    {
+        var seenPaths = new HashSet<string>(StringComparer.Ordinal);
+        var mergedPaths = new List<IReadOnlyList<string>>();
+        var mergedFormats = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var contributingType = new Dictionary<string, string>(StringComparer.Ordinal);
+        var relativeIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        foreach (var typeName in entityTypeNames)
+        {
+            EntityTypeViewDefinition? entityTypeView = null;
+            if (this.viewSpecificEntityTypeViews?.TryGetValue(typeName, out entityTypeView) != true)
+            {
+                entityTypeView = this.entityTypeViewCatalog.GetEntityTypeView(typeName);
+            }
+            if (entityTypeView?.Fields is not { } viewFields)
+            {
+                // Types without a registered entity-type-view (or without a `fields` array) simply
+                // contribute nothing to the merged field list — the diagnosis explicitly allows a
+                // tool+note entity to render tool chrome + note fields even when no tool view exists.
+                continue;
+            }
+
+            for (var i = 0; i < viewFields.Count; i++)
+            {
+                var field = viewFields[i];
+                var key = string.Join(".", field.FieldPath);
+                if (!seenPaths.Add(key))
+                {
+                    // First contributing type wins for duplicate paths.
+                    continue;
+                }
+                mergedPaths.Add(field.FieldPath);
+                mergedFormats[key] = field.DisplayFormat;
+                contributingType[key] = typeName;
+                relativeIndex[key] = i;
+            }
+        }
+
+        return (mergedPaths, mergedFormats, contributingType, relativeIndex);
     }
 
     /// <summary>
@@ -115,32 +230,90 @@ public sealed class FieldEditorFactory
 
     /// <summary>
     /// Orders the supplied field paths by the entity-editor field ordering: absolute-ordered fields
-    /// (schema <c>x-absolute-entity-display-order</c>) first, then the remaining fields by relative
-    /// order and name. The contributing entity type name is taken from the entity's primary type.
+    /// (schema <c>x-absolute-entity-display-order</c>) first, then the remaining fields grouped by
+    /// their contributing entity type's <c>entity-display-order</c>. When a per-field contributing
+    /// type is supplied (multi-type composition), that type drives the grouping so a tool-contributed
+    /// field renders in the tool group and a note-contributed field renders in the note group.
     /// </summary>
     private async Task<IReadOnlyList<IReadOnlyList<string>>> OrderFieldPathsAsync(
         JsonElement entityData,
-        IReadOnlyList<IReadOnlyList<string>> fieldPaths)
+        IReadOnlyList<IReadOnlyList<string>> fieldPaths,
+        IReadOnlyDictionary<string, string>? contributingTypeByPath = null,
+        IReadOnlyDictionary<string, int>? relativeIndexByPath = null)
     {
         var primaryEntityTypeName = ReadPrimaryEntityTypeName(entityData);
+        var typeDisplayOrders = new Dictionary<string, double?>(StringComparer.Ordinal);
         var keyed = new List<(IReadOnlyList<string> FieldPath, FieldOrderingKey Key)>(fieldPaths.Count);
+
         foreach (var fieldPath in fieldPaths)
         {
             var fieldName = fieldPath[^1];
+            var fieldPathKey = string.Join(".", fieldPath);
             var fieldValue = ResolveFieldValue(entityData, fieldPath);
             var resolvedType = await this.fieldTypeResolver
                 .ResolveFieldTypeAsync(entityData, fieldPath, fieldValue)
                 .ConfigureAwait(false);
+
+            var contributingType = contributingTypeByPath is not null
+                    && contributingTypeByPath.TryGetValue(fieldPathKey, out var typeName)
+                ? typeName
+                : primaryEntityTypeName;
+
+            if (!typeDisplayOrders.TryGetValue(contributingType, out var typeDisplayOrder))
+            {
+                typeDisplayOrder = await this.ResolveEntityTypeDisplayOrderAsync(contributingType)
+                    .ConfigureAwait(false);
+                typeDisplayOrders[contributingType] = typeDisplayOrder;
+            }
+
+            // If the field's schema does not carry an x-relative-entity-display-order, fall back to
+            // the field's index inside the contributing entity-type-view.fields array so that array
+            // order is preserved as the intra-type priority.
+            var relativeOrder = resolvedType.RelativeEntityDisplayOrder;
+            if (relativeOrder == 0
+                && relativeIndexByPath is not null
+                && relativeIndexByPath.TryGetValue(fieldPathKey, out var indexInView))
+            {
+                relativeOrder = indexInView;
+            }
+
             var key = FieldOrdering.ComputeKey(
                 string.Join(".", fieldPath),
                 resolvedType.AbsoluteEntityDisplayOrder,
-                resolvedType.RelativeEntityDisplayOrder,
-                primaryEntityTypeName,
-                entityTypeDisplayOrder: null);
+                relativeOrder,
+                contributingType,
+                typeDisplayOrder);
             keyed.Add((fieldPath, key));
         }
 
         return keyed.OrderBy(static item => item.Key).Select(static item => item.FieldPath).ToArray();
+    }
+
+    /// <summary>
+    /// Resolves the contributing entity type's <c>entity-display-order</c> by looking up the
+    /// entity-type schema entity by name. Returns <see langword="null"/> when no order is declared
+    /// (which sorts that group last per <see cref="FieldOrdering.ComputeKey"/>).
+    /// </summary>
+    private async Task<double?> ResolveEntityTypeDisplayOrderAsync(string entityTypeName)
+    {
+        if (string.IsNullOrEmpty(entityTypeName))
+        {
+            return null;
+        }
+
+        var schemaEntity = await this.schemaAccessor
+            .ResolveSchemaByReferenceAsync(entityTypeName)
+            .ConfigureAwait(false);
+        if (schemaEntity is not JsonElement schema
+            || schema.ValueKind != JsonValueKind.Object
+            || !schema.TryGetProperty("entity-display-order", out var order)
+            || order.ValueKind != JsonValueKind.Number
+            || !order.TryGetDouble(out var value))
+        {
+            return null;
+        }
+
+        return value;
     }
 
     private static string ReadPrimaryEntityTypeName(JsonElement entityData)

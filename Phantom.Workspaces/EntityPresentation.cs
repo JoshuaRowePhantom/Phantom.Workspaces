@@ -91,6 +91,10 @@ public static class EntityPresentation
             return Array.Empty<string>();
         }
 
+        // Preserve the entity-types declaration order so multi-typed cards compose their per-type
+        // presentations in the order the entity declares (issue #1164). Only the base abstract
+        // types "entity" and "abstract" are dropped; concrete types (e.g. "tool", "note") stay
+        // in the order they appear on the entity.
         return types.EnumerateArray()
             .Where(static type => type.ValueKind == JsonValueKind.String)
             .Select(static type => type.GetString())
@@ -99,7 +103,6 @@ public static class EntityPresentation
                 && !string.Equals(type, "abstract", StringComparison.Ordinal))
             .Cast<string>()
             .Distinct(StringComparer.Ordinal)
-            .OrderBy(static type => type, StringComparer.Ordinal)
             .ToArray();
     }
 

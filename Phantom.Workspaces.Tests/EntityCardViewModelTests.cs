@@ -1,6 +1,8 @@
 using System;
+using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Data;
@@ -283,5 +285,127 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
         Assert.Equal("hello world", card.DisplayNameBefore);
         Assert.Equal(string.Empty, card.DisplayNameMatch);
         Assert.Equal(string.Empty, card.DisplayNameAfter);
+    }
+
+    // ---- Issue #1164: multi-typed entity card composition ------------------------------------
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_MultiTyped_PassesAllNonAbstractTypesToFieldEditorFactory()
+    {
+        // BuildFieldEditorsAsync must consult every non-abstract entity type so the note view can
+        // contribute the `content` field on a tool+note entity.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(new[]
+        {
+            new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") }),
+        });
+        var fieldEditorFactory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Run VS Code Tunnel\n\nBody." }
+                }
+              }
+            }
+            """);
+
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId("e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8"),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var entity = new SubscribedEntityViewModel(snapshot);
+
+        var card = new EntityCardViewModel(
+            entity,
+            fieldEditorFactory: fieldEditorFactory);
+
+        // BuildFieldEditorsAsync is kicked off from the constructor as fire-and-forget work owned by
+        // the VM's ViewModelLifetime. Wait for the resulting PropertyChanged notification to fire so
+        // the assertion inspects the settled FieldEditors list rather than the empty initial state.
+        var built = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? _, PropertyChangedEventArgs e)
+        {
+            if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.FieldEditors), StringComparison.Ordinal))
+            {
+                built.TrySetResult(true);
+            }
+        }
+        card.PropertyChanged += OnChanged;
+        try
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while (!card.FieldEditors.Any(fe => fe.FieldName == "content"))
+            {
+                var completed = await Task.WhenAny(
+                    built.Task,
+                    Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }).GetTask());
+                Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+                if (completed == built.Task && built.Task.IsCompleted)
+                {
+                    // Rearm for possible follow-up notifications.
+                    built = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                }
+                if (timeout.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            card.PropertyChanged -= OnChanged;
+        }
+
+        Assert.Contains(card.FieldEditors, fe => fe.FieldName == "content");
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_MultiTyped_DisplayItemsContainNoteMarkdown()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Run VS Code Tunnel\n\nBody paragraph." }
+                }
+              }
+            }
+            """);
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId("e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8"),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var entity = new SubscribedEntityViewModel(snapshot);
+        var card = new EntityCardViewModel(entity);
+
+        var item = Assert.Single(card.DisplayItems);
+        Assert.Contains("# Run VS Code Tunnel", item.Text, StringComparison.Ordinal);
     }
 }

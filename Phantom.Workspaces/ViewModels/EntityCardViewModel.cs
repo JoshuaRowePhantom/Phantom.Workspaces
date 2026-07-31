@@ -314,6 +314,15 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public string EntityTypeAfter => SliceAfter(this.EntityType, this.EntityTypeMatchStart, this.EntityTypeMatchLength);
 
+    /// <summary>
+    /// Joined label of every non-abstract entity type the entity declares (issue #1164). A tool+note
+    /// entity shows both "tool" and "note" here rather than only the primary type. When no subscribed
+    /// entity is bound (the display-only constructor), falls back to the single supplied entity type.
+    /// </summary>
+    public string EntityTypeLabels => this.entity is null
+        ? this.entityType
+        : string.Join(", ", this.entity.NonAbstractEntityTypeNames);
+
     private static int FindMatchIndex(string? text, string? query)
     {
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(query))
@@ -538,8 +547,12 @@ public sealed class EntityCardViewModel : ViewModelBase
             return;
         }
 
+        // Issue #1164: pass every non-abstract entity type so the factory can compose per-type
+        // presentations (e.g. a tool+note entity contributes the note's content field via the note
+        // entity-type-view, not just the primary "tool" type).
+        var entityTypeNames = this.entity.NonAbstractEntityTypeNames;
         var built = await this.fieldEditorFactory
-            .BuildFieldEditorsAsync(entityData, this.entity.EntityType)
+            .BuildFieldEditorsAsync(entityData, entityTypeNames)
             .ConfigureAwait(true);
 
         this.SetFieldEditors(built);
@@ -700,6 +713,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
+            this.RaisePropertyChanged(nameof(this.EntityTypeLabels));
             return;
         }
 
@@ -707,6 +721,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
+            this.RaisePropertyChanged(nameof(this.EntityTypeLabels));
             this.RefreshDisplayItems();
             this.RaisePropertyChanged(nameof(this.DisplayItems));
             if (!this.IsEditMode)

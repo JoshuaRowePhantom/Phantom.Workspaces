@@ -108,6 +108,24 @@ public sealed class EntityPresentationTests
         Assert.Empty(EntityPresentation.GetDisplayItems(snapshot));
     }
 
+    [AvaloniaFact]
+    public void EntityPresentation_MultipleNonAbstractTypes_ReturnsAllOrdered()
+    {
+        // Issue #1164: composition depends on iterating every non-abstract type in declaration
+        // order, so a card can contribute per-type presentations for tool THEN note.
+        var snapshot = CreateSnapshot(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" }
+            }
+            """);
+
+        Assert.Equal(new[] { "tool", "note" }, EntityPresentation.GetNonAbstractEntityTypeNames(snapshot));
+    }
+
     private static EntitySnapshot CreateSnapshot(
         string json)
     {
