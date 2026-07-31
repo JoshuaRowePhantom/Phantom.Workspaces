@@ -194,6 +194,170 @@ public sealed class MainWindowDockTemplateTests
         Assert.Contains(toolB, proportional.VisibleDockables);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindowDockControl_TopLevelDockControl_HasProportionalDockSplitterTemplate()
+    {
+        // #1130 (reopened): TopLevelDockControl.DataTemplates must contain a template whose
+        // Match(new ProportionalDockSplitter()) is true, otherwise a runtime split renders
+        // the raw type name Dock.Model.Mvvm.Controls.ProportionalDockSplitter.
+        var topLevelDockControl = GetTopLevelDockControl();
+
+        var splitter = new ProportionalDockSplitter();
+        var matching = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(splitter));
+
+        Assert.NotNull(matching);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindowDockControl_TopLevelDockControl_HasDocumentDockTemplate()
+    {
+        // #1130 (reopened): TopLevelDockControl.DataTemplates must contain a template whose
+        // Match(new DocumentDock()) is true. The typed subclasses WorkspaceContentDock /
+        // WorkspacesPaneDock do not cover the plain base DocumentDock produced by a
+        // runtime split via CreateDocumentDock().
+        var topLevelDockControl = GetTopLevelDockControl();
+
+        var doc = new DocumentDock();
+        var matching = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(doc));
+
+        Assert.NotNull(matching);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspacePaneDockControl_InnerDockControl_HasProportionalDockSplitterTemplate()
+    {
+        // #1130 (reopened): inner workspace-pane DockControl has its own scoped,
+        // non-inheriting template set and must also carry a splitter template.
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+
+        var splitter = new ProportionalDockSplitter();
+        var matching = innerDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(splitter));
+
+        Assert.NotNull(matching);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspacePaneDockControl_InnerDockControl_HasDocumentDockTemplate()
+    {
+        // #1130 (reopened): inner workspace-pane DockControl must also resolve the
+        // base DocumentDock.
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+
+        var doc = new DocumentDock();
+        var matching = innerDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(doc));
+
+        Assert.NotNull(matching);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_ProportionalDockSplitter_ResolvesProportionalStackPanelSplitter()
+    {
+        // #1130 (reopened): the matched template builds the ProportionalStackPanelSplitter
+        // primitive that participates correctly in ProportionalDockControl's layout.
+        var topLevelDockControl = GetTopLevelDockControl();
+
+        var splitter = new ProportionalDockSplitter();
+        var matching = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .First(t => t.Match(splitter));
+
+        var built = matching.Build(splitter);
+        Assert.IsType<global::Dock.Controls.ProportionalStackPanel.ProportionalStackPanelSplitter>(built);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_DocumentDock_ResolvesDocumentDockControl()
+    {
+        // #1130 (reopened): the matched template builds a real DocumentDockControl
+        // (not raw text) for a plain DocumentDock instance.
+        var topLevelDockControl = GetTopLevelDockControl();
+
+        var doc = new DocumentDock();
+        var matching = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .First(t => t.Match(doc));
+
+        var built = matching.Build(doc);
+        Assert.IsType<DocumentDockControl>(built);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SplitDock_WhenCreated_SplitterDoesNotRenderRawTypeName()
+    {
+        // #1130 (reopened): factory.CreateProportionalDockSplitter() must not render
+        // its raw type name Dock.Model.Mvvm.Controls.ProportionalDockSplitter.
+        var factory = new global::Dock.Model.Mvvm.Factory();
+        var splitter = factory.CreateProportionalDockSplitter();
+
+        var topLevelDockControl = GetTopLevelDockControl();
+        var matching = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(splitter));
+
+        Assert.NotNull(matching);
+        var built = matching!.Build(splitter);
+        Assert.IsNotType<TextBlock>(built);
+        Assert.NotEqual(typeof(ProportionalDockSplitter).FullName, built?.GetType().FullName);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SplitDock_WhenCreated_DocumentDockDoesNotRenderRawTypeName()
+    {
+        // #1130 (reopened): factory.CreateDocumentDock() (plain
+        // Dock.Model.Mvvm.Controls.DocumentDock) must not render its raw type name.
+        var factory = new global::Dock.Model.Mvvm.Factory();
+        var doc = factory.CreateDocumentDock();
+
+        var topLevelDockControl = GetTopLevelDockControl();
+        var matching = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(doc));
+
+        Assert.NotNull(matching);
+        var built = matching!.Build(doc);
+        Assert.IsNotType<TextBlock>(built);
+        Assert.NotEqual(typeof(DocumentDock).FullName, built?.GetType().FullName);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void NewHorizontalDock_WhenSplitPopulated_AllChildrenRenderAsControls()
+    {
+        // #1130 (reopened): given a ProportionalDock populated with
+        // [DocumentDock, ProportionalDockSplitter, DocumentDock] (matching the shape
+        // Dock produces for a "New Horizontal Dock" split), the top-level DataTemplates
+        // must resolve a real Avalonia control for every child — no child renders as
+        // TextBlock, and none has a type name equal to any Dock.Model.Mvvm.Controls.* primitive.
+        var factory = new global::Dock.Model.Mvvm.Factory();
+        var proportional = factory.CreateProportionalDock();
+        var leftDoc = factory.CreateDocumentDock();
+        var splitter = factory.CreateProportionalDockSplitter();
+        var rightDoc = factory.CreateDocumentDock();
+        proportional.VisibleDockables = factory.CreateList<IDockable>(leftDoc, splitter, rightDoc);
+
+        var topLevelDockControl = GetTopLevelDockControl();
+        var dataTemplates = topLevelDockControl.DataTemplates.OfType<IDataTemplate>().ToList();
+
+        foreach (var child in proportional.VisibleDockables!)
+        {
+            var matching = dataTemplates.FirstOrDefault(t => t.Match(child));
+            Assert.NotNull(matching);
+            var built = matching!.Build(child);
+            Assert.IsNotType<TextBlock>(built);
+            var builtTypeName = built?.GetType().FullName ?? string.Empty;
+            Assert.False(
+                builtTypeName.StartsWith("Dock.Model.Mvvm.Controls.", System.StringComparison.Ordinal),
+                $"Child {child.GetType().FullName} rendered as raw model type {builtTypeName}");
+        }
+    }
+
     private static DockControl BuildInnerWorkspacePaneDockControl()
     {
         var templates = new DockDataTemplates();

@@ -19,6 +19,30 @@
         <dock:ProportionalDockControl />
     </DataTemplate>
 
+    <!-- Supply proportional-dock splitter template (normally auto-created).
+         Required because AutoCreateDataTemplates="False"; without it a
+         ProportionalDockSplitter (produced by "New Horizontal/Vertical Dock"
+         or any SplitToDock) renders as its raw type name
+         (Dock.Model.Mvvm.Controls.ProportionalDockSplitter). Mirrors the
+         default DockDataTemplateHelper mapping, including the CanResize /
+         ResizePreview bindings on ProportionalStackPanelSplitter. See #1130. -->
+    <DataTemplate DataType="dmc:IProportionalDockSplitter">
+        <ProportionalStackPanelSplitter
+            IsResizingEnabled="{Binding CanResize}"
+            PreviewResize="{Binding ResizePreview}" />
+    </DataTemplate>
+
+    <!-- Supply base DocumentDock template (normally auto-created).
+         Required because the app's typed subclasses (WorkspaceContentDock /
+         WorkspacesPaneDock) do not cover the plain Dock.Model.Mvvm.Controls.DocumentDock
+         that WorkspaceDockFactory (inherits from Dock.Model.Mvvm.Factory) creates
+         via CreateDocumentDock() during a runtime split. Without it the newly
+         created dock half renders as its raw type name
+         (Dock.Model.Mvvm.Controls.DocumentDock). See #1130. -->
+    <DataTemplate DataType="dmc:IDocumentDock">
+        <dock:DocumentDockControl />
+    </DataTemplate>
+
     <!-- WorkspaceContentDock is our typed subclass of DocumentDock.
          Using a concrete subtype means Dock's FuncDataTemplate<IDocumentDock>
          (on PART_ContentControl) is bypassed, so AutoCreateDataTemplates=False
@@ -99,6 +123,17 @@
                      template set (#1130). -->
                 <DataTemplate DataType="dmc:IProportionalDock">
                     <dock:ProportionalDockControl />
+                </DataTemplate>
+                <!-- Supply splitter and base DocumentDock templates within the inner
+                     pane DockControl too, since AutoCreateDataTemplates="False" and its
+                     template lookup does not walk up to ancestor scopes (#1130). -->
+                <DataTemplate DataType="dmc:IProportionalDockSplitter">
+                    <ProportionalStackPanelSplitter
+                        IsResizingEnabled="{Binding CanResize}"
+                        PreviewResize="{Binding ResizePreview}" />
+                </DataTemplate>
+                <DataTemplate DataType="dmc:IDocumentDock">
+                    <dock:DocumentDockControl />
                 </DataTemplate>
             </dock:DockControl.DataTemplates>
         </dock:DockControl>
