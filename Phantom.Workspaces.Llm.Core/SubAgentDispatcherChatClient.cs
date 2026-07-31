@@ -200,21 +200,38 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
         // Subscribe to events for idle detection
         var idleSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var wasCancelled = false;
+        // Tracks whether we ever observed the sub-agent's assistant running item created for this
+        // dispatch. Without this guard, there is a race window between AgentChat.RunProcessLoopAsync
+        // appending the user message to History (History.Count increments) and CreateRunningItem
+        // adding the assistant running item (RunningItems.Count increments). Observing state inside
+        // that window would satisfy "History > idx AND RunningItems == 0" and prematurely signal
+        // idle before the sub-agent actually runs (issue #1184).
+        var hasSeenRunningItem = false;
 
         void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
+            if (lease.AgentChat.RunningItems.Count > 0)
+            {
+                hasSeenRunningItem = true;
+            }
             CheckIdleCondition();
         }
 
         void OnTurnCompleted(object? sender, AgentChatHistoryItem item)
         {
+            if (lease.AgentChat.RunningItems.Count > 0)
+            {
+                hasSeenRunningItem = true;
+            }
             CheckIdleCondition();
         }
 
         void CheckIdleCondition()
         {
-            // Idle when: history has grown past DispatchHistoryIndex AND RunningItems is empty
-            if (lease.AgentChat.History.Count > dispatched.DispatchHistoryIndex
+            // Idle when: a running item was observed for this dispatch, history has grown past
+            // DispatchHistoryIndex, and RunningItems is empty.
+            if (hasSeenRunningItem
+                && lease.AgentChat.History.Count > dispatched.DispatchHistoryIndex
                 && lease.AgentChat.RunningItems.Count == 0)
             {
                 idleSignal.TrySetResult();
@@ -255,8 +272,11 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
                 idleSignal.TrySetCanceled(cancellationToken);
             });
 
-            // Wait for idle - capture cancellation state without catching
-            CheckIdleCondition();
+            // Wait for idle - capture cancellation state without catching.
+            // No pre-await poll here: subscription was set up before EnqueueUserMessage, so all
+            // legitimate transitions (create running item → complete running item → remove) arrive
+            // via events. A direct poll here would race the foreground scheduler's user-message-
+            // then-create-running-item sequence and could fire premature idle (issue #1184).
             var task = idleSignal.Task;
             try
             {
@@ -339,20 +359,33 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
         var lease = targetAgent.Lease;
         var idleSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var wasCancelled = false;
+        // See HandleCreateSubAgentAsync for the same rationale: guard against the AppendUserMessages
+        // -> CreateRunningItem race window that would otherwise satisfy the naive idle predicate
+        // before the sub-agent has actually started running (issue #1184).
+        var hasSeenRunningItem = false;
 
         void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
         {
+            if (lease.AgentChat.RunningItems.Count > 0)
+            {
+                hasSeenRunningItem = true;
+            }
             CheckIdleCondition();
         }
 
         void OnTurnCompleted(object? sender, AgentChatHistoryItem item)
         {
+            if (lease.AgentChat.RunningItems.Count > 0)
+            {
+                hasSeenRunningItem = true;
+            }
             CheckIdleCondition();
         }
 
         void CheckIdleCondition()
         {
-            if (lease.AgentChat.History.Count > targetAgent.DispatchHistoryIndex
+            if (hasSeenRunningItem
+                && lease.AgentChat.History.Count > targetAgent.DispatchHistoryIndex
                 && lease.AgentChat.RunningItems.Count == 0)
             {
                 idleSignal.TrySetResult();
@@ -383,8 +416,8 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
                 idleSignal.TrySetCanceled(cancellationToken);
             });
 
-            // Wait for idle - capture cancellation state without catching
-            CheckIdleCondition();
+            // Wait for idle - capture cancellation state without catching. See
+            // HandleCreateSubAgentAsync for why no direct pre-await poll is done here (issue #1184).
             try
             {
                 await idleSignal.Task.ConfigureAwait(false);
