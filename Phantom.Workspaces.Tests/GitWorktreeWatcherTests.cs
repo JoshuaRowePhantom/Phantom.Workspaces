@@ -4,6 +4,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -12,26 +13,29 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeWatcherTests : IDisposable
 {
-    private readonly string tempDir;
-
-    public GitWorktreeWatcherTests()
-    {
-        this.tempDir = Path.Combine(Path.GetTempPath(), "pw-watcher-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(this.tempDir);
-    }
+    private readonly TempDirectory temp = new("pw-watcher-");
+    private string tempDir => this.temp.Path;
 
     public void Dispose()
     {
-        try
+        this.temp.Dispose();
+    }
+
+    [AvaloniaFact(Timeout = 10_000)]
+    public void GitWorktreeWatcher_AfterTestCompletes_LeavesNoTempDirectoryBehind()
+    {
+        // Sentinel: dispose a sibling TempDirectory and assert the
+        // directory it allocated is fully removed. Regressions in the
+        // exception-safe cleanup path fail this test.
+        string siblingPath;
+        using (var sibling = new TempDirectory("pw-watcher-sentinel-"))
         {
-            if (Directory.Exists(this.tempDir))
-            {
-                Directory.Delete(this.tempDir, recursive: true);
-            }
+            siblingPath = sibling.Path;
+            File.WriteAllText(Path.Combine(siblingPath, "some-file.txt"), "content");
+            Assert.True(Directory.Exists(siblingPath));
         }
-        catch (IOException)
-        {
-        }
+
+        Assert.False(Directory.Exists(siblingPath));
     }
 
     [AvaloniaFact(Timeout = 10_000)]

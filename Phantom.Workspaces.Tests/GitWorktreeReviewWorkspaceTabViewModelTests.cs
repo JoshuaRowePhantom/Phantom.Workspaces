@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Avalonia.Threading;
 using LibGit2Sharp;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -16,35 +17,12 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 {
-    private readonly string repoDir;
-
-    public GitWorktreeReviewWorkspaceTabViewModelTests()
-    {
-        this.repoDir = Path.Combine(Path.GetTempPath(), "pw-review-tab-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(this.repoDir);
-    }
+    private readonly TempDirectory temp = new("pw-review-tab-");
+    private string repoDir => this.temp.Path;
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(this.repoDir))
-            {
-                ForceDeleteDirectory(this.repoDir);
-            }
-        }
-        catch (IOException)
-        {
-        }
-    }
-
-    private static void ForceDeleteDirectory(string path)
-    {
-        foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-        {
-            File.SetAttributes(file, FileAttributes.Normal);
-        }
-        Directory.Delete(path, recursive: true);
+        this.temp.Dispose();
     }
 
     private void InitRepoWithBranch(string branchName)

@@ -3,41 +3,19 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using LibGit2Sharp;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeFileListViewModelTests : IDisposable
 {
-    private readonly string repoDir;
-
-    public GitWorktreeFileListViewModelTests()
-    {
-        this.repoDir = Path.Combine(Path.GetTempPath(), "pw-file-list-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(this.repoDir);
-    }
+    private readonly TempDirectory temp = new("pw-file-list-");
+    private string repoDir => this.temp.Path;
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(this.repoDir))
-            {
-                ForceDeleteDirectory(this.repoDir);
-            }
-        }
-        catch (IOException)
-        {
-        }
-    }
-
-    private static void ForceDeleteDirectory(string path)
-    {
-        foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-        {
-            File.SetAttributes(file, FileAttributes.Normal);
-        }
-        Directory.Delete(path, recursive: true);
+        this.temp.Dispose();
     }
 
     private Repository InitRepo(out Signature sig)

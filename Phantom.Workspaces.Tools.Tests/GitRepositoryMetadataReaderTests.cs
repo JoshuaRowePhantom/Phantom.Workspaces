@@ -1,23 +1,19 @@
 using System.IO;
 using LibGit2Sharp;
 using Microsoft.Extensions.Logging.Abstractions;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class GitRepositoryMetadataReaderTests : IDisposable
 {
-    private readonly string temporaryRootPath = Path.GetFullPath(
-        Path.Combine(Path.GetTempPath(), $"git-metadata-reader-{Guid.NewGuid():N}"));
-
-    public GitRepositoryMetadataReaderTests()
-    {
-        Directory.CreateDirectory(this.temporaryRootPath);
-    }
+    private readonly TempDirectory temporaryRoot = new("git-metadata-reader-");
+    private string temporaryRootPath => this.temporaryRoot.Path;
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.temporaryRootPath);
+        this.temporaryRoot.Dispose();
     }
 
     [Fact]
@@ -154,26 +150,5 @@ public sealed class GitRepositoryMetadataReaderTests : IDisposable
         var signature = new Signature("test-user", "test@example.com", DateTimeOffset.UtcNow);
         repository.Commit("initial", signature, signature);
         repository.Network.Remotes.Add("origin", remoteUrl);
-    }
-
-    private static void TryDeleteDirectory(string directoryPath)
-    {
-        if (!Directory.Exists(directoryPath))
-        {
-            return;
-        }
-
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                Directory.Delete(directoryPath, recursive: true);
-                return;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50);
-            }
-        }
     }
 }

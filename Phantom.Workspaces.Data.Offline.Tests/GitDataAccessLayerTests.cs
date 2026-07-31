@@ -2,17 +2,20 @@ using LibGit2Sharp;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Tests;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Data.Offline.Tests;
 
 public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
 {
+    private readonly TempDirectory repository;
     private readonly string repositoryPath;
 
     protected GitDataAccessLayerWithoutRemoteTestsBase(
         string repositoryPathPrefix)
     {
-        this.repositoryPath = TestPathFactory.CreateIsolatedDirectory(repositoryPathPrefix);
+        this.repository = TestPathFactory.CreateIsolatedTempDirectory(repositoryPathPrefix);
+        this.repositoryPath = this.repository.Path;
         Repository.Init(this.repositoryPath);
     }
 
@@ -261,27 +264,26 @@ public abstract class GitDataAccessLayerWithoutRemoteTestsBase : DataAccessLayer
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.repositoryPath);
+        this.repository.Dispose();
     }
 
-    private static void TryDeleteDirectory(
-        string path)
+    [Fact]
+    public void GitDataAccessLayer_AfterTestCompletes_LeavesNoTempDirectoryBehind()
     {
-        try
+        // Sentinel: dispose a sibling fixture-style temp directory
+        // (also seeded via Repository.Init to exercise the read-only
+        // .git\objects files libgit2 writes) and confirm that Dispose
+        // fully removes it from disk. Regressions in the exception-
+        // safe cleanup path fail this assertion.
+        string siblingPath;
+        using (var sibling = TestPathFactory.CreateIsolatedTempDirectory("sentinel-cleanup"))
         {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, true);
-            }
+            siblingPath = sibling.Path;
+            Repository.Init(siblingPath);
+            Assert.True(Directory.Exists(siblingPath));
         }
-        catch (UnauthorizedAccessException)
-        {
-            // Git object file handles can still be releasing at test teardown.
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup.
-        }
+
+        Assert.False(Directory.Exists(siblingPath));
     }
 }
 
@@ -326,7 +328,9 @@ public sealed class GitDataAccessLayerWithoutRemotePerInvocationTests : GitDataA
 [Trait("Category", "SlowGit")]
 public sealed class GitDataAccessLayerInitializationTests : IDisposable
 {
-    private readonly string repositoryPath = TestPathFactory.CreateIsolatedDirectory("git-init");
+    private readonly TempDirectory repository = TestPathFactory.CreateIsolatedTempDirectory("git-init");
+
+    private string repositoryPath => this.repository.Path;
 
     [Fact]
     public void Constructor_WhenDirectoryIsNotRepository_InitializesRepository()
@@ -341,34 +345,17 @@ public sealed class GitDataAccessLayerInitializationTests : IDisposable
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.repositoryPath);
-    }
-
-    private static void TryDeleteDirectory(
-        string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, true);
-            }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Git handles can still be releasing at test teardown.
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup.
-        }
+        this.repository.Dispose();
     }
 }
 
 public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
 {
-    private readonly string remoteRepositoryPath = TestPathFactory.CreateIsolatedDirectory("git-remote-bare");
-    private readonly string localRepositoryPath = TestPathFactory.CreateIsolatedDirectory("git-with-remote");
+    private readonly TempDirectory remoteRepository = TestPathFactory.CreateIsolatedTempDirectory("git-remote-bare");
+    private readonly TempDirectory localRepository = TestPathFactory.CreateIsolatedTempDirectory("git-with-remote");
+
+    private string remoteRepositoryPath => this.remoteRepository.Path;
+    private string localRepositoryPath => this.localRepository.Path;
 
     protected GitDataAccessLayerWithRemoteTestsBase()
     {
@@ -508,49 +495,24 @@ public abstract class GitDataAccessLayerWithRemoteTestsBase : DataAccessLayerNon
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.localRepositoryPath);
-        TryDeleteDirectory(this.remoteRepositoryPath);
-    }
-
-    private static void TryDeleteDirectory(
-        string path)
-    {
-        try
-        {
-            if (Directory.Exists(path))
-            {
-                Directory.Delete(path, true);
-            }
-        }
-        catch (UnauthorizedAccessException)
-        {
-            // Git object file handles can still be releasing at test teardown.
-        }
-        catch (IOException)
-        {
-            // Best-effort cleanup.
-        }
+        this.localRepository.Dispose();
+        this.remoteRepository.Dispose();
     }
 
     private static void CreateDivergingRemoteCommit(
         string remoteRepositoryPath)
     {
-        var divergingClonePath = TestPathFactory.CreateIsolatedDirectory("git-diverging-clone");
-        try
-        {
-            Repository.Clone(remoteRepositoryPath, divergingClonePath);
-            using var divergingRepository = new Repository(divergingClonePath);
+        using var divergingClone = TestPathFactory.CreateIsolatedTempDirectory("git-diverging-clone");
+        var divergingClonePath = divergingClone.Path;
 
-            File.WriteAllText(Path.Combine(divergingClonePath, "DIVERGING.txt"), "diverging");
-            Commands.Stage(divergingRepository, "DIVERGING.txt");
-            var signature = new Signature("Phantom Workspaces Tests", "noreply@phantom.workspaces", DateTimeOffset.UtcNow);
-            divergingRepository.Commit("Diverging remote commit", signature, signature);
-            divergingRepository.Network.Push(divergingRepository.Head, new PushOptions());
-        }
-        finally
-        {
-            TryDeleteDirectory(divergingClonePath);
-        }
+        Repository.Clone(remoteRepositoryPath, divergingClonePath);
+        using var divergingRepository = new Repository(divergingClonePath);
+
+        File.WriteAllText(Path.Combine(divergingClonePath, "DIVERGING.txt"), "diverging");
+        Commands.Stage(divergingRepository, "DIVERGING.txt");
+        var signature = new Signature("Phantom Workspaces Tests", "noreply@phantom.workspaces", DateTimeOffset.UtcNow);
+        divergingRepository.Commit("Diverging remote commit", signature, signature);
+        divergingRepository.Network.Push(divergingRepository.Head, new PushOptions());
     }
 
     [Trait("Category", "SlowGit")]

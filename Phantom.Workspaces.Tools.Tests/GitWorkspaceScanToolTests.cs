@@ -4,17 +4,14 @@ using Microsoft.Extensions.Logging;
 using LogLevel = Microsoft.Extensions.Logging.LogLevel;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class GitWorkspaceScanToolTests : IDisposable
 {
-    private readonly string temporaryRootPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"git-workspace-scan-{Guid.NewGuid():N}"));
-
-    public GitWorkspaceScanToolTests()
-    {
-        Directory.CreateDirectory(this.temporaryRootPath);
-    }
+    private readonly TempDirectory temporaryRoot = new("git-workspace-scan-");
+    private string temporaryRootPath => this.temporaryRoot.Path;
 
     [Fact]
     public async Task ExecuteAsync_ScansOnlyCurrentComputerUserProfileParticipantsAndUpsertsGitWorktreeEntities()
@@ -238,7 +235,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.temporaryRootPath);
+        this.temporaryRoot.Dispose();
     }
 
     private static void InitializeGitRepository(
@@ -465,23 +462,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     private static void TryDeleteDirectory(
         string directoryPath)
     {
-        if (!Directory.Exists(directoryPath))
-        {
-            return;
-        }
-
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                Directory.Delete(directoryPath, recursive: true);
-                return;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50);
-            }
-        }
+        TempDirectory.ForceDelete(directoryPath);
     }
 
     private sealed class FixedLocalDriveRootProvider(

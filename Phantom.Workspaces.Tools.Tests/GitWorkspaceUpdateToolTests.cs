@@ -5,23 +5,19 @@ using LibGit2Sharp;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class GitWorkspaceUpdateToolTests : IDisposable
 {
-    private readonly string temporaryRootPath = Path.GetFullPath(
-        Path.Combine(Path.GetTempPath(), $"git-workspace-update-{Guid.NewGuid():N}"));
-
-    public GitWorkspaceUpdateToolTests()
-    {
-        Directory.CreateDirectory(this.temporaryRootPath);
-    }
+    private readonly TempDirectory temporaryRoot = new("git-workspace-update-");
+    private string temporaryRootPath => this.temporaryRoot.Path;
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.temporaryRootPath);
+        this.temporaryRoot.Dispose();
     }
 
     [Fact]
@@ -432,25 +428,4 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
 
     private static string EscapeForJsonString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal);
-
-    private static void TryDeleteDirectory(string directoryPath)
-    {
-        if (!Directory.Exists(directoryPath))
-        {
-            return;
-        }
-
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                Directory.Delete(directoryPath, recursive: true);
-                return;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50);
-            }
-        }
-    }
 }
