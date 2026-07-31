@@ -4159,6 +4159,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     this.navigationHistoryService.Push(new NavigationEntry(activeTabId, paneDoc.WorkspacePane.Id));
                 }
             }
+
+            // Mark the newly-visible pane's active content tab as seen. The tab is now on-screen
+            // as a side-effect of the pane becoming active, so any unread notification indicator
+            // for it should be cleared. Only the pane's currently-active tab is cleared;
+            // background tabs retain their indicators. MarkRead is a no-op when there is no
+            // unread notification, so it is safe to invoke unconditionally.
+            var activeTab = paneDoc.WorkspacePane.SelectedTab
+                ?? paneDoc.WorkspacePane.Tabs.FirstOrDefault();
+            if (activeTab is not null)
+            {
+                this.notificationService.MarkRead(activeTab.Id);
+            }
         }
         else if (e.Dockable is WorkspaceDocument doc)
         {
