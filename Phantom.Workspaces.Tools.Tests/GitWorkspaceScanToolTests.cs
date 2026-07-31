@@ -226,6 +226,195 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Assert.Contains($"\"owning-repository\":\"{EscapeForJsonString(rootRepoPath)}\"", rawData, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_ExcludesConfigured_SkipsRepositoriesUnderExcludedPath()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "excludes-configured"));
+        var excludedDirectory = Path.GetFullPath(Path.Combine(scanRoot, "excluded"));
+        var includedRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "included-repo"));
+        var excludedRepoPath = Path.GetFullPath(Path.Combine(excludedDirectory, "excluded-repo"));
+        InitializeGitRepository(includedRepoPath, "https://example.com/included.git");
+        InitializeGitRepository(excludedRepoPath, "https://example.com/excluded.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var excludesJson = JsonSerializer.Serialize(new[] { excludedDirectory });
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")),
+            toolExcludesJson: excludesJson);
+
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        Assert.NotNull(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", includedRepoPath)));
+        Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", excludedRepoPath)));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ParticipantPathContainsEnvironmentVariable_ScanRootIsExpanded()
+    {
+        var variableName = "PW_TEST_PARTICIPANT_" + Guid.NewGuid().ToString("N");
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "env-participant"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "env-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/env-participant.git");
+
+        Environment.SetEnvironmentVariable(variableName, scanRoot);
+        try
+        {
+            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var context = await CreateExecutionContextAsync(
+                dataAccessLayer,
+                "%" + variableName + "%",
+                Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+            var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider(Array.Empty<string>()));
+            await tool.ExecuteAsync(context);
+
+            Assert.NotNull(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repoPath)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_HomeDirectoryContainsEnvironmentVariable_ScanRootIsExpanded()
+    {
+        var variableName = "PW_TEST_HOME_" + Guid.NewGuid().ToString("N");
+        var homeDirectory = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "env-home"));
+        var repoPath = Path.GetFullPath(Path.Combine(homeDirectory, "home-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/env-home.git");
+
+        Environment.SetEnvironmentVariable(variableName, homeDirectory);
+        try
+        {
+            var dataAccessLayer = new InMemoryDataAccessLayer();
+            // Point currentProfileRoot at the env-var reference so the profile's home-directory
+            // is stored as "%VAR%" (not the expanded path).
+            var context = await CreateExecutionContextAsync(
+                dataAccessLayer,
+                "%" + variableName + "%",
+                Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+            // Restrict participants to just the current profile so the profile's home-directory
+            // (rather than a filesystem-folder participant) is the sole scan root.
+            context = context with
+            {
+                Participants = [context.CurrentComputerUserProfileEntity],
+            };
+
+            var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider(Array.Empty<string>()));
+            await tool.ExecuteAsync(context);
+
+            Assert.NotNull(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repoPath)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ExcludeContainsEnvironmentVariable_ExpandedBeforeMatching()
+    {
+        var variableName = "PW_TEST_EXCLUDE_" + Guid.NewGuid().ToString("N");
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "env-exclude"));
+        var excludedDirectory = Path.GetFullPath(Path.Combine(scanRoot, "excluded"));
+        var excludedRepoPath = Path.GetFullPath(Path.Combine(excludedDirectory, "excluded-repo"));
+        var keptRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "kept-repo"));
+        InitializeGitRepository(excludedRepoPath, "https://example.com/env-excluded.git");
+        InitializeGitRepository(keptRepoPath, "https://example.com/env-kept.git");
+
+        Environment.SetEnvironmentVariable(variableName, excludedDirectory);
+        try
+        {
+            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var excludesJson = JsonSerializer.Serialize(new[] { "%" + variableName + "%" });
+            var context = await CreateExecutionContextAsync(
+                dataAccessLayer,
+                scanRoot,
+                Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")),
+                toolExcludesJson: excludesJson);
+
+            var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
+            await tool.ExecuteAsync(context);
+
+            Assert.NotNull(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", keptRepoPath)));
+            Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", excludedRepoPath)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variableName, null);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_DefaultExcludes_SkipTempDirectory()
+    {
+        // Redirect %TEMP% to an isolated sub-directory of the fixture's root so both the
+        // scan root and the "temp" directory are known, and the default %TEMP% exclude
+        // can be validated deterministically without touching the real temp directory.
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "default-excludes-scan"));
+        var fakeTempDirectory = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "default-excludes-temp"));
+        Directory.CreateDirectory(scanRoot);
+        Directory.CreateDirectory(fakeTempDirectory);
+        var keptRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "kept-repo"));
+        var tempRepoPath = Path.GetFullPath(Path.Combine(fakeTempDirectory, "temp-repo"));
+        InitializeGitRepository(keptRepoPath, "https://example.com/kept.git");
+        InitializeGitRepository(tempRepoPath, "https://example.com/temp.git");
+
+        var originalTemp = Environment.GetEnvironmentVariable("TEMP");
+        var originalTmp = Environment.GetEnvironmentVariable("TMP");
+        Environment.SetEnvironmentVariable("TEMP", fakeTempDirectory);
+        Environment.SetEnvironmentVariable("TMP", fakeTempDirectory);
+        try
+        {
+            var dataAccessLayer = new InMemoryDataAccessLayer();
+            // Pass toolExcludesJson: null so the tool entity has no `excludes` property and
+            // the in-code DefaultExcludes ([%TEMP%]) is applied.
+            var context = await CreateExecutionContextAsync(
+                dataAccessLayer,
+                scanRoot,
+                Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")),
+                toolExcludesJson: null);
+
+            // Also add the fake temp directory as a scan root so we would find its repo
+            // if the default exclude were absent.
+            var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot, fakeTempDirectory]));
+            await tool.ExecuteAsync(context);
+
+            Assert.NotNull(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", keptRepoPath)));
+            Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", tempRepoPath)));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TEMP", originalTemp);
+            Environment.SetEnvironmentVariable("TMP", originalTmp);
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RepositoryDirectlyAtExcludedPathRoot_NotDiscovered()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "exclude-at-root"));
+        var excludedRepoPath = Path.GetFullPath(Path.Combine(scanRoot, "exact-repo"));
+        InitializeGitRepository(excludedRepoPath, "https://example.com/at-root.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var excludesJson = JsonSerializer.Serialize(new[] { excludedRepoPath });
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")),
+            toolExcludesJson: excludesJson);
+
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        Assert.Null(await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", excludedRepoPath)));
+    }
+
     private static void AddLinkedWorktree(string rootRepoPath, string worktreeName, string worktreePath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(worktreePath)!);
@@ -258,7 +447,8 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     private static async Task<WorkspaceToolExecutionContext> CreateExecutionContextAsync(
         IDataAccessLayer dataAccessLayer,
         string currentProfileRoot,
-        string otherProfileRoot)
+        string otherProfileRoot,
+        string? toolExcludesJson = "[]")
     {
         var currentComputerEntity = await UpsertEntityAsync(
             dataAccessLayer,
@@ -341,6 +531,22 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
             """,
             concurrencyTag: null);
 
+        var toolExcludesProperty = toolExcludesJson is null
+            ? string.Empty
+            : $",\n              \"excludes\": {toolExcludesJson}";
+        var toolEntity = await UpsertEntityAsync(
+            dataAccessLayer,
+            new EntityId("77777777-7777-7777-7777-777777777777"),
+            $$"""
+            {
+              "entity-id": "77777777-7777-7777-7777-777777777777",
+              "entity-types": ["entity", "tool"],
+              "names": [["tools", "git-workspace-scan"]],
+              "tool-type": "git-workspace-scan"{{toolExcludesProperty}}
+            }
+            """,
+            concurrencyTag: null);
+
         return new WorkspaceToolExecutionContext
         {
             DataAccessLayer = dataAccessLayer,
@@ -356,7 +562,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
                 currentFilesystemFolderParticipant,
                 otherFilesystemFolderParticipant,
             ],
-            Tool = currentUserEntity,
+            Tool = toolEntity,
             Schedule = currentComputerEntity,
         };
     }

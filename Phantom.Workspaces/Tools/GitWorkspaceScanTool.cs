@@ -21,16 +21,30 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
 
     public string ToolType => "git-workspace-scan";
 
+    internal static readonly IReadOnlyList<string> DefaultExcludes = new[] { "%TEMP%" };
+
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
         var currentProfileNames = WorkspaceEntitySnapshotReader.GetEntityNames(context.CurrentComputerUserProfileEntity)
             .ToArray();
+
+        var rawExcludes = WorkspaceEntitySnapshotReader.TryGetStringArrayProperty(context.Tool, "excludes")
+            ?? DefaultExcludes;
+        var expandedExcludes = rawExcludes
+            .Select(ExpandAndNormalize)
+            .Where(static p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
         var scanRoots = this.GetScanRoots(
                 context.Participants,
                 context.CurrentComputerUserProfileEntity,
                 currentProfileNames)
+            .Select(ExpandAndNormalize)
+            .Where(static p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Where(Directory.Exists)
+            .Where(root => !GitRepositoryMetadataReader.IsUnderAnyExclude(root, expandedExcludes))
             .ToArray();
 
         var discoveredWorktreePaths = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -39,7 +53,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
             this.logger.LogInformation("Scanning top-level directory: {Path}", scanRoot);
             var countBefore = discoveredWorktreePaths.Count;
             foreach (var discoveredWorktreePath in GitRepositoryMetadataReader.EnumerateGitRepositories(
-                         scanRoot, int.MaxValue, context.CancellationToken, this.logger))
+                         scanRoot, int.MaxValue, expandedExcludes, context.CancellationToken, this.logger))
             {
                 discoveredWorktreePaths.Add(discoveredWorktreePath);
             }
@@ -155,6 +169,43 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
         return Path.GetFullPath(repositoryPath)
             .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Expands <c>%NAME%</c> environment variable references in <paramref name="raw"/> and returns
+    /// a full, trailing-separator-trimmed path. Returns the empty string for null/whitespace input
+    /// or when the resulting value is not a valid path.
+    /// </summary>
+    internal static string ExpandAndNormalize(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return string.Empty;
+        }
+
+        var expanded = Environment.ExpandEnvironmentVariables(raw);
+        if (string.IsNullOrWhiteSpace(expanded))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Path.GetFullPath(expanded)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
+        catch (PathTooLongException)
+        {
+            return string.Empty;
+        }
+        catch (NotSupportedException)
+        {
+            return string.Empty;
+        }
     }
 }
 

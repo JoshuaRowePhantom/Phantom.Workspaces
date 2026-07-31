@@ -137,6 +137,73 @@ public sealed class GitRepositoryMetadataReaderTests : IDisposable
         Assert.Empty(collected);
     }
 
+    [Fact]
+    public void EnumerateGitRepositories_ExcludedPrefix_SkipsSubtreeButNotSiblings()
+    {
+        var excludedRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "Temp"));
+        var siblingRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "TempStuff"));
+        var excludedRepo = Path.Combine(excludedRoot, "excluded-repo");
+        var siblingRepo = Path.Combine(siblingRoot, "sibling-repo");
+        InitializeGitRepository(excludedRepo, "https://example.com/excluded.git");
+        InitializeGitRepository(siblingRepo, "https://example.com/sibling.git");
+
+        var results = GitRepositoryMetadataReader
+            .EnumerateGitRepositories(
+                this.temporaryRootPath,
+                int.MaxValue,
+                new[] { excludedRoot },
+                CancellationToken.None)
+            .ToArray();
+
+        Assert.DoesNotContain(results, r => string.Equals(r, excludedRepo, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(results, r => string.Equals(r, siblingRepo, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EnumerateGitRepositories_ExcludedPathDiffersInCase_StillSkipped()
+    {
+        var excludeRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "Temp"));
+        var repoInside = Path.Combine(excludeRoot, "repo");
+        InitializeGitRepository(repoInside, "https://example.com/case.git");
+
+        var mixedCaseExclude = excludeRoot.ToUpperInvariant();
+
+        var results = GitRepositoryMetadataReader
+            .EnumerateGitRepositories(
+                this.temporaryRootPath,
+                int.MaxValue,
+                new[] { mixedCaseExclude },
+                CancellationToken.None)
+            .ToArray();
+
+        Assert.DoesNotContain(results, r => string.Equals(r, repoInside, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EnumerateGitRepositories_NoExcludes_EnumeratesAsBefore()
+    {
+        var repoOne = Path.Combine(this.temporaryRootPath, "no-excludes-one");
+        var repoTwo = Path.Combine(this.temporaryRootPath, "no-excludes-two");
+        InitializeGitRepository(repoOne, "https://example.com/no-ex-one.git");
+        InitializeGitRepository(repoTwo, "https://example.com/no-ex-two.git");
+
+        var withoutOverload = GitRepositoryMetadataReader
+            .EnumerateGitRepositories(this.temporaryRootPath, int.MaxValue, CancellationToken.None)
+            .Select(p => Path.GetFullPath(p))
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        var withEmptyExcludes = GitRepositoryMetadataReader
+            .EnumerateGitRepositories(this.temporaryRootPath, int.MaxValue, Array.Empty<string>(), CancellationToken.None)
+            .Select(p => Path.GetFullPath(p))
+            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        Assert.Equal(withoutOverload, withEmptyExcludes);
+        Assert.Contains(withoutOverload, r => string.Equals(r, Path.GetFullPath(repoOne), StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(withoutOverload, r => string.Equals(r, Path.GetFullPath(repoTwo), StringComparison.OrdinalIgnoreCase));
+    }
+
     private static void InitializeGitRepository(string repositoryPath, string remoteUrl)
     {
         Directory.CreateDirectory(repositoryPath);

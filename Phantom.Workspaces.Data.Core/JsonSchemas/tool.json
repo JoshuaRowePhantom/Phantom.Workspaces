@@ -26,6 +26,13 @@
       "description": "Tool-specific configuration settings.",
       "additionalProperties": true
     },
+    "excludes": {
+      "type": "array",
+      "description": "Tool-specific list of filesystem paths whose subtrees are skipped by directory-walking tools. Values may contain %NAME% environment-variable references, which are expanded before matching.",
+      "items": {
+        "type": "string"
+      }
+    },
     "content": {
       "$ref": "mime-attachment.json",
       "x-default-mime-type": "text/markdown"
