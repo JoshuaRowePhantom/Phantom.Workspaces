@@ -7,10 +7,11 @@
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.InstallationWizardWindow"
         x:DataType="vm:WorkspacesSettingsViewModel"
-        SizeToContent="Width"
+        SizeToContent="WidthAndHeight"
         MinWidth="480"
         MaxWidth="900"
-        Height="580"
+        MinHeight="480"
+        MaxHeight="820"
         CanResize="True"
         WindowStartupLocation="CenterScreen"
         Title="Phantom.Workspaces Setup">

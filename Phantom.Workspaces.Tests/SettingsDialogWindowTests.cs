@@ -3,12 +3,14 @@ namespace Phantom.Workspaces.Tests;
 public sealed class SettingsDialogWindowTests
 {
     [Fact]
-    public void SettingsDialogWindow_SizesToContentWidth_NotFixedWidth()
+    public void SettingsDialogWindow_SizesToContentInBothDimensions()
     {
         var text = ReadAxaml("SettingsDialogWindow.axaml");
 
-        Assert.Contains("SizeToContent=\"Width\"", text, StringComparison.Ordinal);
+        Assert.Contains("SizeToContent=\"WidthAndHeight\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("SizeToContent=\"Width\"", text, StringComparison.Ordinal);
         Assert.DoesNotContain(" Width=\"680\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(" Height=\"560\"", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -18,6 +20,15 @@ public sealed class SettingsDialogWindowTests
 
         Assert.Contains("MinWidth=\"", text, StringComparison.Ordinal);
         Assert.Contains("MaxWidth=\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettingsDialogWindow_HasBoundedMinAndMaxHeight()
+    {
+        var text = ReadAxaml("SettingsDialogWindow.axaml");
+
+        Assert.Contains("MinHeight=\"", text, StringComparison.Ordinal);
+        Assert.Contains("MaxHeight=\"", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -37,12 +48,14 @@ public sealed class SettingsDialogWindowTests
     }
 
     [Fact]
-    public void InstallationWizardWindow_SizesToContentWidth_NotFixedWidth()
+    public void InstallationWizardWindow_SizesToContentInBothDimensions()
     {
         var text = ReadAxaml("InstallationWizardWindow.axaml");
 
-        Assert.Contains("SizeToContent=\"Width\"", text, StringComparison.Ordinal);
+        Assert.Contains("SizeToContent=\"WidthAndHeight\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("SizeToContent=\"Width\"", text, StringComparison.Ordinal);
         Assert.DoesNotContain(" Width=\"480\"", text, StringComparison.Ordinal);
+        Assert.DoesNotContain(" Height=\"580\"", text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -61,6 +74,15 @@ public sealed class SettingsDialogWindowTests
 
         Assert.Contains("MinWidth=\"", text, StringComparison.Ordinal);
         Assert.Contains("MaxWidth=\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InstallationWizardWindow_HasBoundedMinAndMaxHeight()
+    {
+        var text = ReadAxaml("InstallationWizardWindow.axaml");
+
+        Assert.Contains("MinHeight=\"", text, StringComparison.Ordinal);
+        Assert.Contains("MaxHeight=\"", text, StringComparison.Ordinal);
     }
 
     private static string ReadAxaml(string fileName)

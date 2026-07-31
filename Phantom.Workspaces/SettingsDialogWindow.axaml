@@ -7,10 +7,11 @@
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.SettingsDialogWindow"
         x:DataType="vm:WorkspacesSettingsViewModel"
-        SizeToContent="Width"
+        SizeToContent="WidthAndHeight"
         MinWidth="680"
         MaxWidth="1100"
-        Height="560"
+        MinHeight="480"
+        MaxHeight="800"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
         Title="Settings">
