@@ -17,9 +17,12 @@
                                Text="AI Usage"
                                FontWeight="SemiBold" />
                     <!-- Tracker-level deep-link (#1159 Fix C): view/manage Copilot metrics on GitHub. -->
+                    <!-- #1172: routed through IUrlOpener via OpenUrlCommand — do NOT set NavigateUri
+                         (Avalonia would still launch it externally, bypassing embedded routing). -->
                     <HyperlinkButton Grid.Column="1"
                                      Name="ManageOnGitHubHyperlink"
-                                     NavigateUri="https://github.com/settings/copilot/features"
+                                     Command="{Binding OpenUrlCommand}"
+                                     CommandParameter="https://github.com/settings/copilot/features"
                                      Padding="0"
                                      FontSize="11"
                                      Content="Manage on GitHub" />
@@ -36,8 +39,10 @@
                                     BorderThickness="0,0,0,1"
                                     BorderBrush="{DynamicResource Theme.Surface.Popup.Border}">
                                 <StackPanel Spacing="6">
-                                    <!-- Account title as hyperlink -->
-                                    <HyperlinkButton NavigateUri="{Binding SettingsUrl}"
+                                    <!-- Account title as hyperlink (#1172: OpenUrlCommand via ItemsControl root VM). -->
+                                    <HyperlinkButton Name="AccountHeaderHyperlink"
+                                                     Command="{Binding $parent[UserControl].DataContext.OpenUrlCommand}"
+                                                     CommandParameter="{Binding SettingsUrl}"
                                                      Padding="0"
                                                      FontWeight="SemiBold">
                                         <TextBlock>
@@ -62,18 +67,20 @@
                                                                  Margin="0,0,4,0"
                                                                  IsChecked="{Binding IsSelectedAsShown, Mode=TwoWay}" />
 
-                                                    <!-- Hyperlink wraps title/quantity/bar so the row navigates to the web data source -->
+                                                    <!-- Hyperlink wraps title/quantity/bar so the row navigates to the web data source.
+                                                         #1172: bind CommandParameter (not NavigateUri) so opens route through IUrlOpener. -->
                                                     <HyperlinkButton Grid.Column="1"
                                                                      Padding="0"
                                                                      HorizontalAlignment="Stretch"
                                                                      HorizontalContentAlignment="Stretch"
-                                                                     Name="MetricRowHyperlink">
-                                                        <HyperlinkButton.NavigateUri>
+                                                                     Name="MetricRowHyperlink"
+                                                                     Command="{Binding $parent[UserControl].DataContext.OpenUrlCommand}">
+                                                        <HyperlinkButton.CommandParameter>
                                                             <MultiBinding Converter="{x:Static converters:FirstNonNullConverter.Instance}">
                                                                 <Binding Path="WebUrl" />
                                                                 <Binding Path="$parent[ItemsControl].DataContext.SettingsUrl" />
                                                             </MultiBinding>
-                                                        </HyperlinkButton.NavigateUri>
+                                                        </HyperlinkButton.CommandParameter>
                                                         <Grid ColumnDefinitions="120,*,120">
                                                     <!-- Metric title -->
                                                     <TextBlock Grid.Column="0"
@@ -93,9 +100,10 @@
                                                     <Panel Grid.Column="2"
                                                            Height="14">
                                                         <!-- Unknown-limit indicator (#1159 Fix B): shown when FractionUsed is null so the
-                                                             row does not read as "100% full green". Hyperlinks to the Copilot features page. -->
+                                                             row does not read as "100% full green". #1172: routed via OpenUrlCommand. -->
                                                         <HyperlinkButton Name="UnknownLimitLink"
-                                                                         NavigateUri="https://github.com/settings/copilot/features"
+                                                                         Command="{Binding $parent[UserControl].DataContext.OpenUrlCommand}"
+                                                                         CommandParameter="https://github.com/settings/copilot/features"
                                                                          Padding="0"
                                                                          HorizontalAlignment="Stretch"
                                                                          HorizontalContentAlignment="Stretch"

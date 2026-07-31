@@ -31,4 +31,14 @@ public interface IWorkspaceTabService
     /// Closes the specified tab and disposes it.
     /// </summary>
     void CloseTab(WorkspaceTabViewModel tab);
+
+    /// <summary>
+    /// Attempts to activate an existing <see cref="WebViewModel"/> tab in the CURRENTLY SELECTED
+    /// workspace pane whose URL matches <paramref name="url"/> (normalized via
+    /// <see cref="System.Uri.AbsoluteUri"/> when both URLs parse as absolute; ordinal-invariant
+    /// string equality otherwise). Returns <see langword="true"/> if such a tab was found and
+    /// activated; <see langword="false"/> otherwise.
+    /// Scoped to the selected pane only — matching tabs in other panes are ignored (#1172).
+    /// </summary>
+    Task<bool> TryFocusExistingWebTabAsync(string url);
 }

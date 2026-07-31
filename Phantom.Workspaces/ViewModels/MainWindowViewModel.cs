@@ -82,6 +82,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private IRunningAgentChatTable? runningAgentChats;
     private UsageTrackerViewModel? usageTracker;
     private Services.UsageMetricsService? usageMetricsService;
+    private readonly Services.ApplicationServices applicationServices;
     private readonly Microsoft.Extensions.Logging.ILoggerFactory loggerFactory;
     private readonly Services.Logging.ILogDirectoryProvider? logDirectoryProvider;
     private readonly global::Phantom.Workspaces.Configuration.ConfigurationPersistenceService? configurationPersistence;
@@ -103,6 +104,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ApplicationServices? applicationServices = null)
     {
         var services = applicationServices ?? CreateDefaultApplicationServices();
+        this.applicationServices = services;
         this.loggerFactory = services.LoggerFactory
             ?? Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance;
         this.logDirectoryProvider = services.LogDirectoryProvider;
@@ -481,6 +483,10 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     internal ShortcutManager ShortcutManager => this.shortcutManager;
 
+    /// <summary>#1172: shared services holder. Exposes <see cref="ApplicationServices.UrlOpener"/>
+    /// once <c>App.axaml.cs</c> has registered it.</summary>
+    internal Services.ApplicationServices ApplicationServices => this.applicationServices;
+
     /// <summary>
     /// Reflects the persisted scheduled-tools pause state on the clock / scheduled-tools button, and
     /// toggles it. Null until <see cref="InitializeAsync"/> has composed the scheduled-tools runtime.
@@ -743,7 +749,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             metrics,
             this.loggerFactory.CreateLogger<UsageTrackerViewModel>(),
             initialSelectedUsageMetricKey: this.configuration?.SelectedUsageMetric,
-            persistSelectionAsync: persistSelection);
+            persistSelectionAsync: persistSelection,
+            urlOpenerProvider: () => this.applicationServices.UrlOpener);
         this.UsageTracker = vm;
 
         var providers = new List<Services.UsageProviders.IUsageProvider>
@@ -2505,6 +2512,66 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             _ = DisposeWorkspaceTabAsync(tab);
             return;
         }
+    }
+
+    /// <summary>
+    /// #1172: same-workspace, same-URL dedup for embedded URL opens. Enumerates the tabs of the
+    /// currently selected workspace pane looking for a <see cref="WebViewModel"/> whose URL
+    /// matches <paramref name="url"/> (normalized via <see cref="Uri.AbsoluteUri"/> when both
+    /// URLs parse as absolute; ordinal-invariant string equality otherwise). On a match,
+    /// activates the existing tab via the standard <see cref="OpenTabAsync(WorkspaceTabViewModel, string?, bool, string?)"/>
+    /// path so activation goes through the same <c>dockFactory.SetActiveDockable</c> /
+    /// <c>SetFocusedDockable</c> logic as tab-id dedup. Scoped to the selected pane only —
+    /// matching tabs in other panes are intentionally ignored.
+    /// </summary>
+    public async Task<bool> TryFocusExistingWebTabAsync(string url)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            return false;
+        }
+
+        var pane = this.selectedWorkspacePane;
+        if (pane?.ContentLayout is null)
+        {
+            return false;
+        }
+
+        WebViewModel? match = null;
+        foreach (var candidate in pane.Tabs)
+        {
+            if (candidate is WebViewModel webVm && UrlsMatch(url, webVm.AddressBarUrl))
+            {
+                match = webVm;
+                break;
+            }
+        }
+
+        if (match is null)
+        {
+            return false;
+        }
+
+        // Reuse the standard dedup branch of OpenTabAsync (finds the existing document by tab.Id
+        // and calls SetActiveDockable / SetFocusedDockable).
+        await this.OpenTabAsync(match, focus: true);
+        return true;
+    }
+
+    private static bool UrlsMatch(string a, string b)
+    {
+        if (a is null || b is null)
+        {
+            return false;
+        }
+
+        if (Uri.TryCreate(a, UriKind.Absolute, out var uriA)
+            && Uri.TryCreate(b, UriKind.Absolute, out var uriB))
+        {
+            return string.Equals(uriA.AbsoluteUri, uriB.AbsoluteUri, StringComparison.Ordinal);
+        }
+
+        return string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task DuplicateBrowserTabAsync()

@@ -1,5 +1,6 @@
 using System;
 using System.Windows.Input;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -18,16 +19,22 @@ public class WebViewModel : WorkspaceTabViewModel
     private string currentUrl = string.Empty;
 
     private readonly IWorkspaceTabService? tabService;
+    private readonly IUrlOpener? urlOpener;
     private readonly bool titleFixed;
     private readonly FaviconTabHeaderItemViewModel faviconItem;
 
-    public WebViewModel(string initialUrl, IWorkspaceTabService? tabService = null, bool titleFixed = false)
+    public WebViewModel(
+        string initialUrl,
+        IWorkspaceTabService? tabService = null,
+        bool titleFixed = false,
+        IUrlOpener? urlOpener = null)
     {
         this.titleFixed = titleFixed;
         this.addressBarUrl = initialUrl;
         this.currentUrl = initialUrl;
         this.sourceUri = Uri.TryCreate(initialUrl, UriKind.Absolute, out var uri) ? uri : null;
         this.tabService = tabService;
+        this.urlOpener = urlOpener;
 
         this.HomeUrl = string.IsNullOrEmpty(initialUrl) ? null : initialUrl;
 
@@ -150,6 +157,18 @@ public class WebViewModel : WorkspaceTabViewModel
 
     private void OpenInExternalBrowser()
     {
+        // #1172: route through IUrlOpener when available so the External preference is respected
+        // and never opens a second embedded tab. Fall back to the legacy Process.Start path only
+        // when no opener has been wired (unit tests that predate the service, etc.).
+        if (this.urlOpener is not null)
+        {
+            _ = this.urlOpener.OpenAsync(new OpenUrlRequest(this.AddressBarUrl)
+            {
+                Preference = UrlOpenPreference.External,
+            });
+            return;
+        }
+
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo

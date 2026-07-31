@@ -44,4 +44,22 @@ public sealed class ApplicationServices
     /// the pinned AI-usage metric selection). Null in tests that don't exercise persistence.
     /// </summary>
     public ConfigurationPersistenceService? ConfigurationPersistence { get; }
+
+    /// <summary>
+    /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>
+    /// after <c>MainWindowViewModel</c> exists (the opener depends on the view model as
+    /// <see cref="Phantom.Workspaces.ViewModels.IWorkspaceTabService"/>). Null in tests that don't
+    /// exercise URL opening.
+    /// </summary>
+    public IUrlOpener? UrlOpener { get; private set; }
+
+    /// <summary>
+    /// Post-construction slot for <see cref="UrlOpener"/>. Breaks the
+    /// <c>MainWindowViewModel</c> ↔ <c>UrlOpener</c> construction cycle (the opener is
+    /// created after the view model, then registered here).
+    /// </summary>
+    internal void SetUrlOpener(IUrlOpener opener)
+    {
+        this.UrlOpener = opener;
+    }
 }

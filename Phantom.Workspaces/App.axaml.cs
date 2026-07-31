@@ -280,6 +280,14 @@ public partial class App : Application
                 configurationPersistence: persistenceService);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
+            // #1172: register the canonical URL opener now that MainWindowViewModel exists
+            // (it implements IWorkspaceTabService). The TopLevel accessor is late-bound to
+            // desktop.MainWindow because the real MainWindow is created after InitializeAsync.
+            applicationServices.SetUrlOpener(
+                Services.UrlOpener.CreateDefault(
+                    viewModel,
+                    () => desktop.MainWindow as Avalonia.Controls.TopLevel));
+
             loadingViewModel.StatusText = "Loading repository data and profile.";
             try
             {

@@ -471,4 +471,83 @@ public sealed class UsageTrackerViewModelTests
         Assert.False(m1.IsSelectedAsShown);
         Assert.True(m2.IsSelectedAsShown);
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // #1172 — OpenUrlCommand routes through IUrlOpener.
+    // ---------------------------------------------------------------------------------------------
+
+    private sealed class RecordingUrlOpener : Phantom.Workspaces.Services.IUrlOpener
+    {
+        public List<Phantom.Workspaces.Services.OpenUrlRequest> Requests { get; } = new();
+
+        public System.Threading.Tasks.Task OpenAsync(Phantom.Workspaces.Services.OpenUrlRequest request, System.Threading.CancellationToken cancellationToken = default)
+        {
+            this.Requests.Add(request);
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenMetricRowInvoked_CallsUrlOpenerWithMetricWebUrl()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        var webUrl = "https://github.com/settings/billing/summary?user=octocat";
+        vm.OpenUrlCommand.Execute(webUrl);
+
+        Assert.Single(opener.Requests);
+        Assert.Equal(webUrl, opener.Requests[0].Url);
+        Assert.Equal(Phantom.Workspaces.Services.UrlOpenPreference.Auto, opener.Requests[0].Preference);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenAccountHeaderInvoked_CallsUrlOpenerWithSettingsUrl()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute("https://github.com/settings/copilot");
+
+        Assert.Single(opener.Requests);
+        Assert.Equal("https://github.com/settings/copilot", opener.Requests[0].Url);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenUrlIsNullOrEmpty_DoesNotCallUrlOpener()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute(null);
+        vm.OpenUrlCommand.Execute(string.Empty);
+
+        Assert.Empty(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenInvoked_DoesNotCallExternalLauncherDirectly()
+    {
+        // The view model must never touch Launcher / Process.Start directly — routing is entirely
+        // delegated to IUrlOpener. Verified by asserting the URL flowed through the injected opener
+        // (no other observable side effect exists).
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute("https://example.com/");
+
+        Assert.Single(opener.Requests);
+    }
 }

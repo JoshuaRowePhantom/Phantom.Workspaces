@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Models;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -24,6 +26,7 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
     private readonly UsageMetrics usageMetrics;
     private readonly ILogger<UsageTrackerViewModel> logger;
     private readonly Func<string?, Task>? persistSelectionAsync;
+    private readonly Func<IUrlOpener?>? urlOpenerProvider;
     private string? topRightLabel;
     private string? selectedUsageMetricKey;
     private bool suppressSelectionSync;
@@ -42,14 +45,17 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
         UsageMetrics usageMetrics,
         ILogger<UsageTrackerViewModel>? logger = null,
         string? initialSelectedUsageMetricKey = null,
-        Func<string?, Task>? persistSelectionAsync = null)
+        Func<string?, Task>? persistSelectionAsync = null,
+        Func<IUrlOpener?>? urlOpenerProvider = null)
     {
         this.usageMetrics = usageMetrics;
         this.logger = logger ?? NullLogger<UsageTrackerViewModel>.Instance;
         this.selectedUsageMetricKey = initialSelectedUsageMetricKey;
         this.persistSelectionAsync = persistSelectionAsync;
+        this.urlOpenerProvider = urlOpenerProvider;
         this.accounts = [.. usageMetrics.Accounts];
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
+        this.OpenUrlCommand = new RelayCommand(parameter => _ = this.OpenUrlAsync(parameter as string));
 
         usageMetrics.Accounts.CollectionChanged += this.OnAccountsChanged;
 
@@ -107,6 +113,31 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
     }
 
     public ICommand ToggleOpenCommand { get; }
+
+    /// <summary>
+    /// #1172: XAML-bound command wired to every <c>HyperlinkButton</c> in
+    /// <see cref="Phantom.Workspaces.Controls.UsageTrackerControl"/>. The <c>CommandParameter</c>
+    /// carries the URL to open. Routes through <see cref="IUrlOpener"/> (Auto preference →
+    /// http(s) opens embedded with same-URL dedup; other schemes go external). The view model
+    /// deliberately never touches <c>Launcher</c> / <c>Process.Start</c> directly.
+    /// </summary>
+    public ICommand OpenUrlCommand { get; }
+
+    private async Task OpenUrlAsync(string? url)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            return;
+        }
+
+        var opener = this.urlOpenerProvider?.Invoke();
+        if (opener is null)
+        {
+            return;
+        }
+
+        await opener.OpenAsync(new OpenUrlRequest(url));
+    }
 
     /// <summary>
     /// The stable key (see <see cref="UsageAccount.ComposeKey"/>) of the metric the

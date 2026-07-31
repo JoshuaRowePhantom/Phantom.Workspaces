@@ -8,12 +8,14 @@ using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.AI;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using Dock.Avalonia.Controls;
 using global::Dock.Model.Controls;
 using global::Dock.Model.Core;
@@ -4781,6 +4783,149 @@ public sealed class MainWindowIntegrationTests
         {
             await CloseWindowAsync(window);
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // #1172 — Usage tracker end-to-end via IUrlOpener.
+    // ---------------------------------------------------------------------------------------------
+
+    private sealed class RecordingUrlOpener : IUrlOpener
+    {
+        public List<OpenUrlRequest> Requests { get; } = new();
+
+        public Task OpenAsync(OpenUrlRequest request, CancellationToken cancellationToken = default)
+        {
+            this.Requests.Add(request);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class DelegatingUrlOpener : IUrlOpener
+    {
+        private readonly IUrlOpener inner;
+        public List<OpenUrlRequest> Requests { get; } = new();
+        public DelegatingUrlOpener(IUrlOpener inner) { this.inner = inner; }
+        public async Task OpenAsync(OpenUrlRequest request, CancellationToken cancellationToken = default)
+        {
+            this.Requests.Add(request);
+            await this.inner.OpenAsync(request, cancellationToken);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlFromUsageTracker_OpensTabInCurrentWorkspacePane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var realOpener = UrlOpener.CreateDefault(viewModel, () => null);
+        viewModel.ApplicationServices.SetUrlOpener(realOpener);
+        await viewModel.InitializeAsync();
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var initialTabCount = pane.Tabs.Count;
+
+        await realOpener.OpenAsync(new OpenUrlRequest("https://example.com/tracker"));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Equal(initialTabCount + 1, pane.Tabs.Count);
+        Assert.Contains(pane.Tabs, t => t is WebViewModel w && w.AddressBarUrl == "https://example.com/tracker");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlFromUsageTracker_SameUrlClickedTwice_ActivatesFirstTabAndDoesNotOpenSecond()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var realOpener = UrlOpener.CreateDefault(viewModel, () => null);
+        viewModel.ApplicationServices.SetUrlOpener(realOpener);
+        await viewModel.InitializeAsync();
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var initial = pane.Tabs.Count;
+
+        await realOpener.OpenAsync(new OpenUrlRequest("https://example.com/tracker"));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        Assert.Equal(initial + 1, pane.Tabs.Count);
+
+        await realOpener.OpenAsync(new OpenUrlRequest("https://example.com/tracker"));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        // Same URL — no new tab; existing tab activated.
+        Assert.Equal(initial + 1, pane.Tabs.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenUrlFromUsageTracker_SameUrlInDifferentPane_OpensNewTabInCurrentPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var realOpener = UrlOpener.CreateDefault(viewModel, () => null);
+        viewModel.ApplicationServices.SetUrlOpener(realOpener);
+        await viewModel.InitializeAsync();
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var currentPane = viewModel.SelectedWorkspacePane;
+        // Simulate a matching tab existing in a NON-selected pane by removing it from the current
+        // pane's Tabs collection (dedup scans SelectedWorkspacePane.Tabs only).
+        var stray = new WebViewModel("https://example.com/tracker") { Id = "web-stray", Title = "stray" };
+        currentPane.Tabs.Add(stray);
+        currentPane.Tabs.Remove(stray); // was never actually in the pane's dock
+
+        var initial = currentPane.Tabs.Count;
+        await realOpener.OpenAsync(new OpenUrlRequest("https://example.com/tracker"));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // A new tab opens in the current pane because the "other pane" tab does not count.
+        Assert.Equal(initial + 1, currentPane.Tabs.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task IUrlOpener_ExternalPreferenceFromWebViewModel_DoesNotOpenSecondTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var recording = new RecordingUrlOpener();
+        viewModel.ApplicationServices.SetUrlOpener(recording);
+        await viewModel.InitializeAsync();
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var web = new WebViewModel(
+            "https://example.com/",
+            tabService: viewModel,
+            titleFixed: false,
+            urlOpener: recording)
+        { Id = "web-a", Title = "A" };
+        await viewModel.OpenTabAsync(web);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var beforeCount = pane.Tabs.Count;
+        web.OpenInExternalBrowserCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // The IUrlOpener recorded an External request, and no additional embedded tab opened.
+        Assert.Contains(recording.Requests, r => r.Preference == UrlOpenPreference.External);
+        Assert.Equal(beforeCount, pane.Tabs.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task IUrlOpener_ExternalPreferenceFromExternalEntity_RoutesThroughLauncher()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        var recording = new RecordingUrlOpener();
+        viewModel.ApplicationServices.SetUrlOpener(recording);
+        await viewModel.InitializeAsync();
+
+        var url = "https://example.com/external";
+        var tab = new ExternalEntityWorkspaceTabViewModel(
+            entity: null!,
+            urlKey: "default",
+            url: url,
+            urlOpener: recording)
+        { Id = "ext-a", Title = "A" };
+
+        tab.OpenInExternalBrowserCommand.Execute(null);
+
+        Assert.Single(recording.Requests);
+        Assert.Equal(url, recording.Requests[0].Url);
+        Assert.Equal(UrlOpenPreference.External, recording.Requests[0].Preference);
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
