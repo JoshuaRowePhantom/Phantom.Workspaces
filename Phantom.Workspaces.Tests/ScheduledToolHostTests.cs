@@ -414,6 +414,39 @@ public sealed class ScheduledToolHostTests
     }
 
     [Fact]
+    public async Task RunToolAsync_WhenNoRegisteredToolMatchesToolType_CompletesResultHandleWithFailure()
+    {
+        // Regression for #1161: a seeded tool entity whose tool-type has no registered tool must
+        // complete its tool-execution-result handle as failed (with a message identifying the missing
+        // tool-type). It must not leave a phantom "running" result entity behind.
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        // Registry has no tools registered — the seeded "stub" tool-type will not resolve.
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]), timeProvider: new FixedTimeProvider());
+
+        var ranCount = await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, ranCount);
+
+        // A tool-execution-result must have been recorded and completed (not left "running").
+        var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
+        var resultEntity = Assert.Single(results);
+        Assert.Equal("failed", resultEntity.GetProperty("status").GetString());
+        var content = resultEntity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString();
+        Assert.NotNull(content);
+        Assert.Contains("stub", content!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunDueTools_ToolReturnsFailure_RecordsFailedResult()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();

@@ -151,7 +151,7 @@ public sealed class ToolExecutionResultWriterTests
         var time = new FixedTimeProvider();
         var writer = new ToolExecutionResultWriter(dataAccessLayer, time);
 
-        var handle = await writer.StartAsync(HostName, "git-workspace-discovery", TestContext.Current.CancellationToken);
+        var handle = await writer.StartAsync(HostName, "git-workspace-scan", TestContext.Current.CancellationToken);
         var startTime = time.Now;
         time.Now = time.Now.AddSeconds(7);
         await writer.CompleteAsync(handle, success: true, content: "Scanned 1 root(s); found 3 repositories.", TestContext.Current.CancellationToken);

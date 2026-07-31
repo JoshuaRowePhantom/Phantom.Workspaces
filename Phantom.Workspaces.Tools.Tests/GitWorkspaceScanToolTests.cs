@@ -7,11 +7,11 @@ using Phantom.Workspaces.Data.Offline;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
-public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
+public sealed class GitWorkspaceScanToolTests : IDisposable
 {
-    private readonly string temporaryRootPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"git-workspace-discovery-{Guid.NewGuid():N}"));
+    private readonly string temporaryRootPath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"git-workspace-scan-{Guid.NewGuid():N}"));
 
-    public GitWorkspaceDiscoveryToolTests()
+    public GitWorkspaceScanToolTests()
     {
         Directory.CreateDirectory(this.temporaryRootPath);
     }
@@ -32,7 +32,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             dataAccessLayer,
             currentProfileRoot,
             otherProfileRoot);
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([currentProfileRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([currentProfileRoot]));
 
         await tool.ExecuteAsync(context);
 
@@ -71,7 +71,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             Participants = [context.CurrentComputerUserProfileEntity],
         };
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([currentProfileRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([currentProfileRoot]));
         await tool.ExecuteAsync(context);
 
         var discoveredWorktree = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath));
@@ -91,7 +91,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
         await tool.ExecuteAsync(context);
 
         var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", rootRepoPath));
@@ -115,7 +115,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
         await tool.ExecuteAsync(context);
 
         var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
@@ -142,7 +142,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
         await tool.ExecuteAsync(context);
 
         var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
@@ -166,7 +166,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
         await tool.ExecuteAsync(context);
 
         var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
@@ -191,7 +191,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
         await tool.ExecuteAsync(context);
 
         Assert.Equal(
@@ -219,7 +219,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
         await tool.ExecuteAsync(context);
 
         var entity = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", linkedWorktreePath));
@@ -501,14 +501,14 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         var invalidRepoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "invalid-repo"));
         Directory.CreateDirectory(Path.Combine(invalidRepoPath, ".git"));
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             this.temporaryRootPath,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([this.temporaryRootPath]),
             logger);
 
@@ -523,14 +523,14 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "profile-root"));
         Directory.CreateDirectory(scanRoot);
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([scanRoot]),
             logger);
 
@@ -548,14 +548,14 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "my-repo"));
         InitializeGitRepository(repoPath, "https://example.com/debug.git");
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([scanRoot]),
             logger);
 
@@ -575,14 +575,14 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         InitializeGitRepository(repoPath1, "https://example.com/one.git");
         InitializeGitRepository(repoPath2, "https://example.com/two.git");
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([scanRoot]),
             logger);
 
@@ -607,7 +607,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
 
         // First run: create entity
         await tool.ExecuteAsync(context);
@@ -652,7 +652,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
 
         // First run: create entity
         await tool.ExecuteAsync(context);
@@ -699,7 +699,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
 
         // First run: create entity
         await tool.ExecuteAsync(context);
@@ -744,7 +744,7 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
 
-        var tool = new GitWorkspaceDiscoveryTool(new FixedLocalDriveRootProvider([scanRoot]));
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
 
         // First run: create entity
         await tool.ExecuteAsync(context);
@@ -781,19 +781,19 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
     }
 
     [Fact]
-    public async Task GitWorkspaceDiscoveryTool_WhenScanStarts_LogsScanningTopLevelDirectory()
+    public async Task GitWorkspaceScanTool_WhenScanStarts_LogsScanningTopLevelDirectory()
     {
         var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "scan-starts"));
         Directory.CreateDirectory(scanRoot);
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([scanRoot]),
             logger);
 
@@ -806,20 +806,20 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
     }
 
     [Fact]
-    public async Task GitWorkspaceDiscoveryTool_WhenScanCompletes_LogsRepositoryCountSummary()
+    public async Task GitWorkspaceScanTool_WhenScanCompletes_LogsRepositoryCountSummary()
     {
         var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "summary-scan"));
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "summary-repo"));
         InitializeGitRepository(repoPath, "https://example.com/summary.git");
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([scanRoot]),
             logger);
 
@@ -833,20 +833,20 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
     }
 
     [Fact]
-    public async Task GitWorkspaceDiscoveryTool_WhenScanCompletes_ReturnsResultSummaryContent()
+    public async Task GitWorkspaceScanTool_WhenScanCompletes_ReturnsResultSummaryContent()
     {
         var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "result-scan"));
         var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "result-repo"));
         InitializeGitRepository(repoPath, "https://example.com/result.git");
 
-        var logger = new TestLogger<GitWorkspaceDiscoveryTool>();
+        var logger = new TestLogger<GitWorkspaceScanTool>();
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var context = await CreateExecutionContextAsync(
             dataAccessLayer,
             scanRoot,
             Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root")));
 
-        var tool = new GitWorkspaceDiscoveryTool(
+        var tool = new GitWorkspaceScanTool(
             new FixedLocalDriveRootProvider([scanRoot]),
             logger);
 
@@ -856,6 +856,22 @@ public sealed class GitWorkspaceDiscoveryToolTests : IDisposable
         Assert.NotNull(result.ResultContent);
         Assert.Contains("Scanned", result.ResultContent, StringComparison.Ordinal);
         Assert.Contains("repositories", result.ResultContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GitWorkspaceScanTool_ToolType_MatchesSeededDefaultEntity()
+    {
+        // Regression for #1161: the seeded default tool entity's tool-type must match the tool's ToolType,
+        // otherwise ScheduledToolHost cannot resolve the tool and scheduled scans silently no-op.
+        var tool = new GitWorkspaceScanTool();
+        var assembly = typeof(SchemaPopulator).Assembly;
+        const string resourceName = "Phantom.Workspaces.Data.JsonEntities.defaults.tools.git-workspace-scan-tool.json";
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+        using var document = JsonDocument.Parse(stream!);
+        var seededToolType = document.RootElement.GetProperty("tool-type").GetString();
+
+        Assert.Equal(seededToolType, tool.ToolType);
     }
 }
 

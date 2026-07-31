@@ -6091,7 +6091,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowViewModel_GitWorkspaceDiscoveryTool_IsRegistered()
+    public async Task MainWindow_ScheduledToolHost_RegistersGitWorkspaceScanTool()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -6102,7 +6102,7 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(hostField);
         var host = Assert.IsType<Phantom.Workspaces.ScheduledTools.ScheduledToolHost>(hostField!.GetValue(viewModel));
 
-        Assert.True(host.TryGetTool("git-workspace-discovery", out _));
+        Assert.True(host.TryGetTool("git-workspace-scan", out _));
     }
 
     [AvaloniaFact(Timeout = 15_000)]

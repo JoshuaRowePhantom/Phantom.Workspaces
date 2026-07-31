@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// Shared helper for detecting and reading metadata from Git repositories.
-/// Used by <see cref="GitWorkspaceDiscoveryTool"/> and <see cref="GitWorkspaceUpdateTool"/>
+/// Used by <see cref="GitWorkspaceScanTool"/> and <see cref="GitWorkspaceUpdateTool"/>
 /// to avoid duplicating detection and read logic.
 /// </summary>
 public static class GitRepositoryMetadataReader

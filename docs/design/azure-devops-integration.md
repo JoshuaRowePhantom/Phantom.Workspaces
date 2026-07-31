@@ -286,7 +286,7 @@ Default entities/schemas (in `Phantom.Workspaces.Data.Core`):
   `AzureDevOpsClient`, `AzureDevOpsTokenResolver`, `AzureDevOpsEntityNames`,
   `AzureDevOpsEntityFactory`, DTOs.
 - **Tool registration:** add the three `tool-type`s to the tool factory/registry that maps
-  `tool-type` → `IWorkspaceTool` (alongside `git-workspace-discovery`, `user-discovery`, etc.).
+  `tool-type` → `IWorkspaceTool` (alongside `git-workspace-scan`, `user-discovery`, etc.).
 - **`EntityClassifierTool`:** load and include the classified entity's entity-types' note
   `content` in the assembled prompt (the classification guidance lives in those notes).
 - **Schemas/entities (`Data.Core`):** new JsonSchemas, entity-type entities, docs, tool +

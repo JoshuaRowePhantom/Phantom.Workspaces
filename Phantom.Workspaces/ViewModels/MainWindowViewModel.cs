@@ -629,7 +629,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var registry = new ScheduledTools.ScheduledToolRegistry(
         [
             new Tools.VectorIndexerTool(),
-            new Tools.GitWorkspaceDiscoveryTool(logger: this.loggerFactory.CreateLogger<Tools.GitWorkspaceDiscoveryTool>()),
+            new Tools.GitWorkspaceScanTool(logger: this.loggerFactory.CreateLogger<Tools.GitWorkspaceScanTool>()),
             new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
             new Tools.VsCodeTunnelDiscoveryTool(),

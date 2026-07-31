@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// Shared helper for building and merging git-worktree entity data.
-/// Used by <see cref="GitWorkspaceDiscoveryTool"/> and <see cref="GitWorkspaceUpdateTool"/>
+/// Used by <see cref="GitWorkspaceScanTool"/> and <see cref="GitWorkspaceUpdateTool"/>
 /// to ensure consistent entity structure and merge behavior.
 /// </summary>
 internal static class GitWorkspaceEntityData

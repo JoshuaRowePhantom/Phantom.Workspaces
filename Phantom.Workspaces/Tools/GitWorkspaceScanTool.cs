@@ -6,20 +6,20 @@ using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.Tools;
 
-public sealed class GitWorkspaceDiscoveryTool : IWorkspaceTool
+public sealed class GitWorkspaceScanTool : IWorkspaceTool
 {
-    private readonly ILogger<GitWorkspaceDiscoveryTool> logger;
+    private readonly ILogger<GitWorkspaceScanTool> logger;
     private readonly ILocalDriveRootProvider localDriveRootProvider;
 
-    public GitWorkspaceDiscoveryTool(
+    public GitWorkspaceScanTool(
         ILocalDriveRootProvider? localDriveRootProvider = null,
-        ILogger<GitWorkspaceDiscoveryTool>? logger = null)
+        ILogger<GitWorkspaceScanTool>? logger = null)
     {
         this.localDriveRootProvider = localDriveRootProvider ?? new LocalDriveRootProvider();
-        this.logger = logger ?? NullLogger<GitWorkspaceDiscoveryTool>.Instance;
+        this.logger = logger ?? NullLogger<GitWorkspaceScanTool>.Instance;
     }
 
-    public string ToolType => "git-workspace-discovery";
+    public string ToolType => "git-workspace-scan";
 
     public async Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context)
     {
