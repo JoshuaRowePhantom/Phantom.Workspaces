@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
@@ -170,7 +171,7 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         Assert.True(child.HasParent);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task InitializeAsync_PopulatesShortcuts()
     {
         var entity = CreateTestEntity();
@@ -185,6 +186,26 @@ public sealed class ViewEntityViewModelTests : IAsyncDisposable
         await viewModel.InitializeAsync();
 
         Assert.Contains(viewModel.Shortcuts, shortcut => shortcut.Shortcut == Shortcut.Open);
+    }
+
+    [AvaloniaFact]
+    public async Task InitializeAsync_CompletesWithinTimeout_WhenDispatcherActive()
+    {
+        var entity = CreateTestEntity();
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new TestShortcutHandler());
+        var viewModel = new ViewEntityViewModel(
+            entity,
+            this.mainWindowViewModel,
+            shortcutManager,
+            indentLevel: 0);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var initTask = viewModel.InitializeAsync();
+        var completed = await Task.WhenAny(initTask, Task.Delay(Timeout.Infinite, cts.Token));
+
+        Assert.Same(initTask, completed);
+        await initTask;
     }
 
     [AvaloniaFact]
