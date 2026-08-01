@@ -127,11 +127,34 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        var agentDefinitionJson = definitionDocument?.AgentDefinitionJson;
+        if (agentDefinitionJson is null)
+        {
+            // Fix #1187: legacy hosted Copilot sub-agents were persisted before the router
+            // wrote a full per-sub-agent AgentDefinition (or wrote only the two-field
+            // synthetic {"kind":"prompt","model":{"provider":"github-copilot-subagent"}})
+            // which round-tripped as null through PromptAgent. When we can prove this
+            // session is a sub-agent (there is a manifest link pointing at it), substitute
+            // the canonical full hosted-Copilot sub-agent definition so restore never
+            // returns a null AgentDefinitionJson for hosted sub-agents.
+            var subAgentManifestExists = await this.subAgentManifestCollection
+                .Find(Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(
+                    static x => x.ChildSessionId,
+                    request.AgentSessionId))
+                .AnyAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (subAgentManifestExists)
+            {
+                agentDefinitionJson = CopilotSubAgentDefinitionDefaults.BuildBsonJson(
+                    request.AgentSessionId);
+            }
+        }
+
         return new PersistedAgent
         {
             AgentSessionId = sessionDocument.AgentSessionId,
             AgentSessionJson = sessionDocument.AgentSessionJson,
-            AgentDefinitionJson = definitionDocument?.AgentDefinitionJson,
+            AgentDefinitionJson = agentDefinitionJson,
             CopilotSdkSessionId = sessionDocument.CopilotSdkSessionId,
             LastUpdatedUtc = sessionDocument.UpdatedUtc == default
                 ? null

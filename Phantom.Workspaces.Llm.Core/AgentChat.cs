@@ -213,6 +213,19 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            ?? (restoredAgentDefinitionJson is not null
                ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
                : null);
+       if (resolvedAgentDefinition is null && restoredAgent.HasValue)
+       {
+           // Fix #1187: legacy hosted Copilot sub-agents rehydrate with a null
+           // AgentDefinitionJson (the empty-definition case behind #1186). Substitute the
+           // canonical full hosted-Copilot sub-agent definition so downstream code (and
+           // AgentFactory model resolution in particular) always sees a well-formed
+           // document rather than propagating the null through to the model-null throw.
+           resolvedAgentDefinition = CopilotSubAgentDefinitionDefaults.Create(
+               subAgentSessionId: restoredAgent.Value.AgentSessionId,
+               displayName: this.request.DisplayNameOverride,
+               description: this.request.DescriptionOverride,
+               name: this.request.NameOverride);
+       }
        if (resolvedAgentDefinition is null)
        {
            throw new InvalidOperationException("Agent definition could not be resolved from request or persistence store.");

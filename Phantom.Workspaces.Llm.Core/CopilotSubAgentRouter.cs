@@ -26,9 +26,12 @@ namespace Phantom.Workspaces.Llm;
 /// </summary>
 internal sealed class CopilotSubAgentRouter : ISubAgentChat
 {
-    private static readonly AgentDefinition SubAgentDefinition =
-        AgentDefinition.FromJson("""{"kind":"prompt","model":{"provider":"github-copilot-subagent"}}""")
-        ?? throw new InvalidOperationException("Failed to parse sub-agent AgentDefinition.");
+    // Fix #1187: hosted Copilot sub-agents are now constructed with a full, per-sub-agent
+    // AgentDefinition (name/displayName/description/model.id) built by
+    // CopilotSubAgentDefinitionDefaults.Create so save/restore round-trip a complete document
+    // rather than the old two-field synthetic
+    // {"kind":"prompt","model":{"provider":"github-copilot-subagent"}} that produced the
+    // empty-definition regression behind #1186.
 
     private readonly ChannelWriter<ChatResponseUpdate> rootWriter;
     private readonly IRunningAgentChatFactory factory;
@@ -279,8 +282,13 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         try
         {
             var sessionId = new AgentSessionId(Guid.NewGuid().ToString("n"));
+            var subAgentDefinition = CopilotSubAgentDefinitionDefaults.Create(
+                subAgentSessionId: sessionId.Value,
+                displayName: displayNameOverride,
+                description: descriptionOverride,
+                name: nameOverride);
             var lease = await this.factory.CreateAsync(
-                    SubAgentDefinition,
+                    subAgentDefinition,
                     sessionId,
                     services: null,
                     displayNameOverride: displayNameOverride,

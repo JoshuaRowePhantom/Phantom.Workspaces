@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
 using Xunit;
 
@@ -261,5 +262,129 @@ public sealed class AgentChatPersistenceTests
             persisted,
             message => message.Text is not null
                 && message.Text.Contains("Opened toolset", StringComparison.Ordinal));
+    }
+
+    // ─── Fix #1187: hosted Copilot sub-agents persist a full, well-formed
+    //     AgentDefinition and rehydrate a full definition on restore, even for legacy
+    //     rows whose AgentDefinitionJson was never written. ────────────────────────────
+
+    [Fact]
+    public async Task AgentChat_CreateSubAgent_PersistsFullAgentDefinitionJson()
+    {
+        // Fix #1187: after GetOrCreateAsync writes the sub-agent's AgentDefinition to the
+        // store, restoring the child session must return a fully-populated PromptAgent
+        // (kind/name/model.provider) — not the empty two-field synthetic the router used to
+        // produce.
+        var store = new InMemoryAgentPersistenceStore();
+        string childSessionId;
+        await using (var parent = await CreateParentChatAsync(store))
+        {
+            _ = await parent.GetOrCreateAsync("agent-1187p", SubDefinition, "tool-call-1187p");
+            childSessionId = ((AgentChat)Assert.Single(parent.SubAgents)).AgentSessionId;
+        }
+
+        var restored = await store.RestoreAsync(
+            new RestoreRequest { AgentSessionId = childSessionId },
+            CancellationToken.None);
+
+        Assert.NotNull(restored);
+        Assert.NotNull(restored!.Value.AgentDefinitionJson);
+        var definition = AgentDefinition.FromJson(restored.Value.AgentDefinitionJson!.ToJson());
+        var prompt = Assert.IsType<PromptAgent>(definition);
+        Assert.NotNull(prompt.Model);
+        Assert.False(string.IsNullOrEmpty(prompt.Name));
+    }
+
+    [Fact]
+    public void AgentDefinition_HostedCopilotSubAgent_RoundTripsThroughJson()
+    {
+        // Fix #1187: serializing then deserializing the canonical hosted Copilot sub-agent
+        // AgentDefinition preserves provider, model.id, name, and displayName.
+        var original = CopilotSubAgentDefinitionDefaults.Create(
+            subAgentSessionId: "session-1187-roundtrip",
+            displayName: "Roundtrip Display",
+            description: "Roundtrip description",
+            name: "roundtrip-name");
+
+        var roundTripped = AgentDefinition.FromJson(original.ToJson());
+
+        Assert.NotNull(roundTripped);
+        var originalPrompt = Assert.IsType<PromptAgent>(original);
+        var roundTrippedPrompt = Assert.IsType<PromptAgent>(roundTripped);
+        Assert.Equal(originalPrompt.Model?.Provider, roundTrippedPrompt.Model?.Provider);
+        Assert.Equal(originalPrompt.Model?.Id, roundTrippedPrompt.Model?.Id);
+        Assert.Equal(originalPrompt.Name, roundTrippedPrompt.Name);
+        Assert.Equal(originalPrompt.DisplayName, roundTrippedPrompt.DisplayName);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_RestoredSubAgent_HasFullAgentDefinition()
+    {
+        // Fix #1187 (extends InitializeAsync_RestoredSubAgent_HasCorrectAgentDefinition):
+        // for a hosted Copilot sub-agent whose AgentDefinitionJson was written via the
+        // full-definition path, restore yields an AgentDefinition whose Model.Provider is
+        // github-copilot-subagent.
+        var store = new InMemoryAgentPersistenceStore();
+        var hostedDefinition = CopilotSubAgentDefinitionDefaults.Create(
+            subAgentSessionId: "child-1187-hosted",
+            displayName: null,
+            description: null,
+            name: null);
+        string parentSessionId;
+
+        await using (var parent = await CreateParentChatAsync(store))
+        {
+            var sink = (ISubAgentChat)await parent.GetOrCreateAsync("agent-hosted-1187", hostedDefinition, "tool-call-hosted-1187");
+            sink.Complete();
+            await Task.Yield();
+            parentSessionId = parent.AgentSessionId;
+        }
+
+        var scheduler = new CapturingTaskScheduler();
+        await using var factory = CreateFactory(store);
+        var services = new AgentServices { RunningAgentChatFactory = factory };
+        await using var restoredParent = await CreateParentChatAsync(store, parentSessionId, services, scheduler);
+        scheduler.Drain();
+
+        var stub = Assert.IsType<SubAgent>(Assert.Single(restoredParent.SubAgents));
+        await using var lease = await stub.AcquireLeaseAsync();
+        var promptAgent = Assert.IsType<PromptAgent>(lease.AgentChat.AgentDefinition);
+        Assert.Equal("github-copilot-subagent", promptAgent.Model?.Provider);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_LegacySubAgentWithMissingDefinitionJson_RehydratesDefaultFullDefinition()
+    {
+        // Fix #1187: legacy hosted sub-agent rows persisted before the full-definition path
+        // existed have AgentDefinitionJson = null. InitializeAsync must substitute the
+        // canonical full hosted-Copilot sub-agent definition rather than throwing "Agent
+        // definition could not be resolved" (the underlying cause behind #1186).
+        var store = new InMemoryAgentPersistenceStore();
+        var legacyChildSessionId = "legacy-child-1187";
+
+        // Simulate legacy: session exists, but no AgentDefinitionJson was ever written.
+        await store.StoreAsync(
+            new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = legacyChildSessionId,
+                    AgentDefinitionJson = null,
+                },
+            },
+            CancellationToken.None);
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = null,
+            AgentSessionId = legacyChildSessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "legacy-restore",
+        });
+
+        var prompt = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        Assert.Equal("github-copilot-subagent", prompt.Model?.Provider);
+        Assert.False(string.IsNullOrEmpty(prompt.Model?.Id));
     }
 }

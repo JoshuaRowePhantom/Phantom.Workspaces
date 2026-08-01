@@ -892,4 +892,29 @@ public sealed class AgentChatFactoryTests
             return TryExecuteTask(task);
         }
     }
+
+    // Fix #1187: GetAsync must construct the child AgentChat for a persisted hosted
+    // Copilot sub-agent from the rehydrated full AgentDefinition (kind/name/model.provider
+    // = github-copilot-subagent) without hitting the "Agent definition does not specify a
+    // model." throw.
+    [Fact]
+    public async Task AgentChatFactory_GetAsync_RestoredHostedSubAgent_ConstructsClientFromRehydratedDefinition()
+    {
+        var sessionId = new AgentSessionId("session-1187-hosted");
+        var hostedDefinition = CopilotSubAgentDefinitionDefaults.Create(
+            subAgentSessionId: sessionId.Value,
+            displayName: null,
+            description: null,
+            name: null);
+        var store = await CreatePopulatedStoreAsync(sessionId, hostedDefinition);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(sessionId);
+
+        Assert.NotNull(lease.AgentChat);
+        var promptAgent = Assert.IsType<PromptAgent>(lease.AgentChat.AgentDefinition);
+        Assert.Equal(
+            CopilotSubAgentDefinitionDefaults.HostedSubAgentProvider,
+            promptAgent.Model?.Provider);
+    }
 }

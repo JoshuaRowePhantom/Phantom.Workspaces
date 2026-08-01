@@ -635,4 +635,66 @@ public sealed class CopilotSubAgentRouterTests
         // Parent transcript is untouched.
         Assert.Empty(await DrainAsync(channel));
     }
+
+    // ─── Fix #1187: full, per-sub-agent AgentDefinition ─────────────────────────
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_SubAgentDefinition_HasGithubCopilotSubagentProvider()
+    {
+        // Fix #1187: the definition the router hands to the factory always resolves to the
+        // github-copilot-subagent provider so AgentFactory's provider fast-path fires
+        // (composes with #912).
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart("agent-1187a", "call-1187a"));
+
+        var call = Assert.Single(factory.CreateCalls);
+        var promptAgent = Assert.IsType<PromptAgent>(call.Definition);
+        Assert.Equal("github-copilot-subagent", promptAgent.Model?.Provider);
+    }
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_SubAgentDefinition_IsFullyPopulated()
+    {
+        // Fix #1187: hosted sub-agents are constructed from a full canonical definition —
+        // non-null Model with a stable id, and non-empty Name/DisplayName — rather than the
+        // pre-#1187 two-field synthetic that had no model.id, no name, no displayName.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1187b",
+            parentToolCallId: "call-1187b",
+            displayName: "Researcher",
+            description: "Does research",
+            agentName: "research-bot"));
+
+        var call = Assert.Single(factory.CreateCalls);
+        var promptAgent = Assert.IsType<PromptAgent>(call.Definition);
+        Assert.NotNull(promptAgent.Model);
+        Assert.False(string.IsNullOrEmpty(promptAgent.Model!.Id));
+        Assert.False(string.IsNullOrEmpty(promptAgent.Name));
+        Assert.False(string.IsNullOrEmpty(promptAgent.DisplayName));
+    }
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_SubAgentStarted_PassesPerSubAgentDefinition()
+    {
+        // Fix #1187: distinct SubAgentStarted events must produce distinct AgentDefinition
+        // instances (per-sub-agent identity) — the previous implementation shared a single
+        // static synthetic definition across every hosted sub-agent.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, _) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1187c1", parentToolCallId: "call-1187c1",
+            displayName: "A", description: "a", agentName: "a"));
+        await router.RouteAsync(LifecycleStart(
+            agentId: "agent-1187c2", parentToolCallId: "call-1187c2",
+            displayName: "B", description: "b", agentName: "b"));
+
+        Assert.Equal(2, factory.CreateCalls.Count);
+        Assert.NotSame(factory.CreateCalls[0].Definition, factory.CreateCalls[1].Definition);
+    }
 }
