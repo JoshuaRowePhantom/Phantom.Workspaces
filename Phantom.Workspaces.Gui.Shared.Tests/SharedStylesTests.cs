@@ -1449,7 +1449,7 @@ public sealed class SharedStylesTests
         ScrollViewer Inner,
         TextBlock Path,
         TreeViewItem Item,
-        StackPanel? Wrapper,
+        Panel? Wrapper,
         bool HScroll,
         bool VScroll);
 
@@ -1577,7 +1577,7 @@ public sealed class SharedStylesTests
         var inner = tree.GetVisualDescendants().OfType<ScrollViewer>().First();
         var path = window.GetVisualDescendants().OfType<TextBlock>().First(b => b.Name == "PathValue");
         var item = window.GetVisualDescendants().OfType<TreeViewItem>().First();
-        var wrapper = window.GetVisualDescendants().OfType<StackPanel>().FirstOrDefault(s => s.MinWidth == 160);
+        var wrapper = window.GetVisualDescendants().OfType<Panel>().FirstOrDefault(s => s.MinWidth == 160);
         var hScroll = window.GetVisualDescendants().OfType<ScrollBar>()
             .Any(s => s.Orientation == Orientation.Horizontal && s.IsEffectivelyVisible && s.Bounds.Width > 0);
         var vScroll = window.GetVisualDescendants().OfType<ScrollBar>()

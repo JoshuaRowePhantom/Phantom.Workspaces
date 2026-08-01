@@ -297,16 +297,23 @@
     <!-- Issue #1177: use VirtualizingStackPanel so trees with thousands of entity cards realize
          only viewport-sized batches. VirtualizingStackPanel in Avalonia 12.1 is a pixel-scrolling
          panel driven by the enclosing ScrollViewer's EffectiveViewportChanged, so smooth per-pixel
-         scrolling is preserved. The MaxWidth/MinWidth binding to the parent ScrollViewer's viewport
-         width is removed here — the virtualizing panel needs a real, bounded viewport rather than a
-         panel-level width cap; width behavior lives on the item content template. -->
+         scrolling is preserved. The MinWidth/MaxWidth two-regime wrapper from #1049/#1064 is
+         preserved here: MinWidth="160" floors the panel so the horizontal scrollbar stays reachable
+         when the viewport is narrower than a card's minimum, and MaxWidth bound to the parent
+         ScrollViewer's Viewport.Width caps content to the viewport so cards wrap without
+         overflowing when the viewport is wider than the minimum. These are per-panel constraints
+         on the non-scrolled (horizontal) axis and do not interfere with pixel virtualization on
+         the scrolled (vertical) axis. -->
     <Style Selector="TreeView.entity-card-tree">
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
         <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
-                <VirtualizingStackPanel Orientation="Vertical" />
+                <VirtualizingStackPanel Orientation="Vertical"
+                                        HorizontalAlignment="Stretch"
+                                        MinWidth="160"
+                                        MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
             </ItemsPanelTemplate>
         </Setter>
     </Style>
@@ -317,7 +324,10 @@
         <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
-                <VirtualizingStackPanel Orientation="Vertical" />
+                <VirtualizingStackPanel Orientation="Vertical"
+                                        HorizontalAlignment="Stretch"
+                                        MinWidth="160"
+                                        MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
             </ItemsPanelTemplate>
         </Setter>
     </Style>
