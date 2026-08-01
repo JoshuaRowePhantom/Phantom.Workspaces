@@ -1,3 +1,4 @@
+using Avalonia.Input;
 using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
@@ -177,5 +178,61 @@ public sealed class WebView2AcceleratorInteropTests
 
         Assert.Equal(1, tab);
         Assert.Null(pane);
+    }
+
+    // --- Generic accelerator-forwarding dispatch (issue #1168) -----------------------------------
+
+    private const int KeyDown = 0;
+    private const int VK_N = 0x4E;
+    private const int VK_A = 0x41;
+
+    [Fact]
+    public void Dispatch_KeyDownCtrlW_RaisesGenericAcceleratorKeyPressedWithCtrlW()
+    {
+        AcceleratorKeyEventArgs? received = null;
+        WebView2AcceleratorInterop.Dispatch(
+            KeyDown, VK_W,
+            listener: args => received = args,
+            isKeyDown: k => k == VK_CONTROL);
+
+        Assert.NotNull(received);
+        Assert.Equal(Key.W, received!.Key);
+        Assert.Equal(KeyModifiers.Control, received.Modifiers);
+    }
+
+    [Fact]
+    public void Dispatch_SystemKeyDownAltN_RaisesGenericAcceleratorKeyPressedWithAltN()
+    {
+        AcceleratorKeyEventArgs? received = null;
+        WebView2AcceleratorInterop.Dispatch(
+            SystemKeyDown, VK_N,
+            listener: args => received = args,
+            isKeyDown: _ => false);
+
+        Assert.NotNull(received);
+        Assert.Equal(Key.N, received!.Key);
+        Assert.Equal(KeyModifiers.Alt, received.Modifiers);
+    }
+
+    [Fact]
+    public void Dispatch_KeyDownPlainLetter_WhenListenerDoesNotHandle_LeavesArgsUnhandled()
+    {
+        var handled = WebView2AcceleratorInterop.Dispatch(
+            KeyDown, VK_A,
+            listener: _ => { /* listener leaves Handled = false */ },
+            isKeyDown: _ => false);
+
+        Assert.False(handled);
+    }
+
+    [Fact]
+    public void Dispatch_KeyDownCtrlW_WhenListenerSetsHandled_MarksComArgsHandled()
+    {
+        var handled = WebView2AcceleratorInterop.Dispatch(
+            KeyDown, VK_W,
+            listener: args => args.Handled = true,
+            isKeyDown: k => k == VK_CONTROL);
+
+        Assert.True(handled);
     }
 }

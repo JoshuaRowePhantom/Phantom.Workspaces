@@ -10,6 +10,7 @@ using Avalonia.Controls;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.Controls;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
+using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.Llm;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -1489,4 +1490,117 @@ public sealed class AgentChatOutputControlTests
               "tools": []
             }
             """);
+
+    // --- Generic accelerator forwarding (issue #1168) --------------------------------------------
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatOutputControl_WhenBrowserAcceleratorMatchesTopLevelKeyBinding_ExecutesBinding()
+    {
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var executed = 0;
+        var command = new DelegateCommand(() => executed++);
+        var window = new Window { Content = control };
+        window.KeyBindings.Add(new Avalonia.Input.KeyBinding
+        {
+            Gesture = new Avalonia.Input.KeyGesture(Avalonia.Input.Key.K, Avalonia.Input.KeyModifiers.Control),
+            Command = command,
+        });
+        window.Show();
+        try
+        {
+            var args = new AcceleratorKeyEventArgs(
+                keyEventKind: 0,
+                Avalonia.Input.Key.K,
+                Avalonia.Input.KeyModifiers.Control);
+            browser.FireAcceleratorKeyPressed(args);
+
+            Assert.Equal(1, executed);
+            Assert.True(args.Handled);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatOutputControl_WhenBrowserAcceleratorHasNoMatchingBinding_DoesNotMarkHandled()
+    {
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var window = new Window { Content = control };
+        window.KeyBindings.Add(new Avalonia.Input.KeyBinding
+        {
+            Gesture = new Avalonia.Input.KeyGesture(Avalonia.Input.Key.K, Avalonia.Input.KeyModifiers.Control),
+            Command = new DelegateCommand(() => { }),
+        });
+        window.Show();
+        try
+        {
+            var args = new AcceleratorKeyEventArgs(
+                keyEventKind: 0,
+                Avalonia.Input.Key.Q,
+                Avalonia.Input.KeyModifiers.Control);
+            browser.FireAcceleratorKeyPressed(args);
+
+            Assert.False(args.Handled);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentChatOutputControl_WhenBrowserRaisesCtrlW_InvokesCloseActiveTabCommand()
+    {
+        // Regression guard for the previously-unsubscribed CloseTabRequested bug: firing a
+        // Ctrl+W accelerator through the generic forwarding path must execute the top-level's
+        // Ctrl+W KeyBinding (which in production is MainWindowViewModel.CloseActiveTabCommand).
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var executed = 0;
+        var closeCommand = new DelegateCommand(() => executed++);
+        var window = new Window { Content = control };
+        window.KeyBindings.Add(new Avalonia.Input.KeyBinding
+        {
+            Gesture = new Avalonia.Input.KeyGesture(Avalonia.Input.Key.W, Avalonia.Input.KeyModifiers.Control),
+            Command = closeCommand,
+        });
+        window.Show();
+        try
+        {
+            var args = new AcceleratorKeyEventArgs(
+                keyEventKind: 0,
+                Avalonia.Input.Key.W,
+                Avalonia.Input.KeyModifiers.Control);
+            browser.FireAcceleratorKeyPressed(args);
+
+            Assert.Equal(1, executed);
+            Assert.True(args.Handled);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private sealed class DelegateCommand : System.Windows.Input.ICommand
+    {
+        private readonly Action action;
+        public DelegateCommand(Action action) => this.action = action;
+        public event EventHandler? CanExecuteChanged { add { } remove { } }
+        public bool CanExecute(object? parameter) => true;
+        public void Execute(object? parameter) => this.action();
+    }
 }

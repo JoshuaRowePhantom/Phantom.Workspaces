@@ -50,8 +50,33 @@ internal static class WebView2AcceleratorInterop
     private const int VkDigit9 = 0x39;
 
     /// <summary>
-    /// Pure dispatch logic: maps a WebView2 key event to the appropriate callback.
-    /// Called from the COM handler and directly in tests.
+    /// Pure generic dispatch: translates the raw WebView2 key event to an
+    /// <see cref="AcceleratorKeyEventArgs"/>, invokes <paramref name="listener"/>, and returns
+    /// whether the listener marked the event as handled (so the caller can propagate that to the
+    /// COM args). Called from the COM handler and directly in tests.
+    /// </summary>
+    internal static bool Dispatch(
+        int kind,
+        int vk,
+        Action<AcceleratorKeyEventArgs>? listener,
+        Func<int, bool>? isKeyDown = null)
+    {
+        if (listener is null)
+        {
+            return false;
+        }
+
+        isKeyDown ??= IsKeyDown;
+        var (key, modifiers) = VirtualKeyMap.Map(kind, vk, isKeyDown);
+        var args = new AcceleratorKeyEventArgs(kind, key, modifiers);
+        listener(args);
+        return args.Handled;
+    }
+
+    /// <summary>
+    /// Legacy typed dispatch: maps a WebView2 key event to Alt/GoToTab/CloseTab/GoToWorkspacePane
+    /// callbacks. Kept for back-compat with the existing bespoke event plumbing; new consumers
+    /// should use the generic <see cref="AcceleratorKeyEventArgs"/> overload.
     /// </summary>
     internal static void Dispatch(
         int kind,
@@ -100,7 +125,8 @@ internal static class WebView2AcceleratorInterop
         Action<bool> onAltKeyState,
         Action<int> onGoToTab,
         Action? onCloseTab = null,
-        Action<int>? onGoToWorkspacePane = null)
+        Action<int>? onGoToWorkspacePane = null,
+        Action<AcceleratorKeyEventArgs>? onAcceleratorKeyPressed = null)
     {
         if (adapter is null)
             return null;
@@ -136,7 +162,7 @@ internal static class WebView2AcceleratorInterop
             if (addMethod is null)
                 return null;
 
-            var handler = new AcceleratorKeyPressedHandler(onAltKeyState, onGoToTab, onCloseTab, onGoToWorkspacePane);
+            var handler = new AcceleratorKeyPressedHandler(onAltKeyState, onGoToTab, onCloseTab, onGoToWorkspacePane, onAcceleratorKeyPressed);
             var handlerPtr = Marshal.GetComInterfaceForObject(
                 handler,
                 typeof(ICoreWebView2AcceleratorKeyPressedEventHandler));
@@ -181,7 +207,8 @@ internal sealed class AcceleratorKeyPressedHandler(
     Action<bool> onAltKeyState,
     Action<int> onGoToTab,
     Action? onCloseTab,
-    Action<int>? onGoToWorkspacePane)
+    Action<int>? onGoToWorkspacePane,
+    Action<AcceleratorKeyEventArgs>? onAcceleratorKeyPressed)
     : ICoreWebView2AcceleratorKeyPressedEventHandler
 {
     [PreserveSig]
@@ -195,6 +222,19 @@ internal sealed class AcceleratorKeyPressedHandler(
                     Marshal.GetObjectForIUnknown(argsPtr);
                 args.get_KeyEventKind(out var kind);
                 args.get_VirtualKey(out var vk);
+
+                // Generic path: hand every accelerator key to the listener. If the listener
+                // marks the event handled, propagate that to the COM args (so WebView2 stops
+                // processing the key) and skip the legacy typed callbacks.
+                var genericHandled = WebView2AcceleratorInterop.Dispatch(kind, (int)vk, onAcceleratorKeyPressed);
+                if (genericHandled)
+                {
+                    args.set_Handled(1);
+                    return 0;
+                }
+
+                // Legacy allowlist path (Alt state / Alt+digit / Ctrl+W) kept for back-compat
+                // with the existing typed event plumbing on AcceleratorAwareWebView.
                 if (ShouldHandle(kind, (int)vk))
                 {
                     args.set_Handled(1);

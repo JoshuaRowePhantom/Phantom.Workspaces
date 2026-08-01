@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.Gui.Shared.Controls;
 /// platform adapter is ready, wires up the COM-level <c>AcceleratorKeyPressed</c> hook, and
 /// exposes events that subclasses (and their owners) can subscribe to.
 /// </summary>
-public abstract class AcceleratorAwareWebView : NativeWebView
+public abstract class AcceleratorAwareWebView : NativeWebView, IBrowserAcceleratorSource
 {
     // Kept alive to prevent GC while the COM callback is registered.
     private AcceleratorKeyPressedHandler? acceleratorKeyHandler;
@@ -33,6 +33,9 @@ public abstract class AcceleratorAwareWebView : NativeWebView
 
     /// <summary>Raised on the UI thread when Ctrl+W is pressed inside this WebView.</summary>
     public event EventHandler? CloseTabRequested;
+
+    /// <inheritdoc/>
+    public event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
 
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs e)
     {
@@ -60,7 +63,11 @@ public abstract class AcceleratorAwareWebView : NativeWebView
                 onCloseTab: () => Dispatcher.UIThread.Post(
                     () => this.CloseTabRequested?.Invoke(this, EventArgs.Empty)),
                 onGoToWorkspacePane: idx => Dispatcher.UIThread.Post(
-                    () => this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, idx)));
+                    () => this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, idx)),
+                // Generic listener must run synchronously so listeners can set Handled before the
+                // COM handler returns to WebView2. The AcceleratorKeyPressed COM event is already
+                // raised on the UI thread, so no dispatch is required.
+                onAcceleratorKeyPressed: args => this.AcceleratorKeyPressed?.Invoke(this, args));
         }
         catch (Exception)
         {
