@@ -1947,12 +1947,34 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var pane = this.selectedWorkspacePane;
-        var tab = activeDoc.TabViewModel;
-        if (tab is null) return;
-        // Removing from pane.Tabs removes the WorkspaceDocument via ItemsSource automatically.
-        pane.Tabs.Remove(tab);
-        _ = DisposeWorkspaceTabAsync(tab);
+        // Route through the dock factory so Dock.Avalonia's default chain runs:
+        //   CloseDockable -> RemoveDockable(..., collapse:true) -> CollapseDock(owner)
+        // which removes the emptied nested DocumentDock and its adjacent
+        // ProportionalDockSplitter when the last tab in a split region closes.
+        // OnDockableClosed -> WorkspaceDockFactory.OnDockableClosed ->
+        // MainWindowViewModel.OnDockableTabClosed handles single-dispose.
+        var factory = documentDock.Factory ?? this.dockFactory;
+        factory.CloseDockable(activeDoc);
+
+        // Factory.CloseDockable synchronously removes the closed tab from pane.Tabs
+        // via ItemsSource sync (HandleItemsSourceDockableClosing) BEFORE
+        // OnDockableClosed fires, so OnDockableTabClosed's wasActive check (which
+        // looks at pane.Tabs) can no longer see the closed tab. We know we invoked
+        // close on the active tab, so run MRU navigation here to match the behaviour
+        // of MainWindowViewModel.CloseTab.
+        this.navigatingViaHistory = true;
+        try
+        {
+            if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry)
+                && entry is not null)
+            {
+                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            }
+        }
+        finally
+        {
+            this.navigatingViaHistory = false;
+        }
     }
 
     private void OnCycleTab(int delta)

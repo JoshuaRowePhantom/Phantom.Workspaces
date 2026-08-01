@@ -1,9 +1,11 @@
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -356,6 +358,278 @@ public sealed class MainWindowDockTemplateTests
                 builtTypeName.StartsWith("Dock.Model.Mvvm.Controls.", System.StringComparison.Ordinal),
                 $"Child {child.GetType().FullName} rendered as raw model type {builtTypeName}");
         }
+    }
+
+    // ── Regression tests for #1170 ────────────────────────────────────────────
+    // Empty split-dock auto-collapse: Ctrl+W / CloseActiveTabCommand must delegate
+    // to Factory.CloseDockable so the library's CollapseDock chain runs, and MRU
+    // navigation + single-dispose semantics match the close-button / middle-click
+    // paths.
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenInvoked_RoutesThroughFactoryCloseDockable()
+    {
+        // #1170: Ctrl+W must go through Factory.CloseDockable(activeDoc) — observable
+        // via factory.DockableClosed, which is NOT raised by a raw pane.Tabs.Remove(tab).
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://route.example.com") { Id = "route-a", Title = "Route A" };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+        var documentDock = FindDocumentDockIn(pane!.ContentLayout!);
+        Assert.NotNull(documentDock);
+
+        IDockable? closedDockable = null;
+        factory.DockableClosed += (_, e) => closedDockable = e.Dockable;
+
+        Assert.Equal("route-a", documentDock!.ActiveDockable?.Id);
+        viewModel.CloseActiveTabCommand.Execute(null);
+
+        Assert.NotNull(closedDockable);
+        Assert.IsAssignableFrom<WorkspaceDocument>(closedDockable!);
+        Assert.Equal("route-a", closedDockable!.Id);
+        Assert.DoesNotContain(pane.Tabs, t => t.Id == "route-a");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenLastTabInSplitDockClosed_RemovesEmptyDockAndSplitter()
+    {
+        // #1170: after closing the last tab of a nested split DocumentDock, the empty
+        // DocumentDock AND its adjacent ProportionalDockSplitter must be removed from
+        // the parent ProportionalDock's VisibleDockables.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        var (root, prop, splitDoc, splitter, mainDocA, mainDocB) = BuildSplitLayout(factory);
+        var tab = new WebViewModel("about:blank") { Id = "split-last-a", Title = "Split A" };
+        var doc = new WorkspaceDocument(tab) { Owner = splitDoc };
+        splitDoc.VisibleDockables = factory.CreateList<IDockable>(doc);
+        splitDoc.ActiveDockable = doc;
+        pane!.ContentLayout = root;
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+
+        Assert.NotNull(prop.VisibleDockables);
+        Assert.DoesNotContain(splitDoc, prop.VisibleDockables!);
+        Assert.DoesNotContain(splitter, prop.VisibleDockables!);
+        // The other split children are untouched.
+        Assert.Contains(mainDocA, prop.VisibleDockables!);
+        Assert.Contains(mainDocB, prop.VisibleDockables!);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenNonLastTabInSplitDockClosed_KeepsDockRegionAndSplitter()
+    {
+        // #1170: closing one of several tabs in a split region must NOT collapse the
+        // region — the DocumentDock and its adjacent splitter stay in place and the
+        // sibling tab remains.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        var (root, prop, splitDoc, splitter, mainDocA, _) = BuildSplitLayout(factory);
+        var tabActive = new WebViewModel("about:blank") { Id = "split-multi-a", Title = "Split A" };
+        var tabOther = new WebViewModel("about:blank") { Id = "split-multi-b", Title = "Split B" };
+        var docActive = new WorkspaceDocument(tabActive) { Owner = splitDoc };
+        var docOther = new WorkspaceDocument(tabOther) { Owner = splitDoc };
+        splitDoc.VisibleDockables = factory.CreateList<IDockable>(docActive, docOther);
+        splitDoc.ActiveDockable = docActive;
+        pane!.ContentLayout = root;
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+
+        Assert.NotNull(prop.VisibleDockables);
+        Assert.Contains(splitDoc, prop.VisibleDockables!);
+        Assert.Contains(splitter, prop.VisibleDockables!);
+        Assert.Contains(mainDocA, prop.VisibleDockables!);
+        Assert.NotNull(splitDoc.VisibleDockables);
+        Assert.DoesNotContain(docActive, splitDoc.VisibleDockables!);
+        Assert.Contains(docOther, splitDoc.VisibleDockables!);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task RootAndWorkspacesPaneDock_WhenLastChildClosed_AreNotRemoved()
+    {
+        // #1170: the top-level RootDock and WorkspacesPaneDock have IsCollapsable=false,
+        // so FactoryBase.CollapseDock refuses to remove them even when their child list
+        // is empty. This guards the primary layout from ever disappearing.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        Assert.NotNull(viewModel.Layout);
+
+        var root = viewModel.Layout!;
+        Assert.False(root.IsCollapsable);
+
+        var workspacesDock = root.VisibleDockables!.OfType<WorkspacesPaneDock>().First();
+        Assert.False(workspacesDock.IsCollapsable);
+
+        var factory = GetDockFactory(viewModel);
+
+        // Snapshot children, empty both docks, invoke CollapseDock, verify no removal.
+        var rootChildren = root.VisibleDockables!.ToList();
+        var workspacesChildren = workspacesDock.VisibleDockables!.ToList();
+        workspacesDock.VisibleDockables!.Clear();
+        factory.CollapseDock(workspacesDock);
+        Assert.Contains(workspacesDock, root.VisibleDockables!);
+
+        root.VisibleDockables!.Clear();
+        factory.CollapseDock(root);
+        // A root is only actually collapsed if its Owner has it in a list AND it is
+        // collapsable; neither holds. Assert it still exists as an object with no owner
+        // change and that IsCollapsable is still false.
+        Assert.False(root.IsCollapsable);
+
+        // Restore for viewModel disposal.
+        foreach (var c in workspacesChildren) workspacesDock.VisibleDockables!.Add(c);
+        foreach (var c in rootChildren) root.VisibleDockables!.Add(c);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenActiveTabClosed_DisposesTabExactlyOnceViaOnDockableTabClosed()
+    {
+        // #1170: after routing through Factory.CloseDockable, disposal must run exactly
+        // once. The Ctrl+W code path used to call DisposeWorkspaceTabAsync itself AND
+        // OnDockableTabClosed also runs it — that duplicate is gone with the fix.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://dispose.example.com") { Id = "dispose-a", Title = "Dispose A" };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+
+        var removeCount = 0;
+        ((System.Collections.Specialized.INotifyCollectionChanged)pane!.Tabs).CollectionChanged += (_, e) =>
+        {
+            if (e.Action == System.Collections.Specialized.NotifyCollectionChangedAction.Remove
+                && e.OldItems?.Contains(tab) == true)
+            {
+                removeCount++;
+            }
+        };
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Equal(1, removeCount);
+        Assert.DoesNotContain(pane.Tabs, t => ReferenceEquals(t, tab));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenActiveTabClosed_ActivatesMostRecentlyUsedTab()
+    {
+        // #1170: after Ctrl+W closes the active tab, MRU navigation (via
+        // navigationHistoryService.GoBackSkipping -> ActivateTabById) must activate the
+        // previously-open tab — matching the close-button / middle-click paths.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://mru.example.com/a") { Id = "mru-1170-a", Title = "A" };
+        var tabB = new WebViewModel("https://mru.example.com/b") { Id = "mru-1170-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var documentDock = FindDocumentDockIn(viewModel.SelectedWorkspacePane!.ContentLayout!);
+        Assert.NotNull(documentDock);
+        Assert.Equal("mru-1170-b", documentDock!.ActiveDockable?.Id);
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Equal("mru-1170-a", documentDock.ActiveDockable?.Id);
+    }
+
+    private static (
+        IRootDock root,
+        IProportionalDock prop,
+        IDocumentDock splitDoc,
+        IProportionalDockSplitter splitter,
+        IDocumentDock mainDocA,
+        IDocumentDock mainDocB)
+        BuildSplitLayout(WorkspaceDockFactory factory)
+    {
+        // Layout: RootDock(IsCollapsable=false) ->
+        //   ProportionalDock [splitDoc(IsCollapsable=true), splitter, mainDocA, splitter2, mainDocB]
+        // Three non-splitter children guarantee CollapseDock does NOT trigger the
+        // "single non-splitter left" cleanup after we remove splitDoc + splitter.
+        var root = factory.CreateRootDock();
+        root.IsCollapsable = false;
+
+        var prop = factory.CreateProportionalDock();
+        var splitDoc = factory.CreateDocumentDock();
+        splitDoc.IsCollapsable = true;
+        var splitter = factory.CreateProportionalDockSplitter();
+        var mainDocA = factory.CreateDocumentDock();
+        mainDocA.IsCollapsable = true;
+        var splitter2 = factory.CreateProportionalDockSplitter();
+        var mainDocB = factory.CreateDocumentDock();
+        mainDocB.IsCollapsable = true;
+
+        prop.VisibleDockables = factory.CreateList<IDockable>(
+            splitDoc, splitter, mainDocA, splitter2, mainDocB);
+        splitDoc.Owner = prop;
+        splitter.Owner = prop;
+        mainDocA.Owner = prop;
+        splitter2.Owner = prop;
+        mainDocB.Owner = prop;
+
+        root.VisibleDockables = factory.CreateList<IDockable>(prop);
+        prop.Owner = root;
+        root.ActiveDockable = prop;
+
+        return (root, prop, splitDoc, splitter, mainDocA, mainDocB);
+    }
+
+    private static WorkspaceDockFactory GetDockFactory(MainWindowViewModel viewModel)
+    {
+        var field = typeof(MainWindowViewModel).GetField(
+            "dockFactory",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return Assert.IsType<WorkspaceDockFactory>(field!.GetValue(viewModel));
+    }
+
+    private static IDocumentDock? FindDocumentDockIn(IDockable dockable)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            return documentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                var result = FindDocumentDockIn(child);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static MainWindowViewModel CreateBootedMainWindowViewModel()
+    {
+        return new MainWindowViewModel(
+            new UnknownRepositorySource(),
+            new WorkspacesConfiguration { SkipStartupWorkspace = false },
+            new ProfileStore(CreateTempProfileStorePath()),
+            applicationServices: null);
     }
 
     private static DockControl BuildInnerWorkspacePaneDockControl()
