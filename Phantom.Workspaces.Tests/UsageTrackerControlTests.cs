@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Controls;
@@ -275,8 +277,9 @@ public sealed class UsageTrackerControlTests
         {
             var usedBar = window.GetVisualDescendants().OfType<Border>()
                 .First(b => b.Name == "UsedBar");
-            // Fraction = 0.5, ConverterParameter total width = 120 → expected width = 60.
-            Assert.Equal(60.0, usedBar.Width);
+            // #1179: bar column width reduced to 80 so the metric-name column can grow.
+            // Fraction = 0.5, ConverterParameter total width = 80 → expected width = 40.
+            Assert.Equal(40.0, usedBar.Width);
             Assert.True(usedBar.IsVisible);
         }
         finally
@@ -440,6 +443,135 @@ public sealed class UsageTrackerControlTests
         {
             window.Close();
             viewModel.Dispose();
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // #1179 — Metric-name column must not clip long names like "Copilot Premium Requests" or
+    // "Copilot AI Credits (Cost)". The row grid uses *,Auto,80 so the name grows and the
+    // progress bar (with a MinWidth floor) is the shrinker.
+    // ---------------------------------------------------------------------------------------------
+
+    private static Grid FindMetricRowGrid(Window window)
+    {
+        // The per-metric row grid is the direct child (visual descendant) of the
+        // MetricRowHyperlink and contains three ColumnDefinitions.
+        var link = window.GetVisualDescendants().OfType<HyperlinkButton>()
+            .First(hb => hb.Name == "MetricRowHyperlink");
+        return link.GetVisualDescendants().OfType<Grid>()
+            .First(g => g.ColumnDefinitions.Count == 3);
+    }
+
+    private static (UsageTrackerViewModel vm, Window window) BuildControlWithSingleMetric(string title)
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = title,
+            QuantityUsed = 10m,
+            QuantityTotal = 100m,
+            QuantityPresentationFormatString = "{0} / {1}",
+        });
+        metrics.Accounts.Add(account);
+
+        var viewModel = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = viewModel };
+        var window = new Window { Content = control };
+        window.Show();
+        return (viewModel, window);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_MetricNameColumn_IsStarSized()
+    {
+        var (vm, window) = BuildControlWithSingleMetric("Copilot Premium Requests");
+        try
+        {
+            var grid = FindMetricRowGrid(window);
+            var nameColumn = grid.ColumnDefinitions[0];
+            Assert.True(nameColumn.Width.IsStar,
+                $"Expected metric-name column to be Star-sized; got {nameColumn.Width}.");
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_ProgressBarColumn_IsTheShrinkingColumn()
+    {
+        var (vm, window) = BuildControlWithSingleMetric("Copilot Premium Requests");
+        try
+        {
+            var grid = FindMetricRowGrid(window);
+            var barColumn = grid.ColumnDefinitions[2];
+            // The bar column must be sized in pixels (not Star) so the name column absorbs
+            // any extra width, and it must have a bounded MinWidth so it shrinks before the
+            // name is starved but never collapses to zero.
+            Assert.False(barColumn.Width.IsStar,
+                $"Expected progress-bar column to be pixel-sized (Auto or absolute); got {barColumn.Width}.");
+            Assert.True(barColumn.MinWidth > 0 && barColumn.MinWidth < 120,
+                $"Expected progress-bar column MinWidth in (0,120); got {barColumn.MinWidth}.");
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_MetricTitleTextBlock_HasNoCharacterEllipsisTrimming()
+    {
+        var (vm, window) = BuildControlWithSingleMetric("Copilot AI Credits (Cost)");
+        try
+        {
+            var link = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .First(hb => hb.Name == "MetricRowHyperlink");
+            var titleBlock = link.GetVisualDescendants().OfType<TextBlock>()
+                .First(tb => (tb.Text ?? string.Empty) == "Copilot AI Credits (Cost)");
+            Assert.NotEqual(TextTrimming.CharacterEllipsis, titleBlock.TextTrimming);
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_LongMetricName_IsNotClippedAtDefaultWidth()
+    {
+        var (vm, window) = BuildControlWithSingleMetric("Copilot Premium Requests");
+        try
+        {
+            window.Measure(Size.Infinity);
+            window.Arrange(new Rect(window.DesiredSize));
+            window.UpdateLayout();
+
+            var link = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .First(hb => hb.Name == "MetricRowHyperlink");
+            var titleBlock = link.GetVisualDescendants().OfType<TextBlock>()
+                .First(tb => (tb.Text ?? string.Empty) == "Copilot Premium Requests");
+
+            // The rendered arrange bounds must be at least the intrinsic desired size — i.e.
+            // the name column gave the TextBlock all the width it needs and did not clip it.
+            Assert.True(
+                titleBlock.Bounds.Width + 0.5 >= titleBlock.DesiredSize.Width,
+                $"Metric name was clipped: Bounds.Width={titleBlock.Bounds.Width} < DesiredSize.Width={titleBlock.DesiredSize.Width}.");
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
         }
     }
 }

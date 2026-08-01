@@ -550,4 +550,27 @@ public sealed class UsageTrackerViewModelTests
 
         Assert.Single(opener.Requests);
     }
+
+    // #1179 — long, unabbreviated metric titles round-trip through the view model without
+    // any view-model-side truncation. Truncation only happens (or fails to happen) in XAML.
+    [Fact]
+    public void UsageTrackerViewModel_LongMetricTitle_IsExposedUntruncated()
+    {
+        const string longTitle = "Copilot AI Credits (Cost)";
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "GitHub Copilot", UserName = "testuser" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = longTitle,
+            QuantityUsed = 1m,
+            QuantityTotal = 10m,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        Assert.Single(vm.Accounts);
+        Assert.Single(vm.Accounts[0].Metrics);
+        Assert.Equal(longTitle, vm.Accounts[0].Metrics[0].Title);
+    }
 }

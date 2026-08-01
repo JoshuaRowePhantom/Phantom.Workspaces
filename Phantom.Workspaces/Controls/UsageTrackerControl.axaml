@@ -7,7 +7,7 @@
              x:CompileBindings="False"
              Focusable="False">
     <Border Classes="notifications-panel"
-            Width="420"
+            Width="520"
             MaxHeight="520">
         <Grid RowDefinitions="Auto,*">
             <Border Grid.Row="0"
@@ -81,23 +81,34 @@
                                                                 <Binding Path="$parent[ItemsControl].DataContext.SettingsUrl" />
                                                             </MultiBinding>
                                                         </HyperlinkButton.CommandParameter>
-                                                        <Grid ColumnDefinitions="120,*,120">
+                                                        <!-- #1179: name column is star-sized so long metric names
+                                                             (e.g. "Copilot Premium Requests") are not clipped; the
+                                                             progress bar column has a MinWidth floor so it can
+                                                             shrink before the name is starved. -->
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="80" MinWidth="60" />
+                                                            </Grid.ColumnDefinitions>
                                                     <!-- Metric title -->
                                                     <TextBlock Grid.Column="0"
                                                                Text="{Binding Title}"
                                                                Classes="muted"
                                                                VerticalAlignment="Center"
-                                                               FontSize="11" />
+                                                               FontSize="11"
+                                                               TextWrapping="NoWrap" />
 
                                                     <!-- Quantity presentation -->
                                                     <TextBlock Grid.Column="1"
                                                                Text="{Binding QuantityPresentation}"
                                                                VerticalAlignment="Center"
                                                                FontSize="11"
-                                                               Margin="4,0" />
+                                                               Margin="8,0" />
 
                                                     <!-- Progress bar: yellow used / light green remaining / black text overlay -->
                                                     <Panel Grid.Column="2"
+                                                           MinWidth="60"
                                                            Height="14">
                                                         <!-- Unknown-limit indicator (#1159 Fix B): shown when FractionUsed is null so the
                                                              row does not read as "100% full green". #1172: routed via OpenUrlCommand. -->
@@ -129,7 +140,7 @@
                                                                 IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Instance}}"
                                                                 Width="{Binding FractionUsed,
                                                                     Converter={x:Static converters:FractionToWidthConverter.Instance},
-                                                                    ConverterParameter=120}" />
+                                                                    ConverterParameter=80}" />
                                                         <!-- Percentage text overlay -->
                                                         <TextBlock HorizontalAlignment="Center"
                                                                    VerticalAlignment="Center"
