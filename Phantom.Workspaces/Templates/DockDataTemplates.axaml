@@ -74,18 +74,6 @@
                     <ContentControl Content="{Binding EffectiveTabHeader}" />
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
-            <dock:DocumentControl.Styles>
-                <Style Selector="DocumentTabStrip">
-                    <Setter Property="RightContent">
-                        <Template>
-                            <Button Classes="workspace-save-button"
-                                    Content="💾"
-                                    ToolTip.Tip="Save workspace (Ctrl+S)"
-                                    Command="{ReflectionBinding $parent[Window].DataContext.SelectedWorkspacePane.SaveCommand}" />
-                        </Template>
-                    </Setter>
-                </Style>
-            </dock:DocumentControl.Styles>
         </dock:DocumentControl>
     </DataTemplate>
 

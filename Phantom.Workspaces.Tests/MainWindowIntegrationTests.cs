@@ -245,6 +245,186 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    // Regression tests for issue #1169: a discoverable Save Workspace button must be present
+    // in the TopRightBar (the earlier attempt in DockDataTemplates.axaml never rendered).
+
+    private static Button? GetSaveWorkspaceButton(Window window) =>
+        window.GetVisualDescendants()
+            .OfType<Button>()
+            .FirstOrDefault(b => b.Classes.Contains("save-workspace"));
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_SaveWorkspaceButton_IsVisibleInTopRightBar_WhenWorkspacePaneSelected()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.InitializeAsync();
+
+        // Opening a tab creates a real workspace pane wired to SaveWorkspacePaneAsync.
+        var tab = new WebViewModel("https://save-btn-visible.example.com") { Id = "svb", Title = "Save Visible" };
+        await viewModel.OpenTabAsync(tab);
+
+        // Precondition: the selected pane is a real, saveable workspace pane.
+        Assert.True(viewModel.SelectedWorkspacePane.CanSaveWorkspace,
+            "Test precondition: OpenTabAsync must produce a real workspace pane with a wired save handler.");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var saveButton = GetSaveWorkspaceButton(window);
+            Assert.NotNull(saveButton);
+            Assert.True(saveButton!.IsEffectivelyVisible,
+                "Save workspace button must be visible when a real workspace pane is selected.");
+            Assert.True(saveButton.Classes.Contains("settings-gear"),
+                "Save workspace button must share the 'settings-gear' class so its rendered height matches the other top-right buttons.");
+            Assert.True(saveButton.Classes.Contains("top-right"),
+                "Save workspace button must carry the 'top-right' class so top-right layout rules apply.");
+
+            // The button must live inside the TopRightBar StackPanel.
+            var topRightBar = window.GetVisualDescendants()
+                .OfType<StackPanel>()
+                .FirstOrDefault(sp => sp.Name == "TopRightBar");
+            Assert.NotNull(topRightBar);
+            Assert.Contains(saveButton, topRightBar!.GetVisualDescendants().OfType<Button>());
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_SaveWorkspaceButton_IsHidden_WhenNoWorkspacePaneSelected()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        // After Initialize, SelectedWorkspacePane is the placeholder pane
+        // (Entity.EntityId == Guid.Empty, saveAsync == null → CanSaveWorkspace is false).
+        Assert.False(viewModel.SelectedWorkspacePane.CanSaveWorkspace,
+            "Placeholder pane must not report CanSaveWorkspace; test precondition failed.");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var saveButton = GetSaveWorkspaceButton(window);
+            Assert.NotNull(saveButton);
+            Assert.False(saveButton!.IsEffectivelyVisible,
+                "Save workspace button must be hidden on the placeholder pane so no permanently-disabled affordance is shown.");
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_SaveWorkspaceButton_IsDisabled_WhenSelectedPaneIsReadOnly()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        // Construct a read-only pane wired with a save handler.
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "22222222-2222-2222-2222-222222222222",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "ReadOnly Workspace" }
+            }
+            """);
+        var readOnlyEntity = new Phantom.Workspaces.ViewModels.SubscribedEntityViewModel(
+            new Phantom.Workspaces.Data.EntitySnapshot
+            {
+                EntityId = new Phantom.Workspaces.Data.EntityId("22222222-2222-2222-2222-222222222222"),
+                ConcurrencyTag = new Phantom.Workspaces.Data.ConcurrencyTag("1"),
+                ModifiedTime = new Phantom.Workspaces.Data.Timestamp(System.DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = System.Array.Empty<Phantom.Workspaces.Data.EntitySnapshot>(),
+            });
+        var readOnlyPane = new WorkspacePaneViewModel(
+            readOnlyEntity,
+            id: "ro-pane",
+            saveAsync: _ => Task.CompletedTask,
+            isReadOnly: true);
+        viewModel.SelectedWorkspacePane = readOnlyPane;
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var saveButton = GetSaveWorkspaceButton(window);
+            Assert.NotNull(saveButton);
+            Assert.True(saveButton!.IsEffectivelyVisible,
+                "Save workspace button must remain visible for a read-only pane so its disabled state is discoverable.");
+            Assert.False(saveButton.IsEffectivelyEnabled,
+                "Save workspace button must be disabled when the selected pane is read-only.");
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_SaveWorkspaceButton_Click_InvokesWriteBackWorkspaceTabs()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://save-btn-click.example.com")
+        {
+            Id = "sbc-tab",
+            Title = "Save Btn Click",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var saveContentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(saveContentDock);
+        await WaitForWorkspaceTabAsync(saveContentDock!, "sbc-tab");
+        Assert.False(pane.Entity.EntityId == new Phantom.Workspaces.Data.EntityId(Guid.Empty),
+            "SelectedWorkspacePane must be a real workspace entity, not the placeholder.");
+        Assert.NotNull(pane.Entity.ConcurrencyTag);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var saveButton = GetSaveWorkspaceButton(window);
+            Assert.NotNull(saveButton);
+            Assert.True(saveButton!.IsEffectivelyEnabled,
+                "Save workspace button must be enabled for a writable pane with a wired save handler.");
+
+            Assert.True(pane.SaveCommand.CanExecute(null));
+            pane.SaveCommand.Execute(null);
+            await pane.SaveCommand.LastExecutionTask!;
+
+            // WriteBackWorkspaceTabs persists dock-layout JSON with per-tab Descriptor data.
+            var data = Assert.IsType<System.Text.Json.JsonElement>(pane.Entity.Data);
+            Assert.True(data.TryGetProperty("dock-layout", out var dockLayoutEl));
+            var dockLayoutJson = dockLayoutEl.GetRawText();
+            Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
+            Assert.Contains("browser", dockLayoutJson, StringComparison.Ordinal);
+            Assert.Contains("save-btn-click.example.com", dockLayoutJson, StringComparison.Ordinal);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task InMemoryRepository_InitializesWithExpectedPipeline()
     {

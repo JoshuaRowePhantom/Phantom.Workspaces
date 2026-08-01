@@ -304,6 +304,31 @@ public sealed class WorkspacePaneViewModelTests
         Assert.False(pane.SaveCommand.CanExecute(null));
     }
 
+    [Fact]
+    public async Task WorkspacePaneViewModel_SaveCommand_CanExecute_IsFalseWhileSaving()
+    {
+        // Regression for #1169: the save button must be disabled while an in-flight save is
+        // running so the user cannot double-invoke the same save.
+        var gate = new TaskCompletionSource();
+        var pane = new WorkspacePaneViewModel(
+            CreateWorkspaceEntity(),
+            saveAsync: async _ => await gate.Task);
+
+        Assert.True(pane.SaveCommand.CanExecute(null));
+
+        pane.SaveCommand.Execute(null);
+
+        // Save is in-flight and awaiting the gate; CanExecute must be false so the button disables.
+        Assert.False(pane.SaveCommand.CanExecute(null));
+        Assert.True(pane.IsSaving);
+
+        gate.SetResult();
+        await pane.SaveCommand.LastExecutionTask!;
+
+        Assert.False(pane.IsSaving);
+        Assert.True(pane.SaveCommand.CanExecute(null));
+    }
+
     private static SubscribedEntityViewModel CreateWorkspaceEntity(
         Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {

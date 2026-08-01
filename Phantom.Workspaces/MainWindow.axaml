@@ -151,6 +151,12 @@
                         </Popup>
                     </Panel>
 
+                    <Button Classes="settings-gear top-right save-workspace"
+                            Content="💾"
+                            ToolTip.Tip="Save workspace (Ctrl+S)"
+                            Command="{Binding SelectedWorkspacePane.SaveCommand}"
+                            IsVisible="{Binding SelectedWorkspacePane.CanSaveWorkspace, FallbackValue=False}" />
+
                     <Button Classes="settings-gear top-right"
                             Content="⚙"
                             ToolTip.Tip="Settings"

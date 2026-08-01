@@ -58,6 +58,13 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
     public AsyncRelayCommand SaveCommand { get; }
 
+    /// <summary>
+    /// True when a save handler is wired (i.e. this pane represents a real workspace that can be
+    /// persisted, not a placeholder / no-workspace-selected pane). Bound by the top-right save
+    /// button's IsVisible so a permanently-disabled affordance is not shown on placeholder panes.
+    /// </summary>
+    public bool CanSaveWorkspace => this.saveAsync is not null;
+
     public bool IsReadOnly { get; }
 
     public bool IsSaving
