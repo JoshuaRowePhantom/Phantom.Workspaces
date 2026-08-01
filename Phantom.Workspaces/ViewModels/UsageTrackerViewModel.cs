@@ -170,6 +170,13 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
     private void SyncSelectionFlagsFromKey()
     {
         if (this.suppressSelectionSync) return;
+
+        // #1160: When there is no user pin, respect provider-supplied IsSelectedAsShown
+        // defaults (e.g. the net-dollar cost metric is marked as the default budget
+        // surface). Clobbering all flags to false here would erase those defaults and
+        // let a saturated credit-quantity metric win the toolbar slot.
+        if (string.IsNullOrEmpty(this.selectedUsageMetricKey)) return;
+
         this.suppressSelectionSync = true;
         try
         {
@@ -177,11 +184,10 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
             {
                 foreach (var metric in account.Metrics)
                 {
-                    var isMatch = !string.IsNullOrEmpty(this.selectedUsageMetricKey)
-                        && string.Equals(
-                            UsageAccount.ComposeKey(account.Product, metric.Title),
-                            this.selectedUsageMetricKey,
-                            StringComparison.Ordinal);
+                    var isMatch = string.Equals(
+                        UsageAccount.ComposeKey(account.Product, metric.Title),
+                        this.selectedUsageMetricKey,
+                        StringComparison.Ordinal);
                     if (metric.IsSelectedAsShown != isMatch)
                     {
                         metric.IsSelectedAsShown = isMatch;
@@ -360,6 +366,22 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
             }
             // Fall through: saved key does not match any current metric. Leave the
             // stored key intact so the pin re-applies if the metric reappears.
+        }
+
+        // #1160: When there is no user pin, prefer any metric the provider has marked as
+        // the default budget surface (IsSelectedAsShown = true). This makes the net-dollar
+        // cost metric win over the credit-quantity metric so the toolbar shows real
+        // budget consumption rather than a saturated included-allotment counter.
+        foreach (var account in allAccounts)
+        {
+            foreach (var metric in account.Metrics)
+            {
+                if (metric.IsSelectedAsShown)
+                {
+                    this.TopRightLabel = metric.QuantityPresentation;
+                    return;
+                }
+            }
         }
 
         // Find the metric with the most recent non-null LastUpdatedAt across all accounts

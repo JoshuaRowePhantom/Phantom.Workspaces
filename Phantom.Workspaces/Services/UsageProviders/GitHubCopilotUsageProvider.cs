@@ -213,9 +213,14 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             var webUrl = BuildMetricWebUrl(account, aggregate.Sku);
 
             // Count-metric denominator: configured included quantity for the SKU (Premium
-            // Request / AI Credit). The billing REST API does not expose an included-quantity
-            // field, so this comes from account configuration or falls back to 0 ("unknown").
-            var countTotal = account.GetIncludedQuantity(aggregate.Sku) ?? 0m;
+            // Request). AI Credits deliberately gets no denominator here — its included
+            // allotment is exactly the budget signal that saturates at 100% (see #1160),
+            // and the net-dollar cost metric is now the budget-relevant surface for AI
+            // credits.
+            var isAiCredits = aggregate.Sku.Contains("AI Credit", StringComparison.OrdinalIgnoreCase);
+            var countTotal = isAiCredits
+                ? 0m
+                : account.GetIncludedQuantity(aggregate.Sku) ?? 0m;
 
             metrics.Add(new UsageMetric
             {
@@ -236,15 +241,27 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                 var costBudget = SelectCostBudget(budgets, aggregate.Sku, account.UserName);
                 var costTotal = costBudget ?? account.MonthlyBudget ?? 0m;
 
+                // #1160: When a budget denominator is known, present the cost metric as
+                // "$spent / $budget" so the progress bar shows real budget consumption.
+                // When unknown, fall back to bare currency to avoid a misleading "$X / $0".
+                var costFormat = costTotal > 0m
+                    ? "{0:C2} / {1:C2}"
+                    : "{0:C2}";
+
                 metrics.Add(new UsageMetric
                 {
                     Title = $"{aggregate.Sku} (Cost)",
                     QuantityUsed = aggregate.NetAmount,
                     QuantityTotal = costTotal,
-                    QuantityPresentationFormatString = "{0:C2}",
+                    QuantityPresentationFormatString = costFormat,
                     Unit = string.Empty,
                     LastUpdatedAt = now,
                     WebUrl = webUrl,
+                    // #1160: Mark the net-dollar cost metric as the default budget-relevant
+                    // surface. When no user pin exists, the ViewModel prefers this over the
+                    // credit-quantity metric so the toolbar shows billable dollars rather
+                    // than credits that saturate at the included allotment.
+                    IsSelectedAsShown = true,
                 });
             }
         }

@@ -573,4 +573,72 @@ public sealed class UsageTrackerViewModelTests
         Assert.Single(vm.Accounts[0].Metrics);
         Assert.Equal(longTitle, vm.Accounts[0].Metrics[0].Title);
     }
+
+    // #1160 — When no user pin is set, the ViewModel prefers a metric that the provider has
+    // marked as the default budget surface (IsSelectedAsShown = true) over the credit-quantity
+    // metric that would otherwise win by ordering. This is what makes the toolbar show real
+    // dollar spend rather than a credit counter saturated at the included allotment.
+    [Fact]
+    public void TopRightLabel_PrefersCostMetric_OverQuantityMetric_WhenNoUserPin()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 20000m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits (Cost)",
+            QuantityUsed = 3754.58m,
+            QuantityTotal = 5000m,
+            QuantityPresentationFormatString = "{0:C2} / {1:C2}",
+            Unit = string.Empty,
+            IsSelectedAsShown = true,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null);
+
+        Assert.Equal("$3,754.58 / $5,000.00", vm.TopRightLabel);
+    }
+
+    // #1160 — A user pin still overrides the provider-supplied default budget metric, so the
+    // per-metric pinning from #1147 composes cleanly with the new default-selection behavior.
+    [Fact]
+    public void TopRightLabel_RespectsUserPin_OverBudgetDefault()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 20000m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits (Cost)",
+            QuantityUsed = 3754.58m,
+            QuantityTotal = 5000m,
+            QuantityPresentationFormatString = "{0:C2} / {1:C2}",
+            Unit = string.Empty,
+            IsSelectedAsShown = true,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: UsageAccount.ComposeKey("github.com", "Copilot AI Credits"));
+
+        Assert.Equal("20,000 AICredits", vm.TopRightLabel);
+    }
 }

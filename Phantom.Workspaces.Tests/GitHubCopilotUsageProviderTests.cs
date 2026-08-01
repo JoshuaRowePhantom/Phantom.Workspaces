@@ -920,4 +920,176 @@ public sealed class GitHubCopilotUsageProviderTests
         var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
         Assert.Equal(100m, costMetric.QuantityTotal);
     }
+
+    // ---------- #1160 tests: net-dollar spend as the budget-relevant metric ----------
+
+    // #1160 — When a line item is fully discounted (grossAmount == discountAmount and
+    // netAmount == 0), no cost metric is emitted for it. This proves the cost metric reflects
+    // billable spend, not gross or included consumption.
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_ExcludesIncludedUsage_ByUsingNetAmount()
+    {
+        const string json = """
+            {
+              "usageItems": [
+                {
+                  "product": "copilot",
+                  "sku": "Copilot Premium Request",
+                  "quantity": 1244,
+                  "unitType": "Requests",
+                  "grossAmount": 49.76,
+                  "discountAmount": 49.76,
+                  "netAmount": 0.0
+                }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(metrics, m => m.Title == "Copilot Premium Request (Cost)");
+    }
+
+    // #1160 — Even when the credit-quantity metric is saturated by the included allotment,
+    // the cost metric's QuantityUsed reflects only the sum of netAmount across items, not
+    // grossAmount. This is what keeps the toolbar's dollar figure honest.
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_ReflectsBillableSpend_WhenIncludedAllotmentSaturated()
+    {
+        const string json = """
+            {
+              "usageItems": [
+                {
+                  "product": "copilot",
+                  "sku": "Copilot AI Credits",
+                  "quantity": 20000,
+                  "unitType": "AICredits",
+                  "grossAmount": 200.00,
+                  "discountAmount": 200.00,
+                  "netAmount": 0.0
+                },
+                {
+                  "product": "copilot",
+                  "sku": "Copilot AI Credits",
+                  "quantity": 375458,
+                  "unitType": "AICredits",
+                  "grossAmount": 3754.58,
+                  "discountAmount": 0.0,
+                  "netAmount": 3754.58
+                }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(3754.58m, costMetric.QuantityUsed);
+    }
+
+    // #1160 — When a spending limit is available (via configured MonthlyBudget in this test),
+    // the cost metric exposes it as QuantityTotal, FractionUsed becomes netAmount/limit, and
+    // the presentation reads "$X / $Y" so users see real budget consumption at a glance.
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_QuantityTotal_ReflectsSpendingLimit_WhenProvided()
+    {
+        Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+        Thread.CurrentThread.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            MonthlyBudget = 5000m,
+        };
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(5000m, costMetric.QuantityTotal);
+        Assert.NotNull(costMetric.FractionUsed);
+        Assert.Equal(3754.58 / 5000.0, costMetric.FractionUsed!.Value, 5);
+        Assert.Equal("$3,754.58 / $5,000.00", costMetric.QuantityPresentation);
+    }
+
+    // #1160 — When no spending limit is available (no budget endpoint result and no
+    // MonthlyBudget configured), the cost metric leaves QuantityTotal at 0m so FractionUsed
+    // is null (no misleading progress bar) and the presentation renders as bare currency
+    // rather than a fake "$X / $0.00".
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_QuantityTotal_IsZero_WhenSpendingLimitUnknown()
+    {
+        Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+        Thread.CurrentThread.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("en-US");
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(0m, costMetric.QuantityTotal);
+        Assert.Null(costMetric.FractionUsed);
+        Assert.Equal("{0:C2}", costMetric.QuantityPresentationFormatString);
+        Assert.Equal("$3,754.58", costMetric.QuantityPresentation);
+    }
+
+    // #1160 — The credit-quantity metric for AI Credits must not receive a QuantityTotal
+    // derived from the included allotment. Otherwise the credit metric would saturate at
+    // 100% the instant included credits are consumed, exactly the misleading behavior this
+    // bug fixes.
+    [Fact]
+    public async Task GetMetricsAsync_QuantityMetric_QuantityTotal_StaysZero_ForCreditMetric()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, AiCreditsOnlyUsageJson),
+            () => "fake-token");
+
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            IncludedAiCredits = 20000m,
+        };
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var creditMetric = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.Equal(0m, creditMetric.QuantityTotal);
+        Assert.Null(creditMetric.FractionUsed);
+    }
+
+    // #1160 — The cost metric emitted for a SKU with non-zero netAmount is marked as the
+    // default budget-relevant surface (IsSelectedAsShown = true). Its sibling credit-quantity
+    // metric is not. This is what lets the ViewModel prefer real dollar spend over credits
+    // when no user pin exists.
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_IsMarkedAsShownByDefault_WhenNetAmountNonZero()
+    {
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, CopilotUsageItemsJson),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var creditMetric = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.True(costMetric.IsSelectedAsShown);
+        Assert.False(creditMetric.IsSelectedAsShown);
+    }
 }
