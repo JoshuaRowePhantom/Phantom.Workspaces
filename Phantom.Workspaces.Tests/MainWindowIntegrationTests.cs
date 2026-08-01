@@ -5108,6 +5108,79 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(UrlOpenPreference.External, recording.Requests[0].Preference);
     }
 
+    // ── Issue #1186: startup splash dismissal + restore-time hang prevention ──
+
+    // #1186: The core symptom is that LoadingWindow stays in front indefinitely
+    // when viewModel.InitializeAsync never completes (or completes with an
+    // unobserved fault buried inside RestoreSubAgentsAsync). The fix routes App
+    // startup through StartupSplashRunner.RunWithSplashDismissAsync, whose
+    // try/finally guarantees the splash close callback fires no matter how
+    // initialize exits. These tests pin that invariant directly.
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task App_Startup_DefaultWorkspaceWithRestorableSubAgents_DismissesLoadingWindow()
+    {
+        var closed = false;
+        var postInitializeRan = false;
+        await using var viewModel = CreateTestMainWindowViewModel();
+
+        var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+            initializeAsync: () => viewModel.InitializeAsync(),
+            setStatus: _ => { },
+            onFaultDelay: () => Task.CompletedTask,
+            shutdown: () => { },
+            postInitialize: () => postInitializeRan = true,
+            closeSplash: () => closed = true);
+
+        Assert.True(succeeded);
+        Assert.True(postInitializeRan);
+        Assert.True(closed, "LoadingWindow must be dismissed on success path.");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task App_Startup_ViewModelInitializeAsyncFaults_LoadingWindowIsClosedInFinally()
+    {
+        var closed = false;
+        var shutdownCalled = false;
+        var postInitializeRan = false;
+
+        var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+            initializeAsync: () => Task.FromException(new InvalidOperationException("boom")),
+            setStatus: _ => { },
+            onFaultDelay: () => Task.CompletedTask,
+            shutdown: () => shutdownCalled = true,
+            postInitialize: () => postInitializeRan = true,
+            closeSplash: () => closed = true);
+
+        Assert.False(succeeded);
+        Assert.False(postInitializeRan);
+        Assert.True(shutdownCalled);
+        Assert.True(closed, "LoadingWindow must be dismissed via finally on the fault path.");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task App_Startup_SubAgentRestoreThrows_DoesNotHangSplash()
+    {
+        // The specific #1186 failure mode: initialize faults from deep inside the
+        // sub-agent restore path. The runner must still route through finally and
+        // dismiss the splash — no hang possible.
+        var closed = false;
+        var statusMessages = new List<string>();
+
+        var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+            initializeAsync: () => Task.FromException(
+                new InvalidOperationException("Agent definition does not specify a model.")),
+            setStatus: msg => statusMessages.Add(msg),
+            onFaultDelay: () => Task.CompletedTask,
+            shutdown: () => { },
+            postInitialize: () => { },
+            closeSplash: () => closed = true);
+
+        Assert.False(succeeded);
+        Assert.True(closed, "Restore-time sub-agent throw must not leave the splash visible.");
+        Assert.Contains(statusMessages, m => m.Contains("Agent definition does not specify a model.", StringComparison.Ordinal));
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
     {
         return new UnknownRepositorySource();

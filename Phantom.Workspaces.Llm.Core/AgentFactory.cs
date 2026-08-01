@@ -210,6 +210,18 @@ public static class AgentFactory
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
 
+        // #1186: A restored hosted Copilot sub-agent stub can carry a persisted
+        // AgentDefinition with no Model (either the definition is missing entirely,
+        // or the persisted PromptAgent's Model round-tripped as null because the
+        // child was hosted by the Copilot CLI and never had its own model). Falling
+        // through to the null-model throw hangs startup (see #1186). Route those
+        // stubs through the same fast-path that CopilotSubAgentRouter uses so
+        // constructing a chat client for a restored sub-agent stub never faults.
+        if (agent is null || (agent as PromptAgent)?.Model is null)
+        {
+            return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
+        }
+
         var model = (agent as PromptAgent)?.Model;
         if (model is null)
         {
@@ -275,6 +287,14 @@ public static class AgentFactory
         CancellationToken cancellationToken = default)
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
+
+        // #1186: See CreateChatClient for rationale — restored hosted sub-agent
+        // stubs with empty AgentDefinitions must reach the sub-agent fast-path
+        // rather than throwing the null-model guard on startup.
+        if (agent is null || (agent as PromptAgent)?.Model is null)
+        {
+            return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
+        }
 
         var model = (agent as PromptAgent)?.Model;
         if (model is null)

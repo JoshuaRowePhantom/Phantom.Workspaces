@@ -522,4 +522,52 @@ public sealed class AgentChatSubAgentRegistryTests
         Assert.False(string.IsNullOrEmpty(childChat.AgentId));
         Assert.Equal(childChat.AgentSessionId, childChat.AgentId);
     }
+
+    // Issue #1186: A restored SubAgent stub carries its terminal completion state as an
+    // override that is applied lazily inside AcquireLeaseAsync. This test drives that
+    // exact contract: mark the stub Succeeded (as RestoreSubAgentsAsync now does) and
+    // then acquire a lease and verify the child chat reports Succeeded. Critically, this
+    // must work even though the stub itself never triggered chat-client construction
+    // during restore (the whole reason #1186's regression exists).
+    [Fact]
+    public async Task AgentChat_RestoredSubAgentStub_LeaseSeesSucceededCompletionState()
+    {
+        var childSessionId = "child-1186-lazy-state";
+        var store = new InMemoryAgentPersistenceStore();
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(
+                    AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson).ToJson()),
+            }
+        });
+
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        // Simulate what RestoreSubAgentsAsync now does: create a lazy stub and stamp
+        // the restored terminal state on it (no materialisation).
+        var stub = new SubAgent(new AgentSessionId(childSessionId), factory);
+        Assert.Null(stub.AgentChat);
+        stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+
+        // Immediate surface: the IRunningSubAgent contract must reflect the restored
+        // state even before AcquireLeaseAsync runs (the UI reads this to clear
+        // running markers on reload).
+        Assert.Equal(
+            AgentChatCompletionState.Succeeded,
+            ((IRunningSubAgent)stub).CompletionState);
+
+        // Deferred materialisation: when the UI eventually acquires the lease (e.g.
+        // AddSubAgentSlotLazy) the child chat is created and the terminal state is
+        // applied to it. Any later lease sees the same Succeeded state.
+        await using (var lease = await stub.AcquireLeaseAsync())
+        {
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        }
+    }
 }

@@ -1258,30 +1258,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         return Task.WhenAll(tasks);
     }
 
-    private async Task MarkRestoredSubAgentTerminalAsync(
+    private Task MarkRestoredSubAgentTerminalAsync(
         SubAgent stub,
         CancellationToken cancellationToken)
     {
-        try
-        {
-            var lease = await stub.AcquireLeaseAsync(cancellationToken).ConfigureAwait(false);
-
-            // Keep the lease alive for as long as this parent lives so the terminal
-            // completionStateOverride persists across other lease acquisitions.
-            this.RegisterOwnedResource(lease);
-
-            lease.AgentChat.SetCompletionState(
-                AgentChatCompletionState.Succeeded,
-                preserveLastUpdatedAt: true);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-        catch
-        {
-            // Best-effort: leaving the sub-agent in its default state is preferable to
-            // faulting parent restore.
-        }
+        // #1186: Previously this method acquired a full lease on the child stub
+        // (SubAgent.AcquireLeaseAsync -> AgentChatFactory.GetAsync -> full
+        // AgentChat.CreateAsync -> AgentChat.InitializeAsync -> AgentFactory.CreateChatClientAsync)
+        // just to flip the terminal completion state. For hosted Copilot sub-agents whose
+        // persisted AgentDefinition was empty (Model == null), CreateChatClientAsync's
+        // null-model guard threw "Agent definition does not specify a model.", faulting
+        // the whole restore path and hanging the startup splash indefinitely.
+        //
+        // Restored sub-agents are receive-only stubs whose SDK run is long gone, so we do
+        // not need a real IChatClient or a validated model to represent their terminal
+        // state. Record the override on the stub itself; SubAgent.AcquireLeaseAsync applies
+        // it lazily when (and only when) a caller — e.g. AgentViewModel's
+        // AddSubAgentSlotLazy — actually needs the child materialised. In the meantime,
+        // IRunningSubAgent.CompletionState surfaces the restored state directly, so the
+        // pulsating-brain / running marker never appears for a reloaded terminal child.
+        _ = cancellationToken; // no I/O; nothing to cancel
+        stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+        return Task.CompletedTask;
     }
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)

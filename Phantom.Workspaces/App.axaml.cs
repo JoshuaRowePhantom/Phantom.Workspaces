@@ -289,27 +289,31 @@ public partial class App : Application
                     () => desktop.MainWindow as Avalonia.Controls.TopLevel));
 
             loadingViewModel.StatusText = "Loading repository data and profile.";
-            try
-            {
-                await viewModel.InitializeAsync();
-            }
-            catch (Exception ex)
-            {
-                loadingViewModel.StatusText = $"Failed to connect: {ex.Message}";
-                await Task.Delay(5000); // Give user time to read the error
-                desktop.Shutdown();
-                return;
-            }
 
-            loadingViewModel.StatusText = "Opening main window.";
-            var mainWindow = new MainWindow(viewModel);
-            viewModel.WireWindowFocus(() => RestoreMainWindow(mainWindow));
-            mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
-            desktop.MainWindow = mainWindow;
-            mainWindow.Show();
-            loadingWindow.Close();
+            // #1186: Route the "initialize + open main window" sequence through
+            // StartupSplashRunner so the loading window is dismissed inside a
+            // finally block regardless of how initialize exits. Previously the
+            // splash was closed only on the happy path, so a fault or hang inside
+            // RestoreSubAgentsAsync (the reported #1186 cause) left it stuck in
+            // front indefinitely.
+            var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+                initializeAsync: () => viewModel.InitializeAsync(),
+                setStatus: msg => loadingViewModel.StatusText = msg,
+                onFaultDelay: () => Task.Delay(5000), // Give user time to read the error
+                shutdown: () => desktop.Shutdown(),
+                postInitialize: () =>
+                {
+                    loadingViewModel.StatusText = "Opening main window.";
+                    var mainWindow = new MainWindow(viewModel);
+                    viewModel.WireWindowFocus(() => RestoreMainWindow(mainWindow));
+                    mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
+                    desktop.MainWindow = mainWindow;
+                    mainWindow.Show();
+                    this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration());
+                },
+                closeSplash: () => loadingWindow.Close());
 
-            this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration());
+            _ = succeeded;
             return;
         }
 
