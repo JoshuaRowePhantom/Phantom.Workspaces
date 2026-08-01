@@ -51,6 +51,10 @@ public sealed class EntityCardViewModel : ViewModelBase
     // and it also gates the snapshot-change rebuild so unrealized cards do not re-launch schema work
     // when their entity data changes.
     private int fieldEditorsBuildRequested;
+    // Issue #1185: the most recently scheduled lazy field-editor build task, exposed so tests (and
+    // any deterministic caller) can await completion of the lazy realization rather than pumping
+    // the dispatcher and guessing when the async build has finished.
+    private Task fieldEditorsBuildTask = Task.CompletedTask;
     // Issue #1177: optional caller-supplied lazy builder. When set (see SetLazyFieldEditorBuilder),
     // it is invoked by BuildFieldEditorsAsync instead of the FieldEditorFactory path so the entity
     // browser can defer its own FieldTypeResolver-based schema work until the card is realized.
@@ -110,7 +114,13 @@ public sealed class EntityCardViewModel : ViewModelBase
             return;
         }
 
-        Lifetime.Run(this.BuildFieldEditorsAsync);
+        // Issue #1185: capture the build task so tests and other deterministic callers can await
+        // completion of the lazy realization instead of pumping the dispatcher speculatively. The
+        // task is also handed to Lifetime so it participates in the ViewModel's cancellation and
+        // dispose-await semantics.
+        var task = this.BuildFieldEditorsAsync(this.Lifetime.Token);
+        this.fieldEditorsBuildTask = task;
+        Lifetime.Run(_ => task);
     }
 
     /// <summary>
@@ -166,6 +176,14 @@ public sealed class EntityCardViewModel : ViewModelBase
     public ExternalEntityCardViewModel? ExternalCard => this.externalCard;
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.fieldEditors;
+
+    /// <summary>
+    /// Issue #1185: exposes the most recently scheduled lazy field-editor build task so
+    /// deterministic callers (and tests) can await the async build's completion instead of
+    /// pumping the dispatcher and guessing. Returns <see cref="Task.CompletedTask"/> before any
+    /// build has been requested, or once the last build has completed.
+    /// </summary>
+    public Task FieldEditorsBuildTask => this.fieldEditorsBuildTask;
 
     public JsonValidationViewModel Validation => this.validation;
 
@@ -772,7 +790,11 @@ public sealed class EntityCardViewModel : ViewModelBase
                 // waking up thousands of virtualized cards on every snapshot change.
                 if (Volatile.Read(ref this.fieldEditorsBuildRequested) == 1)
                 {
-                    Lifetime.Run(this.BuildFieldEditorsAsync);
+                    // Issue #1185: track the rebuild task alongside the initial build so tests can
+                    // observe deterministic completion of snapshot-triggered rebuilds too.
+                    var rebuildTask = this.BuildFieldEditorsAsync(this.Lifetime.Token);
+                    this.fieldEditorsBuildTask = rebuildTask;
+                    Lifetime.Run(_ => rebuildTask);
                 }
             }
 

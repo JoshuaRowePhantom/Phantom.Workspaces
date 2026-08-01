@@ -132,12 +132,12 @@ public sealed class EntityCardControlTests
             window.Show();
             Dispatcher.UIThread.RunJobs();
 
-            // Wait for the field editors to populate on the attached card.
-            for (var i = 0; i < 200 && attachedCard.FieldEditors.Count == 0; i++)
-            {
-                Dispatcher.UIThread.RunJobs();
-                await Task.Yield();
-            }
+            // Issue #1185: deterministically await the lazy field-editor build task exposed by
+            // EntityCardViewModel instead of pumping RunJobs speculatively — the previous pump
+            // loop could observe FieldEditors.Count == 0 before the async build finished on the
+            // UI thread. Awaiting the actual build task removes the timing race.
+            await attachedCard.FieldEditorsBuildTask;
+            Dispatcher.UIThread.RunJobs();
 
             Assert.NotEmpty(attachedCard.FieldEditors);
             Assert.Empty(detachedCard.FieldEditors);
