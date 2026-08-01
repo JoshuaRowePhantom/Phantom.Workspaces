@@ -133,7 +133,8 @@
     <DataTemplate DataType="vm:TabHeaderViewModel">
         <Grid HorizontalAlignment="Left">
             <StackPanel Orientation="Horizontal" Spacing="4">
-                <TextBlock Text="{Binding Title}" />
+                <TextBlock Text="{Binding Title}"
+                           ToolTip.Tip="{Binding Title}" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>

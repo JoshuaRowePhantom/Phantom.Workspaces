@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
 using global::Dock.Model.Controls;
 using global::Dock.Model.Core;
 using global::Dock.Model.Mvvm.Controls;
@@ -273,6 +274,55 @@ public sealed class TabHeaderViewModelTests
         var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
 
         Assert.NotNull(matchingTemplate);
+    }
+
+    // ── #1181: TabHeader title TextBlock exposes full title via ToolTip.Tip ──
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderDataTemplate_TitleTextBlock_HasToolTipBoundToTitle()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "My Tab" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        Assert.Equal("My Tab", ToolTip.GetTip(titleTextBlock));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderDataTemplate_LongTitle_ToolTipExposesFullUntruncatedText()
+    {
+        const string longTitle = "Copilot SDK sub-agent design document";
+        var viewModel = new TabHeaderViewModel { Title = longTitle };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        Assert.Equal(longTitle, ToolTip.GetTip(titleTextBlock));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderDataTemplate_TitleChanged_ToolTipUpdatesLive()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "Original" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        viewModel.Title = "Renamed";
+
+        Assert.Equal("Renamed", ToolTip.GetTip(titleTextBlock));
+    }
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
+    {
+        var templates = new DockDataTemplates();
+        var template = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        var control = template.Build(viewModel);
+        Assert.NotNull(control);
+        control!.DataContext = viewModel;
+
+        var host = new ContentControl { Content = control };
+        host.Measure(new Avalonia.Size(1000, 600));
+        host.Arrange(new Avalonia.Rect(0, 0, 1000, 600));
+
+        return control.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .First(tb => tb.Text == viewModel.Title);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
