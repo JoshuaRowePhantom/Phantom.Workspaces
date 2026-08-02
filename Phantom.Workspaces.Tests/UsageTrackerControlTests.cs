@@ -574,4 +574,48 @@ public sealed class UsageTrackerControlTests
             vm.Dispose();
         }
     }
+
+    // #1188 — When an account has a populated ResetsAt, the flyout renders a "Resets on
+    // {date}" line under the account header (bound to ResetsAtDisplay).
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_ResetDate_IsRendered()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "github.com",
+            UserName = "alice",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            ResetsAt = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 10769m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = vm };
+
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var resetsTextBlock = window.GetVisualDescendants().OfType<TextBlock>()
+                .FirstOrDefault(tb => tb.Name == "ResetsOnText");
+            Assert.NotNull(resetsTextBlock);
+            Assert.True(resetsTextBlock!.IsVisible, "ResetsOnText should be visible when ResetsAt is set.");
+            Assert.Contains("Aug 31, 2026", resetsTextBlock.Text ?? string.Empty);
+        }
+        finally
+        {
+            window.Close();
+            vm.Dispose();
+        }
+    }
 }

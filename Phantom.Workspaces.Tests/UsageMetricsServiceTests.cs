@@ -1101,4 +1101,104 @@ public sealed class UsageMetricsServiceTests
         Assert.Contains("user1", entry.Message, StringComparison.Ordinal);
         Assert.Contains("1", entry.Message, StringComparison.Ordinal);
     }
+
+    // #1188 — When a subsequent poll returns a different BillingPeriodStart than what
+    // is currently cached on the account, the service must replace all previously
+    // cached metrics for that account with the new-period set (no stale carry-over).
+    [Fact]
+    public async Task UsageMetricsService_CachedPreviousPeriodUsage_InvalidatedOnPeriodChange()
+    {
+        var providerUri = new Uri("https://example.com");
+        var augStart = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var sepStart = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var firstCall = true;
+        var secondCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeUsageProvider(
+            providerUri,
+            (_, _) =>
+            {
+                if (firstCall)
+                {
+                    firstCall = false;
+                    return Task.FromResult<IReadOnlyList<UsageMetric>>(
+                    [
+                        new UsageMetric
+                        {
+                            Title = "Copilot AI Credits",
+                            QuantityUsed = 15000m,
+                            QuantityTotal = 20000m,
+                            BillingPeriodStart = augStart,
+                            ResetsAt = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero),
+                        },
+                    ]);
+                }
+                secondCallCompleted.TrySetResult();
+                return Task.FromResult<IReadOnlyList<UsageMetric>>(
+                [
+                    new UsageMetric
+                    {
+                        Title = "Copilot AI Credits",
+                        QuantityUsed = 250m,
+                        QuantityTotal = 20000m,
+                        BillingPeriodStart = sepStart,
+                        ResetsAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    },
+                ]);
+            });
+
+        var dal = new FakeDataAccessLayer([
+            CreateUserAccountEntity("https://example.com", "user1"),
+        ]);
+
+        var mutationCount = 0;
+        var firstMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            if (Interlocked.Increment(ref mutationCount) == 1)
+                firstMutationCompleted.TrySetResult();
+            else
+                secondMutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var timeProvider = new FakeTimeProvider();
+
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { provider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await firstMutationCompleted.Task;
+
+        var account = Assert.Single(usageMetrics.Accounts);
+        Assert.Equal(augStart, account.BillingPeriodStart);
+        var firstMetric = Assert.Single(account.Metrics);
+        Assert.Equal(15000m, firstMetric.QuantityUsed);
+
+        await delayScheduled.Task;
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await secondCallCompleted.Task;
+        await secondMutationCompleted.Task;
+
+        // Period rolled: prior 15,000 AI-credit metric must have been dropped; only the
+        // new-period metric (250 credits) remains, and the account's cached period start
+        // is updated to reflect September.
+        Assert.Equal(sepStart, account.BillingPeriodStart);
+        var secondMetric = Assert.Single(account.Metrics);
+        Assert.Equal(250m, secondMetric.QuantityUsed);
+        Assert.DoesNotContain(account.Metrics, m => m.QuantityUsed == 15000m);
+    }
 }

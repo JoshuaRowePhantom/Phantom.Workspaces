@@ -53,8 +53,23 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         UsageAccount account,
         CancellationToken cancellationToken)
     {
-        var url = BuildRequestUrl(account);
         var token = this.tokenResolver();
+        var now = this.timeProvider.GetUtcNow();
+
+        // Fetch org budgets first (#1188): they carry the current billing period, which
+        // we then pass to /settings/billing/usage as year/month/day so aggregation is
+        // bounded to the current period. Personal accounts (account.Org == null) skip
+        // this call entirely.
+        var budgets = account.Org is { Length: > 0 } org
+            ? await this.FetchOrgBudgetsAsync(org, account.UserName, token, cancellationToken).ConfigureAwait(false)
+            : Array.Empty<ScopedBudget>();
+
+        // Discover the current period start / end. Prefer any budget that supplies
+        // current_period_start (selected via the same scope priority as budget amount);
+        // else fall back to the calendar-month start as a documented approximation.
+        var (periodStart, periodEnd) = SelectPeriod(budgets, account.UserName, now);
+
+        var url = BuildRequestUrl(account, periodStart);
         var response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
@@ -101,20 +116,54 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
-        // Fetch org budgets to supply the cost-metric denominator when this is an org-managed
-        // seat. Personal accounts (account.Org == null) MUST NOT call the budgets endpoint —
-        // there is no user-scoped budgets GET (§D of #1159).
-        var budgets = account.Org is { Length: > 0 } org
-            ? await this.FetchOrgBudgetsAsync(org, account.UserName, token, cancellationToken).ConfigureAwait(false)
-            : Array.Empty<ScopedBudget>();
-
-        return ParseMetrics(json, account, budgets, this.timeProvider.GetUtcNow().UtcDateTime);
+        return ParseMetrics(json, account, budgets, now.UtcDateTime, periodStart, periodEnd);
     }
 
-    private static string BuildRequestUrl(UsageAccount account)
+    private static string BuildRequestUrl(UsageAccount account, DateTimeOffset periodStart)
     {
-        var userName = account.UserName ?? string.Empty;
-        return $"https://api.github.com/users/{Uri.EscapeDataString(userName)}/settings/billing/usage";
+        var userName = Uri.EscapeDataString(account.UserName ?? string.Empty);
+        var utc = periodStart.UtcDateTime;
+        return $"https://api.github.com/users/{userName}/settings/billing/usage?year={utc.Year}&month={utc.Month}&day={utc.Day}";
+    }
+
+    /// <summary>
+    /// Picks the current billing period, preferring a period surfaced by the org budgets
+    /// (user scope first, then multi-user, then organization) and falling back to the
+    /// first day of the current calendar month with no upper bound (#1188). PeriodEnd is
+    /// only known when a budget explicitly provides <c>current_period_end</c>.
+    /// </summary>
+    private static (DateTimeOffset PeriodStart, DateTimeOffset? PeriodEnd) SelectPeriod(
+        IReadOnlyList<ScopedBudget> budgets,
+        string userName,
+        DateTimeOffset now)
+    {
+        foreach (var scope in new[] { "user", "multi_user_customer", "organization" })
+        {
+            foreach (var b in budgets)
+            {
+                if (!string.Equals(b.Scope, scope, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (scope == "user"
+                    && !string.IsNullOrEmpty(userName)
+                    && !string.IsNullOrEmpty(b.EntityName)
+                    && !string.Equals(b.EntityName, userName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (b.PeriodStart is { } start)
+                {
+                    return (start, b.PeriodEnd);
+                }
+            }
+        }
+
+        // Personal-account / no-period-metadata fallback: the current calendar month.
+        var monthStart = new DateTimeOffset(now.UtcDateTime.Year, now.UtcDateTime.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        return (monthStart, null);
     }
 
     private Task<HttpResponseMessage> SendRequestAsync(string url, string? token, CancellationToken cancellationToken)
@@ -135,7 +184,9 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         string json,
         UsageAccount account,
         IReadOnlyList<ScopedBudget> budgets,
-        DateTime now)
+        DateTime now,
+        DateTimeOffset periodStart,
+        DateTimeOffset? periodEnd)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
@@ -167,6 +218,24 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
             if (!string.Equals(product, "copilot", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
+            }
+
+            // #1188: When the item carries a date, exclude items outside the current
+            // billing period. Items without a date field are still included (the API
+            // does not always emit one, and older responses used by tests do not).
+            if (item.TryGetProperty("date", out var dateElement)
+                && dateElement.ValueKind == JsonValueKind.String
+                && DateTimeOffset.TryParse(dateElement.GetString(), out var itemDate))
+            {
+                if (itemDate < periodStart)
+                {
+                    continue;
+                }
+
+                if (periodEnd is { } end && itemDate >= end)
+                {
+                    continue;
+                }
             }
 
             var sku = item.TryGetProperty("sku", out var skuElement)
@@ -231,6 +300,8 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                 Unit = aggregate.Unit,
                 LastUpdatedAt = now,
                 WebUrl = webUrl,
+                ResetsAt = periodEnd,
+                BillingPeriodStart = periodStart,
             });
 
             if (aggregate.NetAmount != 0m)
@@ -257,6 +328,8 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     Unit = string.Empty,
                     LastUpdatedAt = now,
                     WebUrl = webUrl,
+                    ResetsAt = periodEnd,
+                    BillingPeriodStart = periodStart,
                     // #1160: Mark the net-dollar cost metric as the default budget-relevant
                     // surface. When no user pin exists, the ViewModel prefers this over the
                     // credit-quantity metric so the toolbar shows billable dollars rather
@@ -449,6 +522,27 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     ? ba.GetDecimal()
                     : 0m;
 
+                DateTimeOffset? periodStart = null;
+                DateTimeOffset? periodEnd = null;
+                if (element.TryGetProperty("current_period_start", out var cps)
+                    && cps.ValueKind == JsonValueKind.String
+                    && DateTimeOffset.TryParse(cps.GetString(), out var parsedStart))
+                {
+                    periodStart = parsedStart;
+                }
+                if (element.TryGetProperty("current_period_end", out var cpe)
+                    && cpe.ValueKind == JsonValueKind.String
+                    && DateTimeOffset.TryParse(cpe.GetString(), out var parsedEnd))
+                {
+                    periodEnd = parsedEnd;
+                }
+                else if (periodStart is { } ps)
+                {
+                    // Fallback per #1188: when only a period start is present, treat the
+                    // period as one month wide.
+                    periodEnd = ps.AddMonths(1);
+                }
+
                 var skus = new List<string>();
                 if (element.TryGetProperty("budget_product_skus", out var bpsku)
                     && bpsku.ValueKind == JsonValueKind.Array)
@@ -462,7 +556,7 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     }
                 }
 
-                list.Add(new ScopedBudget(scope, budgetType, budgetScope, entityName, skus, amount));
+                list.Add(new ScopedBudget(scope, budgetType, budgetScope, entityName, skus, amount, periodStart, periodEnd));
             }
 
             return list;
@@ -501,7 +595,9 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         string BudgetScope,
         string EntityName,
         IReadOnlyList<string> ProductSkus,
-        decimal Amount)
+        decimal Amount,
+        DateTimeOffset? PeriodStart = null,
+        DateTimeOffset? PeriodEnd = null)
     {
         public string Scope => this.RequestedScope;
     }

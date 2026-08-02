@@ -18,7 +18,6 @@ public sealed class GitHubCopilotUsageProviderTests
         {
           "usageItems": [
             {
-              "date": "2026-07-01T00:00:00Z",
               "product": "copilot",
               "sku": "Copilot AI Credits",
               "quantity": 395199.59,
@@ -30,7 +29,6 @@ public sealed class GitHubCopilotUsageProviderTests
               "repositoryName": ""
             },
             {
-              "date": "2026-05-01T00:00:00Z",
               "product": "copilot",
               "sku": "Copilot Premium Request",
               "quantity": 1244,
@@ -109,8 +107,10 @@ public sealed class GitHubCopilotUsageProviderTests
         await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedRequest);
-        Assert.Equal(
-            "https://api.github.com/users/JoshuaRowePhantom/settings/billing/usage",
+        // #1188: URL is now bounded to the current billing period; the path/user prefix
+        // must still be exactly the user-scoped enhanced-billing usage endpoint.
+        Assert.StartsWith(
+            "https://api.github.com/users/JoshuaRowePhantom/settings/billing/usage?",
             capturedRequest!.RequestUri!.ToString());
         Assert.DoesNotContain("/copilot/billing/usage", capturedRequest.RequestUri.ToString());
     }
@@ -735,9 +735,13 @@ public sealed class GitHubCopilotUsageProviderTests
             }
             """;
 
+        // #1188: budgets are fetched before the usage call so the discovered period can
+        // shape the usage-request URL.
         var handler = new SequencedRequestHandler(
-            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
-            _ => (HttpStatusCode.OK, budgetsJson));
+            _ => (HttpStatusCode.OK, budgetsJson),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson));
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
@@ -767,8 +771,10 @@ public sealed class GitHubCopilotUsageProviderTests
             """;
 
         var handler = new SequencedRequestHandler(
-            _ => (HttpStatusCode.OK, AiCreditsOnlyUsageJson),
-            _ => (HttpStatusCode.OK, budgetsJson));
+            _ => (HttpStatusCode.OK, budgetsJson),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, AiCreditsOnlyUsageJson));
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
@@ -783,11 +789,13 @@ public sealed class GitHubCopilotUsageProviderTests
     [Fact]
     public async Task GetMetricsAsync_BudgetsEndpointReturns403_FallsBackToConfiguredMonthlyBudget()
     {
+        // #1188: three budget scopes are attempted before the usage call; all 403,
+        // then the usage endpoint returns the copilot line items.
         var handler = new SequencedRequestHandler(
-            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
             _ => (HttpStatusCode.Forbidden, string.Empty),
             _ => (HttpStatusCode.Forbidden, string.Empty),
-            _ => (HttpStatusCode.Forbidden, string.Empty));
+            _ => (HttpStatusCode.Forbidden, string.Empty),
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson));
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
@@ -906,10 +914,10 @@ public sealed class GitHubCopilotUsageProviderTests
             """;
 
         var handler = new SequencedRequestHandler(
-            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson),
             _ => (HttpStatusCode.OK, userScopeJson),
             _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
-            _ => (HttpStatusCode.OK, orgScopeJson));
+            _ => (HttpStatusCode.OK, orgScopeJson),
+            _ => (HttpStatusCode.OK, PremiumRequestOnlyUsageJson));
 
         var provider = new GitHubCopilotUsageProvider(
             new HttpClient(handler),
@@ -1091,5 +1099,203 @@ public sealed class GitHubCopilotUsageProviderTests
         var creditMetric = metrics.Single(m => m.Title == "Copilot AI Credits");
         Assert.True(costMetric.IsSelectedAsShown);
         Assert.False(creditMetric.IsSelectedAsShown);
+    }
+
+    // ---------- #1188 tests: bound aggregation to the current billing period ----------
+
+    private static UsageAccount PersonalAccount(string userName = "alice")
+        => new()
+        {
+            UserName = userName,
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+    [Fact]
+    public async Task GetMetricsAsync_UsageSpanningTwoBillingPeriods_ExcludesItemsBeforePeriodStart()
+    {
+        // Personal account: PeriodStart falls back to first-of-current-month (UTC).
+        // Fixed TimeProvider anchors "now" so we control which items are before vs. after.
+        var now = new DateTimeOffset(2026, 8, 15, 0, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        const string json = """
+            {
+              "usageItems": [
+                { "date": "2026-07-15T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 10000, "unitType": "AICredits", "netAmount": 100.00 },
+                { "date": "2026-08-05T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 250,   "unitType": "AICredits", "netAmount": 2.50 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
+
+        var credits = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.Equal(250m, credits.QuantityUsed);
+
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(2.50m, cost.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_AfterMonthlyReset_ConsumedCreditsResetToCurrentPeriod()
+    {
+        // "Now" is early September — the fallback period start is 2026-09-01. Any
+        // August items are pre-period and must be dropped from the aggregate.
+        var now = new DateTimeOffset(2026, 9, 3, 12, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        const string json = """
+            {
+              "usageItems": [
+                { "date": "2026-08-28T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 800000, "unitType": "AICredits", "netAmount": 7000.00 },
+                { "date": "2026-09-01T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 500,    "unitType": "AICredits", "netAmount": 5.00 },
+                { "date": "2026-09-02T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 269,    "unitType": "AICredits", "netAmount": 2.69 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
+
+        var credits = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.Equal(769m, credits.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_RequestUrl_IncludesYearMonthDayForCurrentPeriod()
+    {
+        var now = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new RequestCapturingHandler(
+            req => capturedRequest = req,
+            HttpStatusCode.OK,
+            """{ "usageItems": [] }""");
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        await provider.GetMetricsAsync(PersonalAccount("octocat"), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        var uri = capturedRequest!.RequestUri!.ToString();
+        Assert.Contains("year=2026", uri);
+        Assert.Contains("month=8", uri);
+        Assert.Contains("day=1", uri);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_IncludedUsage_MatchesCurrentPeriodAllowance()
+    {
+        // Mirrors the website's "10,769 / 20,000 AI credits" — includes are configured
+        // and the credit metric's QuantityUsed only counts current-period items.
+        var now = new DateTimeOffset(2026, 8, 15, 0, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        const string json = """
+            {
+              "usageItems": [
+                { "date": "2026-07-15T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 500000, "unitType": "AICredits" },
+                { "date": "2026-08-01T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 10769,  "unitType": "AICredits" }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        var account = new UsageAccount
+        {
+            UserName = "alice",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+            IncludedAiCredits = 20000m,
+        };
+
+        var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var credits = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.Equal(10769m, credits.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_CostMetric_ReflectsOnlyCurrentPeriodNetAmount()
+    {
+        var now = new DateTimeOffset(2026, 8, 15, 0, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        const string json = """
+            {
+              "usageItems": [
+                { "date": "2026-07-30T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 10000, "unitType": "AICredits", "netAmount": 7285.60 },
+                { "date": "2026-08-05T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 200,   "unitType": "AICredits", "netAmount": 12.34 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
+
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(12.34m, cost.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_BudgetsResponse_ExposesResetDateOnMetric()
+    {
+        const string budgetsJson = """
+            {
+              "budgets": [
+                {
+                  "budget_type": "BundlePricing",
+                  "budget_product_skus": ["ai_credits"],
+                  "budget_scope": "user",
+                  "budget_entity_name": "alice",
+                  "budget_amount": 200,
+                  "current_period_start": "2026-08-01T00:00:00Z",
+                  "current_period_end":   "2026-08-31T00:00:00Z"
+                }
+              ]
+            }
+            """;
+
+        var handler = new SequencedRequestHandler(
+            _ => (HttpStatusCode.OK, budgetsJson),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, """{ "budgets": [] }"""),
+            _ => (HttpStatusCode.OK, AiCreditsOnlyUsageJson));
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token");
+
+        var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
+
+        var expectedReset = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero);
+        Assert.All(metrics, m => Assert.Equal(expectedReset, m.ResetsAt));
     }
 }

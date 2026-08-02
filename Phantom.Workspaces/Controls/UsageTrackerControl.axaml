@@ -52,6 +52,13 @@
                                         </TextBlock>
                                     </HyperlinkButton>
 
+                                    <!-- #1188: Current billing period reset date (e.g. "Resets on Aug 31, 2026"). -->
+                                    <TextBlock Name="ResetsOnText"
+                                               Text="{Binding ResetsAtDisplay}"
+                                               IsVisible="{Binding ResetsAtDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                               Classes="muted"
+                                               FontSize="10" />
+
                                     <!-- Metrics list -->
                                     <ItemsControl ItemsSource="{Binding Metrics}">
                                         <ItemsControl.ItemTemplate>

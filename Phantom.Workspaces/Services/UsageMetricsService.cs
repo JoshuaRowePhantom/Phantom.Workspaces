@@ -237,6 +237,14 @@ public sealed class UsageMetricsService : IAsyncDisposable
 
             if (hasMetrics)
             {
+                // #1188: Detect period rollover so callers/observers can distinguish an
+                // in-period refresh from a new-period reset. Metrics are always fully
+                // replaced (Clear + Add) so any stale prior-period totals are dropped
+                // regardless — this signal exists so the account's own BillingPeriodStart
+                // / ResetsAt properties can be updated atomically with the swap.
+                var incomingPeriodStart = metrics[0].BillingPeriodStart;
+                var incomingResetsAt = metrics[0].ResetsAt;
+
                 // Update metrics - must marshal to foreground
                 await this.usageMetrics.MutateAsync(async () =>
                 {
@@ -245,6 +253,9 @@ public sealed class UsageMetricsService : IAsyncDisposable
                     {
                         account.Metrics.Add(metric);
                     }
+
+                    account.BillingPeriodStart = incomingPeriodStart;
+                    account.ResetsAt = incomingResetsAt;
 
                     // Add account if not already visible
                     if (!isCurrentlyVisible)

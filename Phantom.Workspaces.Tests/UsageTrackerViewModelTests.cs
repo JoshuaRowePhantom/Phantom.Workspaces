@@ -641,4 +641,107 @@ public sealed class UsageTrackerViewModelTests
 
         Assert.Equal("20,000 AICredits", vm.TopRightLabel);
     }
+
+    // ---------- #1188 tests: current-period consumption ----------
+
+    [Fact]
+    public void UsageTrackerViewModel_UsageSpanningTwoPeriods_ShowsOnlyCurrentPeriodConsumption()
+    {
+        // Provider has already filtered items to the current period; the ViewModel must
+        // surface exactly those numbers (no re-aggregation, no cumulative leakage).
+        var periodStart = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var periodEnd = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero);
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 10769m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+            IsSelectedAsShown = true,
+            BillingPeriodStart = periodStart,
+            ResetsAt = periodEnd,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        Assert.Equal("10,769 / 20,000 AICredits", vm.TopRightLabel);
+        var displayedAccount = Assert.Single(vm.Accounts);
+        var displayedMetric = Assert.Single(displayedAccount.Metrics);
+        Assert.Equal(10769m, displayedMetric.QuantityUsed);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_AfterMonthlyReset_ConsumedCreditsResetToCurrentPeriod()
+    {
+        // First poll: August, 15,000 AI credits used. Second poll (new period): the
+        // provider returns fresh September metrics with a new BillingPeriodStart. The
+        // ViewModel must reflect the new-period consumed value, not the prior total.
+        var augStart = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var sepStart = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 15000m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+            IsSelectedAsShown = true,
+            BillingPeriodStart = augStart,
+        });
+        account.BillingPeriodStart = augStart;
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        Assert.Equal("15,000 / 20,000 AICredits", vm.TopRightLabel);
+
+        // Simulate the service applying a new-period replacement.
+        account.Metrics.Clear();
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 250m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+            IsSelectedAsShown = true,
+            BillingPeriodStart = sepStart,
+        });
+        account.BillingPeriodStart = sepStart;
+
+        Assert.Equal("250 / 20,000 AICredits", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_ResetDate_IsSurfacedOnAccountCard()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "github.com",
+            UserName = "alice",
+            ResetsAt = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 100m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var displayed = Assert.Single(vm.Accounts);
+        Assert.NotNull(displayed.ResetsAtDisplay);
+        Assert.Contains("Aug 31, 2026", displayed.ResetsAtDisplay);
+        Assert.StartsWith("Resets on", displayed.ResetsAtDisplay);
+    }
 }

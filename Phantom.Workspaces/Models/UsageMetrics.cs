@@ -76,6 +76,22 @@ public sealed class UsageMetric : ObservableObject
     public Uri? WebUrl { get; init; }
 
     /// <summary>
+    /// Optional date on which the billing period covering this metric resets. Populated
+    /// from the budget's <c>current_period_end</c> (or the fallback calendar-month end)
+    /// so the flyout can render "Resets on {ResetsAt:MMM d, yyyy}" text and downstream
+    /// caches can detect period rollover (#1188).
+    /// </summary>
+    public DateTimeOffset? ResetsAt { get; init; }
+
+    /// <summary>
+    /// Start of the billing period covered by this metric's aggregate values (#1188).
+    /// Set by providers that filter aggregation to the current period; the cache in
+    /// <see cref="Services.UsageMetricsService"/> compares this against the previously
+    /// observed period start and clears stale prior-period metrics when it changes.
+    /// </summary>
+    public DateTimeOffset? BillingPeriodStart { get; init; }
+
+    /// <summary>
     /// Whether this metric is the one pinned as the top-right indicator label.
     /// Two-way bound to the row's RadioButton. The <see cref="UsageTrackerViewModel"/>
     /// enforces single-selection semantics across all rows and accounts.
@@ -104,12 +120,51 @@ public sealed class UsageMetric : ObservableObject
 }
 
 /// <summary>One external-provider account with its associated usage metrics.</summary>
-public sealed class UsageAccount
+public sealed class UsageAccount : ObservableObject
 {
+    private DateTimeOffset? resetsAt;
+    private DateTimeOffset? billingPeriodStart;
+
     public string Product { get; init; } = string.Empty;
     public string UserName { get; init; } = string.Empty;
     public Uri SettingsUrl { get; init; } = new Uri("about:blank");
     public ObservableCollection<UsageMetric> Metrics { get; } = [];
+
+    /// <summary>
+    /// Date on which the currently displayed billing period resets, if known (#1188).
+    /// Populated from the provider's discovered <c>PeriodEnd</c>. The XAML flyout binds
+    /// this to a "Resets on {ResetsAt:MMM d, yyyy}" line under the account header.
+    /// </summary>
+    public DateTimeOffset? ResetsAt
+    {
+        get => this.resetsAt;
+        set
+        {
+            if (this.SetProperty(ref this.resetsAt, value))
+            {
+                this.OnPropertyChanged(nameof(this.ResetsAtDisplay));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Formatted "Resets on {date}" string bound by the flyout. Null when
+    /// <see cref="ResetsAt"/> is null so the row is collapsed via
+    /// <c>StringConverters.IsNotNullOrEmpty</c>.
+    /// </summary>
+    public string? ResetsAtDisplay =>
+        this.resetsAt is { } r ? $"Resets on {r.UtcDateTime:MMM d, yyyy}" : null;
+
+    /// <summary>
+    /// Start of the billing period currently reflected in <see cref="Metrics"/> (#1188).
+    /// The <see cref="Services.UsageMetricsService"/> uses this to detect period rollover
+    /// and clear stale prior-period metrics before applying the new set.
+    /// </summary>
+    public DateTimeOffset? BillingPeriodStart
+    {
+        get => this.billingPeriodStart;
+        set => this.SetProperty(ref this.billingPeriodStart, value);
+    }
 
     /// <summary>
     /// Organisation (e.g. GitHub org) that owns / bills this account when the account is an
