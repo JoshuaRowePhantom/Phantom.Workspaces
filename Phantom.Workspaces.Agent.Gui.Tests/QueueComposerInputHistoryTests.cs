@@ -357,4 +357,154 @@ public sealed class QueueComposerInputHistoryTests
 
         inputQueue.Dispose();
     }
+
+    // #1192 regression tests.
+
+    [Fact]
+    public async Task SlashPopup_DownArrow_AdvancesSelectionByOne()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new SlashCommandCompletion("alpha", "/alpha", "d"),
+            new SlashCommandCompletion("beta", "/beta", "d"),
+            new SlashCommandCompletion("gamma", "/gamma", "d"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Down, KeyModifiers.None, caretLine: 0, out _, out _);
+
+        Assert.True(handled);
+        Assert.Equal(1, composer.Completions.SelectedIndex);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SlashPopup_UpArrow_MovesSelectionBackByOne()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new SlashCommandCompletion("alpha", "/alpha", "d"),
+            new SlashCommandCompletion("beta", "/beta", "d"),
+            new SlashCommandCompletion("gamma", "/gamma", "d"),
+        ]);
+        composer.Completions.SelectedIndex = 2;
+
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Up, KeyModifiers.None, caretLine: 0, out _, out _);
+
+        Assert.True(handled);
+        Assert.Equal(1, composer.Completions.SelectedIndex);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SlashPopup_ArrowKey_IsMarkedHandled()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.Completions.SetItems([
+            new SlashCommandCompletion("alpha", "/alpha", "d"),
+            new SlashCommandCompletion("beta", "/beta", "d"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Down, KeyModifiers.None, caretLine: 0, out _, out _);
+
+        Assert.True(handled);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SlashPopup_Open_DownArrowDoesNotTriggerHistoryNavigation()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+        composer.InputText = "draft";
+
+        composer.Completions.SetItems([
+            new SlashCommandCompletion("alpha", "/alpha", "d"),
+            new SlashCommandCompletion("beta", "/beta", "d"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Down, KeyModifiers.None, caretLine: 0, out var newText, out _);
+
+        Assert.True(handled);
+        Assert.Null(newText);
+        Assert.Equal("draft", composer.InputText);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SlashPopup_Open_UpArrowDoesNotTriggerHistoryNavigation()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+        composer.InputText = "draft";
+
+        composer.Completions.SetItems([
+            new SlashCommandCompletion("alpha", "/alpha", "d"),
+            new SlashCommandCompletion("beta", "/beta", "d"),
+        ]);
+        composer.Completions.SelectedIndex = 1;
+
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Up, KeyModifiers.None, caretLine: 0, out var newText, out _);
+
+        Assert.True(handled);
+        Assert.Null(newText);
+        Assert.Equal("draft", composer.InputText);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task SlashPopup_Closed_UpArrowStillNavigatesHistory()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "recent";
+        composer.Submit();
+
+        Assert.False(composer.Completions.IsVisible);
+
+        var handled = QueueComposerControl.HandleInputKey(
+            composer, Key.Up, KeyModifiers.None, caretLine: 0, out var newText, out _);
+
+        Assert.True(handled);
+        Assert.Equal("recent", newText);
+
+        inputQueue.Dispose();
+    }
 }

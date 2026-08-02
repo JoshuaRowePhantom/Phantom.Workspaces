@@ -25,8 +25,7 @@ public partial class QueueComposerControl : UserControl
         this.InputBox.AddHandler(
             InputElement.KeyDownEvent,
             this.InputBox_KeyDown,
-            RoutingStrategies.Tunnel | RoutingStrategies.Bubble,
-            handledEventsToo: true);
+            RoutingStrategies.Tunnel);
         this.InputBox.AddHandler(
             TextBox.PastingFromClipboardEvent,
             this.InputBox_PastingFromClipboard,
