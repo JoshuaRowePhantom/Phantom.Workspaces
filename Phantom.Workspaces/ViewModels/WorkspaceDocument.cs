@@ -92,6 +92,21 @@ public class WorkspaceDocument : Document
             this.baseTitle = ComputeBaseTitle(tabVm);
             this.RebuildTabHeaderItems();
             this.UpdateTitle();
+
+            // #1190: keep the persisted descriptor in sync with the live tab title so
+            // subsequent WriteBackWorkspaceTabs round-trips the current Title rather
+            // than the stale value captured at InitializeCore time. Without this,
+            // any Title change after Initialize (async DisplayName load, user rename,
+            // entity update, split-and-add) is lost on save/close/reopen and the
+            // restored tab header renders blank.
+            if (e.PropertyName is nameof(WorkspaceTabViewModel.Title))
+            {
+                var refreshed = BuildDescriptor(tabVm);
+                if (refreshed is not null)
+                {
+                    this.Descriptor = refreshed;
+                }
+            }
         }
         else if (e.PropertyName is nameof(WorkspaceTabViewModel.TabStatus))
         {

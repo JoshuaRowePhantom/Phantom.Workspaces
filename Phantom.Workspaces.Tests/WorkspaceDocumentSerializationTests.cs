@@ -536,6 +536,86 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.Equal("Open", restoredDesc.ShortcutName);
     }
 
+    // ── #1190: Descriptor stays in sync with live tab Title ──────────────────
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_RefreshesTitle_WhenTabTitleChangesAfterInitialize()
+    {
+        // Regression for #1190: Descriptor was captured once via `??=` at InitializeCore
+        // time and never refreshed, so any Title change after Initialize was lost on save.
+        var tab = new WebViewModel("https://desc-refresh.example.com")
+        {
+            Id = "tab-refresh-desc",
+            Title = string.Empty,
+        };
+        var doc = new WorkspaceDocument(tab);
+
+        // At construction time the initial Title is empty, so descriptor.Title is null.
+        var initial = Assert.IsType<BrowserDockTabDescriptor>(doc.Descriptor);
+        Assert.Null(initial.Title);
+
+        tab.Title = "New Title After Init";
+
+        var refreshed = Assert.IsType<BrowserDockTabDescriptor>(doc.Descriptor);
+        Assert.Equal("New Title After Init", refreshed.Title);
+        Assert.Equal("https://desc-refresh.example.com", refreshed.Url);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_SerializedAfterTitleChange_PersistsNewTitle()
+    {
+        // Same setup as above: after mutating tab.Title, DockSerializer.Serialize(doc)
+        // must produce JSON containing the new title, and Deserialize must recover it.
+        var tab = new WebViewModel("https://desc-persist.example.com")
+        {
+            Id = "tab-persist-desc",
+            Title = "Original",
+        };
+        var doc = new WorkspaceDocument(tab);
+
+        tab.Title = "Updated Title";
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        Assert.Contains("Updated Title", json);
+        Assert.DoesNotContain("\"Title\":\"Original\"", json);
+
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("Updated Title", restoredDesc.Title);
+    }
+
+    [Theory]
+    [InlineData("entity")]
+    [InlineData("agent-session")]
+    [InlineData("browser")]
+    public void DockTabDescriptor_RoundTrip_PreservesTitle_AcrossAllKinds(string kind)
+    {
+        // Consolidates the per-kind PreservesTitle_OnRoundTrip tests into a parametrised
+        // form. Any future descriptor kind must also carry Title through DockSerializer.
+        DockTabDescriptor descriptor = kind switch
+        {
+            "entity" => new EntityDockTabDescriptor(
+                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "Open") { Title = "Round-Trip Entity" },
+            "agent-session" => new AgentSessionDockTabDescriptor(
+                "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff") { Title = "Round-Trip Agent" },
+            "browser" => new BrowserDockTabDescriptor(
+                "https://round-trip.example.com") { Title = "Round-Trip Browser" },
+            _ => throw new System.ArgumentOutOfRangeException(nameof(kind)),
+        };
+        var tab = new StubWorkspaceTab($"tab-rt-{kind}", $"Tab {kind}");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        Assert.NotNull(restored!.Descriptor);
+        Assert.Equal(descriptor.Title, restored.Descriptor!.Title);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     /// <summary>

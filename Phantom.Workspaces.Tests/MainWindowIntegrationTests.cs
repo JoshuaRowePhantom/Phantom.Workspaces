@@ -4418,6 +4418,376 @@ public sealed class MainWindowIntegrationTests
             && b.Url == "https://roundtrip-test.example.com");
     }
 
+    // ── #1190: modify → save → close → reopen preserves inner tab header titles ─
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceRestore_AfterModifySaveCloseReopen_InnerTabHeaderTitlesArePreserved()
+    {
+        // Canonical regression for #1190: opens a workspace with three entity tabs,
+        // sets each tab.Title to a distinct value AFTER OpenTabAsync returns, calls
+        // WriteBackWorkspaceTabs, closes the pane via CloseWorkspacePaneAsync, then
+        // calls OpenWorkspaceAsync and asserts every restored WorkspaceDocument's
+        // EffectiveTabHeader.Title (bound in DockDataTemplates.axaml) equals its
+        // pre-save value and is non-empty. Prior to the fix, Descriptor was captured
+        // once via `??=` at InitializeCore time and never refreshed when tab.Title
+        // changed, so the restored header rendered blank.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Seed three note entities whose display-name is empty so the only viable
+        // source for the restored header title is the persisted Descriptor.Title.
+        var entityIds = new[]
+        {
+            new EntityId("11901190-1111-4000-8000-000000000001"),
+            new EntityId("11901190-1111-4000-8000-000000000002"),
+            new EntityId("11901190-1111-4000-8000-000000000003"),
+        };
+        for (var i = 0; i < entityIds.Length; i++)
+        {
+            await UpsertEntityAndLoadAsync(entityBroker, entityIds[i], $$"""
+                {
+                  "entity-id": "{{entityIds[i]}}",
+                  "entity-types": ["entity", "note"],
+                  "names": [["notes", "1190-tab-{{i + 1}}"]],
+                  "display-name": { "default": "" },
+                  "content": { "mime-type": "text/markdown", "content": { "text": "n{{i + 1}}" } }
+                }
+                """);
+        }
+
+        // Seed the workspace entity and open it so pane.Entity is real (not the placeholder).
+        var workspaceId = new EntityId("11901190-1111-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Modify Save Close Reopen WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(pane);
+        await WaitForPanePopulatedAsync(pane!);
+
+        // Open three tabs with placeholder titles.
+        var tabs = new EntityWorkspaceTabViewModel[3];
+        for (var i = 0; i < 3; i++)
+        {
+            var entities = await entityBroker.GetEntitiesAsync(
+                [new GetEntityRequest { EntityId = entityIds[i] }]);
+            var entity = entities.Single();
+            tabs[i] = new EntityWorkspaceTabViewModel
+            {
+                Id = $"1190-tab-{i + 1}",
+                Title = "initial",
+                Entity = entity,
+                DockRegion = "full",
+            };
+            await viewModel.OpenTabAsync(tabs[i]);
+        }
+
+        var contentDock = FindDocumentDockIn(pane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "1190-tab-3");
+
+        // Mutate Title AFTER OpenTabAsync — this is the scenario #1158 never covered.
+        var expectedTitles = new[] { "Modified Alpha", "Modified Beta", "Modified Gamma" };
+        for (var i = 0; i < 3; i++)
+        {
+            tabs[i].Title = expectedTitles[i];
+        }
+
+        // Drive the real save handler (used by the Save-workspace button).
+        var writeBackResult = await viewModel.WriteBackWorkspaceTabs(pane);
+        var writeBackErrors = writeBackResult.EntityResults
+            .Where(r => r.UpdateState == UpdateState.Failed)
+            .SelectMany(r => r.Errors ?? [])
+            .Select(e => e.Message)
+            .ToList();
+        Assert.Empty(writeBackErrors);
+
+        // Close the pane; then reopen the workspace via the real code path.
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        // Every restored tab must have a non-empty header title matching the pre-save value.
+        var restoredDocs = MainWindowViewModel.EnumerateAllDocuments(restoredPane!.ContentLayout!)
+            .Where(d => d.Id?.StartsWith("1190-tab-", StringComparison.Ordinal) == true)
+            .ToDictionary(d => d.Id!, d => d);
+        Assert.Equal(3, restoredDocs.Count);
+        for (var i = 0; i < 3; i++)
+        {
+            var doc = restoredDocs[$"1190-tab-{i + 1}"];
+            var headerTitle = doc.EffectiveTabHeader.Title;
+            Assert.False(string.IsNullOrEmpty(headerTitle),
+                $"Restored tab {i + 1} header title must not be blank (was '{headerTitle}').");
+            Assert.Equal(expectedTitles[i], headerTitle);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WriteBackWorkspaceTabs_AfterTabTitleChange_PersistsCurrentTitleInDockLayout()
+    {
+        // Regression for #1190: WriteBackWorkspaceTabs must serialize the CURRENT tab
+        // title, not the stale value captured at InitializeCore. Reads the pane's
+        // dock-layout JSON and asserts the persisted Descriptor.Title reflects the
+        // most recent tab.Title assignment.
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration { SkipStartupWorkspace = false });
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://writeback-1190.example.com")
+        {
+            Id = "wb-1190-tab",
+            Title = "A",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "wb-1190-tab");
+
+        // Reassign Title AFTER OpenTabAsync — this is what #1158 tests never do.
+        tab.Title = "B";
+
+        var writeBackResult = await viewModel.WriteBackWorkspaceTabs(pane);
+        var errors = writeBackResult.EntityResults
+            .Where(r => r.UpdateState == UpdateState.Failed)
+            .SelectMany(r => r.Errors ?? [])
+            .Select(e => e.Message)
+            .ToList();
+        Assert.Empty(errors);
+
+        var data = Assert.IsType<System.Text.Json.JsonElement>(pane.Entity.Data);
+        Assert.True(data.TryGetProperty("dock-layout", out var dockLayoutEl));
+        var dockLayoutJson = dockLayoutEl.GetRawText();
+        Assert.Contains("\"Title\":\"B\"", dockLayoutJson);
+        Assert.DoesNotContain("\"Title\":\"A\"", dockLayoutJson);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceRestore_EntityTab_TitleIsNonEmptyAfterRestore()
+    {
+        // Regression for #1190 Fix 3: even when both the descriptor Title and the
+        // entity's display-name are empty, the restored tab title must fall back to
+        // a non-empty label so the header never renders blank.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("11901190-3333-4000-8000-000000000001");
+        var entity = await UpsertEntityAndLoadAsync(entityBroker, entityId, $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "1190-empty-entity"]],
+              "display-name": { "default": "" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "e" } }
+            }
+            """);
+
+        // Build a dock-layout in which the persisted descriptor has NO Title
+        // (simulating the stale-descriptor case). Since the entity's display-name
+        // is also empty, only the last-resort fallback rescues the header title.
+        var descriptor = new EntityDockTabDescriptor(entityId.ToString(), "Open");
+        var placeholder = new EntityWorkspaceTabViewModel
+        {
+            Id = "1190-empty-tab",
+            Title = "placeholder",
+            Entity = entity,
+            DockRegion = "full",
+        };
+        var doc = new WorkspaceDocument(placeholder) { Descriptor = descriptor };
+        var contentDock = new WorkspaceContentDock
+        {
+            Id = "cd-1190-empty",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable> { doc },
+        };
+        contentDock.ActiveDockable = doc;
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
+        {
+            Id = "root-1190-empty",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable> { contentDock },
+        };
+        root.ActiveDockable = contentDock;
+        doc.Owner = contentDock;
+        contentDock.Owner = root;
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(root);
+
+        var workspaceId = new EntityId("11901190-3333-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Empty Title Restore WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredTab = Assert.Single(restoredPane!.Tabs);
+        Assert.False(string.IsNullOrEmpty(restoredTab.Title),
+            "Restored tab title must not be empty even when Descriptor.Title and DisplayName are both empty.");
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceRestore_AgentSessionTab_TitleRoundTripsThroughFullCycle()
+    {
+        // Regression for #1190: full modify → save → close → reopen cycle for an
+        // AgentSessionWorkspaceTabViewModel. Prior to the fix, changing the tab's
+        // Title after OpenTabAsync was lost on the next save/close/reopen.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var agentDefinitionId = new EntityId("11901190-4444-4000-8000-000000000001");
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, agentDefinitionId, """
+            {
+              "entity-id": "11901190-4444-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "1190-agent"]],
+              "display-name": { "default": "1190 Agent" },
+              "definition": {
+                "kind": "prompt",
+                "name": "1190-agent",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(agentSessionEntity);
+
+        var workspaceId = new EntityId("11901190-4444-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Agent Cycle WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(pane);
+        await WaitForPanePopulatedAsync(pane!);
+
+        var agentTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "1190-agent-tab",
+            Title = "initial",
+            Entity = agentSessionEntity!,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(agentTab);
+
+        var contentDock = FindDocumentDockIn(pane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "1190-agent-tab");
+
+        // Change title AFTER open.
+        agentTab.Title = "Agent Chat #3";
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredTab = restoredPane!.Tabs.FirstOrDefault(t => t.Id == "1190-agent-tab");
+        Assert.NotNull(restoredTab);
+        Assert.IsType<AgentSessionWorkspaceTabViewModel>(restoredTab);
+        Assert.Equal("Agent Chat #3", restoredTab!.Title);
+
+        var restoredDoc = MainWindowViewModel.EnumerateAllDocuments(restoredPane.ContentLayout!)
+            .First(d => d.Id == "1190-agent-tab");
+        Assert.Equal("Agent Chat #3", restoredDoc.EffectiveTabHeader.Title);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceRestore_BrowserTab_TitleRoundTripsThroughFullCycle()
+    {
+        // Regression for #1190: full modify → save → close → reopen cycle for a
+        // browser (WebViewModel) tab.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("11901190-5555-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Browser Cycle WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(pane);
+        await WaitForPanePopulatedAsync(pane!);
+
+        var browserTab = new WebViewModel("https://cycle-1190.example.com")
+        {
+            Id = "1190-browser-tab",
+            Title = "initial",
+        };
+        await viewModel.OpenTabAsync(browserTab);
+
+        var contentDock = FindDocumentDockIn(pane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "1190-browser-tab");
+
+        browserTab.Title = "My Docs";
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredTab = restoredPane!.Tabs.FirstOrDefault(t => t.Id == "1190-browser-tab");
+        Assert.NotNull(restoredTab);
+        Assert.IsType<WebViewModel>(restoredTab);
+        Assert.Equal("My Docs", restoredTab!.Title);
+
+        var restoredDoc = MainWindowViewModel.EnumerateAllDocuments(restoredPane.ContentLayout!)
+            .First(d => d.Id == "1190-browser-tab");
+        Assert.Equal("My Docs", restoredDoc.EffectiveTabHeader.Title);
+    }
+
     private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel)
     {
         var field = typeof(MainWindowViewModel)
@@ -4487,7 +4857,7 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
-    private static IDocumentDock? FindDocumentDockIn(IDockable dockable)
+    internal static IDocumentDock? FindDocumentDockIn(IDockable dockable)
     {
         if (dockable is IDocumentDock documentDock)
         {
@@ -4537,7 +4907,7 @@ public sealed class MainWindowIntegrationTests
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
     }
 
-    private static async Task WaitForWorkspaceTabAsync(IDocumentDock contentDock, string tabId)
+    internal static async Task WaitForWorkspaceTabAsync(IDocumentDock contentDock, string tabId)
     {
         if (contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) == true)
         {
@@ -4605,7 +4975,7 @@ public sealed class MainWindowIntegrationTests
     /// Throws <see cref="TimeoutException"/> with diagnostic details if populate does not complete in time.
     /// Propagates any exception raised during populate.
     /// </summary>
-    private static async Task WaitForPanePopulatedAsync(WorkspacePaneViewModel pane, TimeSpan? timeout = null)
+    internal static async Task WaitForPanePopulatedAsync(WorkspacePaneViewModel pane, TimeSpan? timeout = null)
     {
         var populateTask = pane.Populated;
         var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(10);

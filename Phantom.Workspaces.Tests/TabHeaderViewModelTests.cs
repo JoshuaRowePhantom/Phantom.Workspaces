@@ -525,4 +525,72 @@ public sealed class TabHeaderViewModelTests
             AgentDefinition = agentDefinition,
         });
     }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceDocument_EffectiveTabHeader_TitleIsNonEmpty_AfterRestore()
+    {
+        // Regression for #1190: after a full save-close-reopen cycle, every restored
+        // WorkspaceDocument's EffectiveTabHeader.Title (bound in DockDataTemplates.axaml:136
+        // via <TextBlock Text="{Binding Title}"/>) must be non-empty. Directly targets the
+        // symptom the user reported.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var entityId = new Phantom.Workspaces.Data.EntityId("11901190-2222-4000-8000-000000000001");
+        var entity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, entityId, """
+            {
+              "entity-id": "11901190-2222-4000-8000-000000000001",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "1190-header-tab"]],
+              "display-name": { "default": "" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "h" } }
+            }
+            """);
+
+        var workspaceId = new Phantom.Workspaces.Data.EntityId("11901190-2222-4000-8000-0000000000f1");
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Header Cycle WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), System.StringComparison.Ordinal));
+        Assert.NotNull(pane);
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(pane!);
+
+        var tab = new EntityWorkspaceTabViewModel
+        {
+            Id = "1190-header-tab",
+            Title = "before",
+            Entity = entity,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var contentDock = MainWindowIntegrationTests.FindDocumentDockIn(pane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "1190-header-tab");
+
+        tab.Title = "After Modify";
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), System.StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredDoc = MainWindowViewModel.EnumerateAllDocuments(restoredPane!.ContentLayout!)
+            .First(d => d.Id == "1190-header-tab");
+        Assert.False(string.IsNullOrEmpty(restoredDoc.EffectiveTabHeader.Title),
+            $"EffectiveTabHeader.Title must be non-empty after restore (was '{restoredDoc.EffectiveTabHeader.Title}').");
+        Assert.Equal("After Modify", restoredDoc.EffectiveTabHeader.Title);
+    }
 }

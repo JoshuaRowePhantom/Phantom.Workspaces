@@ -2715,6 +2715,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         JsonNode? dockLayout = null;
         if (workspacePane.ContentLayout is not null)
         {
+            // #1190: refresh each document's Descriptor from its current TabViewModel
+            // before serializing. Belt-and-braces backstop for the OnTabViewModelPropertyChanged
+            // hook: if the descriptor drifted from the live tab (e.g. Title changed via a path
+            // that did not raise the WorkspaceTabViewModel.Title property change), rebuild it
+            // now so the persisted layout carries the currently-rendered title.
+            foreach (var openDoc in EnumerateAllDocuments(workspacePane.ContentLayout))
+            {
+                if (openDoc.TabViewModel is { } liveTab)
+                {
+                    var refreshed = WorkspaceDocument.BuildDescriptor(liveTab);
+                    if (refreshed is not null)
+                    {
+                        openDoc.Descriptor = refreshed;
+                    }
+                }
+            }
+
             this.dockFactory.DockState.Save(workspacePane.ContentLayout);
 
             var serializer = new DockSerializer(
@@ -3346,9 +3363,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     var entity = entities.FirstOrDefault();
                     if (entity is not null && this.openAgentSessionShortcutHandler is not null)
                     {
+                        // #1190: guarantee a non-empty title so the restored tab header
+                        // never renders blank when both the descriptor's Title and the
+                        // entity's DisplayName are empty.
+                        var restoredAgentTitle =
+                            !string.IsNullOrEmpty(agentDesc.Title) ? agentDesc.Title :
+                            !string.IsNullOrEmpty(entity.DisplayName) ? entity.DisplayName :
+                            entity.EntityId.Value.ToString();
                         var agentTab = await this.openAgentSessionShortcutHandler
                             .TryCreateAgentSessionTabForRestoreAsync(
-                                this, entity, tabId, title: agentDesc.Title, dockRegion: null);
+                                this, entity, tabId, title: restoredAgentTitle, dockRegion: null);
                         if (agentTab is not null) return agentTab;
                     }
                 }
@@ -3363,9 +3387,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                     var entity = entities.FirstOrDefault();
                     if (entity is not null)
                     {
-                        var restoredTitle = !string.IsNullOrEmpty(entityDesc.Title)
-                            ? entityDesc.Title
-                            : entity.DisplayName;
+                        // #1190: cascade to a non-empty last-resort label so the tab header
+                        // never renders blank even when descriptor Title and display-name
+                        // are both empty (e.g. stale descriptor + async DisplayName load).
+                        var restoredTitle =
+                            !string.IsNullOrEmpty(entityDesc.Title) ? entityDesc.Title :
+                            !string.IsNullOrEmpty(entity.DisplayName) ? entity.DisplayName :
+                            entity.EntityId.Value.ToString();
                         return new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
                         {
                             Id = tabId,
