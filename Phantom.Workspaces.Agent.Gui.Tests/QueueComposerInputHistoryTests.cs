@@ -358,6 +358,178 @@ public sealed class QueueComposerInputHistoryTests
         inputQueue.Dispose();
     }
 
+    // #1191 regression tests.
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_AfterResendingLastMessage_FirstPressReturnsMostRecentMessage()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+        composer.InputText = "B";
+        composer.Submit();
+
+        composer.TryNavigateHistoryUp(caretLine: 0, out var first, out _);
+        Assert.Equal("B", first);
+
+        // Resend "B" — dedup-suppressed, must still reset history navigation.
+        composer.InputText = "B";
+        composer.Submit();
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+        Assert.True(navigated);
+        Assert.Equal("B", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_AfterDedupSuppressedSubmit_ResetsHistoryCursor()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+        composer.InputText = "B";
+        composer.Submit();
+
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+
+        // Direct dedup-suppressed submit (matches last entry "B").
+        composer.CommitToHistory("B");
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+        Assert.True(navigated);
+        Assert.Equal("B", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_AfterSlashCommandSubmit_FirstPressReturnsMostRecentMessage()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.SlashCommandInterceptorAsync = _ => Task.CompletedTask;
+
+        composer.InputText = "A";
+        composer.Submit();
+
+        // Move the history cursor away from -1.
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+
+        composer.InputText = "/help";
+        composer.Submit();
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+        Assert.True(navigated);
+        Assert.Equal("A", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_AfterSend_FirstPressRecallsMostRecentMessage()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+
+        var navigated = composer.TryNavigateHistoryUp(caretLine: 0, out var text, out _);
+        Assert.True(navigated);
+        Assert.Equal("A", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryUp_TwoMessages_UpArrowSequenceRecallsBThenA()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+        composer.InputText = "B";
+        composer.Submit();
+
+        composer.TryNavigateHistoryUp(caretLine: 0, out var t1, out _);
+        composer.TryNavigateHistoryUp(caretLine: 0, out var t2, out _);
+
+        Assert.Equal("B", t1);
+        Assert.Equal("A", t2);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task TryNavigateHistoryDown_AfterUp_ReturnsToDraft()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "first";
+        composer.Submit();
+        composer.InputText = "d";
+
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        var navigated = composer.TryNavigateHistoryDown(out var text, out _);
+
+        Assert.True(navigated);
+        Assert.Equal("d", text);
+
+        inputQueue.Dispose();
+    }
+
+    [Fact]
+    public async Task CommitToHistory_WithDuplicateOfLastEntry_ResetsHistoryIndexToMinusOne()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.InputText = "A";
+        composer.Submit();
+        composer.InputText = "B";
+        composer.Submit();
+
+        // Advance history cursor.
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+        composer.TryNavigateHistoryUp(caretLine: 0, out _, out _);
+
+        // Dedup-suppressed commit.
+        composer.CommitToHistory("B");
+
+        // Cursor was reset — next Up returns most recent (newest), then oldest.
+        composer.TryNavigateHistoryUp(caretLine: 0, out var t1, out _);
+        composer.TryNavigateHistoryUp(caretLine: 0, out var t2, out _);
+
+        Assert.Equal("B", t1);
+        Assert.Equal("A", t2);
+
+        inputQueue.Dispose();
+    }
+
     // #1192 regression tests.
 
     [Fact]
