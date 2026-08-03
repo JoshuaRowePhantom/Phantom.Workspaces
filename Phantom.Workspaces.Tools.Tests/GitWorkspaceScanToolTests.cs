@@ -949,6 +949,74 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
         Assert.Equal(firstEntity.EntityId, secondEntity.EntityId);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_DiscoveredWorktree_SetsComputerUserProfileIdToCurrentProfileEntityId()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "profile-id-scan"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "profile-id-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/profile-id.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+        var entity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(entity);
+        var profileIdString = entity.Data?.GetProperty("computer-user-profile-id").GetString();
+        Assert.Equal(context.CurrentComputerUserProfileEntity.EntityId.ToString(), profileIdString);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_RescanExistingWorktreeMissingProfileId_BackfillsComputerUserProfileId()
+    {
+        var scanRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "profile-id-backfill"));
+        var repoPath = Path.GetFullPath(Path.Combine(scanRoot, "backfill-repo"));
+        InitializeGitRepository(repoPath, "https://example.com/backfill.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            scanRoot,
+            Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
+
+        // Seed a pre-existing git-worktree entity WITHOUT computer-user-profile-id — simulating
+        // an entity written by a pre-fix scanner version.
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer", "git-workspace", "{{EscapeForJsonString(normalizedPath)}}"]],
+              "display-name": {"default": "backfill-repo"},
+              "path": "{{EscapeForJsonString(repoPath)}}"
+            }
+            """,
+            concurrencyTag: null);
+
+        var beforeEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(beforeEntity);
+        Assert.False(beforeEntity.Data!.Value.TryGetProperty("computer-user-profile-id", out _));
+
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider([scanRoot]));
+        await tool.ExecuteAsync(context);
+
+        var afterEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(afterEntity);
+        var profileIdString = afterEntity.Data?.GetProperty("computer-user-profile-id").GetString();
+        Assert.Equal(context.CurrentComputerUserProfileEntity.EntityId.ToString(), profileIdString);
+    }
+
     private static async Task<EntitySnapshot?> GetEntityByIdAsync(
         IDataAccessLayer dataAccessLayer,
         EntityId entityId)

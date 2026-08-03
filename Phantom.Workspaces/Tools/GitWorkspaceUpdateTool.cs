@@ -98,7 +98,8 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
                 path,
                 currentProfileNames,
                 metadata,
-                owningRepository);
+                owningRepository,
+                context.CurrentComputerUserProfileEntity.EntityId);
 
             // Check if git section would be unchanged
             if (IsEntityUnchanged(entity.Data, incomingData))
@@ -157,6 +158,11 @@ public sealed class GitWorkspaceUpdateTool : IWorkspaceTool
         }
 
         if (!JsonPropertyEquals(existing, incomingData, "git"))
+        {
+            return false;
+        }
+
+        if (!JsonPropertyEquals(existing, incomingData, "computer-user-profile-id"))
         {
             return false;
         }

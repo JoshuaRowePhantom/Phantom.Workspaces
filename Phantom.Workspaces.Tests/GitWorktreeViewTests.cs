@@ -1,9 +1,11 @@
 using Avalonia.Headless.XUnit;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -110,6 +112,61 @@ public sealed class GitWorktreeViewTests
         Assert.NotNull(rootWorktreeNode);
         Assert.Single(profileNode.Children);
         Assert.Equal(worktree1Id, profileNode.Children[0].Entity!.EntityId);
+    }
+
+    [AvaloniaFact]
+    public async Task GitWorktreeView_DiscoveredWorktrees_AllNestedUnderProfile_NoneAtRoot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+
+        var profileId = new EntityId(Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"));
+        await SeedProfileAsync(dataAccessLayer, profileId, "alice", "machine1");
+
+        // Simulate what GitWorkspaceScanTool now writes for every discovered worktree by
+        // building entity data with a computerUserProfileId and upserting it.
+        var profileNames = new[]
+        {
+            new EntityName("computer-user-profiles", "users", "username", "alice", "computers", "hostname", "machine1"),
+        };
+
+        var worktreeIds = new List<EntityId>();
+        foreach (var path in new[] { "/tmp/discovered-repo-a", "/tmp/discovered-repo-b", "/tmp/discovered-repo-c" })
+        {
+            var entityData = GitWorkspaceEntityData.Build(
+                path,
+                profileNames,
+                metadata: null,
+                owningRepository: null,
+                computerUserProfileId: profileId);
+
+            var worktreeId = new EntityId(Guid.NewGuid());
+            worktreeIds.Add(worktreeId);
+            await dataAccessLayer.UpdateAsync(
+                new UpdateRequest
+                {
+                    UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Seed discovered worktree" } },
+                    Changes =
+                    [
+                        new EntityChange
+                        {
+                            EntityId = worktreeId,
+                            ConcurrencyTag = null,
+                            EntityChangeMode = EntityChangeMode.Replace,
+                            Data = System.Text.Json.JsonDocument.Parse(entityData.ToJsonString()).RootElement.Clone(),
+                        },
+                    ],
+                }, ct);
+        }
+
+        var worktrees = (await broker.GetEntitiesAsync(worktreeIds, ct)).ToArray();
+        var hierarchy = await new ViewHierarchyAssembler(broker).AssembleAsync(worktrees, ct);
+
+        // Every worktree nests under the profile; nothing appears at the root level.
+        Assert.DoesNotContain(hierarchy, node => worktreeIds.Contains(node.Entity?.EntityId ?? default));
+        var profileNode = Assert.Single(hierarchy, node => node.Entity?.EntityId == profileId);
+        Assert.Equal(worktreeIds.Count, profileNode.Children.Count);
     }
 
     private static async Task SeedProfileAsync(

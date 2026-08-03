@@ -28,12 +28,20 @@ internal static class GitWorkspaceEntityData
     /// <param name="profileNames">The collection of profile names for the current user-computer-profile.</param>
     /// <param name="metadata">Git metadata (branch, HEAD commit, remotes); may be null.</param>
     /// <param name="owningRepository">The path to the owning repository for linked worktrees; null for root repos.</param>
+    /// <param name="computerUserProfileId">
+    /// Entity id of the user-computer-profile that hosts this worktree. When supplied, the
+    /// resulting entity data includes a <c>computer-user-profile-id</c> field so the
+    /// git-worktree view can nest the worktree under its profile via
+    /// <see cref="ViewHierarchyAssembler.AssembleWithGroupByParentAsync"/>. When null, the
+    /// field is omitted and the worktree will appear at the root.
+    /// </param>
     /// <returns>A complete entity data object ready for upsert.</returns>
     public static JsonObject Build(
         string path,
         IReadOnlyCollection<EntityName> profileNames,
         GitMetadata? metadata,
-        string? owningRepository = null)
+        string? owningRepository = null,
+        EntityId? computerUserProfileId = null)
     {
         var fullPath = Path.GetFullPath(path);
         var normalizedPath = NormalizeRepositoryPath(fullPath);
@@ -75,6 +83,14 @@ internal static class GitWorkspaceEntityData
         if (!string.IsNullOrWhiteSpace(owningRepository))
         {
             entityData["owning-repository"] = owningRepository;
+        }
+
+        if (computerUserProfileId is { } profileId)
+        {
+            // Enables group-by-parent nesting in the Git Workspaces view — see
+            // ViewHierarchyAssembler.AssembleWithGroupByParentAsync and
+            // entity-type-views/git-worktree-entity-type-view.json.
+            entityData["computer-user-profile-id"] = profileId.ToString();
         }
 
         if (metadata != null)

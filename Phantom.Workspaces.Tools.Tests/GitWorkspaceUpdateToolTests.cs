@@ -313,6 +313,43 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         Assert.Equal(deterministicId, refreshedEntity.EntityId);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_UpdatedWorktree_SetsComputerUserProfileIdToCurrentProfileEntityId()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "update-profile-id"));
+        InitializeGitRepository(repoPath, "https://example.com/update-profile-id.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+
+        // Pre-existing entity WITHOUT computer-user-profile-id — simulating a worktree
+        // written by a pre-fix scanner version.
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
+              "display-name": {"default": "update-profile-id"},
+              "path": "{{EscapeForJsonString(repoPath)}}"
+            }
+            """,
+            concurrencyTag: null);
+
+        var context = CreateContext(dataAccessLayer);
+        var tool = new GitWorkspaceUpdateTool();
+
+        await tool.ExecuteAsync(context);
+
+        var refreshedEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(refreshedEntity);
+        Assert.True(refreshedEntity.Data!.Value.TryGetProperty("computer-user-profile-id", out var profileIdElement));
+        Assert.Equal(context.CurrentComputerUserProfileEntity.EntityId.ToString(), profileIdElement.GetString());
+    }
+
     private static WorkspaceToolExecutionContext CreateContext(IDataAccessLayer dataAccessLayer)
     {
         var placeholder = CreateSnapshot(
