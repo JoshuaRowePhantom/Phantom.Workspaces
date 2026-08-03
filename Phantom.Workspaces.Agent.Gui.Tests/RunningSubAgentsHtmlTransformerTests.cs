@@ -420,13 +420,16 @@ public sealed class RunningSubAgentsHtmlTransformerTests
 
         agent.RaiseActivityChanged();
 
-        Assert.Equal(2, sink.Operations.Count);
+        Assert.Equal(3, sink.Operations.Count);
         Assert.Equal("remove", sink.Operations[0].Kind);
         Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, sink.Operations[0].Path);
         Assert.Equal("update", sink.Operations[1].Kind);
         Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelSentinelId, sink.Operations[1].Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, sink.Operations[1].Location);
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.SubAgentPanelInnerId}\"", sink.Operations[1].Content);
+        // Issue #1202: the transformer requests a scroll-to-bottom after the append so
+        // AgentChatOutputControl can re-stick the WebView when auto-scroll is still enabled.
+        Assert.Equal("scroll", sink.Operations[2].Kind);
     }
 
     [Fact]
@@ -694,6 +697,35 @@ public sealed class RunningSubAgentsHtmlTransformerTests
 
         Assert.Contains("▷ nested-name", html, StringComparison.Ordinal);
         Assert.Contains("▷ parent-name", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_FullRender_RequestsScrollToBottom()
+    {
+        // Issue #1202: FullRender must call sink.ScrollToBottom() after appending the sub-agent
+        // panel so AgentChatOutputControl.ScrollToBottom() gets a chance to re-stick the WebView
+        // (gated on AutoScrollEnabled). Without this, the WebView's scrollHeight-growth transient
+        // latches auto-scroll off and subsequent streamed deltas no longer scroll into view.
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        sink.Clear();
+
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        subAgents.Add(agent);
+
+        // The append op is emitted first; the scroll request must follow so the browser has already
+        // grown scrollHeight by the time the scroll command posts.
+        var appendIndex = sink.Operations.FindIndex(op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append);
+        Assert.True(appendIndex >= 0, "Expected a sub-agent panel Append operation.");
+
+        var scrollIndex = sink.Operations.FindIndex(op => op.Kind == "scroll");
+        Assert.True(scrollIndex > appendIndex,
+            $"Expected a scroll op after the append (append={appendIndex}, scroll={scrollIndex}).");
     }
 
     private sealed record Operation(string Kind, string Path, ChatOutputUpdateLocation Location, string Content);

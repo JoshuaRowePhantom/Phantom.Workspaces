@@ -125,6 +125,12 @@ internal sealed class RunningSubAgentsHtmlTransformer : IDisposable
             ChatOutputHtmlRenderer.SubAgentPanelSentinelId,
             ChatOutputUpdateLocation.Append,
             BuildPanelHtml(this.subAgents, this.ancestors));
+
+        // Issue #1202: appending the sub-agent panel grows document.body.scrollHeight and would
+        // otherwise leave the WebView un-scrolled — indistinguishable from the user scrolling up.
+        // Route through the sink so the AgentChatOutputControl re-sticks when AutoScrollEnabled is
+        // still true, matching the invariant used by ChatMessageHtmlTransformer's streamed deltas.
+        this.sink.ScrollToBottom();
     }
 
     private void RenderParentPanel()

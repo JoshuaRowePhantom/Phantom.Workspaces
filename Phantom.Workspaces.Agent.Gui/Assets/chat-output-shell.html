@@ -749,6 +749,16 @@
         window.scrollTo(0, document.body.scrollHeight);
       }
 
+      // Issue #1202: distinguish genuine user scroll-up gestures from programmatic scroll events
+      // caused by DOM mutations that grow document.body.scrollHeight. A user scroll only counts
+      // when preceded by one of these input events; otherwise the scroll listener treats the
+      // transient as programmatic and re-sticks the viewport instead of latching auto-scroll off.
+      var userInteractedSinceStuck = false;
+      var wasAtBottom = true;
+      ["wheel", "touchstart", "keydown", "mousedown"].forEach(function (evt) {
+        window.addEventListener(evt, function () { userInteractedSinceStuck = true; }, { passive: true, capture: true });
+      });
+
       function applyCommand(command) {
         switch (command.type) {
           case "update": {
@@ -813,7 +823,21 @@
       };
 
       window.addEventListener("scroll", function () {
-        postToHost({ type: "scrollState", atBottom: isNearBottom() });
+        var atBottom = isNearBottom();
+        // Issue #1202: a programmatic DOM append (e.g. RunningSubAgentsHtmlTransformer appending
+        // the sub-agent panel) grows document.body.scrollHeight before the browser rescrolls, so
+        // the transient scroll event reports atBottom=false even though the user never scrolled.
+        // If the user has not interacted since we were last at the bottom, treat this as a
+        // programmatic transient: re-stick to the new bottom and do NOT tell the host we left it.
+        if (!userInteractedSinceStuck && wasAtBottom && !atBottom) {
+          scrollToBottom();
+          return;
+        }
+        wasAtBottom = atBottom;
+        if (atBottom) {
+          userInteractedSinceStuck = false;
+        }
+        postToHost({ type: "scrollState", atBottom: atBottom });
       }, { passive: true });
 
       // Intercept all anchor clicks and post to host instead of navigating the WebView.

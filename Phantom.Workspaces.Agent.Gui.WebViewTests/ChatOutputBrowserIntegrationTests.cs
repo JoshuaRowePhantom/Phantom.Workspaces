@@ -919,6 +919,244 @@ public sealed class ChatOutputBrowserIntegrationTests
             }
         });
 
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task ScrollState_ProgrammaticHeightGrowthWithoutUserGesture_DoesNotLatchAutoScrollOff()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window, scrollStates) = await ShowReadyBrowserWithScrollCaptureAsync();
+            try
+            {
+                await MakePageScrollableAndScrollToBottomAsync(web);
+                scrollStates.Clear();
+
+                // Programmatic append that grows document.body.scrollHeight WITHOUT any user gesture
+                // (no wheel/touch/keydown/mousedown). The listener must treat the resulting scroll
+                // transient as programmatic: re-stick to the new bottom and post no atBottom:false.
+                await EvalAsync(web, "(function(){var d=document.createElement('div');d.style.height='1000px';d.id='grow-1';document.body.appendChild(d);})();'x'");
+                await WaitForFrameSyncAsync(web);
+
+                Assert.DoesNotContain(false, scrollStates);
+
+                var nearBottom = await EvalAsync(web, "((window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 24)).toString()");
+                Assert.Contains("true", nearBottom, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task AutoScroll_UserScrollsUp_DisablesAutoScroll()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window, scrollStates) = await ShowReadyBrowserWithScrollCaptureAsync();
+            try
+            {
+                await MakePageScrollableAndScrollToBottomAsync(web);
+                scrollStates.Clear();
+
+                // Simulate a genuine user gesture (wheel) followed by a scroll-up. The listener
+                // must post scrollState { atBottom: false } so the host can latch auto-scroll off.
+                await EvalAsync(web, "window.dispatchEvent(new WheelEvent('wheel',{deltaY:-100}));window.scrollTo(0,0);'x'");
+                await WaitForFrameSyncAsync(web);
+
+                Assert.Contains(false, scrollStates);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task AutoScroll_UserScrollsBackToBottom_ReEnablesAutoScroll()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window, scrollStates) = await ShowReadyBrowserWithScrollCaptureAsync();
+            try
+            {
+                await MakePageScrollableAndScrollToBottomAsync(web);
+
+                // User scrolls up first (mark auto-scroll off).
+                await EvalAsync(web, "window.dispatchEvent(new WheelEvent('wheel',{deltaY:-100}));window.scrollTo(0,0);'x'");
+                await WaitForFrameSyncAsync(web);
+                scrollStates.Clear();
+
+                // Then the user scrolls back down to the bottom with a real gesture.
+                await EvalAsync(web, "window.dispatchEvent(new WheelEvent('wheel',{deltaY:100}));window.scrollTo(0,document.body.scrollHeight);'x'");
+                await WaitForFrameSyncAsync(web);
+
+                Assert.Contains(true, scrollStates);
+                Assert.DoesNotContain(false, scrollStates);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task AutoScroll_SubAgentPanelAppendedWhileAtBottom_RemainsEnabledAndScrollsToNewBottom()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window, scrollStates) = await ShowReadyBrowserWithScrollCaptureAsync();
+            try
+            {
+                // Fill the history so the page is scrollable and land at the bottom.
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                for (var i = 0; i < 30; i++)
+                {
+                    history.Add(TextItem($"message {i}"));
+                }
+
+                var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+                using var model = CreateModel(web, history, subAgents: subAgents);
+                await model.HistoryLoaded;
+                await MakePageScrollableAndScrollToBottomAsync(web);
+                scrollStates.Clear();
+
+                // Append the sub-agent panel via the real transformer path.
+                subAgents.Add(new StubSubAgentDisplay("agent-1", "Research Agent"));
+                await WaitForFrameSyncAsync(web);
+
+                // Fix A: no atBottom:false messages posted; the WebView remains at the new bottom.
+                Assert.DoesNotContain(false, scrollStates);
+
+                var nearBottom = await EvalAsync(web, "((window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 24)).toString()");
+                Assert.Contains("true", nearBottom, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    [Trait("Category", "WebView")]
+    public Task AutoScroll_SubAgentPanelAppendedAfterUserScrolledUp_DoesNotForceScroll()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window, scrollStates) = await ShowReadyBrowserWithScrollCaptureAsync();
+            try
+            {
+                var history = new ObservableCollection<AgentChatHistoryItem>();
+                for (var i = 0; i < 30; i++)
+                {
+                    history.Add(TextItem($"message {i}"));
+                }
+
+                var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+                // Use a gated sink that mirrors AgentChatOutputControl's production behaviour:
+                // ScrollToBottom is short-circuited whenever the host-tracked AutoScrollEnabled is
+                // false. This is essential for the "user scrolled up" scenario — without the gate,
+                // the transformer's request would re-stick the viewport and defeat fix B.
+                var gate = new GatedBrowserSink(web);
+                using var model = new ChatOutputHtmlModel(
+                    history,
+                    [],
+                    () => true,
+                    gate,
+                    subAgents: subAgents);
+                await model.HistoryLoaded;
+                await MakePageScrollableAndScrollToBottomAsync(web);
+
+                // User scrolls up (real gesture). The host would set AutoScrollEnabled=false on
+                // seeing scrollState { atBottom: false }. Reflect that in the sink gate here.
+                await EvalAsync(web, "window.dispatchEvent(new WheelEvent('wheel',{deltaY:-100}));window.scrollTo(0,0);'x'");
+                await WaitForFrameSyncAsync(web);
+                gate.AutoScrollEnabled = false;
+                var scrollYBefore = await EvalAsync(web, "window.scrollY.toString()");
+                scrollStates.Clear();
+
+                // Sub-agent append while auto-scroll is off. The sink drops ScrollToBottom so no
+                // programmatic scroll is issued; the JS-side guard also holds wasAtBottom=false, so
+                // the transient scroll from scrollHeight growth does not re-stick either.
+                subAgents.Add(new StubSubAgentDisplay("agent-2", "Late Agent"));
+                await WaitForFrameSyncAsync(web);
+
+                // The viewport must remain where the user left it (near scrollY=0), NOT at bottom.
+                var nearBottomAfter = await EvalAsync(web, "((window.innerHeight + window.scrollY) >= (document.body.scrollHeight - 24)).toString()");
+                Assert.Contains("false", nearBottomAfter, StringComparison.Ordinal);
+                // No scrollState { atBottom: true } message should be posted from a programmatic
+                // transient after the user has already opted out.
+                Assert.DoesNotContain(true, scrollStates);
+                _ = scrollYBefore;
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    private static async Task<(ControllableWebViewControl Web, Window Window, System.Collections.Generic.List<bool> ScrollStates)> ShowReadyBrowserWithScrollCaptureAsync()
+    {
+        var web = new ControllableWebViewControl();
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scrollStates = new System.Collections.Generic.List<bool>();
+        web.Ready += (_, _) => ready.TrySetResult();
+        web.JavaScriptMessageReceived += (_, body) =>
+        {
+            if (body.Contains("\"scrollState\"", StringComparison.Ordinal))
+            {
+                var atBottom = body.Contains("\"atBottom\":true", StringComparison.Ordinal);
+                scrollStates.Add(atBottom);
+            }
+        };
+        var window = CreateOffscreenWindow(web);
+        window.Show();
+        web.HtmlShell = ShellHtml;
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        return (web, window, scrollStates);
+    }
+
+    /// <summary>
+    /// Message-based synchronization barrier: post a marker through the page's own bridge and
+    /// wait for it. When the marker arrives, every JavaScript task queued before us — including
+    /// any pending scroll-event handlers — has already run. Also flushes any pending
+    /// PostMessageToJavaScript auto-batch so the marker's InvokeScript runs after them.
+    /// </summary>
+    private static async Task WaitForFrameSyncAsync(ControllableWebViewControl web)
+    {
+        var syncId = Guid.NewGuid().ToString("N");
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, string body)
+        {
+            if (body.Contains(syncId, StringComparison.Ordinal))
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        web.JavaScriptMessageReceived += Handler;
+        try
+        {
+            web.EndBatch();
+            await EvalAsync(
+                web,
+                $"requestAnimationFrame(function(){{requestAnimationFrame(function(){{window.chrome.webview.postMessage(JSON.stringify({{type:'testSync',id:'{syncId}'}}));}});}});'x'");
+            await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            web.JavaScriptMessageReceived -= Handler;
+        }
+    }
+
+    private static async Task MakePageScrollableAndScrollToBottomAsync(ControllableWebViewControl web)
+    {
+        // Force a scrollable body and land at the bottom, then drain any scroll events this triggers
+        // before the caller starts capturing. Flush any queued PostMessageToJavaScript batch so the
+        // subsequent InvokeScript doesn't race the batch's dispatcher timer.
+        web.EndBatch();
+        await EvalAsync(web, "document.body.style.minHeight='1200px';window.scrollTo(0,document.body.scrollHeight);'x'");
+        await WaitForFrameSyncAsync(web);
+    }
+
     private static ChatOutputHtmlModel CreateModel(
         ControllableWebViewControl web,
         ObservableCollection<AgentChatHistoryItem> history,
@@ -959,6 +1197,46 @@ public sealed class ChatOutputBrowserIntegrationTests
 
         public void ScrollToBottom()
             => this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+
+        private static string ToWireLocation(ChatOutputUpdateLocation location) => location switch
+        {
+            ChatOutputUpdateLocation.Replace => "replace",
+            ChatOutputUpdateLocation.Before => "before",
+            ChatOutputUpdateLocation.After => "after",
+            ChatOutputUpdateLocation.Append => "append",
+            ChatOutputUpdateLocation.Prepend => "prepend",
+            _ => throw new ArgumentOutOfRangeException(nameof(location), location, null),
+        };
+    }
+
+    /// <summary>
+    /// <see cref="IChatOutputHtmlSink"/> mirroring <c>AgentChatOutputControl</c>'s production
+    /// gating: ScrollToBottom is dropped when <see cref="AutoScrollEnabled"/> is false, matching
+    /// the host contract that JS scroll commands are only posted while auto-scroll is active.
+    /// </summary>
+    private sealed class GatedBrowserSink : IChatOutputHtmlSink
+    {
+        private readonly ControllableWebViewControl web;
+
+        public GatedBrowserSink(ControllableWebViewControl web) => this.web = web;
+
+        public bool AutoScrollEnabled { get; set; } = true;
+
+        public void UpdateContent(string path, ChatOutputUpdateLocation location, string content)
+            => this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(path, ToWireLocation(location), content));
+
+        public void RemoveContent(string path)
+            => this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove(path));
+
+        public void ScrollToBottom()
+        {
+            if (!this.AutoScrollEnabled)
+            {
+                return;
+            }
+
+            this.web.PostMessageToJavaScript(ChatOutputBrowserCommands.Scroll());
+        }
 
         private static string ToWireLocation(ChatOutputUpdateLocation location) => location switch
         {
