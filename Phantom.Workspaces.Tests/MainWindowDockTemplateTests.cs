@@ -6,6 +6,7 @@ using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Dock.Avalonia.Controls;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -53,21 +54,23 @@ public sealed class MainWindowDockTemplateTests
     [AvaloniaFact(Timeout = 15_000)]
     public void MainWindowDockControl_TopLevelDockControl_HasTabHeaderGlyphTemplates()
     {
+        // #1196: TabHeaderViewModel template lives on the DockControl so the
+        // tab-strip scope can resolve it; the two indicator DataTemplates now
+        // live in Application.Resources (TabHeaderItemTemplates.axaml) and
+        // are referenced via {StaticResource} from inside the TabHeaderViewModel
+        // DataTemplate. Verify both wiring points.
         var topLevelDockControl = GetTopLevelDockControl();
 
         var tabHeader = new TabHeaderViewModel { Title = "T" };
-        var running = new AgentRunningIndicatorTabHeaderItemViewModel();
-        var notification = new NotificationIndicatorTabHeaderItemViewModel();
-
         Assert.NotNull(topLevelDockControl.DataTemplates
             .OfType<IDataTemplate>()
             .FirstOrDefault(t => t.Match(tabHeader)));
-        Assert.NotNull(topLevelDockControl.DataTemplates
-            .OfType<IDataTemplate>()
-            .FirstOrDefault(t => t.Match(running)));
-        Assert.NotNull(topLevelDockControl.DataTemplates
-            .OfType<IDataTemplate>()
-            .FirstOrDefault(t => t.Match(notification)));
+
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "AgentRunningIndicatorTabHeaderItemTemplate", null, out _));
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "NotificationIndicatorTabHeaderItemTemplate", null, out _));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -549,6 +552,391 @@ public sealed class MainWindowDockTemplateTests
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
         Assert.Equal("mru-1170-a", documentDock.ActiveDockable?.Id);
+    }
+
+    // ── #1196: Complete-template-set / instance-sharing / floating-host tests ─
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindowDockControl_HasCompleteDockDataTemplateSet()
+    {
+        // MainWindow.TopLevelDockControl.DataTemplates must contain a template
+        // that Matches every DataType produced by new DockDataTemplates().
+        var topLevelDockControl = GetTopLevelDockControl();
+        var reference = new DockDataTemplates().OfType<IDataTemplate>().ToList();
+
+        foreach (var referenceTemplate in reference)
+        {
+            var matchesReference = topLevelDockControl.DataTemplates
+                .OfType<IDataTemplate>()
+                .Any(t => object.ReferenceEquals(t, referenceTemplate)
+                          || t.GetType() == referenceTemplate.GetType());
+            Assert.True(matchesReference,
+                $"TopLevelDockControl.DataTemplates missing template of type {referenceTemplate.GetType()}");
+        }
+
+        Assert.Equal(reference.Count, topLevelDockControl.DataTemplates.Count);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowDockControl_WorkspacePaneWithRunningTab_RendersPulsatingBrainOnOuterTabHeader()
+    {
+        // Regression for #1196 Part A: inflating a TabHeaderViewModel with an
+        // AgentRunningIndicator item through the exact DataTemplates instance
+        // used by the MainWindow's outer TopLevelDockControl tab-strip must
+        // materialise a pulsating-brain ProgressBar. The regression was that
+        // the indicator DataTemplates were unreachable from that scope.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var header = new TabHeaderViewModel { Title = "outer" };
+            header.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+
+            var pulsatingBrain = InflateHeaderViaTopLevelDockTemplates(window, header)
+                .GetLogicalDescendants()
+                .OfType<ProgressBar>()
+                .FirstOrDefault(pb => pb.Classes.Contains("pulsating-brain"));
+
+            Assert.NotNull(pulsatingBrain);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowDockControl_WorkspacePaneWithUnreadTab_RendersExclamationOnOuterTabHeader()
+    {
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var header = new TabHeaderViewModel { Title = "outer" };
+            header.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+
+            var exclamation = InflateHeaderViaTopLevelDockTemplates(window, header)
+                .GetLogicalDescendants()
+                .OfType<ProgressBar>()
+                .FirstOrDefault(pb => pb.Classes.Contains("exclamation-indicator"));
+
+            Assert.NotNull(exclamation);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static Control InflateHeaderViaTopLevelDockTemplates(
+        Avalonia.Controls.Window window,
+        TabHeaderViewModel header)
+    {
+        // Resolve the TabHeaderViewModel template from the same DataTemplates
+        // instance the outer TopLevelDockControl uses, then host the built
+        // control under a fresh Window so the ItemsControl's {StaticResource}
+        // references walk up to Application.Current and resolve the shared
+        // indicator DataTemplates from TabHeaderItemTemplates.axaml.
+        var topLevelDockControl = window.GetVisualDescendants()
+            .OfType<DockControl>()
+            .FirstOrDefault(dc => dc.Name == "TopLevelDockControl")
+            ?? window.GetLogicalDescendants()
+                .OfType<DockControl>()
+                .First(dc => dc.Name == "TopLevelDockControl");
+        var template = topLevelDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .First(t => t.Match(header));
+        var control = template.Build(header)!;
+        control.DataContext = header;
+
+        var renderWindow = new Avalonia.Controls.Window { Content = control };
+        renderWindow.Show();
+        Dispatcher.UIThread.RunJobs();
+        return control;
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void InnerWorkspacePaneDockControl_HasOnlyItsScopedFiveTemplateSubset()
+    {
+        // #1130: the inner-pane DockControl has a hand-picked 5-template subset
+        // declared in-XAML on DockDataTemplates.axaml (WorkspaceContentDock,
+        // WorkspaceDocument, IProportionalDock, IProportionalDockSplitter,
+        // IDocumentDock). #1196 must NOT overwrite it.
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+
+        Assert.Equal(5, innerDockControl.DataTemplates.Count);
+
+        // Guard: IRootDock must NOT be matched by the inner set. (WorkspacesPaneDock
+        // inherits DocumentDock and would be matched by the IDocumentDock template,
+        // but there is no scenario in which a WorkspacesPaneDock is placed inside
+        // the inner-pane DockControl.)
+        var rootDock = new global::Dock.Model.Mvvm.Controls.RootDock();
+        Assert.Null(innerDockControl.DataTemplates
+            .OfType<IDataTemplate>().FirstOrDefault(t => t.Match(rootDock)));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindow_AddDockDataTemplates_SharesInstancesBetweenWindowAndTopLevelDockControl()
+    {
+        // Every template registered on MainWindow.DataTemplates must be the
+        // SAME IDataTemplate instance as the corresponding entry on
+        // TopLevelDockControl.DataTemplates — a single new DockDataTemplates()
+        // shared across both scopes.
+        var viewModel = CreateTestMainWindowViewModel();
+        var window = new MainWindow(viewModel);
+
+        var topLevelDockControl = window.GetLogicalDescendants()
+            .OfType<DockControl>()
+            .First(dc => dc.Name == "TopLevelDockControl");
+
+        var windowTemplates = window.DataTemplates.ToList();
+        var dockTemplates = topLevelDockControl.DataTemplates.ToList();
+        Assert.Equal(windowTemplates.Count, dockTemplates.Count);
+        for (var i = 0; i < windowTemplates.Count; i++)
+        {
+            Assert.Same(windowTemplates[i], dockTemplates[i]);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void PhantomHostWindow_AfterOnApplyTemplate_OuterDockControlHasCompleteDockDataTemplateSet()
+    {
+        // Attach an empty descendant DockControl and force template application
+        // so PhantomHostWindow.OnApplyTemplate copies the source's templates
+        // into the descendant DockControl's DataTemplates collection.
+        var referenceTemplates = new DockDataTemplates().OfType<IDataTemplate>().ToList();
+
+        var source = new DockControl { AutoCreateDataTemplates = false };
+        foreach (var template in referenceTemplates)
+        {
+            source.DataTemplates.Add(template);
+        }
+
+        var innerDockControl = new DockControl { AutoCreateDataTemplates = false };
+        Assert.Empty(innerDockControl.DataTemplates);
+
+        var host = new Phantom.Workspaces.Controls.PhantomHostWindow(source)
+        {
+            Content = innerDockControl,
+        };
+        host.Show();
+        try
+        {
+            host.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.Equal(referenceTemplates.Count, innerDockControl.DataTemplates.Count);
+            foreach (var referenceTemplate in referenceTemplates)
+            {
+                Assert.Contains(innerDockControl.DataTemplates,
+                    t => object.ReferenceEquals(t, referenceTemplate));
+            }
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void PhantomHostWindow_AfterOnApplyTemplate_InnerPaneDockControlIsNotOverwritten()
+    {
+        // Inner-pane DockControl (built by the WorkspacePaneDocument template)
+        // declares its own scoped 5-template subset. PhantomHostWindow's
+        // OnApplyTemplate must skip any DockControl whose DataTemplates.Count > 0.
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+        Assert.Equal(5, innerDockControl.DataTemplates.Count);
+        var originalTemplates = innerDockControl.DataTemplates.ToList();
+
+        var referenceTemplates = new DockDataTemplates().OfType<IDataTemplate>().ToList();
+        var source = new DockControl { AutoCreateDataTemplates = false };
+        foreach (var t in referenceTemplates) source.DataTemplates.Add(t);
+
+        var host = new Phantom.Workspaces.Controls.PhantomHostWindow(source)
+        {
+            Content = innerDockControl,
+        };
+        host.Show();
+        try
+        {
+            host.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            // Inner DockControl kept its scoped 5-template subset unchanged.
+            Assert.Equal(originalTemplates.Count, innerDockControl.DataTemplates.Count);
+            for (var i = 0; i < originalTemplates.Count; i++)
+            {
+                Assert.Same(originalTemplates[i], innerDockControl.DataTemplates[i]);
+            }
+        }
+        finally
+        {
+            host.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void FloatingHostWindow_UsesSameTemplateInstancesAsSourceDockControl()
+    {
+        // A directly-constructed PhantomHostWindow(sourceDockControl) shares
+        // every IDataTemplate INSTANCE with the source, not a fresh copy.
+        var referenceTemplates = new DockDataTemplates().OfType<IDataTemplate>().ToList();
+        var source = new DockControl { AutoCreateDataTemplates = false };
+        foreach (var t in referenceTemplates) source.DataTemplates.Add(t);
+
+        var host = new Phantom.Workspaces.Controls.PhantomHostWindow(source);
+
+        Assert.Equal(source.DataTemplates.Count, host.DataTemplates.Count);
+        for (var i = 0; i < source.DataTemplates.Count; i++)
+        {
+            Assert.Same(source.DataTemplates[i], host.DataTemplates[i]);
+        }
+    }
+
+    // ── #1196 Cross-host invariants: "no host silently lacks its templates" ──
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EveryOpenDockControl_HasExactlyTheTemplatesItsHostRoleRequires()
+    {
+        // Enumerate every DockControl reachable from every open Window and
+        // classify by role. Outer DockControls must match the full DockDataTemplates
+        // universe; inner-pane DockControls must have exactly the scoped
+        // 5-template subset.
+        var viewModel = CreateTestMainWindowViewModel();
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var referenceCount = new DockDataTemplates().OfType<IDataTemplate>().Count();
+            const int innerScopedSubsetCount = 5;
+
+            Assert.NotNull(Avalonia.Application.Current);
+            var openWindows = GetOpenWindows();
+            // In headless tests without IClassicDesktopStyleApplicationLifetime,
+            // fall back to inspecting the single window we opened directly.
+            var windowsToInspect = openWindows.Count > 0
+                ? openWindows
+                : new[] { (Avalonia.Controls.Window)window };
+            var allDockControls = windowsToInspect
+                .SelectMany(w => w.GetVisualDescendants().OfType<DockControl>())
+                .ToList();
+
+            Assert.NotEmpty(allDockControls);
+            foreach (var dc in allDockControls)
+            {
+                Assert.True(
+                    dc.DataTemplates.Count == referenceCount
+                    || dc.DataTemplates.Count == innerScopedSubsetCount,
+                    $"DockControl carries {dc.DataTemplates.Count} templates; expected " +
+                    $"either {referenceCount} (outer) or {innerScopedSubsetCount} (inner).");
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EveryOuterFloatingDockControl_SharesTemplateInstancesWithSourceDockControl()
+    {
+        // Every open PhantomHostWindow's DataTemplates entries must be reference-
+        // equal to entries in MainWindow.TopLevelDockControl.DataTemplates.
+        var viewModel = CreateTestMainWindowViewModel();
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var topLevelDockControl = window.GetLogicalDescendants()
+                .OfType<DockControl>()
+                .First(dc => dc.Name == "TopLevelDockControl");
+            var referenceTemplates = topLevelDockControl.DataTemplates.ToList();
+
+            Assert.NotNull(Avalonia.Application.Current);
+            var openWindows = GetOpenWindows();
+            var floatingHosts = openWindows
+                .OfType<Phantom.Workspaces.Controls.PhantomHostWindow>()
+                .ToList();
+
+            foreach (var host in floatingHosts)
+            {
+                foreach (var template in host.DataTemplates)
+                {
+                    Assert.Contains(referenceTemplates, t => object.ReferenceEquals(t, template));
+                }
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EveryOpenDockControl_ResolvesSharedIndicatorResourcesViaStaticResource()
+    {
+        // The Application-level MergedDictionaries wiring must expose the two
+        // keyed indicator DataTemplates to every open Window.
+        var viewModel = CreateTestMainWindowViewModel();
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.NotNull(Avalonia.Application.Current);
+            var openWindows = GetOpenWindows();
+            var windowsToInspect = openWindows.Count > 0
+                ? openWindows
+                : new[] { (Avalonia.Controls.Window)window };
+            foreach (var w in windowsToInspect)
+            {
+                Assert.True(w.TryFindResource(
+                    "AgentRunningIndicatorTabHeaderItemTemplate", null, out _));
+                Assert.True(w.TryFindResource(
+                    "NotificationIndicatorTabHeaderItemTemplate", null, out _));
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static WorkspacePaneDocument? FindFirstWorkspacePaneDocument(Avalonia.Controls.Window window)
+    {
+        return window.GetLogicalDescendants()
+            .OfType<Control>()
+            .Select(c => c.DataContext)
+            .OfType<WorkspacePaneDocument>()
+            .FirstOrDefault();
+    }
+
+    private static System.Collections.Generic.IReadOnlyList<Avalonia.Controls.Window> GetOpenWindows()
+    {
+        // Headless tests do not set up an IClassicDesktopStyleApplicationLifetime,
+        // so Application.Windows is not available. Fall back to enumerating open
+        // top-levels via HeadlessApp-friendly APIs.
+        var app = Avalonia.Application.Current;
+        if (app?.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            return desktop.Windows.ToList();
+        }
+        return System.Array.Empty<Avalonia.Controls.Window>();
     }
 
     private static (

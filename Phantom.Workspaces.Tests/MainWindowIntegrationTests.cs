@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.LogicalTree;
 using Avalonia.Media;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -3534,6 +3535,157 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(workspacePane.Tabs, t => ReferenceEquals(t, agentTab));
         Assert.NotNull(agentTab.Agent);
         Assert.Equal(AgentTabState.Ready, agentTab.State);
+    }
+
+    // ── #1196: Floating host window tab-header indicators ─────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task FloatingHostWindow_WithRunningTab_RendersPulsatingBrainOnFloatingTabHeader()
+        => await AssertFloatingHostWindowIndicatorAsync(
+            id: new EntityId("f1196a01-0000-4000-8000-000000000001"),
+            name: "float-running-echo",
+            configureHeader: header => header.Items.Add(
+                new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true }),
+            expectedClass: "pulsating-brain",
+            shouldFind: true);
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task FloatingHostWindow_WithUnreadTab_RendersExclamationOnFloatingTabHeader()
+        => await AssertFloatingHostWindowIndicatorAsync(
+            id: new EntityId("f1196a01-0000-4000-8000-000000000002"),
+            name: "float-unread-echo",
+            configureHeader: header => header.Items.Add(
+                new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true }),
+            expectedClass: "exclamation-indicator",
+            shouldFind: true);
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task FloatingHostWindow_WithNeitherIndicator_RendersNeitherBrainNorExclamation()
+        => await AssertFloatingHostWindowIndicatorAsync(
+            id: new EntityId("f1196a01-0000-4000-8000-000000000003"),
+            name: "float-neither-echo",
+            configureHeader: _ => { /* no indicator items */ },
+            expectedClass: null,
+            shouldFind: false);
+
+    private static async Task AssertFloatingHostWindowIndicatorAsync(
+        EntityId id,
+        string name,
+        System.Action<TabHeaderViewModel> configureHeader,
+        string? expectedClass,
+        bool shouldFind)
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new Phantom.Workspaces.MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var entityBroker = GetEntityBroker(viewModel);
+            var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, id,
+                $$"""
+                {
+                  "entity-id": "{{id}}",
+                  "entity-types": ["entity", "agent-definition"],
+                  "names": [["tests", "agent-definitions", "{{name}}"]],
+                  "display-name": { "default": "{{name}}" },
+                  "definition": {
+                    "kind": "prompt",
+                    "name": "{{name}}",
+                    "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                    "tools": []
+                  }
+                }
+                """);
+
+            var agentSessionShortcutContext = new AgentSessionShortcutContext();
+            var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+                viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+            Assert.NotNull(agentSessionEntity);
+
+            var handler = new OpenAgentSessionShortcutHandler(
+                agentSessionShortcutContext,
+                CreateLocalTrustedExecutorSelector(),
+                CreateTestRunningAgentChatTable());
+            await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
+
+            var workspacePane = viewModel.SelectedWorkspacePane;
+            var agentTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(workspacePane);
+            await WaitForAgentReadyAsync(agentTab);
+
+            var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+            var contentDock = FindDocumentDockIn(workspacePane.ContentLayout!);
+            Assert.NotNull(contentDock);
+            await WaitForWorkspaceTabAsync(contentDock!, agentTab.Id);
+
+            var document = dockFactory.GetDocumentForTab(agentTab.Id);
+            Assert.NotNull(document);
+
+            configureHeader(document!.EffectiveTabHeader);
+
+            // Remove any indicator items that this ViewModel populates by default
+            // so the "neither indicator" case truly starts from an empty item set.
+            if (!shouldFind)
+            {
+                for (var i = document!.EffectiveTabHeader.Items.Count - 1; i >= 0; i--)
+                {
+                    var item = document!.EffectiveTabHeader.Items[i];
+                    if (item is AgentRunningIndicatorTabHeaderItemViewModel
+                        || item is NotificationIndicatorTabHeaderItemViewModel)
+                    {
+                        document!.EffectiveTabHeader.Items.RemoveAt(i);
+                    }
+                }
+            }
+
+            dockFactory.FloatDockable(document!);
+            await Dispatcher.UIThread.InvokeAsync(() => { });
+            Dispatcher.UIThread.RunJobs();
+
+            // Locate the PhantomHostWindow via the factory's HostWindows list
+            // and inflate the floated document's EffectiveTabHeader through its
+            // shared DataTemplates (the same instances the floating tab-strip
+            // uses).
+            var phantomHost = dockFactory.HostWindows
+                .OfType<Phantom.Workspaces.Controls.PhantomHostWindow>()
+                .FirstOrDefault();
+            Assert.NotNull(phantomHost);
+
+            var template = phantomHost!.DataTemplates
+                .OfType<Avalonia.Controls.Templates.IDataTemplate>()
+                .First(t => t.Match(document!.EffectiveTabHeader));
+            var control = template.Build(document!.EffectiveTabHeader)!;
+            control.DataContext = document!.EffectiveTabHeader;
+
+            var renderWindow = new Avalonia.Controls.Window { Content = control };
+            renderWindow.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var glyphs = control.GetLogicalDescendants()
+                .OfType<Avalonia.Controls.ProgressBar>()
+                .Where(pb => pb.Classes.Contains("glyph-indicator"))
+                .ToList();
+
+            if (shouldFind)
+            {
+                Assert.NotEmpty(glyphs);
+                Assert.Contains(glyphs, pb => pb.Classes.Contains(expectedClass!));
+            }
+            else
+            {
+                Assert.DoesNotContain(glyphs, pb => pb.Classes.Contains("pulsating-brain"));
+                Assert.DoesNotContain(glyphs, pb => pb.Classes.Contains("exclamation-indicator"));
+            }
+
+            renderWindow.Close();
+        }
+        finally
+        {
+            window.Close();
+        }
     }
 
     [AvaloniaFact(Timeout = 15_000)]

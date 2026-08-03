@@ -474,15 +474,10 @@
         <TextBlock Text="{Binding Icon}" />
     </DataTemplate>
 
-    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="glyph-indicator pulsating-brain"
-                     IsIndeterminate="{Binding IsRunning}" />
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="glyph-indicator exclamation-indicator"
-                     IsIndeterminate="{Binding HasUnread}" />
-    </DataTemplate>
+    <!-- #1196: AgentRunningIndicator / NotificationIndicator DataTemplates
+         are defined once as keyed resources in TabHeaderItemTemplates.axaml
+         (merged into App.axaml) and referenced from
+         ItemsControl.DataTemplates in the TabHeaderViewModel template below. -->
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
         <entityControls:StatusControl Item="{Binding Status}" />
@@ -498,6 +493,11 @@
                             <StackPanel Orientation="Horizontal" Spacing="2" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
+                    <!-- #1196: single source of truth for the indicator templates. -->
+                    <ItemsControl.DataTemplates>
+                        <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
+                    </ItemsControl.DataTemplates>
                 </ItemsControl>
             </StackPanel>
         </Grid>

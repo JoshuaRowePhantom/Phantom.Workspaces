@@ -25,6 +25,7 @@
             </ResourceDictionary.ThemeDictionaries>
             <ResourceDictionary.MergedDictionaries>
                 <ResourceInclude Source="avares://Phantom.Workspaces.Agent.Gui/Styles/QueueStyles.axaml"/>
+                <ResourceInclude Source="avares://Phantom.Workspaces/Templates/TabHeaderItemTemplates.axaml"/>
             </ResourceDictionary.MergedDictionaries>
             <converters:EntityTypeColorConverter x:Key="EntityTypeColorConverter" />
         </ResourceDictionary>

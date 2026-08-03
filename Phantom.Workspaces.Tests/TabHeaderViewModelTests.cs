@@ -242,17 +242,6 @@ public sealed class TabHeaderViewModelTests
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
-    {
-        var templates = new WorkspaceDataTemplates();
-        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
-
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        Assert.NotNull(matchingTemplate);
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -325,27 +314,13 @@ public sealed class TabHeaderViewModelTests
             .First(tb => tb.Text == viewModel.Title);
     }
 
-    [AvaloniaFact(Timeout = 15_000)]
-    public void DockDataTemplates_HasDataTemplateFor_AgentRunningIndicatorTabHeaderItemViewModel()
-    {
-        var templates = new DockDataTemplates();
-        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
-
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        Assert.NotNull(matchingTemplate);
-    }
-
-    [AvaloniaFact(Timeout = 15_000)]
-    public void DockDataTemplates_HasDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
-    {
-        var templates = new DockDataTemplates();
-        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
-
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        Assert.NotNull(matchingTemplate);
-    }
+    // ── #1196: Indicator DataTemplates are keyed resources in App.Resources ────
+    //
+    // The previous DockDataTemplates / WorkspaceDataTemplates presence tests are
+    // superseded by the Application-resources tests below
+    // (AgentRunningIndicatorTabHeaderItemTemplate_IsDefinedExactlyOnceInApplicationResources,
+    // TabHeaderViewModelTemplate_WithRunningIndicatorItem_MaterialisesPulsatingBrainProgressBar,
+    // etc.). The templates now live in exactly one place — TabHeaderItemTemplates.axaml.
 
     // ── #1119: DockDataTemplates must include a template for WorkspacesPaneDock ─────
 
@@ -360,34 +335,130 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
+    // ── #1196: Application-resource-scoped indicator DataTemplates ────────────
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
+    public void AgentRunningIndicatorTabHeaderItemTemplate_IsDefinedExactlyOnceInApplicationResources()
     {
-        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
-        var templates = new WorkspaceDataTemplates();
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "AgentRunningIndicatorTabHeaderItemTemplate", null, out var resource);
 
-        var control = matchingTemplate.Build(viewModel);
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new AgentRunningIndicatorTabHeaderItemViewModel()));
 
-        var progressBar = Assert.IsType<ProgressBar>(control);
-        Assert.Contains("glyph-indicator", progressBar.Classes);
-        Assert.Contains("pulsating-brain", progressBar.Classes);
+        AssertClassOccursInExactlyOneTemplateFile("pulsating-brain");
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void NotificationIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
+    public void NotificationIndicatorTabHeaderItemTemplate_IsDefinedExactlyOnceInApplicationResources()
     {
-        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
-        var templates = new WorkspaceDataTemplates();
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "NotificationIndicatorTabHeaderItemTemplate", null, out var resource);
 
-        var control = matchingTemplate.Build(viewModel);
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new NotificationIndicatorTabHeaderItemViewModel()));
 
-        var progressBar = Assert.IsType<ProgressBar>(control);
-        Assert.Contains("glyph-indicator", progressBar.Classes);
-        Assert.Contains("exclamation-indicator", progressBar.Classes);
+        AssertClassOccursInExactlyOneTemplateFile("exclamation-indicator");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModelTemplate_WithRunningIndicatorItem_MaterialisesPulsatingBrainProgressBar()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+        viewModel.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+
+        var control = InflateAndRenderTabHeader(viewModel);
+
+        var progressBar = control.GetLogicalDescendants()
+            .OfType<ProgressBar>()
+            .FirstOrDefault(pb => pb.Classes.Contains("pulsating-brain"));
+
+        Assert.NotNull(progressBar);
+        Assert.Contains("glyph-indicator", progressBar!.Classes);
+        Assert.True(progressBar.IsIndeterminate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModelTemplate_WithNotificationIndicatorItem_MaterialisesExclamationProgressBar()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+        viewModel.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+
+        var control = InflateAndRenderTabHeader(viewModel);
+
+        var progressBar = control.GetLogicalDescendants()
+            .OfType<ProgressBar>()
+            .FirstOrDefault(pb => pb.Classes.Contains("exclamation-indicator"));
+
+        Assert.NotNull(progressBar);
+        Assert.Contains("glyph-indicator", progressBar!.Classes);
+        Assert.True(progressBar.IsIndeterminate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModelTemplate_WithNeitherIndicator_ShowsNeitherBrainNorExclamation()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+
+        var control = InflateAndRenderTabHeader(viewModel);
+
+        Assert.DoesNotContain(
+            control.GetLogicalDescendants().OfType<ProgressBar>(),
+            pb => pb.Classes.Contains("pulsating-brain") || pb.Classes.Contains("exclamation-indicator"));
+    }
+
+    private static Avalonia.Controls.Control InflateAndRenderTabHeader(TabHeaderViewModel viewModel)
+    {
+        var templates = new DockDataTemplates();
+        var template = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        var control = template.Build(viewModel);
+        Assert.NotNull(control);
+        control!.DataContext = viewModel;
+
+        // Attach to a Window so the StaticResource lookups on
+        // ItemsControl.DataTemplates can walk the StylingParent chain up to
+        // Application.Current and resolve the keyed indicator DataTemplates
+        // in TabHeaderItemTemplates.axaml.
+        var window = new Window { Content = control };
+        window.Show();
+        // Force the layout pass so ItemsControl materialises and the
+        // {StaticResource} lookups resolve against Application.Current.
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        return control;
+    }
+
+    private static void AssertClassOccursInExactlyOneTemplateFile(string cssClassOrText)
+    {
+        var repoRoot = FindRepositoryRoot();
+        var templatesDir = System.IO.Path.Combine(repoRoot.FullName, "Phantom.Workspaces", "Templates");
+        // Match ProgressBar-classes markup only, so passing mentions in XML comments
+        // do not count as a duplicate template definition.
+        var needle = $"Classes=\"glyph-indicator {cssClassOrText}\"";
+        var matches = System.IO.Directory
+            .EnumerateFiles(templatesDir, "*.axaml", System.IO.SearchOption.AllDirectories)
+            .Where(path => System.IO.File.ReadAllText(path).Contains(needle))
+            .ToList();
+
+        Assert.Single(matches);
+    }
+
+    private static System.IO.DirectoryInfo FindRepositoryRoot()
+    {
+        var current = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (System.IO.File.Exists(System.IO.Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return current;
+            }
+            current = current.Parent;
+        }
+        throw new System.IO.DirectoryNotFoundException(
+            "Could not locate repository root from test base directory.");
     }
 
     // ── AgentSessionWorkspaceTabViewModel – SetReady wires tab header indicators

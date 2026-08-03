@@ -141,18 +141,16 @@
                             <StackPanel Orientation="Horizontal" Spacing="2" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
+                    <!-- #1196: Dock.Avalonia tab-strip scope does not walk up to
+                         ancestor DataTemplates. Reference the keyed DataTemplate
+                         resources from App.axaml so the pulsating-brain / exclamation
+                         indicators materialise inside the tab header. -->
+                    <ItemsControl.DataTemplates>
+                        <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
+                    </ItemsControl.DataTemplates>
                 </ItemsControl>
             </StackPanel>
         </Grid>
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="glyph-indicator pulsating-brain"
-                     IsIndeterminate="{Binding IsRunning}" />
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="glyph-indicator exclamation-indicator"
-                     IsIndeterminate="{Binding HasUnread}" />
     </DataTemplate>
 </DataTemplates>

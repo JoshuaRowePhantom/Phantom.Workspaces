@@ -63,6 +63,16 @@ public static class AvaloniaTestAppBuilder
                 };
             Resources.MergedDictionaries.Add(themeDictionaries);
 
+            // #1196: Merge the shared tab-header indicator DataTemplates keyed
+            // resources so headless tests and the production App both resolve
+            // {StaticResource AgentRunningIndicatorTabHeaderItemTemplate} and
+            // {StaticResource NotificationIndicatorTabHeaderItemTemplate}.
+            Resources.MergedDictionaries.Add(
+                new ResourceInclude(new Uri("avares://Phantom.Workspaces.Tests/"))
+                {
+                    Source = new Uri("avares://Phantom.Workspaces/Templates/TabHeaderItemTemplates.axaml")
+                });
+
             foreach (var template in new WorkspaceDataTemplates())
             {
                 DataTemplates.Add(template);

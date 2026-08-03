@@ -1,0 +1,23 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="using:Phantom.Workspaces.ViewModels">
+
+    <!-- #1196: Single source of truth for tab-header indicator DataTemplates.
+         Merged into App.axaml so {StaticResource} lookup can find them from any
+         window (including floating PhantomHostWindow) via
+         Application.Current.Resources. Referenced by
+         DockDataTemplates.axaml and WorkspaceDataTemplates.axaml. -->
+
+    <DataTemplate x:Key="AgentRunningIndicatorTabHeaderItemTemplate"
+                  DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
+        <ProgressBar Classes="glyph-indicator pulsating-brain"
+                     IsIndeterminate="{Binding IsRunning}" />
+    </DataTemplate>
+
+    <DataTemplate x:Key="NotificationIndicatorTabHeaderItemTemplate"
+                  DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
+        <ProgressBar Classes="glyph-indicator exclamation-indicator"
+                     IsIndeterminate="{Binding HasUnread}" />
+    </DataTemplate>
+
+</ResourceDictionary>
