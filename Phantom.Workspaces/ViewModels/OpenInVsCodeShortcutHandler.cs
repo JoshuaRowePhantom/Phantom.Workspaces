@@ -28,6 +28,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
     private readonly Func<string> cliLocator;
     private readonly Func<RunProcessParameters, CancellationToken, Task<ProcessResult>>? processRunner;
     private readonly Func<string, Task>? urlLauncher;
+    private readonly Func<MainWindowViewModel, SubscribedEntityViewModel, Task<string?>>? remoteTunnelNameResolver;
     private readonly ILogger logger;
 
     /// <summary>Production constructor: uses default VS Code CLI locator and process runner.</summary>
@@ -36,6 +37,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         this.cliLocator = VsCodeCliLocator.ResolveDefaultCliPath;
         this.processRunner = null;
         this.urlLauncher = null;
+        this.remoteTunnelNameResolver = null;
         this.logger = NullLogger.Instance;
     }
 
@@ -44,11 +46,13 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         Func<string> cliLocator,
         Func<RunProcessParameters, CancellationToken, Task<ProcessResult>>? processRunner,
         Func<string, Task>? urlLauncher,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<MainWindowViewModel, SubscribedEntityViewModel, Task<string?>>? remoteTunnelNameResolver = null)
     {
         this.cliLocator = cliLocator;
         this.processRunner = processRunner;
         this.urlLauncher = urlLauncher;
+        this.remoteTunnelNameResolver = remoteTunnelNameResolver;
         this.logger = logger ?? NullLogger.Instance;
     }
 
@@ -96,6 +100,17 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         if (path is null)
         {
             return false;
+        }
+
+        if (this.remoteTunnelNameResolver is not null)
+        {
+            var resolvedTunnelName = await this.remoteTunnelNameResolver(mainWindowViewModel, entityViewModel);
+            if (resolvedTunnelName is null)
+            {
+                return await HandleLocalEntityAsync(mainWindowViewModel, path);
+            }
+
+            return await LaunchRemoteVsCodeUriAsync(mainWindowViewModel, resolvedTunnelName, path);
         }
 
         var owningProfile = await FindOwningProfileAsync(mainWindowViewModel, entityViewModel);
@@ -182,6 +197,14 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return false;
         }
 
+        return await LaunchRemoteVsCodeUriAsync(mainWindowViewModel, tunnelName, path);
+    }
+
+    private async Task<bool> LaunchRemoteVsCodeUriAsync(
+        MainWindowViewModel mainWindowViewModel,
+        string tunnelName,
+        string path)
+    {
         var url = $"vscode://vscode-remote/tunnel+{tunnelName}{path}";
 
         try

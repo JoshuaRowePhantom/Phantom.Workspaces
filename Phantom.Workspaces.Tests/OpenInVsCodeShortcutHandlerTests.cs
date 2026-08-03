@@ -308,76 +308,22 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             || notification.Heading.Contains("4", System.StringComparison.Ordinal));
     }
 
-    [AvaloniaFact(Timeout = 15_000, Skip = "Entity-broker driven remote profile resolution is exercised elsewhere; this test's remote-branch expectation is order-dependent and covered by targeted logger/notifier coverage above.")]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_RemoteEntity_UriLaunchFails_LogsAndNotifies()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
-        var entityBroker = GetEntityBroker(viewModel);
-
-        var remoteProfileId = new EntityId(Guid.NewGuid());
-        var profileData = new System.Text.Json.Nodes.JsonObject
-        {
-            ["entity-id"] = remoteProfileId.Value.ToString(),
-            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "user-computer-profile"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-launchfail-user", "computers", "hostname", "remote-host")),
-            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "remote" },
-        };
-        using var profileDoc = JsonDocument.Parse(profileData.ToJsonString());
-        await entityBroker.UpdateAsync(new UpdateRequest
-        {
-            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "profile" } },
-            Changes = [new EntityChange { Data = profileDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
-        }, TestContext.Current.CancellationToken);
-
-        var tunnelId = new EntityId(Guid.NewGuid());
-        var tunnelData = new System.Text.Json.Nodes.JsonObject
-        {
-            ["entity-id"] = tunnelId.Value.ToString(),
-            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-launchfail-user", "vscode-tunnel")),
-            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "tunnel" },
-            ["tunnel-name"] = "remote-host",
-            ["tunnel-url"] = "https://vscode.dev/tunnel/remote-host",
-            ["active"] = true,
-        };
-        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
-        await entityBroker.UpdateAsync(new UpdateRequest
-        {
-            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "tunnel" } },
-            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
-        }, TestContext.Current.CancellationToken);
-
-        var worktreeId = new EntityId(Guid.NewGuid());
-        var worktreeData = new System.Text.Json.Nodes.JsonObject
-        {
-            ["entity-id"] = worktreeId.Value.ToString(),
-            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "git-worktree", "filesystem-path"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray("git-worktrees", "/remote/repo-lf"),
-                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-launchfail-user", "computers", "hostname", "remote-host")),
-            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "remote-repo" },
-            ["path"] = "/remote/repo-lf",
-        };
-        using var worktreeDoc = JsonDocument.Parse(worktreeData.ToJsonString());
-        await entityBroker.UpdateAsync(new UpdateRequest
-        {
-            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "worktree" } },
-            Changes = [new EntityChange { Data = worktreeDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
-        }, TestContext.Current.CancellationToken);
-
-        var worktreeEntities = await entityBroker.GetEntitiesAsync([worktreeId], TestContext.Current.CancellationToken);
-        var entityViewModel = worktreeEntities.Single();
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/remote/repo-lf"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
 
         var recordingLogger = new RecordingLogger();
         var handler = new OpenInVsCodeShortcutHandler(
             cliLocator: () => "code",
             processRunner: null,
             urlLauncher: _ => throw new System.InvalidOperationException("launch-failed-marker"),
-            logger: recordingLogger);
+            logger: recordingLogger,
+            remoteTunnelNameResolver: (_, _) => Task.FromResult<string?>("remote-host"));
 
         var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
 
