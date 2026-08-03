@@ -634,7 +634,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 sendCancellationToken => session.SendAsync(
                     messageOptions,
                     sendCancellationToken),
-                () => this.AbortAndInvalidateSessionAsync(session),
+                () => this.AbortAndInvalidateSessionAsync(session, router),
                 () => { this.InvalidateBrokenSession(session); return Task.CompletedTask; });
         }
     }
@@ -723,7 +723,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Actually stops the in-flight Copilot CLI turn. Cancelling the read loop alone leaves the CLI
     // generating and lets a stale SessionIdleEvent from the abandoned turn complete the next turn's
     // channel (a silent empty response), so the session is also invalidated and recreated next turn.
-    private async Task AbortAndInvalidateSessionAsync(CopilotSession session)
+    private async Task AbortAndInvalidateSessionAsync(CopilotSession session, CopilotSubAgentRouter? router = null)
     {
         // Suspend steering BEFORE aborting/invalidating the session (GitHub issue #1142). Once
         // this flag is set, OnQueueChanged early-returns without calling TryDequeueNextImmediate,
@@ -745,6 +745,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         this.InvalidateCopilotSession(session);
+
+        // Fix #1193: force any sub-agents whose SubagentCompleted/SubagentFailed events the
+        // aborted session will never deliver into a terminal (Failed) state. Idempotent with any
+        // late real events via SetCompletionState's equality guard and the router's dictionary
+        // clear. Router may be null when a legacy caller stubs OnCancelledAsync directly.
+        if (router is not null)
+        {
+            try
+            {
+                await router.TerminalizeRemainingChildrenAsync(
+                        new OperationCanceledException("Parent Copilot chat was interrupted."))
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
+                    .LogDebug(exception, "Terminalizing running sub-agents on parent interrupt failed.");
+            }
+        }
     }
 
     /// <summary>

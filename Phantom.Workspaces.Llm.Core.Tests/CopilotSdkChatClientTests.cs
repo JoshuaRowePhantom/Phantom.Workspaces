@@ -1256,7 +1256,7 @@ public sealed class CopilotSdkChatClientTests
         // observe both writes; a stricter ordering is enforced by the source's line order.
         var task = (Task)typeof(CopilotSdkChatClient)
             .GetMethod("AbortAndInvalidateSessionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(client, [fakeSession])!;
+            .Invoke(client, [fakeSession, null])!;
 
         // The task will fault because fakeSession.AbortAsync will throw (uninitialized) — that
         // exception is swallowed inside AbortAndInvalidateSessionAsync, so awaiting is safe.

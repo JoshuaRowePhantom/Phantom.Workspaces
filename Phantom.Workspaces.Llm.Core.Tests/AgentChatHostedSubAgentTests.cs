@@ -1163,4 +1163,198 @@ public sealed class AgentChatHostedSubAgentTests
             rootChannel.Writer.TryComplete();
         }
     }
+
+    // ─── Fix #1193: parent interrupt terminalizes running sub-agents ─────────────
+    //
+    // Real router → real child AgentChat pipeline (via Fix1139TestFactory) exercised
+    // against the router's TerminalizeRemainingChildrenAsync entry point that
+    // CopilotSdkChatClient.AbortAndInvalidateSessionAsync now calls on parent interrupt.
+    // These tests assert on the child AgentChat.CompletionState / CompletionStateChanged
+    // — the exact signal the running-items UI listens on to clear the pulsating-brain
+    // indicator.
+
+    private static async Task WaitForCompletionStateEventAsync(
+        AgentChat chat,
+        AgentChatCompletionState expected,
+        CancellationToken cancellationToken)
+    {
+        if (chat.CompletionState == expected)
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChanged(object? _, EventArgs __)
+        {
+            if (chat.CompletionState == expected)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        chat.CompletionStateChanged += OnChanged;
+        try
+        {
+            if (chat.CompletionState == expected)
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            chat.CompletionStateChanged -= OnChanged;
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_ParentInterrupted_ChildCompletionStateSetToFailed()
+    {
+        // Fix #1193: cancelling the parent's turn while a hosted sub-agent is running
+        // must eventually transition the child AgentChat.CompletionState to Failed. Before
+        // the fix, the aborted SDK session never delivers SubagentCompleted/SubagentFailed
+        // and nothing on the cancel path sweeps the router's ChildRoutingEntry map, so the
+        // child stays Running forever and the running-items indicator never clears.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStart("child-agent-1", "call-1"));
+            var child = Assert.Single(factory.CreatedChildren);
+            Assert.Equal(AgentChatCompletionState.Running, child.CompletionState);
+
+            // Simulate the parent's cancel path: after AbortAsync/InvalidateCopilotSession,
+            // AbortAndInvalidateSessionAsync now calls TerminalizeRemainingChildrenAsync.
+            await router.TerminalizeRemainingChildrenAsync(
+                new OperationCanceledException("Parent Copilot chat was interrupted."));
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForCompletionStateEventAsync(child, AgentChatCompletionState.Failed, cts.Token);
+            Assert.Equal(AgentChatCompletionState.Failed, child.CompletionState);
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_ParentInterruptedThenLateCompletion_ChildStaysTerminalAndNoDuplicateEvent()
+    {
+        // Fix #1193 idempotency: after the parent-interrupt sweep terminalizes the child,
+        // a late-arriving SubagentCompleted (queued in the event channel before the abort)
+        // must NOT re-raise CompletionStateChanged. SetCompletionState's equality guard
+        // guarantees this even if the router lookup were to hit; the router's dictionary
+        // clear ensures the lookup misses in the first place.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStart("child-agent-1", "call-1"));
+            var child = Assert.Single(factory.CreatedChildren);
+
+            var terminalTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            int eventCount = 0;
+            void OnChanged(object? _, EventArgs __)
+            {
+                Interlocked.Increment(ref eventCount);
+                if (child.CompletionState != AgentChatCompletionState.Running)
+                {
+                    terminalTcs.TrySetResult();
+                }
+            }
+            child.CompletionStateChanged += OnChanged;
+            try
+            {
+                await router.TerminalizeRemainingChildrenAsync(
+                    new OperationCanceledException("Parent Copilot chat was interrupted."));
+
+                await terminalTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(AgentChatCompletionState.Failed, child.CompletionState);
+                var countAfterTerminalize = Volatile.Read(ref eventCount);
+                Assert.Equal(1, countAfterTerminalize);
+
+                // Late queued SubagentCompleted for the same child — must be a no-op.
+                await router.RouteAsync(new ChatResponseUpdate
+                {
+                    Contents =
+                    [
+                        new FunctionResultContent("child-agent-1", """{"event":"completed"}""")
+                        {
+                            AdditionalProperties = new()
+                            {
+                                [CopilotSdkStreamAdapter.ContentTypePropertyName] = CopilotSdkStreamAdapter.SubAgentLifecycleContentType,
+                            },
+                        },
+                    ],
+                });
+
+                // Let any spurious CompletionStateChanged posted through the scheduler run.
+                await Task.Yield();
+                await Task.Yield();
+
+                Assert.Equal(AgentChatCompletionState.Failed, child.CompletionState);
+                Assert.Equal(countAfterTerminalize, Volatile.Read(ref eventCount));
+            }
+            finally
+            {
+                child.CompletionStateChanged -= OnChanged;
+            }
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
+
+    [Fact]
+    public async Task AgentChat_HostedSubAgent_NormalCompletion_UnaffectedByInterruptPath()
+    {
+        // Fix #1193 regression guard: a hosted sub-agent that completes normally (no
+        // parent interrupt, SubagentCompleted flows through RouteAsync) still ends in
+        // Succeeded — the new terminalize-remaining code path does not fire when it
+        // should not.
+        var (router, rootChannel, factory) = await F1139_CreateRouterAsync();
+        try
+        {
+            await router.RouteAsync(F1139_LifecycleStart("child-agent-1", "call-1"));
+            var child = Assert.Single(factory.CreatedChildren);
+
+            await router.RouteAsync(new ChatResponseUpdate
+            {
+                Contents =
+                [
+                    new FunctionResultContent("child-agent-1", """{"event":"completed"}""")
+                    {
+                        AdditionalProperties = new()
+                        {
+                            [CopilotSdkStreamAdapter.ContentTypePropertyName] = CopilotSdkStreamAdapter.SubAgentLifecycleContentType,
+                        },
+                    },
+                ],
+            });
+
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await WaitForCompletionStateEventAsync(child, AgentChatCompletionState.Succeeded, cts.Token);
+            Assert.Equal(AgentChatCompletionState.Succeeded, child.CompletionState);
+        }
+        finally
+        {
+            foreach (var hosted in factory.CreatedHostedClients)
+            {
+                hosted.Complete();
+            }
+            await router.DisposeRemainingLeasesAsync();
+            rootChannel.Writer.TryComplete();
+        }
+    }
 }

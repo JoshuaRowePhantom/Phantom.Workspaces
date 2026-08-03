@@ -85,6 +85,62 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     }
 
     /// <summary>
+    /// Fix #1193: force every still-running child sub-agent to a terminal (failed) state.
+    /// Called by the parent's cancellation/interrupt path (see
+    /// <see cref="CopilotSdkChatClient.AbortAndInvalidateSessionAsync"/>) after the SDK session has
+    /// been ordered to abort — at which point the SDK will not deliver the
+    /// <c>SubagentCompleted</c>/<c>SubagentFailed</c> events that normally terminalize each
+    /// <see cref="ChildRoutingEntry"/> through <see cref="HandleSubAgentResultAsync"/>. Without
+    /// this sweep the surviving <see cref="AgentChat"/>s stay non-terminal and the UI's
+    /// running-item / pulsating-brain indicators never clear.
+    ///
+    /// Idempotent with any late real completion event: the router's dictionaries are cleared here
+    /// so a queued <c>SubagentCompleted</c> arriving after the abort finds no matching entry and
+    /// is a no-op; and even if the same entry were completed twice,
+    /// <see cref="AgentChat.SetCompletionState(AgentChatCompletionState)"/> already returns early
+    /// when the state is unchanged so <c>CompletionStateChanged</c> is not re-raised.
+    /// </summary>
+    internal async Task TerminalizeRemainingChildrenAsync(Exception cancellationReason)
+    {
+        ArgumentNullException.ThrowIfNull(cancellationReason);
+
+        List<ChildRoutingEntry> entries;
+        lock (this.childSinks)
+        {
+            entries = this.childSinks.Values.ToList();
+            this.childSinks.Clear();
+        }
+
+        lock (this.pendingChildSinksByToolCall)
+        {
+            foreach (var pending in this.pendingChildSinksByToolCall.Values)
+            {
+                if (!entries.Contains(pending))
+                {
+                    entries.Add(pending);
+                }
+            }
+
+            this.pendingChildSinksByToolCall.Clear();
+            this.pendingChildSinksToolCallOrder.Clear();
+        }
+
+        foreach (var entry in entries)
+        {
+            try
+            {
+                await entry.CompleteAsFailedAsync(cancellationReason).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                this.logger?.LogDebug(
+                    ex,
+                    "Terminalizing remaining sub-agent on parent interrupt failed.");
+            }
+        }
+    }
+
+    /// <summary>
     /// Disposes all leases held for sub-agents that have not yet completed or failed. Called by
     /// the owning turn when the turn's subscription is torn down so no leases are leaked across
     /// turns.

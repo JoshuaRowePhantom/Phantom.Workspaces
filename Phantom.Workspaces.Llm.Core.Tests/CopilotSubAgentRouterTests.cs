@@ -697,4 +697,131 @@ public sealed class CopilotSubAgentRouterTests
         Assert.Equal(2, factory.CreateCalls.Count);
         Assert.NotSame(factory.CreateCalls[0].Definition, factory.CreateCalls[1].Definition);
     }
+
+    // ─── Fix #1193: parent-interrupt terminalize-remaining-children ─────────────
+    //
+    // When the parent Copilot chat is interrupted, its SDK session is aborted before the
+    // pending SubagentCompleted/SubagentFailed events are ever delivered. Nothing else on
+    // the cancel path enumerates the router's ChildRoutingEntry bookkeeping, so running
+    // sub-agent AgentChats stay non-terminal and the running-items UI never clears.
+    // TerminalizeRemainingChildrenAsync sweeps both dictionaries and forces each entry to
+    // Failed via ChildRoutingEntry.CompleteAsFailedAsync, which flips the child's
+    // AgentChat.CompletionState through SetCompletionState.
+
+    [Fact]
+    public async Task TerminalizeRemainingChildrenAsync_WithRunningChildren_MarksEachAgentChatFailed()
+    {
+        // Fix #1193: after two ChildRoutingEntrys are registered via SubagentStarted lifecycles,
+        // calling TerminalizeRemainingChildrenAsync must transition every associated child
+        // AgentChat.CompletionState to Failed — mirroring the terminal state a real
+        // SubagentFailed event would have produced.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var (router, _) = CreateRouter(factory, table);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
+        await router.RouteAsync(LifecycleStart("agent-2", "call-2"));
+
+        Assert.Equal(2, table.AddedChats.Count);
+        Assert.All(table.AddedChats, chat => Assert.Equal(AgentChatCompletionState.Running, chat.CompletionState));
+
+        await router.TerminalizeRemainingChildrenAsync(new OperationCanceledException("parent interrupted"));
+
+        Assert.All(table.AddedChats, chat => Assert.Equal(AgentChatCompletionState.Failed, chat.CompletionState));
+    }
+
+    [Fact]
+    public async Task TerminalizeRemainingChildrenAsync_ClearsChildSinksAndPending()
+    {
+        // Fix #1193: after termination, both childSinks and pendingChildSinksByToolCall are
+        // empty so a subsequent RouteAsync for the same agent id misses cleanly (the router
+        // logs a warning and returns without throwing). This guarantees a late queued
+        // SubagentCompleted arriving after the abort does not re-attach state.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
+        // AgentId-less start parks the entry in pendingChildSinksByToolCall.
+        await router.RouteAsync(LifecycleStartWithoutAgentId("call-2"));
+
+        await router.TerminalizeRemainingChildrenAsync(new OperationCanceledException("parent interrupted"));
+
+        // Late completion for agent-1 finds no entry and returns without throwing.
+        await router.RouteAsync(LifecycleCompleted("agent-1"));
+        // Late completion for the AgentId-less start also finds nothing — the pending entry
+        // was terminalized and cleared, and pendingChildSinksToolCallOrder is empty so
+        // TryAdoptPendingSinkForAgentId returns false.
+        await router.RouteAsync(LifecycleCompleted("child-runtime-id"));
+
+        // Parent transcript is untouched by any of this.
+        Assert.Empty(await DrainAsync(channel));
+    }
+
+    [Fact]
+    public async Task RouteAsync_LateCompletionAfterTerminalize_DoesNotDoubleTerminalize()
+    {
+        // Fix #1193 idempotency: after TerminalizeRemainingChildrenAsync flips the child's
+        // AgentChat to Failed and raises CompletionStateChanged once, a late queued
+        // SubagentCompleted for the same agent id must not fire CompletionStateChanged
+        // again — SetCompletionState's equality guard already handles this, and the router's
+        // dictionary clear makes the late event a lookup-miss no-op.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var (router, _) = CreateRouter(factory, table);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
+        var childChat = Assert.Single(table.AddedChats);
+
+        var terminalTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var eventCount = 0;
+        childChat.CompletionStateChanged += (_, _) =>
+        {
+            Interlocked.Increment(ref eventCount);
+            if (childChat.CompletionState != AgentChatCompletionState.Running)
+            {
+                terminalTcs.TrySetResult();
+            }
+        };
+
+        await router.TerminalizeRemainingChildrenAsync(new OperationCanceledException("parent interrupted"));
+
+        // Wait until the CompletionStateChanged for the terminalize sweep has been marshaled
+        // onto the child's foreground scheduler.
+        await terminalTcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(AgentChatCompletionState.Failed, childChat.CompletionState);
+        var terminalCount = Volatile.Read(ref eventCount);
+        Assert.Equal(1, terminalCount);
+
+        // A late queued SubagentCompleted for the same agent must not throw and must not
+        // re-fire CompletionStateChanged.
+        await router.RouteAsync(LifecycleCompleted("agent-1"));
+
+        // Give the scheduler a chance to raise any event that would have been raised.
+        await Task.Yield();
+        await Task.Yield();
+        Assert.Equal(AgentChatCompletionState.Failed, childChat.CompletionState);
+        Assert.Equal(terminalCount, Volatile.Read(ref eventCount));
+    }
+
+    [Fact]
+    public async Task RouteAsync_LifecycleCompleted_WithoutInterrupt_StillCompletesChildReceiver()
+    {
+        // Fix #1193 regression guard: the normal (non-interrupted) path still runs
+        // HandleSubAgentResultAsync → ChildRoutingEntry.CompleteAsync → child
+        // AgentChat.SetCompletionState(Succeeded). Adding TerminalizeRemainingChildrenAsync
+        // must not disturb this path when no cancellation occurs.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var table = new SubAgentTestFakes.FakeSubAgentTable();
+        var (router, channel) = CreateRouter(factory, table);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-1"));
+        await router.RouteAsync(LifecycleCompleted("agent-1"));
+
+        var childChat = Assert.Single(table.AddedChats);
+        Assert.Equal(AgentChatCompletionState.Succeeded, childChat.CompletionState);
+
+        // Child receiver's stream terminates gracefully and the parent transcript is empty.
+        Assert.Empty(await DrainAsync(channel));
+        var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
+    }
 }
