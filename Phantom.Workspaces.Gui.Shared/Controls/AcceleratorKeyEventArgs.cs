@@ -27,6 +27,15 @@ public sealed class AcceleratorKeyEventArgs : EventArgs
     /// <summary>Modifier state at the time of the event, including Alt inferred from SystemKeyDown/Up.</summary>
     public KeyModifiers Modifiers { get; }
 
+    /// <summary>True when <see cref="KeyEventKind"/> is <c>KeyDown</c> (0) or <c>SystemKeyDown</c> (2).</summary>
+    public bool IsKeyDown => this.KeyEventKind == 0 || this.KeyEventKind == 2;
+
+    /// <summary>True when <see cref="KeyEventKind"/> is <c>KeyUp</c> (1) or <c>SystemKeyUp</c> (3).</summary>
+    public bool IsKeyUp => this.KeyEventKind == 1 || this.KeyEventKind == 3;
+
+    /// <summary>True when the event originated from a <c>SystemKey*</c> kind (WebView2 raises these while Alt is held).</summary>
+    public bool IsSystemKey => this.KeyEventKind == 2 || this.KeyEventKind == 3;
+
     /// <summary>
     /// When set to true by a listener, the underlying WebView2 COM args are marked handled and the
     /// hosted page does not receive the keystroke. Default is false.

@@ -97,45 +97,16 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             acceleratorWebView.GoToWorkspacePaneAtIndexRequested += this.OnBrowserGoToWorkspacePaneAtIndexRequested;
         }
 
-        // Generic accelerator forwarding: any key that matches a KeyBinding on the hosting TopLevel
-        // is executed and marked handled so the WebView2 stops processing it (issue #1168). Keys
-        // with no matching binding are left unhandled so HTML text-input keystrokes still reach
-        // the page.
-        if (browserControl is IBrowserAcceleratorSource acceleratorSource)
+        // Generic accelerator forwarding (issue #1189): install BrowserAcceleratorBehavior so that
+        // every WebView2 accelerator key is re-raised as a routed KeyDown/KeyUp event on the browser
+        // control itself. Avalonia's tunnel/bubble routing then walks every ancestor — including
+        // DockTabSwitchController's tunnel handlers (Alt-hold overlay) and MainWindow.OnPreviewKeyDown.
+        // A KeyBinding ancestor walk after the raise mirrors KeyboardDevice.ProcessRawEvent and
+        // fires Window-level bindings such as Ctrl+W. Replaces the earlier direct-invoke path from
+        // #1168 which bypassed the routed pipeline.
+        if (browserControl is Avalonia.Controls.Control avaloniaControl)
         {
-            acceleratorSource.AcceleratorKeyPressed += this.OnBrowserAcceleratorKeyPressed;
-        }
-    }
-
-    private void OnBrowserAcceleratorKeyPressed(object? sender, AcceleratorKeyEventArgs e)
-    {
-        if (e.Key == Key.None)
-        {
-            return;
-        }
-
-        if (TopLevel.GetTopLevel(this) is not TopLevel topLevel)
-        {
-            return;
-        }
-
-        foreach (var binding in topLevel.KeyBindings)
-        {
-            if (binding.Gesture is not { } gesture)
-            {
-                continue;
-            }
-
-            if (gesture.Key == e.Key && gesture.KeyModifiers == e.Modifiers)
-            {
-                var command = binding.Command;
-                if (command is not null && command.CanExecute(binding.CommandParameter))
-                {
-                    command.Execute(binding.CommandParameter);
-                    e.Handled = true;
-                    return;
-                }
-            }
+            BrowserAcceleratorBehavior.SetIsEnabled(avaloniaControl, true);
         }
     }
 

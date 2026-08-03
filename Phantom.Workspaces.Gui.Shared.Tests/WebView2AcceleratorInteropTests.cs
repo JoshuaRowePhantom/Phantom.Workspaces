@@ -235,4 +235,71 @@ public sealed class WebView2AcceleratorInteropTests
 
         Assert.True(handled);
     }
+
+    // --- Issue #1189: verify each accelerator kind surfaces IsKeyDown/IsKeyUp/IsSystemKey correctly.
+
+    [Fact]
+    public void Dispatch_KeyDownCtrlW_RaisesGenericAcceleratorKeyPressedWithCtrlWAndIsKeyDown()
+    {
+        AcceleratorKeyEventArgs? received = null;
+        WebView2AcceleratorInterop.Dispatch(
+            KeyDown, VK_W,
+            listener: args => received = args,
+            isKeyDown: k => k == VK_CONTROL);
+
+        Assert.NotNull(received);
+        Assert.Equal(Key.W, received!.Key);
+        Assert.Equal(KeyModifiers.Control, received.Modifiers);
+        Assert.True(received.IsKeyDown);
+        Assert.False(received.IsKeyUp);
+        Assert.False(received.IsSystemKey);
+    }
+
+    [Fact]
+    public void Dispatch_SystemKeyDownAltAlone_RaisesAcceleratorKeyPressedWithLeftAltAndSystemKey()
+    {
+        AcceleratorKeyEventArgs? received = null;
+        WebView2AcceleratorInterop.Dispatch(
+            SystemKeyDown, VK_MENU,
+            listener: args => received = args,
+            isKeyDown: _ => false);
+
+        Assert.NotNull(received);
+        Assert.Equal(Key.LeftAlt, received!.Key);
+        Assert.Equal(KeyModifiers.Alt, received.Modifiers);
+        Assert.True(received.IsKeyDown);
+        Assert.True(received.IsSystemKey);
+    }
+
+    [Fact]
+    public void Dispatch_SystemKeyUpAltAlone_RaisesAcceleratorKeyPressedWithLeftAltAndIsKeyUp()
+    {
+        AcceleratorKeyEventArgs? received = null;
+        WebView2AcceleratorInterop.Dispatch(
+            SystemKeyUp, VK_MENU,
+            listener: args => received = args,
+            isKeyDown: _ => false);
+
+        Assert.NotNull(received);
+        Assert.Equal(Key.LeftAlt, received!.Key);
+        Assert.Equal(KeyModifiers.Alt, received.Modifiers);
+        Assert.True(received.IsKeyUp);
+        Assert.True(received.IsSystemKey);
+        Assert.False(received.IsKeyDown);
+    }
+
+    [Fact]
+    public void Dispatch_SystemKeyDownAltRepeat_RaisesAcceleratorKeyPressedEachRepeat()
+    {
+        var count = 0;
+        for (var i = 0; i < 5; i++)
+        {
+            WebView2AcceleratorInterop.Dispatch(
+                SystemKeyDown, VK_MENU,
+                listener: _ => count++,
+                isKeyDown: _ => false);
+        }
+
+        Assert.Equal(5, count);
+    }
 }
