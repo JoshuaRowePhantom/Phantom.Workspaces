@@ -329,6 +329,46 @@ public sealed class WorkspacePaneViewModelTests
         Assert.True(pane.SaveCommand.CanExecute(null));
     }
 
+    // ── #1198: recursive DisposeAsync cascades to child tabs ────────────────
+
+    [Fact]
+    public async Task WorkspacePaneViewModel_WhenDisposed_RecursivelyDisposesTabs()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var tabA = new DisposeSpyTab("tab-a");
+        var tabB = new DisposeSpyTab("tab-b");
+        pane.Tabs.Add(tabA);
+        pane.Tabs.Add(tabB);
+
+        await pane.DisposeAsync();
+
+        Assert.Equal(1, tabA.DisposeCount);
+        Assert.Equal(1, tabB.DisposeCount);
+        Assert.Empty(pane.Tabs);
+    }
+
+    [Fact]
+    public async Task WorkspacePaneViewModel_WhenDisposed_DisposesAgentSessionTabLease()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var leaseDisposed = 0;
+        var agentTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab",
+            Title = "Agent",
+        };
+        var lease = new Phantom.Workspaces.Llm.RunningAgentChatLease(
+            new Phantom.Workspaces.Llm.Interfaces.AgentSessionId("session-1198"),
+            null!,
+            () => { System.Threading.Interlocked.Increment(ref leaseDisposed); return ValueTask.CompletedTask; });
+        agentTab.SetLease(lease);
+        pane.Tabs.Add(agentTab);
+
+        await pane.DisposeAsync();
+
+        Assert.Equal(1, leaseDisposed);
+    }
+
     private static SubscribedEntityViewModel CreateWorkspaceEntity(
         Func<SubscribedEntityViewModel, Task>? deleteEntityAsync = null)
     {
@@ -367,5 +407,24 @@ public sealed class WorkspacePaneViewModelTests
         }
 
         public override IStatusItem? TabStatus => this.statusItem;
+    }
+
+    private sealed class DisposeSpyTab : WorkspaceTabViewModel
+    {
+        public int DisposeCount { get; private set; }
+
+        [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
+        public DisposeSpyTab(string id)
+        {
+            this.Id = id;
+            this.Title = id;
+            this.DockRegion = "full";
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            await base.DisposeAsync();
+        }
     }
 }

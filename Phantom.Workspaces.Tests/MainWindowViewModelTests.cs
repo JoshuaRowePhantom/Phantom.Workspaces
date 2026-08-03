@@ -515,6 +515,176 @@ public sealed class MainWindowViewModelTests
         Assert.False(result);
     }
 
+    // ── #1198: pane-close cascades DisposeAsync to child tabs ───────────────
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_ClosingWorkspacePaneWithRunningAgentTab_DisposesAllChildTabs()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, tabs) = AddPaneWithDisposeSpyTabs(viewModel, "ws-1198-a", 2);
+
+        await viewModel.RemoveWorkspacePaneAsync(pane);
+
+        Assert.All(tabs, t => Assert.Equal(1, t.DisposeCount));
+        Assert.Empty(pane.Tabs);
+    }
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_ClosingWorkspacePaneWithRunningAgentTab_ReleasesRunningAgentChatLease()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = AddPane(viewModel, "ws-1198-b");
+        var agentTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-1198-b",
+            Title = "Agent B",
+        };
+        var leaseDisposed = 0;
+        var lease = new Phantom.Workspaces.Llm.RunningAgentChatLease(
+            new Phantom.Workspaces.Llm.Interfaces.AgentSessionId("agent-session-1198-b"),
+            null!,
+            () => { System.Threading.Interlocked.Increment(ref leaseDisposed); return ValueTask.CompletedTask; });
+        agentTab.SetLease(lease);
+        pane.Tabs.Add(agentTab);
+
+        await viewModel.RemoveWorkspacePaneAsync(pane);
+
+        Assert.Equal(1, leaseDisposed);
+    }
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_ClosingPaneViaDockCloseButton_DisposesDocumentAndChildren()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, tabs) = AddPaneWithDisposeSpyTabs(viewModel, "ws-1198-c", 1);
+        var paneDoc = new WorkspacePaneDocument(pane);
+
+        // Dock UI close path: OnDockableClosed → OnWorkspacePaneDockableClosed → RemoveWorkspacePaneAsync.
+        viewModel.OnWorkspacePaneDockableClosed(paneDoc);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.DoesNotContain(viewModel.WorkspacePanes, p => ReferenceEquals(p, pane));
+        Assert.Equal(1, tabs[0].DisposeCount);
+    }
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_ClosingSingleTabViaDockClose_DisposesTabViewModel()
+    {
+        // Regression: single-tab close through the existing OnDockableTabClosed seam
+        // must still dispose the tab VM.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, tabs) = AddPaneWithDisposeSpyTabs(viewModel, "ws-1198-d", 1);
+        var tab = tabs[0];
+
+        viewModel.OnDockableTabClosed(tab);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.DoesNotContain(tab, pane.Tabs);
+        Assert.Equal(1, tab.DisposeCount);
+    }
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_ReopeningWorkspaceAfterClose_RecreatesAgentSessionTab()
+    {
+        // #1198: closing a pane must evict stale documentsByTabId entries so the
+        // freshly-restored tab is not treated as "already open" by OpenTabAsync's
+        // dedupe (which would dispose the fresh tab and activate a dead document).
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("10810001-1198-4000-8000-000000000001");
+        await UpsertWorkspaceAsync(entityBroker, workspaceId, "ws-1198-e", "WS 1198 E");
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var pane = Assert.Single(
+            viewModel.WorkspacePanes,
+            p => string.Equals(p.Id, workspaceId.Value.ToString(), StringComparison.Ordinal));
+        await pane.Populated;
+
+        // Open a tab that becomes registered in the dock factory's tab map.
+        var tab = new WebViewModel("https://example-1198.example.com/") { Id = "web-1198-e", Title = "Web 1198 E" };
+        await viewModel.OpenTabAsync(tab);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var dockFactoryField = typeof(MainWindowViewModel).GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var dockFactory = (WorkspaceDockFactory)dockFactoryField.GetValue(viewModel)!;
+        Assert.NotNull(dockFactory.GetDocumentForTab(tab.Id));
+
+        // Close the pane. Before #1198's fix, this left a stale documentsByTabId entry;
+        // after the fix, pane.Tabs is cleared which propagates through the inner dock's
+        // items-source generator and evicts the entry.
+        await viewModel.RemoveWorkspacePaneAsync(pane);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Null(dockFactory.GetDocumentForTab(tab.Id));
+    }
+
+    private static WorkspacePaneViewModel AddPane(MainWindowViewModel viewModel, string id)
+    {
+        var entityId = Guid.NewGuid();
+        using var entityDoc = JsonDocument.Parse($$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": "{{id}}"
+            }
+            """);
+        var entity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId(entityId),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = entityDoc.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+        var pane = new WorkspacePaneViewModel(entity, id);
+        viewModel.WorkspacePanes.Add(pane);
+        return pane;
+    }
+
+    private static (WorkspacePaneViewModel pane, DisposeSpyTab_1198[] tabs) AddPaneWithDisposeSpyTabs(
+        MainWindowViewModel viewModel, string paneId, int tabCount)
+    {
+        var pane = AddPane(viewModel, paneId);
+        var tabs = new DisposeSpyTab_1198[tabCount];
+        for (var i = 0; i < tabCount; i++)
+        {
+            tabs[i] = new DisposeSpyTab_1198($"{paneId}-tab-{i}");
+            pane.Tabs.Add(tabs[i]);
+        }
+        return (pane, tabs);
+    }
+
+    private sealed class DisposeSpyTab_1198 : WorkspaceTabViewModel
+    {
+        public int DisposeCount { get; private set; }
+
+        [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
+        public DisposeSpyTab_1198(string id)
+        {
+            this.Id = id;
+            this.Title = id;
+            this.DockRegion = "full";
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            await base.DisposeAsync();
+        }
+    }
+
     private static DirectoryInfo FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);

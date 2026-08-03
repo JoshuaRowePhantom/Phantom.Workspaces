@@ -232,6 +232,30 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Recursively disposes every tab in <see cref="Tabs"/> so that the pane-close path
+    /// releases per-tab resources (notably the <c>RunningAgentChatLease</c> owned by
+    /// <see cref="AgentSessionWorkspaceTabViewModel"/>). See #1198.
+    /// </summary>
+    public override async ValueTask DisposeAsync()
+    {
+        var snapshot = this.Tabs.ToArray();
+        this.Tabs.Clear();
+        foreach (var tab in snapshot)
+        {
+            try
+            {
+                await tab.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Continue disposing siblings; a single tab disposal failure must not
+                // strand the remaining tabs (or their leases).
+            }
+        }
+        await base.DisposeAsync().ConfigureAwait(false);
+    }
+
     private async Task SaveAsync()
     {
         if (this.saveAsync is null || this.IsReadOnly || this.isSaving)

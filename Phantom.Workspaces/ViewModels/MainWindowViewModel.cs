@@ -2238,6 +2238,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
        this.UnsubscribeFromInnerDockChanges(pane);
        this.WorkspacePanes.RemoveAt(paneIndex);
 
+       // #1198: cascade disposal into the removed pane so every child WorkspaceTabViewModel
+       // is disposed. For agent-session tabs this releases the RunningAgentChatLease so the
+       // agent leaves the running-agents flyout; clearing pane.Tabs also propagates through
+       // the inner dock's ItemsSource generator and evicts stale documentsByTabId entries,
+       // so reopening the workspace restores the persisted agent-session tab normally.
+       await pane.DisposeAsync().ConfigureAwait(true);
+
        // If we just closed the selected workspace, select another one
        if (this.SelectedWorkspacePane == pane)
        {

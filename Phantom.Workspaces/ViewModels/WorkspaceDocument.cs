@@ -5,13 +5,14 @@ using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public class WorkspaceDocument : Document
+public class WorkspaceDocument : Document, IAsyncDisposable
 {
     private bool hasUnreadNotification;
     private string baseTitle = string.Empty;
     private readonly StatusTabHeaderItemViewModel statusIndicator;
     private readonly TabHeaderViewModel cachedTabHeader;
     private IStatusItem? subscribedTabStatus;
+    private int disposed;
 
     /// <summary>
     /// Parameterless constructor for JSON deserialization. <see cref="TabViewModel"/> is
@@ -206,5 +207,33 @@ public class WorkspaceDocument : Document
             return new BrowserDockTabDescriptor(webVm.AddressBarUrl) { Title = title };
 
         return null;
+    }
+
+    /// <summary>
+    /// Unsubscribes from the wrapped <see cref="WorkspaceTabViewModel"/> (and its
+    /// <see cref="IStatusItem"/>) and cascades disposal into it. This is the recursive
+    /// "document disposes its sub-document" step that guarantees per-tab resources
+    /// (e.g. an <c>AgentSessionWorkspaceTabViewModel</c>'s <c>RunningAgentChatLease</c>)
+    /// are always released, regardless of which close path is used. See #1198.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (System.Threading.Interlocked.Exchange(ref this.disposed, 1) != 0)
+            return;
+
+        var tabVm = this.TabViewModel;
+        if (tabVm is not null)
+        {
+            tabVm.PropertyChanged -= this.OnTabViewModelPropertyChanged;
+        }
+        if (this.subscribedTabStatus is not null)
+        {
+            this.subscribedTabStatus.PropertyChanged -= this.OnTabStatusPropertyChanged;
+            this.subscribedTabStatus = null;
+        }
+        if (tabVm is not null)
+        {
+            await tabVm.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

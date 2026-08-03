@@ -195,6 +195,40 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.Empty(vm.Rows);
     }
 
+    // ── #1198: workspace-pane close releases lease → row removed ────────────
+
+    [Fact]
+    public void RunningAgentBrainViewModel_WhenAgentTabDisposedOnPaneClose_ClearsRow()
+    {
+        // Simulates the observable effect of #1198's fix: when a workspace pane hosting an
+        // agent-session tab is closed, cascaded disposal releases the RunningAgentChatLease,
+        // which drops the entry from IRunningAgentChatFactory.RunningSessions. The brain
+        // view-model must react by clearing its row and reporting IsAnyRunning = false.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1198", "Agent 1198");
+        var tab = CreateReadyTab("tab-1198", "Agent 1198", agentSessionId: "session-1198");
+
+        var returnTabs = true;
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => returnTabs
+                ? [new AgentTabInfo("pane-1198", "Workspace 1198", tab)]
+                : [],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        Assert.Single(vm.Rows);
+        Assert.True(vm.IsAnyRunning);
+
+        // Pane close cascade → tab.DisposeAsync → lease.DisposeAsync → factory removes session.
+        returnTabs = false;
+        table.RemoveSession("session-1198");
+
+        Assert.Empty(vm.Rows);
+        Assert.False(vm.IsAnyRunning);
+    }
+
     [Fact]
     public void RowActivateCommand_CallsActivateTab()
     {
