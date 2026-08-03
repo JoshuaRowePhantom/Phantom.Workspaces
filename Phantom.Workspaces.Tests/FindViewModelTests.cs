@@ -76,6 +76,20 @@ public sealed class FindViewModelTests
             sortKey: $"[\"{sortKey}\"]");
     }
 
+    private static SubscribedEntityViewModel CreateEntityRaw(string entityId, string entityJson)
+    {
+        using var document = JsonDocument.Parse(entityJson);
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        return new SubscribedEntityViewModel(snapshot, deleteEntityAsync: _ => Task.CompletedTask);
+    }
+
     // -------------------- FindViewModel tests --------------------
 
     [AvaloniaFact]
@@ -336,6 +350,226 @@ public sealed class FindViewModelTests
         find.Query = "target";
 
         Assert.Same(node.Card, broughtIntoView);
+    }
+
+    // -------------------- #1200: display-name / JSON-value matching coverage --------------------
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryMatchingSubstringOfDisplayName_FindsThatEntity()
+    {
+        var a = MakeStringNode("apple pie");
+        var b = MakeStringNode("banana");
+        var list = MakeList((a, null), (b, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "pie";
+
+        Assert.Single(find.Matches);
+        Assert.Equal(a.Card, find.CurrentCard);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryCaseDiffersFromDisplayName_FindsEntityCaseInsensitively()
+    {
+        var a = MakeStringNode("Apple");
+        var b = MakeStringNode("banana");
+        var list = MakeList((a, null), (b, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "APPLE";
+        Assert.Equal(a.Card, find.CurrentCard);
+
+        find.Query = "BAN";
+        Assert.Equal(b.Card, find.CurrentCard);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_EmptyQuery_ShowsAllEntitiesAndClearsFilter()
+    {
+        var a = MakeStringNode("apple");
+        var b = MakeStringNode("banana");
+        var list = MakeList((a, null), (b, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "apple";
+        Assert.Single(find.Matches);
+
+        find.Query = string.Empty;
+
+        Assert.Empty(find.Matches);
+        Assert.Null(find.CurrentCard);
+        // ClearFindFilter runs — no node is in a hide-unmatched state, so every child is visible
+        // and no match highlight remains.
+        foreach (var item in list.Items)
+        {
+            Assert.False(item.Node.HideUnmatched);
+            Assert.False(item.Node.MatchesFilter);
+            Assert.False(item.Node.IsAncestorOfMatch);
+        }
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryMatchesNoEntity_ProducesNoMatches()
+    {
+        var a = MakeStringNode("apple");
+        var b = MakeStringNode("banana");
+        var list = MakeList((a, null), (b, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "zzzzz-nothing-matches";
+
+        Assert.Empty(find.Matches);
+        Assert.Null(find.CurrentCard);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_EntityWithEmptyNamesArray_StillMatchesByEntityId()
+    {
+        // Regression for #1200: names[0] is [] so DisplayName falls back to EntityId. A query
+        // containing a substring of the EntityId must still find the entity.
+        var entityId = "abcdef01-2345-6789-abcd-ef0123456789";
+        var entity = CreateEntityRaw(
+            entityId,
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity"],
+              "names": [[]]
+            }
+            """);
+        var node = MakeEntityNode(entity, "z");
+        var list = MakeList((node, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        // A distinctive substring of the entity id.
+        find.Query = "abcdef01";
+
+        Assert.Equal(node.Card, find.CurrentCard);
+        Assert.Equal(FindViewModel.MatchWhere.CardText, find.CurrentMatch!.Value.Where);
+        Assert.False(string.IsNullOrEmpty(node.Card.DisplayName));
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_EntityWithEmptyDisplayNameButMatchingJsonValue_StillMatches()
+    {
+        // The display name resolves to EntityId (never ""), but the interesting text is in a
+        // JSON leaf value — the entity is still found via JsonValueMatcher with JsonOnly.
+        var entityId = "11112222-3333-4444-5555-666677778888";
+        var entity = CreateEntityRaw(
+            entityId,
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity"],
+              "names": [[]],
+              "content": { "default": "quirky-payload" }
+            }
+            """);
+        var node = MakeEntityNode(entity, "z");
+        var list = MakeList((node, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "quirky-payload";
+
+        Assert.Equal(node.Card, find.CurrentCard);
+        Assert.Equal(FindViewModel.MatchWhere.JsonOnly, find.CurrentMatch!.Value.Where);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryMatchingJsonValueInNestedObject_FindsThatEntity()
+    {
+        var entity = CreateEntityWithJson(
+            "note",
+            "\"content\": { \"default\": { \"text\": \"deep-value\" } }");
+        var node = MakeEntityNode(entity, "n");
+        var list = MakeList((node, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "deep-value";
+
+        Assert.Equal(node.Card, find.CurrentCard);
+        Assert.Equal(FindViewModel.MatchWhere.JsonOnly, find.CurrentMatch!.Value.Where);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryMatchingJsonValueInArray_FindsThatEntity()
+    {
+        var entity = CreateEntityWithJson(
+            "note",
+            "\"tags\": [\"alpha\", { \"label\": \"buried-tag\" }, \"gamma\"]");
+        var node = MakeEntityNode(entity, "n");
+        var list = MakeList((node, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "buried-tag";
+
+        Assert.Equal(node.Card, find.CurrentCard);
+        Assert.Equal(FindViewModel.MatchWhere.JsonOnly, find.CurrentMatch!.Value.Where);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryMatchingUnrealizedVirtualizedItem_FindsThatEntity()
+    {
+        // The find filter walks the full source collection via EnumerateInOrder, not just the
+        // items that a virtualizing panel happens to have realized. Prove that by constructing
+        // a large list and matching an entity mid-way; no visual realization ever occurs in the
+        // pure-view-model test, which is precisely the "unrealized" condition.
+        var nodes = new List<EntityListNodeViewModel>();
+        for (int i = 0; i < 200; i++)
+        {
+            nodes.Add(MakeStringNode($"item-{i:D3}"));
+        }
+        var target = MakeStringNode("needle-item");
+        nodes.Add(target);
+        for (int i = 200; i < 400; i++)
+        {
+            nodes.Add(MakeStringNode($"item-{i:D3}"));
+        }
+
+        var list = new EntityListViewModel();
+        var items = new List<EntityListItemViewModel>();
+        for (int i = 0; i < nodes.Count; i++)
+        {
+            items.Add(MakeItem(nodes[i], order: i + 1));
+        }
+        list.SetItems(items);
+
+        var find = new FindViewModel(list);
+        find.Open();
+        find.Query = "needle-item";
+
+        Assert.Single(find.Matches);
+        Assert.Equal(target.Card, find.CurrentCard);
+    }
+
+    // -------------------- #1199: FindViewModel-level open-idempotence --------------------
+
+    [AvaloniaFact]
+    public void FindViewModel_CtrlFWhenOpenWithQuery_LeavesQueryUnchanged()
+    {
+        // View-model-level assurance that Open() on an already-open bar does not mutate Query.
+        // Select-all is a view concern and must not clear the model text.
+        var a = MakeStringNode("apple");
+        var list = MakeList((a, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "app";
+        Assert.True(find.IsOpen);
+
+        find.OpenCommand.Execute(null);
+
+        Assert.True(find.IsOpen);
+        Assert.Equal("app", find.Query);
     }
 
     // -------------------- JsonValueMatcher tests --------------------

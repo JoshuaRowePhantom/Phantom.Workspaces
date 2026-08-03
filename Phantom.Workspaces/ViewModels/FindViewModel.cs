@@ -207,9 +207,12 @@ public sealed class FindViewModel : ViewModelBase
 
         var displayName = card.DisplayName;
         var entityType = card.EntityType;
+        // #1200: guard against empty display-name / entity-type explicitly. "".Contains(query)
+        // is always false for non-empty query, so an empty display name would silently zero
+        // the card-text branch even if the primary fix regresses.
         var inCardText =
-            (displayName != null && displayName.Contains(query, StringComparison.OrdinalIgnoreCase))
-            || (entityType != null && entityType.Contains(query, StringComparison.OrdinalIgnoreCase));
+            (!string.IsNullOrEmpty(displayName) && displayName.Contains(query, StringComparison.OrdinalIgnoreCase))
+            || (!string.IsNullOrEmpty(entityType) && entityType.Contains(query, StringComparison.OrdinalIgnoreCase));
         if (inCardText)
         {
             return MatchWhere.CardText;

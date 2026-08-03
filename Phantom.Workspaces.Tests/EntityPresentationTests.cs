@@ -61,6 +61,64 @@ public sealed class EntityPresentationTests
         Assert.Equal(new[] { "tool", "note" }, EntityPresentation.GetNonAbstractEntityTypeNames(snapshot));
     }
 
+    // -------------------- #1200: names[0]-empty display name fallback --------------------
+
+    [AvaloniaFact]
+    public void ReadPrimaryName_NamesFirstArrayHasNoStringParts_ReturnsNull()
+    {
+        // With no display-name and no title, the fallback goes through ReadPrimaryName. If
+        // names[0] is an array whose entries yield no non-whitespace strings, ReadPrimaryName
+        // must return null (not "") so GetDisplayName's null-coalescing chain reaches EntityId.
+        var emptyArray = CreateSnapshot(
+            """
+            {
+              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-types": ["entity"],
+              "names": [[]]
+            }
+            """);
+        var nullEntry = CreateSnapshot(
+            """
+            {
+              "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+              "entity-types": ["entity"],
+              "names": [[null]]
+            }
+            """);
+        var whitespaceEntry = CreateSnapshot(
+            """
+            {
+              "entity-id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+              "entity-types": ["entity"],
+              "names": [[""]]
+            }
+            """);
+
+        Assert.Equal(emptyArray.EntityId.ToString(), EntityPresentation.GetDisplayName(emptyArray));
+        Assert.Equal(nullEntry.EntityId.ToString(), EntityPresentation.GetDisplayName(nullEntry));
+        Assert.Equal(whitespaceEntry.EntityId.ToString(), EntityPresentation.GetDisplayName(whitespaceEntry));
+    }
+
+    [AvaloniaFact]
+    public void GetDisplayName_NamesArrayEmpty_FallsBackToEntityId()
+    {
+        // End-to-end: an entity with no display-name, no title, and empty names[0] must return
+        // its EntityId (not "") from GetDisplayName.
+        var snapshot = CreateSnapshot(
+            """
+            {
+              "entity-id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+              "entity-types": ["entity"],
+              "names": [[]]
+            }
+            """);
+
+        var displayName = EntityPresentation.GetDisplayName(snapshot);
+
+        Assert.False(string.IsNullOrEmpty(displayName));
+        Assert.Equal(snapshot.EntityId.ToString(), displayName);
+    }
+
     private static EntitySnapshot CreateSnapshot(
         string json)
     {

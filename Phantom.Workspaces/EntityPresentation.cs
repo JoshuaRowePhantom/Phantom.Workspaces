@@ -163,10 +163,18 @@ public static class EntityPresentation
 
         if (first.ValueKind == JsonValueKind.Array)
         {
+            // #1200: return null (not "") when the joined parts collection is empty, so the
+            // null-coalescing chain in GetDisplayName falls through to the EntityId fallback.
+            // Otherwise Ctrl-F entity find sees "" as a real DisplayName and matches nothing.
             var parts = first.EnumerateArray()
                 .Where(static item => item.ValueKind == JsonValueKind.String)
                 .Select(static item => item.GetString())
-                .Where(static value => !string.IsNullOrWhiteSpace(value));
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToArray();
+            if (parts.Length == 0)
+            {
+                return null;
+            }
             return string.Join("/", parts!);
         }
 
