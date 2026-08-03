@@ -5,6 +5,7 @@ using System.Linq;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using global::Dock.Model.Controls;
@@ -505,6 +506,302 @@ public sealed class WorkspaceGuiContextProviderTests
 
         var resultJson = Assert.IsType<JsonElement>(result);
         Assert.False(resultJson.GetProperty("handled").GetBoolean());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_ReviewOnGitWorktree_OpensReviewTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550001-aa55-4aa5-aa55-aa5500000001");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "review-tab-1"]],
+              "display-name": { "default": "Review Tab Test Worktree" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"Review\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var reviewTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<GitWorktreeReviewWorkspaceTabViewModel>()
+            .FirstOrDefault();
+        Assert.NotNull(reviewTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_VsCodeWebOnGitWorktree_OpensWebViewTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Seed a vscode-tunnel for the local profile
+        var localProfileId = viewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var localProfiles = await entityBroker.GetEntitiesAsync([localProfileId], TestContext.Current.CancellationToken);
+        var profile = localProfiles.Single();
+
+        if (profile.Data is not JsonElement profileData)
+        {
+            Assert.Fail("Profile data is null");
+            return;
+        }
+
+        var namesArray = profileData.GetProperty("names");
+        var primaryName = namesArray[0];
+        var nameParts = primaryName.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .ToArray();
+
+        string? userSegment = null;
+        for (int i = 0; i < nameParts.Length - 1; i++)
+        {
+            if (nameParts[i] == "username")
+            {
+                userSegment = nameParts[i + 1];
+                break;
+            }
+        }
+        Assert.NotNull(userSegment);
+
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new JsonArray(new JsonArray(userSegment, "vscode-tunnel")),
+            ["display-name"] = new JsonObject { ["default"] = "invoke-shortcut-tunnel" },
+            ["tunnel-name"] = "invoke-shortcut-tunnel",
+            ["tunnel-url"] = "https://vscode.dev/tunnel/invoke-shortcut-tunnel",
+            ["active"] = true,
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Insert test tunnel for VsCodeWeb." } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        // Seed the git-worktree entity (names don't resolve to a profile, so handler uses local profile)
+        var entityId = new EntityId("aa550002-aa55-4aa5-aa55-aa5500000002");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "vscode-web-tab-1"]],
+              "display-name": { "default": "VsCodeWeb Tab Test Worktree" },
+              "path": "/test/vscode-web-repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"VsCodeWeb\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var webViewTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<WebViewModel>()
+            .FirstOrDefault(t => t.Title?.StartsWith("VS Code Web", StringComparison.Ordinal) == true);
+        Assert.NotNull(webViewTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_StartAgentSessionOnGitWorktree_OpensStartAgentSessionTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550003-aa55-4aa5-aa55-aa5500000003");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "agent-session-1"]],
+              "display-name": { "default": "Agent Session Test Worktree" },
+              "path": "/test/repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"StartAgentSession\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var agentSessionTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<StartAgentSessionOnProfileViewModel>()
+            .FirstOrDefault();
+        Assert.NotNull(agentSessionTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_StartShellOnGitWorktree_OpensShellTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Replace production handler with a fake to avoid spawning a real PTY
+        viewModel.ShortcutManager.ReplaceShortcutHandlerForTesting<StartShellFromEntityShortcutHandler>(
+            new StartShellFromEntityShortcutHandler(
+                (_, _, _) => Task.FromResult<ITerminalSession>(new FakeTerminalSession())));
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550004-aa55-4aa5-aa55-aa5500000004");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "shell-tab-1"]],
+              "display-name": { "default": "Shell Tab Test Worktree" },
+              "path": "/test/repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"StartShell\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var shellTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<ShellTabViewModel>()
+            .FirstOrDefault();
+        Assert.NotNull(shellTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_VsCodeOnGitWorktree_RemainsWorking()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Replace production handler with a fake to avoid running the VS Code CLI
+        viewModel.ShortcutManager.ReplaceShortcutHandlerForTesting<OpenInVsCodeShortcutHandler>(
+            new OpenInVsCodeShortcutHandler(
+                cliLocator: () => "code",
+                processRunner: (_, _, _) => Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty)),
+                urlLauncher: null));
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550005-aa55-4aa5-aa55-aa5500000005");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "vscode-1"]],
+              "display-name": { "default": "VsCode Test Worktree" },
+              "path": "/test/repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"VsCode\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+        Assert.False(resultJson.TryGetProperty("reason", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_NoHandlerApplies_ReturnsReason()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550006-aa55-4aa5-aa55-aa5500000006");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tests", "tasks", "no-handler-1"]],
+              "display-name": { "default": "No Handler Task" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        // Review shortcut applies only to git-worktree entities; this entity is a plain "task"
+        var shortcutArg = JsonDocument.Parse("\"Review\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.False(resultJson.GetProperty("handled").GetBoolean());
+        Assert.True(resultJson.TryGetProperty("reason", out var reasonEl));
+        var reason = reasonEl.GetString()!;
+        Assert.NotEmpty(reason);
+        Assert.Contains("Review", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("task", reason, StringComparison.OrdinalIgnoreCase);
     }
 
     // ── ProvideAIContextAsync instructions tests ──────────────────────────────

@@ -275,11 +275,14 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             .Select(static e => e.GetString()!)
             .ToArray();
 
-        // Find "username" key and extract the next element
+        // Extract the user segment. Local profiles use
+        // ["computer-user-profiles", "users", "username", <user>, ...] so scan for
+        // "username" first. Accept "user-computer-profile" as a secondary marker for
+        // profiles that use the singular naming style. See #1194.
         string? userSegment = null;
         for (int i = 0; i < nameParts.Length - 1; i++)
         {
-            if (nameParts[i] == "username")
+            if (nameParts[i] is "username" or "user-computer-profile")
             {
                 userSegment = nameParts[i + 1];
                 break;

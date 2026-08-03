@@ -290,6 +290,40 @@ public sealed class ShortcutManagerTests
         Assert.True(handled);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task GetShortcutsForAsync_LocalWorktreeWithNoTunnel_OmitsVsCodeWeb()
+    {
+        var shortcutManager = new ShortcutManager();
+        shortcutManager.AddShortcutHandler(new OpenInVsCodeWebShortcutHandler());
+
+        await using var mainWindowViewModel = CreateTestMainWindowViewModel();
+        await mainWindowViewModel.InitializeAsync();
+
+        // Entity has a path but no tunnel is seeded — handler must NOT include VsCodeWeb
+        using var document = JsonDocument.Parse("""
+            {
+                "entity-id": "11111111-2222-4333-4444-555555555555",
+                "entity-types": ["entity", "git-worktree", "filesystem-path"],
+                "names": [["tests", "worktrees", "no-tunnel-check"]],
+                "display-name": { "default": "No Tunnel Worktree" },
+                "path": "/test/no-tunnel"
+            }
+            """);
+        var entity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = new EntityId("11111111-2222-4333-4444-555555555555"),
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+
+        var shortcuts = await GetShortcutsAsync(shortcutManager, mainWindowViewModel, entity);
+
+        Assert.DoesNotContain(shortcuts, s => s == Shortcut.VsCodeWeb);
+    }
+
     private static RepositorySource CreateInMemoryRepositorySource()
         => new UnknownRepositorySource();
 

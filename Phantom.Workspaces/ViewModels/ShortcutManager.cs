@@ -60,6 +60,23 @@ public sealed class ShortcutManager
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
+        var (handled, _) = await this.TryHandleShortcutAsync(mainWindowViewModel, shortcut, entityViewModel);
+        return handled;
+    }
+
+    /// <summary>
+    /// Restore-aware counterpart to <see cref="HandleShortcutAsync"/> that also surfaces a
+    /// diagnostic <c>reason</c> when no handler runs to completion. The reason describes why
+    /// no handler applied (or why the matching handler returned <see langword="false"/>), so
+    /// the MCP <c>entity_invoke_shortcut</c> tool can report a useful diagnostic instead of a
+    /// bare <c>{handled:false}</c>. See #1194.
+    /// </summary>
+    public async Task<(bool Handled, string? Reason)> TryHandleShortcutAsync(
+        MainWindowViewModel mainWindowViewModel,
+        Shortcut shortcut,
+        SubscribedEntityViewModel entityViewModel)
+    {
+        string? matchedHandlerName = null;
         foreach (var shortcutHandler in this.shortcutHandlers)
         {
             if (!await shortcutHandler.ShouldApplyTo(mainWindowViewModel, shortcut, entityViewModel))
@@ -67,13 +84,43 @@ public sealed class ShortcutManager
                 continue;
             }
 
+            matchedHandlerName ??= shortcutHandler.GetType().Name;
             if (await shortcutHandler.Handle(mainWindowViewModel, shortcut, entityViewModel))
             {
-                return true;
+                return (true, null);
             }
         }
 
-        return false;
+        if (matchedHandlerName is null)
+        {
+            var typesDescription = DescribeEntityTypes(entityViewModel);
+            return (false, $"no handler applied to {shortcut} on {typesDescription}");
+        }
+
+        return (false, $"{matchedHandlerName} declined to handle {shortcut} — see notifications for details");
+    }
+
+    private static string DescribeEntityTypes(SubscribedEntityViewModel entityViewModel)
+    {
+        if (entityViewModel.Data is not System.Text.Json.JsonElement data
+            || !data.TryGetProperty("entity-types", out var typesElement)
+            || typesElement.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return "entity";
+        }
+
+        var names = new List<string>();
+        foreach (var item in typesElement.EnumerateArray())
+        {
+            if (item.ValueKind == System.Text.Json.JsonValueKind.String
+                && item.GetString() is { Length: > 0 } name
+                && !string.Equals(name, "entity", System.StringComparison.Ordinal))
+            {
+                names.Add(name);
+            }
+        }
+
+        return names.Count == 0 ? "entity" : "entity of type " + string.Join(",", names);
     }
 
     /// <summary>

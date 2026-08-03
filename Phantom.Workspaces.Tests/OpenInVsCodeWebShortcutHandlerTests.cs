@@ -15,18 +15,161 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
     // ---- ShouldApplyTo -----------------------------------------------------------------------
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task ShouldApplyTo_VsCodeWebShortcut_PathExists_ReturnsTrue()
+    public async Task VsCodeWebShortcut_WhenNoTunnelResolvable_IsNotApplicable()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
 
         var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/repo"}""");
         var entityViewModel = new SubscribedEntityViewModel(snapshot);
-        
-        var handler = new OpenInVsCodeWebShortcutHandler(
-            tabOpener: null);
+
+        var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
+
+        Assert.False(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task VsCodeWebShortcut_WhenTunnelResolvable_IsApplicable()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var localProfileId = viewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var localProfiles = await entityBroker.GetEntitiesAsync([localProfileId], TestContext.Current.CancellationToken);
+        var profile = localProfiles.Single();
+
+        if (profile.Data is not JsonElement profileData)
+        {
+            Assert.Fail("Profile data is null");
+            return;
+        }
+
+        var namesArray = profileData.GetProperty("names");
+        var primaryName = namesArray[0];
+        var nameParts = primaryName.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .ToArray();
+
+        string? userSegment = null;
+        for (int i = 0; i < nameParts.Length - 1; i++)
+        {
+            if (nameParts[i] == "username")
+            {
+                userSegment = nameParts[i + 1];
+                break;
+            }
+        }
+        Assert.NotNull(userSegment);
+
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "resolvable-tunnel" },
+            ["tunnel-name"] = "resolvable-tunnel",
+            ["tunnel-url"] = "https://vscode.dev/tunnel/resolvable-tunnel",
+            ["active"] = true,
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Insert test tunnel for ShouldApplyTo." } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
 
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TryFindVsCodeTunnel_LocalProfileWithComputerUserProfilesName_ResolvesTunnel()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var localProfileId = viewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var localProfiles = await entityBroker.GetEntitiesAsync([localProfileId], TestContext.Current.CancellationToken);
+        var profile = localProfiles.Single();
+
+        if (profile.Data is not JsonElement profileData)
+        {
+            Assert.Fail("Profile data is null");
+            return;
+        }
+
+        var namesArray = profileData.GetProperty("names");
+        var primaryName = namesArray[0];
+        var nameParts = primaryName.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .ToArray();
+
+        // Find the userSegment that follows the "username" key — verifies the key-scan logic
+        string? userSegment = null;
+        for (int i = 0; i < nameParts.Length - 1; i++)
+        {
+            if (nameParts[i] == "username")
+            {
+                userSegment = nameParts[i + 1];
+                break;
+            }
+        }
+        Assert.NotNull(userSegment);
+
+        // Seed a tunnel named [userSegment, "vscode-tunnel"] as the handler expects
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "profile-name-tunnel" },
+            ["tunnel-name"] = "profile-name-tunnel",
+            ["tunnel-url"] = "https://vscode.dev/tunnel/profile-name-tunnel",
+            ["active"] = true,
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Insert test tunnel." } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        // ShouldApplyTo proxies TryFindVsCodeTunnelAsync (which is private)
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/test/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
+
+        Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalWorktreeWithNoTunnel_NotifiesAndReturnsFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"display-name":{"default":"no-tunnel-repo"},"path":"/no/tunnel/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
+
+        var handled = await handler.Handle(viewModel, Shortcut.VsCodeWeb, entityViewModel);
+
+        Assert.False(handled);
+        Assert.NotEmpty(viewModel.NotificationService.Notifications);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

@@ -1,5 +1,6 @@
 using Avalonia.Headless.XUnit;
 using System;
+using System.Reflection;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Gui.Shared.Utilities;
@@ -105,6 +106,86 @@ public sealed class StartAgentSessionFromEntityShortcutHandlerTests
         var handled = await handler.Handle(viewModel, Shortcut.StartAgentSession, entity);
 
         Assert.True(handled);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ResolveDefaultManifestEntityId_SwallowsException_LogsNotification()
+    {
+        var handler = CreateHandler();
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Replace the DataAccessLayer with a throwing one to trigger the catch block in
+        // ResolveDefaultManifestEntityIdAsync (which is private, so we drive it via Handle).
+        var entityBroker = GetEntityBroker(viewModel);
+        entityBroker.EntityRepository.SetDataAccessLayerForTesting(new ThrowingDataAccessLayer());
+
+        var entity = CreateEntityWithData("""{"entity-id":"44444444-4444-4444-4444-444444444444","entity-types":["entity","git-worktree","filesystem-path"],"names":[["tests","worktrees","notify-test"]],"display-name":{"default":"Notify Test"},"path":"/test/repo"}""");
+
+        // Handle calls ResolveDefaultManifestEntityIdAsync, which calls DataAccessLayer.GetAsync →
+        // throws → catch fires → notification posted. Handle still opens the tab and returns true.
+        var handled = await handler.Handle(viewModel, Shortcut.StartAgentSession, entity);
+
+        Assert.True(handled);
+        Assert.NotEmpty(viewModel.NotificationService.Notifications);
+    }
+
+    private static EntityBroker GetEntityBroker(MainWindowViewModel viewModel)
+    {
+        var prop = typeof(MainWindowViewModel).GetProperty(
+            "EntityBroker",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(prop);
+        return Assert.IsType<EntityBroker>(prop!.GetValue(viewModel));
+    }
+
+    private sealed class ThrowingDataAccessLayer : Phantom.Workspaces.Data.IDataAccessLayer
+    {
+        public Task<Phantom.Workspaces.Data.UpdateResult> UpdateAsync(
+            Phantom.Workspaces.Data.UpdateRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: UpdateAsync not supported in test.");
+
+        public Task<Phantom.Workspaces.Data.GetResult> GetAsync(
+            Phantom.Workspaces.Data.GetRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: GetAsync is intentionally unavailable in this test.");
+
+        public Task<Phantom.Workspaces.Data.QueryResult> QueryAsync(
+            Phantom.Workspaces.Data.QueryRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: QueryAsync not supported in test.");
+
+        public Task<Phantom.Workspaces.Data.GetHistoryResult> GetHistoryAsync(
+            Phantom.Workspaces.Data.GetHistoryRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: GetHistoryAsync not supported in test.");
+
+        [Obsolete]
+        public Task<Phantom.Workspaces.Data.ExportResult> ExportAsync(
+            Phantom.Workspaces.Data.ExportRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: ExportAsync not supported in test.");
+
+        public Task<Phantom.Workspaces.Data.GetChangedEntitiesResult> GetChangedEntitiesAsync(
+            Phantom.Workspaces.Data.GetChangedEntitiesRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: GetChangedEntitiesAsync not supported in test.");
+
+        public Task<Phantom.Workspaces.Data.ProcessQueueResult> ProcessQueueAsync(
+            Phantom.Workspaces.Data.ProcessQueueRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: ProcessQueueAsync not supported in test.");
+
+        public Task<Phantom.Workspaces.Data.ComputeEmbeddingsResult> ComputeEmbeddingsAsync(
+            Phantom.Workspaces.Data.ComputeEmbeddingsRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: ComputeEmbeddingsAsync not supported in test.");
+
+        public Task<Phantom.Workspaces.Data.UpdateEmbeddingsResult> UpdateEmbeddingsAsync(
+            Phantom.Workspaces.Data.UpdateEmbeddingsRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("ThrowingDataAccessLayer: UpdateEmbeddingsAsync not supported in test.");
     }
 
     private static StartAgentSessionFromEntityShortcutHandler CreateHandler()

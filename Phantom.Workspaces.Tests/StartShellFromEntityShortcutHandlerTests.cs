@@ -256,6 +256,26 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(".", receivedClientInstance);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_ExecutorSelectionThrows_NotifiesAndReturnsFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot(
+            """{"entity-types":["entity","git-worktree","filesystem-path"],"display-name":{"default":"failing-repo"},"path":"/failing/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        // Use a session opener that throws to simulate executor failure
+        var handler = new StartShellFromEntityShortcutHandler(
+            (_, _, _) => throw new InvalidOperationException("Test: executor unavailable"));
+
+        var handled = await handler.Handle(viewModel, Shortcut.StartShell, entityViewModel);
+
+        Assert.False(handled);
+        Assert.NotEmpty(viewModel.NotificationService.Notifications);
+    }
+
     // ---- Helpers -----------------------------------------------------------------------------
 
     private static EntitySnapshot MakeSnapshot(string json) =>

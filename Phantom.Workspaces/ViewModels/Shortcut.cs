@@ -76,4 +76,6 @@ public sealed class Shortcut : IEquatable<Shortcut>
     {
         return HashCode.Combine(this.Name, this.Label);
     }
+
+    public override string ToString() => this.Name;
 }

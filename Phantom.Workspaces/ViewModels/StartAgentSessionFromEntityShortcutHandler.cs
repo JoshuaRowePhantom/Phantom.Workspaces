@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -143,8 +144,23 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
 
             return null;
         }
-        catch
+        catch (Exception ex)
         {
+            // Previously this catch silently returned null with no diagnostic. Surface the
+            // failure through the notification service so the user knows why no default
+            // manifest was pre-selected. See #1194.
+            mainWindowViewModel.NotificationService.Notify(
+                new Notification(
+                    new TabDescriptor
+                    {
+                        TabId = $"start-agent-session:{entityViewModel.EntityId}",
+                        TabTitle = "Start Agent Session",
+                    },
+                    "Could not resolve default agent manifest",
+                    $"Default manifest lookup failed for {entityViewModel.DisplayName}: {ex.Message}",
+                    DateTime.UtcNow,
+                    RunningState.Idle,
+                    NotificationState.Interesting));
             return null;
         }
     }

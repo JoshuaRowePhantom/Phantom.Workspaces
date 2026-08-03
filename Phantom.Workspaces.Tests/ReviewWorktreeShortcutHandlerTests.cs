@@ -1,6 +1,7 @@
 using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
 using global::Dock.Model.Controls;
@@ -118,6 +119,31 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         await reviewTab.DisposeAsync();
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ShouldApplyTo_GitWorktreeFetchedViaMcpBroker_ReturnsTrue()
+    {
+        await using var vm = new MainWindowViewModel(new UnknownRepositorySource());
+        await vm.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(vm);
+        var entityId = new EntityId("cccccccc-cccc-4ccc-cccc-cccccccccccc");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "broker-review"]],
+              "display-name": { "default": "Broker Review Worktree" }
+            }
+            """);
+
+        var entities = await entityBroker.GetEntitiesAsync(
+            [new GetEntityRequest { EntityId = entityId }]);
+        var entity = Assert.Single(entities);
+
+        var handler = new ReviewWorktreeShortcutHandler();
+        Assert.True(await handler.ShouldApplyTo(vm, Shortcut.Review, entity));
+    }
+
     private static SubscribedEntityViewModel CreateGitWorktreeEntity()
     {
         using var document = JsonDocument.Parse("""
@@ -215,6 +241,43 @@ public sealed class ReviewWorktreeShortcutHandlerTests
         }
 
         return null;
+    }
+
+    private static EntityBroker GetEntityBroker(MainWindowViewModel viewModel)
+    {
+        var prop = typeof(MainWindowViewModel).GetProperty(
+            "EntityBroker",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(prop);
+        return Assert.IsType<EntityBroker>(prop!.GetValue(viewModel));
+    }
+
+    private static async Task<SubscribedEntityViewModel> UpsertEntityAndLoadAsync(
+        EntityBroker entityBroker,
+        EntityId entityId,
+        string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var updateResult = await entityBroker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Add test entity." },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = entityId,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            });
+        var entityResult = Assert.Single(updateResult.EntityResults, r => r.RequestedEntityId == entityId);
+        Assert.NotEqual(UpdateState.Failed, entityResult.UpdateState);
+        return Assert.Single(await entityBroker.GetEntitiesAsync([entityId]));
     }
 }
 

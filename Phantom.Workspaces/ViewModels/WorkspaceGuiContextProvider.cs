@@ -376,7 +376,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             }
 
             var entityId = new EntityId(entityIdValue);
-            var handled = await Dispatcher.UIThread.InvokeAsync(async () =>
+            var invokeResult = await Dispatcher.UIThread.InvokeAsync<(bool Handled, string? Reason)>(async () =>
             {
                 var entities = await this.context.MainWindowViewModel.EntityBroker.GetEntitiesAsync(
                     [new GetEntityRequest
@@ -390,16 +390,24 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 var entity = entities.FirstOrDefault();
                 if (entity is null)
                 {
-                    return false;
+                    return (false, (string?)$"entity {entityId} not found");
                 }
 
-                return await this.context.ShortcutManager.HandleShortcutAsync(
+                return await this.context.ShortcutManager.TryHandleShortcutAsync(
                     this.context.MainWindowViewModel,
                     shortcut,
                     entity);
             });
 
-            return Serialize(new { handled });
+            var handled = invokeResult.Handled;
+            var reason = invokeResult.Reason;
+
+            if (!handled)
+            {
+                return Serialize(new { handled = false, reason });
+            }
+
+            return Serialize(new { handled = true });
         }
 
         // When adding a case here, also update:
