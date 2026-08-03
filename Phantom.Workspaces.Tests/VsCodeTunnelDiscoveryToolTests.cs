@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -36,13 +38,6 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         }
     }
 
-    private string WriteTunnelJson(string tunnelName)
-    {
-        var path = Path.Combine(this.testRoot, "code_tunnel.json");
-        File.WriteAllText(path, $"{{\"tunnel_name\":\"{tunnelName}\"}}");
-        return path;
-    }
-
     private sealed class FakeExecutionContextProvider : ICurrentExecutionContextProvider
     {
         public string ComputerName => "test-machine";
@@ -52,21 +47,37 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         public string EffectiveComputerName => this.ComputerName;
     }
 
+    private sealed class FakeStatusResolver : IVsCodeTunnelStatusResolver
+    {
+        private readonly Func<string, CancellationToken, Task<VsCodeTunnelStatus?>> handler;
+        public List<string> Invocations { get; } = new();
+
+        public FakeStatusResolver(Func<string, CancellationToken, Task<VsCodeTunnelStatus?>> handler)
+        {
+            this.handler = handler;
+        }
+
+        public FakeStatusResolver(VsCodeTunnelStatus? status)
+            : this((_, _) => Task.FromResult(status))
+        {
+        }
+
+        public Task<VsCodeTunnelStatus?> GetTunnelStatusAsync(string cliPath, CancellationToken cancellationToken)
+        {
+            this.Invocations.Add(cliPath);
+            return this.handler(cliPath, cancellationToken);
+        }
+    }
+
     private WorkspaceToolExecutionContext Context(
         IDataAccessLayer dataAccessLayer,
-        string? tunnelJsonPath = null,
         string? cliPath = null)
     {
-        var props = new System.Collections.Generic.List<string>
+        var props = new List<string>
         {
             "\"entity-types\": [\"entity\", \"tool\"]",
             "\"tool-type\": \"vscode-tunnel-discovery\"",
         };
-
-        if (tunnelJsonPath is not null)
-        {
-            props.Add($"\"{VsCodeTunnelDiscoveryTool.TunnelJsonPathProperty}\": {JsonSerializer.Serialize(tunnelJsonPath)}");
-        }
 
         if (cliPath is not null)
         {
@@ -91,129 +102,170 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         "computer-user-profiles", "users", "username", "test-user",
         "computers", "hostname", "test-machine", "vscode-tunnel");
 
+    // ---- New tests specified by #1201 --------------------------------------------------------
+
     [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_ActiveTunnel_UpsertEntityWithCorrectUrl()
+    public async Task Discovery_RunningTunnel_UpsertsVsCodeTunnelEntityFromCliOutput()
     {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "cli-reported-name",
+            TunnelUrl: "https://vscode.dev/tunnel/cli-reported-name",
+            IsConnected: true));
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
-            (_, _) => Task.FromResult(0));
+            tunnelStatusResolver: resolver);
 
-        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
         Assert.True(result.IsSuccess);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.NotNull(entity);
-        Assert.Contains("vscode-tunnel", entity!.Value.GetProperty("entity-types").EnumerateArray().Select(t => t.GetString()));
-        Assert.Equal("my-desktop", entity.Value.GetProperty("tunnel-name").GetString());
-        Assert.Equal("https://vscode.dev/tunnel/my-desktop", entity.Value.GetProperty("tunnel-url").GetString());
+        Assert.Equal("cli-reported-name", entity!.Value.GetProperty("tunnel-name").GetString());
+        Assert.Equal("https://vscode.dev/tunnel/cli-reported-name", entity.Value.GetProperty("tunnel-url").GetString());
         Assert.True(entity.Value.GetProperty("active").GetBoolean());
     }
 
     [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_MissingTunnelJson_ReturnsFailure()
+    public async Task Discovery_NoRunningTunnel_DoesNotUpsertEntity()
     {
-        var noJsonPath = Path.Combine(this.testRoot, "nonexistent.json");
+        var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
-            (_, _) => Task.FromResult(0));
+            tunnelStatusResolver: resolver);
 
-        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: noJsonPath));
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
-        Assert.False(result.IsSuccess);
-        Assert.Contains(noJsonPath, result.ErrorMessage);
+        Assert.True(result.IsSuccess);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.Null(entity);
     }
 
     [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_InvalidTunnelJson_ReturnsFailure()
+    public async Task Discovery_CliMissing_ReturnsFailureWithoutThrowing()
     {
-        var invalidJsonPath = Path.Combine(this.testRoot, "code_tunnel.json");
-        File.WriteAllText(invalidJsonPath, "{\"other_property\": \"value\"}");
+        var resolver = new FakeStatusResolver((_, _) =>
+            throw new Win32Exception("The system cannot find the file specified"));
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
-            (_, _) => Task.FromResult(0));
+            tunnelStatusResolver: resolver);
 
-        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: invalidJsonPath));
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
         Assert.False(result.IsSuccess);
-        Assert.Contains(invalidJsonPath, result.ErrorMessage);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("VS Code CLI", result.ErrorMessage);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.Null(entity);
     }
 
     [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_CliThrows_ReturnsFailure()
+    public async Task Discovery_DoesNotReadCodeTunnelJsonFile()
     {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var tool = new VsCodeTunnelDiscoveryTool(
-            new FakeExecutionContextProvider(),
-            (_, _) => throw new InvalidOperationException("CLI not found"));
+        // Write a stale code_tunnel.json under an isolated USERPROFILE and prove the tool
+        // ignores it — the entity's tunnel-name must come from the fake resolver output.
+        var stalePath = Path.Combine(this.testRoot, ".vscode", "cli", "code_tunnel.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(stalePath)!);
+        File.WriteAllText(stalePath, "{\"tunnel_name\":\"STALE-FROM-FILE\"}");
 
-        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
+        var originalUserProfile = Environment.GetEnvironmentVariable("USERPROFILE");
+        try
+        {
+            Environment.SetEnvironmentVariable("USERPROFILE", this.testRoot);
 
-        Assert.False(result.IsSuccess);
-        Assert.StartsWith("Failed to run VS Code CLI:", result.ErrorMessage);
-        Assert.Contains("CLI not found", result.ErrorMessage);
-        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
-        Assert.Null(entity);
+            var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+                TunnelName: "live-cli-name",
+                TunnelUrl: "https://vscode.dev/tunnel/live-cli-name",
+                IsConnected: true));
+            var dataAccessLayer = new InMemoryDataAccessLayer();
+            var tool = new VsCodeTunnelDiscoveryTool(
+                new FakeExecutionContextProvider(),
+                tunnelStatusResolver: resolver);
+
+            var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+            Assert.True(result.IsSuccess);
+            var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+            Assert.NotNull(entity);
+            Assert.Equal("live-cli-name", entity!.Value.GetProperty("tunnel-name").GetString());
+            Assert.DoesNotContain("STALE-FROM-FILE", entity.Value.GetProperty("tunnel-name").GetString());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("USERPROFILE", originalUserProfile);
+        }
     }
 
     [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_NoTunnel_NoEntityChanges()
+    public async Task Discovery_RunsCliOffCallingThread()
     {
-        var noJsonPath = Path.Combine(this.testRoot, "nonexistent.json");
+        // The resolver invocation is awaited (not blocked). We confirm the tool returns before
+        // the resolver's task completes when we control completion via a TaskCompletionSource,
+        // and that ExecuteAsync itself yields to the resolver awaitable.
+        var tcs = new TaskCompletionSource<VsCodeTunnelStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolver = new FakeStatusResolver((_, _) => tcs.Task);
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
-            (_, _) => Task.FromResult(0));
+            tunnelStatusResolver: resolver);
 
-        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: noJsonPath));
+        var executeTask = tool.ExecuteAsync(this.Context(dataAccessLayer));
+        Assert.False(executeTask.IsCompleted);
 
-        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
-        Assert.Null(entity);
+        tcs.SetResult(new VsCodeTunnelStatus("late", "https://vscode.dev/tunnel/late", true));
+        var result = await executeTask;
+        Assert.True(result.IsSuccess);
     }
+
+    // ---- Retained coverage (rewritten to use the resolver seam) -----------------------------
 
     [Fact]
     public async Task VsCodeTunnelDiscoveryTool_CliPathOverride()
     {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
-        string? capturedCliPath = null;
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus("my-desktop", "https://vscode.dev/tunnel/my-desktop", true));
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
-            (cliPath, _) =>
-            {
-                capturedCliPath = cliPath;
-                return Task.FromResult(0);
-            });
+            tunnelStatusResolver: resolver);
 
-        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath, cliPath: "/custom/code"));
+        await tool.ExecuteAsync(this.Context(dataAccessLayer, cliPath: "/custom/code"));
 
-        Assert.Equal("/custom/code", capturedCliPath);
-        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
-        Assert.NotNull(entity);
+        Assert.Single(resolver.Invocations);
+        Assert.Equal("/custom/code", resolver.Invocations[0]);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_DefaultCliPath_UsesLocatorResolvedPath()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus("my-desktop", "https://vscode.dev/tunnel/my-desktop", true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver,
+            defaultCliPathResolver: () => @"C:\fake\code.cmd");
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Single(resolver.Invocations);
+        Assert.Equal(@"C:\fake\code.cmd", resolver.Invocations[0]);
     }
 
     [Fact]
     public async Task VsCodeTunnelDiscoveryTool_DeterministicEntityId()
     {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus("my-desktop", "https://vscode.dev/tunnel/my-desktop", true));
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
-            (_, _) => Task.FromResult(0));
+            tunnelStatusResolver: resolver);
 
         var dataAccessLayer1 = new InMemoryDataAccessLayer();
-        await tool.ExecuteAsync(this.Context(dataAccessLayer1, tunnelJsonPath: tunnelJsonPath));
+        await tool.ExecuteAsync(this.Context(dataAccessLayer1));
         var entity1 = await GetEntityByNameAsync(dataAccessLayer1, ExpectedEntityName);
 
         var dataAccessLayer2 = new InMemoryDataAccessLayer();
-        await tool.ExecuteAsync(this.Context(dataAccessLayer2, tunnelJsonPath: tunnelJsonPath));
+        await tool.ExecuteAsync(this.Context(dataAccessLayer2));
         var entity2 = await GetEntityByNameAsync(dataAccessLayer2, ExpectedEntityName);
 
         Assert.NotNull(entity1);
@@ -221,62 +273,5 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         Assert.Equal(
             entity1!.Value.GetProperty("entity-id").GetString(),
             entity2!.Value.GetProperty("entity-id").GetString());
-    }
-
-    [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_DefaultCliPath_UsesLocatorResolvedPath()
-    {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
-        string? capturedCliPath = null;
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var tool = new VsCodeTunnelDiscoveryTool(
-            new FakeExecutionContextProvider(),
-            (cliPath, _) =>
-            {
-                capturedCliPath = cliPath;
-                return Task.FromResult(0);
-            },
-            defaultCliPathResolver: () => @"C:\fake\code.cmd");
-
-        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
-
-        Assert.Equal(@"C:\fake\code.cmd", capturedCliPath);
-    }
-
-    [Fact]
-    public async Task VsCodeTunnelDiscoveryTool_CliNonZeroExit_UpsertEntityWithActiveFalse()
-    {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        var tool = new VsCodeTunnelDiscoveryTool(
-            new FakeExecutionContextProvider(),
-            (_, _) => Task.FromResult(1)); // non-zero exit, no throw
-
-        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
-
-        Assert.True(result.IsSuccess);
-        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
-        Assert.NotNull(entity);
-        Assert.False(entity!.Value.GetProperty("active").GetBoolean());
-    }
-
-    [Fact]
-    [Trait("Category", "Integration")]
-    public async Task VsCodeTunnelDiscoveryTool_DefaultCli_TunnelStatusNonZeroExit_LogsWarning()
-    {
-        var tunnelJsonPath = this.WriteTunnelJson("my-desktop");
-        var testLogger = new TestLogger<VsCodeTunnelDiscoveryTool>();
-        var dataAccessLayer = new InMemoryDataAccessLayer();
-        // nonexistent_cli.cmd ends with .cmd, so BuildRunProcessParameters wraps it with
-        // cmd.exe /c, which exits non-zero (file not found). cmd.exe writes error to the
-        // redirected stderr handle so it does not bleed onto the test-host console.
-        var tool = new VsCodeTunnelDiscoveryTool(
-            new FakeExecutionContextProvider(),
-            defaultCliPathResolver: () => "nonexistent_cli.cmd",
-            logger: testLogger);
-
-        await tool.ExecuteAsync(this.Context(dataAccessLayer, tunnelJsonPath: tunnelJsonPath));
-
-        Assert.Contains(testLogger.Entries, e => e.Level == LogLevel.Warning);
     }
 }
