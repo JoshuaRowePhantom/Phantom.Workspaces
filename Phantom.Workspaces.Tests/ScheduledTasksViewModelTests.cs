@@ -489,6 +489,70 @@ public sealed class ScheduledTasksViewModelTests
         Assert.All(observedThreadIds, id => Assert.Equal(uiThreadId, id));
     }
 
+    [AvaloniaFact]
+    public async Task RefreshAsync_DoesNotBlockForegroundScheduler_WhileHistoryLoads()
+    {
+        // #1203: RefreshAsync should hand off history population to a background thread and
+        // yield the foreground scheduler while the query and JSON parsing run, so the UI
+        // thread can continue processing other posted work.
+
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        // Seed a moderate amount of history so the off-thread work is meaningful.
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var writer = new ToolExecutionResultWriter(dataAccessLayer);
+        for (var i = 0; i < 50; i++)
+        {
+            var handle = await writer.StartAsync(new[] { "host", $"machine-{i % 5}" }, $"tool-{i % 10}", TestContext.Current.CancellationToken);
+            await writer.CompleteAsync(handle, success: i % 2 == 0, cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        // Capture the foreground scheduler on the pump thread.
+        var schedulerTcs = new TaskCompletionSource<TaskScheduler>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => schedulerTcs.SetResult(TaskScheduler.FromCurrentSynchronizationContext()), null);
+        var foregroundScheduler = await schedulerTcs.Task;
+
+        // Also build the view model on the pump thread so any construction-time captures use it.
+        var viewModelTcs = new TaskCompletionSource<ScheduledTasksViewModel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => viewModelTcs.SetResult(new ScheduledTasksViewModel(
+            broker,
+            scheduledToolHost: host,
+            foregroundScheduler: foregroundScheduler)), null);
+        using var viewModel = await viewModelTcs.Task;
+
+        // Kick off RefreshAsync from the pump thread; capture the returned Task.
+        var refreshTaskTcs = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(
+            _ => refreshTaskTcs.SetResult(viewModel.RefreshAsync(TestContext.Current.CancellationToken)),
+            null);
+        var refreshTask = await refreshTaskTcs.Task;
+
+        // Now that RefreshAsync has yielded control back to the pump (because it hits Task.Run
+        // inside RefreshHistoryAsync), we should be able to interleave another posted item.
+        var interleavedRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => interleavedRan.SetResult(), null);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+        var winner = await Task.WhenAny(interleavedRan.Task, refreshTask).WaitAsync(timeoutCts.Token);
+
+        // The interleaved item must complete before (or at the same tick as) RefreshAsync,
+        // proving the foreground scheduler was not held while history loaded off-thread.
+        Assert.Same(interleavedRan.Task, winner);
+
+        await refreshTask.WaitAsync(timeoutCts.Token);
+
+        Assert.NotNull(viewModel.ScheduledToolsRunning);
+        Assert.NotEmpty(viewModel.ScheduledToolsRunning!.Tools);
+    }
+
     private static async Task SeedAsync(
         EntityBroker broker,
         string json)

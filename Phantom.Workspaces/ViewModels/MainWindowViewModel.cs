@@ -562,7 +562,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.scheduledToolHost,
                 action => Dispatcher.UIThread.Post(action),
                 this.logDirectoryProvider,
-                new Phantom.Workspaces.Install.RealProcessLauncher())
+                new Phantom.Workspaces.Install.RealProcessLauncher(),
+                TaskScheduler.FromCurrentSynchronizationContext())
             : null;
 
     private EntityId HostProfileEntityId =>
@@ -676,7 +677,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.ScheduledToolsRunning = new ScheduledToolsRunningViewModel(
             this.scheduledToolHost,
             dataAccessLayer,
-            action => Dispatcher.UIThread.Post(action));
+            action => Dispatcher.UIThread.Post(action),
+            TaskScheduler.FromCurrentSynchronizationContext());
         _ = this.ScheduledToolsRunning.RefreshHistoryAsync();
 
         this.scheduledToolRunner = ScheduledTools.ScheduledToolRunner.Create(

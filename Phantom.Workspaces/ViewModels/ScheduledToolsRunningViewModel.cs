@@ -57,15 +57,18 @@ public sealed class ToolRowViewModel : ViewModelBase
     private string? lastRunStatus;
     private bool isExpanded;
     private readonly Func<CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadRecentRuns;
+    private readonly TaskScheduler? foregroundScheduler;
 
     public ToolRowViewModel(
         string toolType,
         string host,
-        Func<CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadRecentRuns)
+        Func<CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadRecentRuns,
+        TaskScheduler? foregroundScheduler = null)
     {
         this.ToolType = toolType ?? throw new ArgumentNullException(nameof(toolType));
         this.Host = host ?? throw new ArgumentNullException(nameof(host));
         this.loadRecentRuns = loadRecentRuns ?? throw new ArgumentNullException(nameof(loadRecentRuns));
+        this.foregroundScheduler = foregroundScheduler;
         this.ExpandCommand = new RelayCommand(_ => this.OnExpandCommandExecuted());
     }
 
@@ -139,15 +142,29 @@ public sealed class ToolRowViewModel : ViewModelBase
     /// <summary>Loads (or reloads) the recent run history into <see cref="RecentRuns"/>.</summary>
     public async Task LoadRecentRunsAsync(CancellationToken cancellationToken = default)
     {
-        // Do NOT use ConfigureAwait(false): the continuation below mutates RecentRuns,
-        // which is bound to a TreeView, so it must resume on the UI synchronization
-        // context. Matches the RefreshHistoryAsync/MergeHistory convention below.
-        var runs = await this.loadRecentRuns(cancellationToken);
-        this.RecentRuns.Clear();
-        foreach (var run in runs)
-        {
-            this.RecentRuns.Add(run);
-        }
+        // #1203: Run the loader off the UI thread and marshal the RecentRuns mutation back
+        // via the injected foreground TaskScheduler (or a scheduler captured from the
+        // current SynchronizationContext when none was injected). This mirrors the
+        // AgentViewModel pattern established for #1122 and stops the UI freezing while
+        // the query runs and rows are enumerated.
+        var scheduler = ScheduledToolsRunningViewModel.ResolveForegroundScheduler(this.foregroundScheduler);
+
+        var loadTask = Task.Run(
+            async () => await this.loadRecentRuns(cancellationToken).ConfigureAwait(false),
+            cancellationToken);
+
+        await loadTask.ContinueWith(
+            t =>
+            {
+                this.RecentRuns.Clear();
+                foreach (var run in t.Result)
+                {
+                    this.RecentRuns.Add(run);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            scheduler).ConfigureAwait(false);
     }
 }
 
@@ -161,23 +178,51 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
     private readonly ScheduledToolHost host;
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Action<Action> dispatch;
+    private readonly TaskScheduler? foregroundScheduler;
 
     /// <param name="host">The host whose running and historical tool executions are displayed.</param>
     /// <param name="dataAccessLayer">Used to query <c>tool-execution-result</c> entities for run history.</param>
     /// <param name="dispatch">
-    /// Marshals a refresh onto the UI thread. Defaults to running synchronously (used in tests); the
-    /// GUI passes a dispatcher post so the observable collection is updated on the UI thread.
+    /// Marshals a refresh of live in-flight executions onto the UI thread. Defaults to running
+    /// synchronously (used in tests); the GUI passes a dispatcher post so the observable
+    /// collection is updated on the UI thread.
+    /// </param>
+    /// <param name="foregroundScheduler">
+    /// #1203: Foreground <see cref="TaskScheduler"/> used by <see cref="RefreshHistoryAsync"/> and
+    /// <see cref="ToolRowViewModel.LoadRecentRunsAsync"/> to marshal the final collection mutations
+    /// back onto the UI thread while the query and JSON parsing run off-thread. When null, the
+    /// caller's <see cref="SynchronizationContext"/> is captured at each call site to preserve
+    /// legacy behaviour; production wires the Avalonia dispatcher scheduler here.
     /// </param>
     public ScheduledToolsRunningViewModel(
         ScheduledToolHost host,
         IDataAccessLayer dataAccessLayer,
-        Action<Action>? dispatch = null)
+        Action<Action>? dispatch = null,
+        TaskScheduler? foregroundScheduler = null)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.dispatch = dispatch ?? (action => action());
+        this.foregroundScheduler = foregroundScheduler;
         this.host.RunningExecutionsChanged += this.OnRunningExecutionsChanged;
         this.Refresh();
+    }
+
+    /// <summary>
+    /// Resolves the foreground scheduler used for marshaling UI mutations: uses the injected
+    /// scheduler when provided, otherwise falls back to the current
+    /// <see cref="SynchronizationContext"/>, and finally to <see cref="TaskScheduler.Default"/>.
+    /// </summary>
+    internal static TaskScheduler ResolveForegroundScheduler(TaskScheduler? injected)
+    {
+        if (injected is not null)
+        {
+            return injected;
+        }
+
+        return SynchronizationContext.Current is not null
+            ? TaskScheduler.FromCurrentSynchronizationContext()
+            : TaskScheduler.Default;
     }
 
     /// <summary>All known tool rows (running or with recorded history), ordered by host then tool type.</summary>
@@ -226,55 +271,67 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
     }
 
     /// <summary>
-    /// Queries all top-level <c>tool-execution-result</c> entitiesand merges them into
-    /// <see cref="Tools"/>, setting <see cref="ToolRowViewModel.LastRunStatus"/> on each row.
+    /// Queries all top-level <c>tool-execution-result</c> entities off the UI thread and merges
+    /// them into <see cref="Tools"/> on the injected foreground scheduler, setting
+    /// <see cref="ToolRowViewModel.LastRunStatus"/> on each row. #1203: the query and JSON parsing
+    /// run on a thread-pool thread so the UI does not freeze while history is populated; only the
+    /// final <see cref="MergeHistory"/> mutation is marshaled back onto the foreground scheduler.
     /// </summary>
     public async Task RefreshHistoryAsync(CancellationToken cancellationToken = default)
     {
-        var queryResult = await this.dataAccessLayer.QueryAsync(
-            new QueryRequest
+        var scheduler = ResolveForegroundScheduler(this.foregroundScheduler);
+
+        var loadTask = Task.Run(
+            async () =>
             {
-                Clauses =
-                [
-                    new TopLevelQueryClause
+                var queryResult = await this.dataAccessLayer.QueryAsync(
+                    new QueryRequest
                     {
-                        ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
-                        Clause = new EntityTypeQueryClause
-                        {
-                            EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
-                        },
+                        Clauses =
+                        [
+                            new TopLevelQueryClause
+                            {
+                                ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
+                                Clause = new EntityTypeQueryClause
+                                {
+                                    EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                                },
+                            },
+                        ],
                     },
-                ],
+                    cancellationToken).ConfigureAwait(false);
+
+                // Parse all top-level run entities off the UI thread.
+                var topLevelRuns = queryResult.Batches
+                    .SelectMany(batch => batch.Entities)
+                    .Select(entity => entity.Data)
+                    .OfType<JsonElement>()
+                    .Select(ParseTopLevelRun)
+                    .Where(r => r is not null)
+                    .Select(r => r!.Value)
+                    .OrderByDescending(r => r.StartTime)
+                    .ToArray();
+
+                // Group by (host, toolType) to find LastRunStatus, still off the UI thread.
+                var latestByKey = new Dictionary<(string Host, string ToolType), string>();
+                foreach (var run in topLevelRuns)
+                {
+                    var key = (run.HostLabel, run.ToolName);
+                    if (!latestByKey.ContainsKey(key))
+                    {
+                        latestByKey[key] = run.Status ?? "running";
+                    }
+                }
+
+                return latestByKey;
             },
             cancellationToken);
 
-        // Parse all top-level run entities (SuffixComponents.Length == 2: [toolName, startTimestamp]).
-        var topLevelRuns = queryResult.Batches
-            .SelectMany(batch => batch.Entities)
-            .Select(entity => entity.Data)
-            .OfType<JsonElement>()
-            .Select(ParseTopLevelRun)
-            .Where(r => r is not null)
-            .Select(r => r!.Value)
-            .OrderByDescending(r => r.StartTime)
-            .ToArray();
-
-        // Group by (host, toolType) to find LastRunStatus.
-        var latestByKey = new Dictionary<(string Host, string ToolType), string>(
-            EqualityComparer<(string, string)>.Default);
-
-        foreach (var run in topLevelRuns)
-        {
-            var key = (run.HostLabel, run.ToolName);
-            if (!latestByKey.ContainsKey(key))
-            {
-                latestByKey[key] = run.Status ?? "running";
-            }
-        }
-
-        // Merge into the Tools collection on the captured context (must be called without
-        // ConfigureAwait(false) so the continuation stays on the UI synchronization context).
-        MergeHistory(latestByKey);
+        await loadTask.ContinueWith(
+            t => this.MergeHistory(t.Result),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            scheduler).ConfigureAwait(false);
     }
 
     private void MergeHistory(Dictionary<(string Host, string ToolType), string> latestByKey)
@@ -313,7 +370,8 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
         return new ToolRowViewModel(
             toolType,
             host,
-            cancellationToken => this.LoadRecentRunsForToolAsync(capturedHost, capturedToolType, cancellationToken));
+            cancellationToken => this.LoadRecentRunsForToolAsync(capturedHost, capturedToolType, cancellationToken),
+            this.foregroundScheduler);
     }
 
     private async Task<IReadOnlyList<RunSummaryViewModel>> LoadRecentRunsForToolAsync(

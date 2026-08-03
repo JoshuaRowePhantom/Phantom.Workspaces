@@ -126,12 +126,13 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
         ScheduledToolHost? scheduledToolHost = null,
         Action<Action>? dispatch = null,
         ILogDirectoryProvider? logDirectoryProvider = null,
-        IProcessLauncher? processLauncher = null)
+        IProcessLauncher? processLauncher = null,
+        TaskScheduler? foregroundScheduler = null)
     {
         this.entityBroker = entityBroker ?? throw new ArgumentNullException(nameof(entityBroker));
         this.entityReferenceSearch = new EntityReferenceSearch(entityBroker);
         this.ScheduledToolsRunning = scheduledToolHost is not null
-            ? new ScheduledToolsRunningViewModel(scheduledToolHost, entityBroker.EntityRepository.DataAccessLayer, dispatch)
+            ? new ScheduledToolsRunningViewModel(scheduledToolHost, entityBroker.EntityRepository.DataAccessLayer, dispatch, foregroundScheduler)
             : null;
         this.pauseStateService = pauseStateService;
         this.hostEntityId = hostEntityId;
@@ -291,6 +292,9 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(this.HasScheduledTasks));
             if (this.ScheduledToolsRunning is not null)
             {
+                // #1203: RefreshHistoryAsync runs the query and JSON parsing off the UI thread
+                // and marshals the final merge via the injected foreground scheduler; awaiting
+                // it here yields the foreground scheduler while the load is in progress.
                 await this.ScheduledToolsRunning.RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
                 this.SyncStatusIndicators();
                 this.RaisePropertyChanged(nameof(this.SelectedToolRow));
