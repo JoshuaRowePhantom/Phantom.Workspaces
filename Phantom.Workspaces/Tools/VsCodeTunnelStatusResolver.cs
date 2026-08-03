@@ -7,53 +7,64 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Phantom.Workspaces.Tools;
 
 /// <summary>
-/// Default <see cref="IVsCodeTunnelStatusResolver"/>. Invokes <c>code tunnel status --output json</c>
-/// (preferred) with a fallback to the legacy text form, and parses the tunnel name / URL /
-/// connected state out of the captured stdout.
+/// Default <see cref="IVsCodeTunnelStatusResolver"/>. Dispatches <c>code tunnel status --output json</c>
+/// (preferred) with a fallback to the legacy text form via the shared <see cref="VsCodeCliInvoker"/>,
+/// and parses the tunnel name / URL / connected state out of the captured stdout. The full CLI
+/// result (exit code, stdout, stderr) is always returned via <see cref="VsCodeTunnelResolution"/>
+/// so the caller can surface it to the user on failure.
 /// </summary>
 public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
 {
+    private readonly VsCodeCliInvoker invoker;
     private readonly ILogger logger;
-    private readonly Func<string, string, CancellationToken, Task<ProcessResult>> processRunner;
 
     public VsCodeTunnelStatusResolver(
-        ILogger? logger = null,
-        Func<string, string, CancellationToken, Task<ProcessResult>>? processRunner = null)
+        VsCodeCliInvoker? invoker = null,
+        ILogger? logger = null)
     {
         this.logger = logger ?? NullLogger.Instance;
-        this.processRunner = processRunner ?? this.DefaultRunAsync;
+        this.invoker = invoker ?? new VsCodeCliInvoker(notificationService: null, logger: this.logger);
     }
 
-    public async Task<VsCodeTunnelStatus?> GetTunnelStatusAsync(string cliPath, CancellationToken cancellationToken)
+    public async Task<VsCodeTunnelResolution> ResolveAsync(string cliPath, CancellationToken cancellationToken)
     {
-        ProcessResult jsonResult;
+        VsCodeCliResult jsonResult;
         try
         {
-            jsonResult = await this.processRunner(cliPath, "tunnel status --output json", cancellationToken).ConfigureAwait(false);
+            jsonResult = await this.invoker.RunAsync(
+                cliPath,
+                "tunnel status --output json",
+                operationDescription: "vscode tunnel status",
+                VsCodeCliReporting.LogOnly,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (Win32Exception ex)
         {
-            this.logger.LogWarning(ex, "VS Code CLI ('code') could not be launched at '{CliPath}'.", cliPath);
-            return null;
+            return new VsCodeTunnelResolution(Status: null, CliResult: null, CliLaunchError: ex.Message);
         }
 
         if (TryParseJsonStatus(jsonResult.StandardOut, out var jsonStatus))
         {
-            return jsonStatus;
+            return new VsCodeTunnelResolution(jsonStatus, jsonResult, CliLaunchError: null);
         }
 
-        ProcessResult textResult;
+        VsCodeCliResult textResult;
         try
         {
-            textResult = await this.processRunner(cliPath, "tunnel status", cancellationToken).ConfigureAwait(false);
+            textResult = await this.invoker.RunAsync(
+                cliPath,
+                "tunnel status",
+                operationDescription: "vscode tunnel status",
+                VsCodeCliReporting.LogOnly,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (Win32Exception ex)
         {
-            this.logger.LogWarning(ex, "VS Code CLI ('code') could not be launched at '{CliPath}'.", cliPath);
-            return null;
+            return new VsCodeTunnelResolution(Status: null, CliResult: jsonResult, CliLaunchError: ex.Message);
         }
 
-        return TryParseTextStatus(textResult.StandardOut, textResult.ExitCode);
+        var textStatus = TryParseTextStatus(textResult.StandardOut, textResult.ExitCode);
+        return new VsCodeTunnelResolution(textStatus, textResult, CliLaunchError: null);
     }
 
     /// <summary>
@@ -68,7 +79,6 @@ public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
             return false;
         }
 
-        // The CLI may emit multiple JSON objects (one per line). Try each candidate.
         foreach (var line in stdout.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
         {
             var trimmed = line.Trim();
@@ -90,7 +100,6 @@ public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
             }
         }
 
-        // Also try the whole document (may be pretty-printed JSON spanning multiple lines).
         try
         {
             using var document = JsonDocument.Parse(stdout);
@@ -114,7 +123,6 @@ public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
             return false;
         }
 
-        // The CLI wraps the payload in a "tunnel" object on newer versions.
         var payload = element;
         if (element.TryGetProperty("tunnel", out var wrapped) && wrapped.ValueKind == JsonValueKind.Object)
         {
@@ -204,8 +212,6 @@ public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
             return null;
         }
 
-        // Consider the tunnel connected when the CLI exited zero and the output mentions
-        // "connected"/"online"/"running" (or does not mention an explicit disconnect state).
         var isConnected = exitCode == 0
             && !stdout.Contains("disconnected", StringComparison.OrdinalIgnoreCase);
 
@@ -233,15 +239,5 @@ public sealed class VsCodeTunnelStatusResolver : IVsCodeTunnelStatusResolver
         }
 
         return null;
-    }
-
-    private async Task<ProcessResult> DefaultRunAsync(string cliPath, string arguments, CancellationToken cancellationToken)
-    {
-        var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, arguments);
-        return await ProcessRunner.RunAndLogAsync(
-            parameters,
-            this.logger,
-            operationDescription: $"vscode {arguments}",
-            cancellationToken).ConfigureAwait(false);
     }
 }

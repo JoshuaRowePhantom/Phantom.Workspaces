@@ -4,15 +4,17 @@ using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// A built-in scheduled tool that discovers any active VS Code dev tunnel for the current
 /// user/machine by invoking <c>code tunnel status</c> and parsing its stdout, then upserts a
-/// single <c>vscode-tunnel</c> entity under the user-computer-profile, named at the fixed leaf
-/// <c>vscode-tunnel</c>. When the CLI reports that no tunnel is running the tool does not upsert
-/// any entity.
+/// single <c>vscode-tunnel</c> entity under the user-computer-profile. All CLI invocations are
+/// routed through the shared <see cref="VsCodeCliInvoker"/> so stdout/stderr/exit code are
+/// logged and surfaced to the user on failure. When the CLI reports that no tunnel is running
+/// the tool does not upsert any entity.
 /// </summary>
 public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 {
@@ -28,11 +30,15 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
         IVsCodeTunnelStatusResolver? tunnelStatusResolver = null,
         Func<string>? defaultCliPathResolver = null,
+        INotificationService? notificationService = null,
         ILogger<VsCodeTunnelDiscoveryTool>? logger = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
         this.logger = logger ?? NullLogger<VsCodeTunnelDiscoveryTool>.Instance;
-        this.tunnelStatusResolver = tunnelStatusResolver ?? new VsCodeTunnelStatusResolver(this.logger);
+        this.tunnelStatusResolver = tunnelStatusResolver
+            ?? new VsCodeTunnelStatusResolver(
+                invoker: new VsCodeCliInvoker(notificationService: notificationService, logger: this.logger),
+                logger: this.logger);
         this.defaultCliPathResolver = defaultCliPathResolver ?? VsCodeCliLocator.ResolveDefaultCliPath;
     }
 
@@ -44,11 +50,11 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
         var cliPath = this.ResolveCliPath(context.Tool.Data);
 
-        VsCodeTunnelStatus? status;
+        VsCodeTunnelResolution resolution;
         try
         {
-            status = await this.tunnelStatusResolver
-                .GetTunnelStatusAsync(cliPath, context.CancellationToken)
+            resolution = await this.tunnelStatusResolver
+                .ResolveAsync(cliPath, context.CancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Win32Exception ex)
@@ -61,8 +67,21 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             return WorkspaceToolExecutionResult.Failure($"Failed to run 'code tunnel status': {ex.Message}");
         }
 
-        if (status is null)
+        if (resolution.CliResult is null)
         {
+            return WorkspaceToolExecutionResult.Failure(
+                $"VS Code CLI ('code') not found or not runnable: {resolution.CliLaunchError}");
+        }
+
+        if (resolution.Status is null)
+        {
+            var cli = resolution.CliResult;
+            if (cli.ExitCode != 0)
+            {
+                return WorkspaceToolExecutionResult.Failure(
+                    $"'code tunnel status' failed (exit {cli.ExitCode}).\nStdout:\n{cli.StandardOut}\nStderr:\n{cli.StandardError}");
+            }
+
             // No tunnel currently running — do not upsert a stale entity.
             return WorkspaceToolExecutionResult.Success();
         }
@@ -71,7 +90,7 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
         var entityId = CreateDeterministicEntityId(entityName);
 
         using var entityDataDocument = JsonDocument.Parse(
-            BuildVsCodeTunnelJson(entityId, entityName, status.TunnelName, status.TunnelUrl, status.IsConnected));
+            BuildVsCodeTunnelJson(entityId, entityName, resolution.Status.TunnelName, resolution.Status.TunnelUrl, resolution.Status.IsConnected));
 
         await context.DataAccessLayer.UpdateAsync(
             new UpdateRequest

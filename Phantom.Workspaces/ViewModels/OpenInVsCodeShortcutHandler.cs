@@ -7,6 +7,8 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Tools;
@@ -15,14 +17,18 @@ namespace Phantom.Workspaces.ViewModels;
 
 /// <summary>
 /// Handles <see cref="Shortcut.VsCode"/> on filesystem entities (git-worktree, filesystem-path).
-/// For local entities, runs <c>code &lt;path&gt;</c>. For remote entities with a vscode-tunnel,
-/// opens <c>vscode://vscode-remote/tunnel+&lt;tunnel-name&gt;/&lt;path&gt;</c> via shell execute.
+/// For local entities, runs <c>code &lt;path&gt;</c> through the shared
+/// <see cref="VsCodeCliInvoker"/> so stdout, stderr, and exit code are always logged and
+/// surfaced to the user on failure. For remote entities with a vscode-tunnel, opens
+/// <c>vscode://vscode-remote/tunnel+&lt;tunnel-name&gt;/&lt;path&gt;</c> via shell execute and
+/// logs / notifies on launch failure.
 /// </summary>
 public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
 {
     private readonly Func<string> cliLocator;
-    private readonly Func<string, string[], CancellationToken, Task<ProcessResult>>? processRunner;
+    private readonly Func<RunProcessParameters, CancellationToken, Task<ProcessResult>>? processRunner;
     private readonly Func<string, Task>? urlLauncher;
+    private readonly ILogger logger;
 
     /// <summary>Production constructor: uses default VS Code CLI locator and process runner.</summary>
     public OpenInVsCodeShortcutHandler()
@@ -30,17 +36,20 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         this.cliLocator = VsCodeCliLocator.ResolveDefaultCliPath;
         this.processRunner = null;
         this.urlLauncher = null;
+        this.logger = NullLogger.Instance;
     }
 
     /// <summary>Test constructor: injects custom locator, process runner, and URL launcher.</summary>
     internal OpenInVsCodeShortcutHandler(
         Func<string> cliLocator,
-        Func<string, string[], CancellationToken, Task<ProcessResult>>? processRunner,
-        Func<string, Task>? urlLauncher)
+        Func<RunProcessParameters, CancellationToken, Task<ProcessResult>>? processRunner,
+        Func<string, Task>? urlLauncher,
+        ILogger? logger = null)
     {
         this.cliLocator = cliLocator;
         this.processRunner = processRunner;
         this.urlLauncher = urlLauncher;
+        this.logger = logger ?? NullLogger.Instance;
     }
 
     public override async ValueTask<bool> ShouldApplyTo(
@@ -116,18 +125,6 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
         try
         {
             cliPath = this.cliLocator();
-
-            if (this.processRunner is not null)
-            {
-                await this.processRunner(cliPath, [path], CancellationToken.None);
-            }
-            else
-            {
-                var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, path);
-                await ProcessRunner.RunProcessAsync(parameters, CancellationToken.None);
-            }
-
-            return true;
         }
         catch (Win32Exception)
         {
@@ -143,6 +140,27 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
                     DateTime.UtcNow,
                     RunningState.Idle,
                     NotificationState.Interesting));
+            return false;
+        }
+
+        var invoker = new VsCodeCliInvoker(
+            notificationService: mainWindowViewModel.NotificationService,
+            logger: this.logger,
+            processRunner: this.processRunner);
+
+        try
+        {
+            await invoker.RunAsync(
+                cliPath,
+                path,
+                operationDescription: $"open {path}",
+                VsCodeCliReporting.LogAndReportOnFailure,
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (Win32Exception)
+        {
+            // Invoker already logged and notified via TryNotify on Win32Exception.
             return false;
         }
     }
@@ -166,16 +184,36 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
 
         var url = $"vscode://vscode-remote/tunnel+{tunnelName}{path}";
 
-        if (this.urlLauncher is not null)
+        try
         {
-            await this.urlLauncher(url);
-        }
-        else
-        {
-            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
-        }
+            if (this.urlLauncher is not null)
+            {
+                await this.urlLauncher(url).ConfigureAwait(false);
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+            }
 
-        return true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            this.logger.LogError(ex, "Failed to launch VS Code remote URI '{Url}': {Message}", url, ex.Message);
+            mainWindowViewModel.NotificationService.Notify(
+                new Notification(
+                    new TabDescriptor
+                    {
+                        TabId = $"vscode-cli:remote:{tunnelName}",
+                        TabTitle = "VS Code",
+                    },
+                    "VS Code remote launch failed",
+                    $"Could not open '{url}': {ex.Message}",
+                    DateTime.UtcNow,
+                    RunningState.Idle,
+                    NotificationState.Interesting));
+            return false;
+        }
     }
 
     private static string? TryGetPath(SubscribedEntityViewModel entityViewModel)
@@ -262,8 +300,6 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return null;
         }
 
-        // Extract the user segment from the profile's primary name
-        // Expected format: ["computer-user-profiles", "users", "username", "<user>", "computers", "hostname", "<host>"]
         var primaryNameElement = namesElement[0];
         if (primaryNameElement.ValueKind != JsonValueKind.Array)
         {
@@ -275,10 +311,6 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             .Select(static e => e.GetString()!)
             .ToArray();
 
-        // Extract the user segment. Local profiles use
-        // ["computer-user-profiles", "users", "username", <user>, ...] so scan for
-        // "username" first. Accept "user-computer-profile" as a secondary marker for
-        // profiles that use the singular naming style. See #1194.
         string? userSegment = null;
         for (int i = 0; i < nameParts.Length - 1; i++)
         {
@@ -294,7 +326,6 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             return null;
         }
 
-        // Query for vscode-tunnel entity: [<user>, "vscode-tunnel"]
         var tunnelName = new EntityName([userSegment, "vscode-tunnel"]);
         var request = new GetEntityRequest { EntityName = tunnelName };
 

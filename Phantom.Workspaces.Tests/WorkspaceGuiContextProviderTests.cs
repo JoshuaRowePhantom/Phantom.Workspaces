@@ -735,7 +735,7 @@ public sealed class WorkspaceGuiContextProviderTests
         viewModel.ShortcutManager.ReplaceShortcutHandlerForTesting<OpenInVsCodeShortcutHandler>(
             new OpenInVsCodeShortcutHandler(
                 cliLocator: () => "code",
-                processRunner: (_, _, _) => Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty)),
+                processRunner: (_, _) => Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty)),
                 urlLauncher: null));
 
         var entityBroker = GetEntityBroker(viewModel);

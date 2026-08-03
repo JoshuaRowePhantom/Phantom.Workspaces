@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,19 +10,26 @@ namespace Phantom.Workspaces.Tests;
 public sealed class VsCodeTunnelStatusResolverTests
 {
     private static VsCodeTunnelStatusResolver Resolver(
-        System.Collections.Generic.Dictionary<string, ProcessResult> byArgs)
+        Dictionary<string, ProcessResult> byArgs)
     {
-        return new VsCodeTunnelStatusResolver(
+        var invoker = new VsCodeCliInvoker(
+            notificationService: null,
             logger: null,
-            processRunner: (cliPath, args, ct) =>
+            processRunner: (parameters, ct) =>
             {
-                if (byArgs.TryGetValue(args, out var result))
+                var args = string.Join(" ", parameters.Arguments);
+                foreach (var (key, value) in byArgs)
                 {
-                    return Task.FromResult(result);
+                    if (args.Contains(key))
+                    {
+                        return Task.FromResult(value);
+                    }
                 }
 
                 return Task.FromResult(new ProcessResult(1, "", "", ""));
             });
+
+        return new VsCodeTunnelStatusResolver(invoker: invoker);
     }
 
     [Fact]
@@ -33,7 +41,8 @@ public sealed class VsCodeTunnelStatusResolverTests
             ["tunnel status --output json"] = new ProcessResult(0, json, "", json),
         });
 
-        var status = await resolver.GetTunnelStatusAsync("code", CancellationToken.None);
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
+        var status = resolution.Status;
 
         Assert.NotNull(status);
         Assert.Equal("my-desktop", status!.TunnelName);
@@ -44,14 +53,14 @@ public sealed class VsCodeTunnelStatusResolverTests
     [Fact]
     public async Task TunnelStatus_RunningTunnelTextOutput_ProducesNameAndUrl()
     {
-        // Legacy CLIs do not honour --output json; the resolver falls back to text form.
         var resolver = Resolver(new()
         {
             ["tunnel status --output json"] = new ProcessResult(0, "unknown option --output", "", "unknown option --output"),
             ["tunnel status"] = new ProcessResult(0, "Connected to tunnel: legacy-desktop\n", "", "Connected to tunnel: legacy-desktop\n"),
         });
 
-        var status = await resolver.GetTunnelStatusAsync("code", CancellationToken.None);
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
+        var status = resolution.Status;
 
         Assert.NotNull(status);
         Assert.Equal("legacy-desktop", status!.TunnelName);
@@ -68,9 +77,10 @@ public sealed class VsCodeTunnelStatusResolverTests
             ["tunnel status"] = new ProcessResult(1, "No tunnel is currently running.\n", "", "No tunnel is currently running.\n"),
         });
 
-        var status = await resolver.GetTunnelStatusAsync("code", CancellationToken.None);
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
 
-        Assert.Null(status);
+        Assert.Null(resolution.Status);
+        Assert.NotNull(resolution.CliResult);
     }
 
     [Fact]
@@ -82,20 +92,24 @@ public sealed class VsCodeTunnelStatusResolverTests
             ["tunnel status"] = new ProcessResult(0, "\u0001\u0002garbage", "", "garbage"),
         });
 
-        var status = await resolver.GetTunnelStatusAsync("code", CancellationToken.None);
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
 
-        Assert.Null(status);
+        Assert.Null(resolution.Status);
     }
 
     [Fact]
     public async Task TunnelStatus_CliNotFound_ReturnsNullOrFailureWithoutThrowing()
     {
-        var resolver = new VsCodeTunnelStatusResolver(
+        var invoker = new VsCodeCliInvoker(
+            notificationService: null,
             logger: null,
-            processRunner: (_, _, _) => throw new Win32Exception("The system cannot find the file specified"));
+            processRunner: (_, _) => throw new Win32Exception("The system cannot find the file specified"));
+        var resolver = new VsCodeTunnelStatusResolver(invoker: invoker);
 
-        var status = await resolver.GetTunnelStatusAsync("code", CancellationToken.None);
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
 
-        Assert.Null(status);
+        Assert.Null(resolution.Status);
+        Assert.Null(resolution.CliResult);
+        Assert.NotNull(resolution.CliLaunchError);
     }
 }

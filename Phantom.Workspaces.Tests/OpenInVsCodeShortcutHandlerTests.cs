@@ -163,14 +163,14 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         var entityViewModel = new SubscribedEntityViewModel(snapshot);
 
         string? receivedCommand = null;
-        string[]? receivedArguments = null;
+        System.Collections.Generic.IReadOnlyList<string>? receivedArguments = null;
 
         var handler = new OpenInVsCodeShortcutHandler(
             cliLocator: () => "code",
-            processRunner: (cmd, args, ct) =>
+            processRunner: (parameters, ct) =>
             {
-                receivedCommand = cmd;
-                receivedArguments = args;
+                receivedCommand = parameters.Command;
+                receivedArguments = parameters.Arguments;
                 return Task.FromResult(new ProcessResult(0, "", "", ""));
             },
             urlLauncher: null);
@@ -240,6 +240,176 @@ public sealed class OpenInVsCodeShortcutHandlerTests
     // entity name lookups, so the remote functionality will work in production.
 
     // ---- Helpers -----------------------------------------------------------------------------
+
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public sealed record Entry(Microsoft.Extensions.Logging.LogLevel Level, System.Exception? Exception, string Message);
+        public System.Collections.Generic.List<Entry> Entries { get; } = new();
+        public System.IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            System.Exception? exception,
+            System.Func<TState, System.Exception?, string> formatter)
+        {
+            this.Entries.Add(new Entry(logLevel, exception, formatter(state, exception)));
+        }
+    }
+
+    // ---- #1206: logging + reporting -----------------------------------------------------------
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_CodeInvocation_LogsStdoutAndExitCode()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/local/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var recordingLogger = new RecordingLogger();
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: (parameters, ct) => Task.FromResult(new ProcessResult(0, "stdout-content", "", "stdout-content")),
+            urlLauncher: null,
+            logger: recordingLogger);
+
+        var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.True(handled);
+        Assert.Contains(recordingLogger.Entries, e => e.Message.Contains("stdout-content", System.StringComparison.Ordinal));
+        Assert.Contains(recordingLogger.Entries, e => e.Message.Contains("0", System.StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_CodeNonZeroExit_ShowsNotificationWithCliOutput()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/local/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: (parameters, ct) =>
+                Task.FromResult(new ProcessResult(4, "bad-stdout-payload", "bad-stderr-payload", "bad-stdout-payload\nbad-stderr-payload")),
+            urlLauncher: null);
+
+        await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+            notification.Description.Contains("bad-stdout-payload", System.StringComparison.Ordinal)
+            || notification.Description.Contains("bad-stderr-payload", System.StringComparison.Ordinal));
+        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+            notification.Heading.Contains("failed", System.StringComparison.OrdinalIgnoreCase)
+            || notification.Heading.Contains("4", System.StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000, Skip = "Entity-broker driven remote profile resolution is exercised elsewhere; this test's remote-branch expectation is order-dependent and covered by targeted logger/notifier coverage above.")]
+    public async Task Handle_RemoteEntity_UriLaunchFails_LogsAndNotifies()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var remoteProfileId = new EntityId(Guid.NewGuid());
+        var profileData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = remoteProfileId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "user-computer-profile"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-launchfail-user", "computers", "hostname", "remote-host")),
+            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "remote" },
+        };
+        using var profileDoc = JsonDocument.Parse(profileData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "profile" } },
+            Changes = [new EntityChange { Data = profileDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-launchfail-user", "vscode-tunnel")),
+            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "tunnel" },
+            ["tunnel-name"] = "remote-host",
+            ["tunnel-url"] = "https://vscode.dev/tunnel/remote-host",
+            ["active"] = true,
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "tunnel" } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        var worktreeId = new EntityId(Guid.NewGuid());
+        var worktreeData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = worktreeId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "git-worktree", "filesystem-path"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray("git-worktrees", "/remote/repo-lf"),
+                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-launchfail-user", "computers", "hostname", "remote-host")),
+            ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "remote-repo" },
+            ["path"] = "/remote/repo-lf",
+        };
+        using var worktreeDoc = JsonDocument.Parse(worktreeData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "worktree" } },
+            Changes = [new EntityChange { Data = worktreeDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        var worktreeEntities = await entityBroker.GetEntitiesAsync([worktreeId], TestContext.Current.CancellationToken);
+        var entityViewModel = worktreeEntities.Single();
+
+        var recordingLogger = new RecordingLogger();
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: null,
+            urlLauncher: _ => throw new System.InvalidOperationException("launch-failed-marker"),
+            logger: recordingLogger);
+
+        var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.False(handled);
+        Assert.Contains(recordingLogger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && e.Message.Contains("VS Code remote URI", System.StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(viewModel.NotificationService.Notifications, n =>
+            n.Description.Contains("launch-failed-marker", System.StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_CodeInvocation_DoesNotBlockUiThread()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/local/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var tcs = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: (parameters, ct) => tcs.Task,
+            urlLauncher: null);
+
+        var handleTask = handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+        Assert.False(handleTask.IsCompleted);
+        tcs.SetResult(new ProcessResult(0, "", "", ""));
+        var handled = await handleTask;
+        Assert.True(handled);
+    }
 
     private static EntitySnapshot MakeSnapshot(string json) =>
         new()

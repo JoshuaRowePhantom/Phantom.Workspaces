@@ -49,20 +49,28 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
     private sealed class FakeStatusResolver : IVsCodeTunnelStatusResolver
     {
-        private readonly Func<string, CancellationToken, Task<VsCodeTunnelStatus?>> handler;
+        private readonly Func<string, CancellationToken, Task<VsCodeTunnelResolution>> handler;
         public List<string> Invocations { get; } = new();
 
-        public FakeStatusResolver(Func<string, CancellationToken, Task<VsCodeTunnelStatus?>> handler)
+        public FakeStatusResolver(Func<string, CancellationToken, Task<VsCodeTunnelResolution>> handler)
         {
             this.handler = handler;
         }
 
         public FakeStatusResolver(VsCodeTunnelStatus? status)
-            : this((_, _) => Task.FromResult(status))
+            : this((_, _) => Task.FromResult(new VsCodeTunnelResolution(
+                status,
+                new VsCodeCliResult(0, string.Empty, string.Empty),
+                CliLaunchError: null)))
         {
         }
 
-        public Task<VsCodeTunnelStatus?> GetTunnelStatusAsync(string cliPath, CancellationToken cancellationToken)
+        public FakeStatusResolver(VsCodeTunnelResolution resolution)
+            : this((_, _) => Task.FromResult(resolution))
+        {
+        }
+
+        public Task<VsCodeTunnelResolution> ResolveAsync(string cliPath, CancellationToken cancellationToken)
         {
             this.Invocations.Add(cliPath);
             return this.handler(cliPath, cancellationToken);
@@ -145,8 +153,10 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     [Fact]
     public async Task Discovery_CliMissing_ReturnsFailureWithoutThrowing()
     {
-        var resolver = new FakeStatusResolver((_, _) =>
-            throw new Win32Exception("The system cannot find the file specified"));
+        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution(
+            Status: null,
+            CliResult: null,
+            CliLaunchError: "The system cannot find the file specified"));
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
             new FakeExecutionContextProvider(),
@@ -204,7 +214,7 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         // The resolver invocation is awaited (not blocked). We confirm the tool returns before
         // the resolver's task completes when we control completion via a TaskCompletionSource,
         // and that ExecuteAsync itself yields to the resolver awaitable.
-        var tcs = new TaskCompletionSource<VsCodeTunnelStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<VsCodeTunnelResolution>(TaskCreationOptions.RunContinuationsAsynchronously);
         var resolver = new FakeStatusResolver((_, _) => tcs.Task);
         var dataAccessLayer = new InMemoryDataAccessLayer();
         var tool = new VsCodeTunnelDiscoveryTool(
@@ -214,7 +224,10 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         var executeTask = tool.ExecuteAsync(this.Context(dataAccessLayer));
         Assert.False(executeTask.IsCompleted);
 
-        tcs.SetResult(new VsCodeTunnelStatus("late", "https://vscode.dev/tunnel/late", true));
+        tcs.SetResult(new VsCodeTunnelResolution(
+            new VsCodeTunnelStatus("late", "https://vscode.dev/tunnel/late", true),
+            new VsCodeCliResult(0, string.Empty, string.Empty),
+            CliLaunchError: null));
         var result = await executeTask;
         Assert.True(result.IsSuccess);
     }
@@ -273,5 +286,57 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         Assert.Equal(
             entity1!.Value.GetProperty("entity-id").GetString(),
             entity2!.Value.GetProperty("entity-id").GetString());
+    }
+
+    // ---- #1206: logging + reporting ---------------------------------------------------------
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_TunnelStatusNonZeroExit_FailureResultContainsCliOutput()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution(
+            Status: null,
+            CliResult: new VsCodeCliResult(2, "some stdout marker", "some stderr marker"),
+            CliLaunchError: null));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("some stdout marker", result.ErrorMessage);
+        Assert.Contains("some stderr marker", result.ErrorMessage);
+        Assert.Contains("exit 2", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_TunnelStatusInvoked_RoutesThroughSharedInvoker()
+    {
+        // Prove the tool dispatches "tunnel status" through the shared VsCodeCliInvoker
+        // (via VsCodeTunnelStatusResolver) rather than a bare ProcessRunner.RunProcessAsync
+        // call. We construct a real resolver + invoker; the invoker's processRunner captures
+        // every invocation so we can assert routing.
+        var invocations = new List<string>();
+        var invoker = new VsCodeCliInvoker(
+            notificationService: null,
+            logger: null,
+            processRunner: (parameters, ct) =>
+            {
+                invocations.Add(string.Join(" ", parameters.Arguments));
+                return Task.FromResult(new ProcessResult(0, "no tunnel", string.Empty, "no tunnel"));
+            });
+        var resolver = new VsCodeTunnelStatusResolver(invoker: invoker);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver,
+            defaultCliPathResolver: () => "code");
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.NotEmpty(invocations);
+        Assert.Contains(invocations, args => args.Contains("tunnel") && args.Contains("status"));
     }
 }

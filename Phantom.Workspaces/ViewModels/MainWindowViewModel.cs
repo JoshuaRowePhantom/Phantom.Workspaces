@@ -638,8 +638,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             new Tools.GitWorkspaceScanTool(logger: this.loggerFactory.CreateLogger<Tools.GitWorkspaceScanTool>()),
             new Tools.GitWorkspaceUpdateTool(),
             new Tools.CopilotSessionDiscoveryTool(),
-            new Tools.VsCodeTunnelDiscoveryTool(),
-            new Tools.RunVsCodeTunnelTool(),
+            new Tools.VsCodeTunnelDiscoveryTool(
+                notificationService: this.notificationService,
+                logger: this.loggerFactory.CreateLogger<Tools.VsCodeTunnelDiscoveryTool>()),
+            new Tools.RunVsCodeTunnelTool(
+                notificationService: this.notificationService,
+                logger: this.loggerFactory.CreateLogger<Tools.RunVsCodeTunnelTool>()),
             new Tools.GitHub.GitHubWorkItemDiscoveryTool(),
             new Tools.AzureDevOps.AzureDevOpsWorkItemDiscoveryTool(),
         ]);

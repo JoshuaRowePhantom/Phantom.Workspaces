@@ -566,5 +566,107 @@ public sealed class RunVsCodeTunnelToolTests
         var installCall = calls.FirstOrDefault(c => c.Arguments.Contains("tunnel service install"));
         Assert.Null(installCall);
     }
+
+    // ---- #1206: logging + reporting via shared invoker --------------------------------------
+
+    private sealed class RecordingNotificationService : Phantom.Workspaces.Services.Notifications.INotificationService
+    {
+        private readonly List<Phantom.Workspaces.Services.Notifications.Notification> calls = [];
+        public IReadOnlyList<Phantom.Workspaces.Services.Notifications.Notification> Calls
+        {
+            get { lock (this.calls) { return this.calls.ToArray(); } }
+        }
+        public IReadOnlyList<Phantom.Workspaces.Services.Notifications.NotificationEntry> Notifications => [];
+        public bool HasActiveRun => false;
+#pragma warning disable CS0067
+        public event System.EventHandler? NotificationsChanged;
+#pragma warning restore CS0067
+        public void Notify(Phantom.Workspaces.Services.Notifications.Notification n)
+        {
+            lock (this.calls) { this.calls.Add(n); }
+        }
+        public void Remove(string tabId) { }
+        public void MarkRead(string tabId) { }
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_InstallNonZeroExit_FailureResultContainsCliOutput()
+    {
+        var calls = new List<CliCall>();
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                calls.Add(new CliCall { CliPath = cli, Arguments = args, EnvironmentVariables = env });
+                if (args.Contains("service status")) return Task.FromResult(("", 1));  // NotInstalled
+                if (args.Contains("user login")) return Task.FromResult(("", 0));
+                if (args.Contains("service install")) return Task.FromResult(("install-stdout-marker", 2));
+                return Task.FromResult(("", 0));
+            },
+            tokenResolver: () => "fake-token");
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("install-stdout-marker", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_LoginNonZeroExit_NotifiesUserWithCliOutput()
+    {
+        var notifier = new RecordingNotificationService();
+        var invoker = new VsCodeCliInvoker(
+            notificationService: notifier,
+            logger: null,
+            processRunner: (parameters, ct) =>
+            {
+                var args = string.Join(" ", parameters.Arguments);
+                if (args.Contains("service status") && args.Contains("tunnel"))
+                    return Task.FromResult(new ProcessResult(1, "", "", ""));  // NotInstalled
+                if (args.Contains("user login"))
+                    return Task.FromResult(new ProcessResult(1, "login-stdout-x", "login-stderr-y", ""));
+                return Task.FromResult(new ProcessResult(0, "", "", ""));
+            });
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            cliInvoker: invoker,
+            tokenResolver: () => "fake-token");
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.NotEmpty(notifier.Calls);
+        Assert.Contains(notifier.Calls, c =>
+            c.Description.Contains("login-stdout-x", StringComparison.Ordinal)
+            || c.Description.Contains("login-stderr-y", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_AllCliInvocations_RoutedThroughSharedInvoker()
+    {
+        var invocations = new List<string>();
+        var invoker = new VsCodeCliInvoker(
+            notificationService: null,
+            logger: null,
+            processRunner: (parameters, ct) =>
+            {
+                var args = string.Join(" ", parameters.Arguments);
+                invocations.Add(args);
+                if (args.Contains("service status") && args.Contains("tunnel"))
+                    return Task.FromResult(new ProcessResult(0, "service is stopped", "", "service is stopped"));  // Stopped → uninstall+install
+                return Task.FromResult(new ProcessResult(0, "", "", ""));
+            });
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            cliInvoker: invoker,
+            tokenResolver: () => "fake-token");
+
+        await tool.ExecuteAsync(this.Context());
+
+        Assert.Contains(invocations, args => args.Contains("service status"));
+        Assert.Contains(invocations, args => args.Contains("service uninstall"));
+        Assert.Contains(invocations, args => args.Contains("user login"));
+        Assert.Contains(invocations, args => args.Contains("service install"));
+    }
 }
 
