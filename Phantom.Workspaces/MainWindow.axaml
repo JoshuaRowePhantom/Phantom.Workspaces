@@ -26,7 +26,6 @@
         <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding NavigateBackCommand}" />
         <KeyBinding Gesture="Ctrl+Shift+OemMinus" Command="{Binding NavigateForwardCommand}" />
         <KeyBinding Gesture="Ctrl+S" Command="{Binding SelectedWorkspacePane.SaveCommand}" />
-        <KeyBinding Gesture="Ctrl+F" Command="{Binding Find.OpenCommand}" />
     </Window.KeyBindings>
     <Grid RowDefinitions="Auto,Auto,*">
         <Border Grid.Row="0" Classes="window-header">

@@ -10473,5 +10473,216 @@ public sealed class MainWindowIntegrationTests
             deleteEntityAsync: null);
     }
 
+    // ── #1199: Ctrl+F must focus the FindTextBox and select-all its current text ──
+    //
+    // The Ctrl+F code-behind handler previously called findTextBox?.Focus() on the very next
+    // line after Find.OpenCommand.Execute(null). Because the FindTextBox lives inside a Border
+    // whose IsVisible is bound to Find.IsOpen, the control was not yet attached / realized at
+    // the moment Focus() ran, so focus silently failed. And SelectAll() was never called, so
+    // typing appended to the existing query instead of replacing it. The fix posts the
+    // Focus() + SelectAll() work through Dispatcher.UIThread with DispatcherPriority.Input so
+    // the visibility binding and layout pass complete first.
+
+    private static TextBox GetFindTextBox(Window window)
+    {
+        return window.GetVisualDescendants()
+            .OfType<TextBox>()
+            .First(tb => tb.Name == "FindTextBox");
+    }
+
+    private static void SendCtrlF(Window window)
+    {
+        window.RaiseEvent(new KeyEventArgs
+        {
+            RoutedEvent = InputElement.KeyDownEvent,
+            Key = Key.F,
+            KeyModifiers = KeyModifiers.Control,
+            Source = window,
+        });
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_CtrlFWhenFindBarClosed_ShowsAndFocusesFindTextBox()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(viewModel.Find.IsOpen);
+
+            SendCtrlF(window);
+
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(viewModel.Find.IsOpen);
+            var findTextBox = GetFindTextBox(window);
+            Assert.True(findTextBox.IsFocused);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_CtrlFWhenFindBarClosedWithExistingQuery_SelectsAllText()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        // Pre-populate Query while the bar is still closed.
+        viewModel.Find.Query = "prev-query";
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+            Assert.False(viewModel.Find.IsOpen);
+
+            SendCtrlF(window);
+
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var findTextBox = GetFindTextBox(window);
+            Assert.Equal("prev-query", findTextBox.Text);
+            Assert.Equal(0, findTextBox.SelectionStart);
+            Assert.Equal(findTextBox.Text!.Length, findTextBox.SelectionEnd);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_CtrlFWhenFindBarAlreadyOpen_SelectsAllTextIdempotently()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            // First Ctrl+F: opens the bar.
+            SendCtrlF(window);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var findTextBox = GetFindTextBox(window);
+            findTextBox.Text = "typed-query";
+            findTextBox.SelectionStart = findTextBox.Text.Length;
+            findTextBox.SelectionEnd = findTextBox.Text.Length;
+            Dispatcher.UIThread.RunJobs();
+
+            // Second Ctrl+F on an already-open bar must re-select all text so typing replaces
+            // the query. Query itself must not change (view-only concern).
+            var queryBefore = viewModel.Find.Query;
+            SendCtrlF(window);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(viewModel.Find.IsOpen);
+            Assert.Equal(queryBefore, viewModel.Find.Query);
+            Assert.Equal(0, findTextBox.SelectionStart);
+            Assert.Equal(findTextBox.Text!.Length, findTextBox.SelectionEnd);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_CtrlFWhenFindTextBoxAlreadyHasFocus_KeepsFocusAndSelectsAll()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            SendCtrlF(window);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var findTextBox = GetFindTextBox(window);
+            findTextBox.Text = "keep-focus";
+            findTextBox.Focus();
+            findTextBox.SelectionStart = findTextBox.Text.Length;
+            findTextBox.SelectionEnd = findTextBox.Text.Length;
+            Dispatcher.UIThread.RunJobs();
+            Assert.True(findTextBox.IsFocused);
+
+            SendCtrlF(window);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(findTextBox.IsFocused);
+            Assert.Equal(0, findTextBox.SelectionStart);
+            Assert.Equal(findTextBox.Text!.Length, findTextBox.SelectionEnd);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_CtrlFAfterVisibilityBindingUpdate_FocusLandsOnRealizedTextBox()
+    {
+        // Regression for the timing bug: at the moment Ctrl+F fires the FindTextBox is not yet
+        // attached (Border.IsVisible binding hasn't propagated). The fix defers Focus() /
+        // SelectAll() past the layout pass. After RunJobs / UpdateLayout / RunJobs the focus
+        // must land on the (now realized) FindTextBox.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            // Before Ctrl+F the find-bar Border is collapsed (Find.IsOpen == false), so the
+            // FindTextBox is not attached to a visible ancestor — the essence of the pre-fix
+            // race. The fix defers Focus() / SelectAll() past the visibility flip and layout
+            // pass so focus lands on the (now realized+visible) FindTextBox rather than being
+            // dropped on the collapsed control.
+            Assert.False(viewModel.Find.IsOpen);
+
+            SendCtrlF(window);
+            Dispatcher.UIThread.RunJobs();
+            window.UpdateLayout();
+            Dispatcher.UIThread.RunJobs();
+
+            var findTextBox = GetFindTextBox(window);
+            Assert.True(findTextBox.IsEffectivelyVisible);
+            Assert.True(findTextBox.IsFocused);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
 }
 

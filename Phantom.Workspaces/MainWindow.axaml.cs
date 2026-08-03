@@ -116,12 +116,28 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Ctrl+F: open the find bar and focus the find input.
+        // Ctrl+F: open the find bar and focus + select-all the find input.
+        // #1199: defer focus/select-all past the IsVisible binding and layout pass, since the
+        // FindTextBox is invisible until Find.IsOpen flips true. Focus() on an unattached
+        // control does not reliably move focus. SelectAll() also missing before, so re-Ctrl-F
+        // on an already-open bar now re-selects text so typing replaces the query.
         if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
         {
             viewModel.Find.OpenCommand.Execute(null);
-            var findTextBox = this.FindControl<TextBox>("FindTextBox");
-            findTextBox?.Focus();
+
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () =>
+                {
+                    var findTextBox = this.FindControl<TextBox>("FindTextBox");
+                    if (findTextBox is null)
+                    {
+                        return;
+                    }
+                    findTextBox.Focus();
+                    findTextBox.SelectAll();
+                },
+                Avalonia.Threading.DispatcherPriority.Input);
+
             e.Handled = true;
             return;
         }
