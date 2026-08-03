@@ -421,7 +421,14 @@ public sealed class ChatOutputBrowserIntegrationTests
     };
 
     private static async Task<string> EvalAsync(ControllableWebViewControl web, string expression)
-        => await web.InvokeScript(expression) ?? string.Empty;
+    {
+        // The page mutation commands posted via PostMessageToJavaScript are batched by an
+        // auto-flush DispatcherTimer (~16ms); a readback InvokeScript issued immediately after a
+        // post would otherwise race the timer and see a stale DOM (issue #1212). Force the batch
+        // to deliver before the readback runs so ordering matches host-side call order.
+        web.FlushPendingMessages();
+        return await web.InvokeScript(expression) ?? string.Empty;
+    }
 
     private static string Message(string id, string text)
         => $"<div class=\"chat-message\" id=\"{id}\">"
@@ -703,13 +710,13 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var count = await EvalAsync(
                     web,
                     "document.querySelectorAll('#chat-history-container .chat-message').length.toString()");
-                Assert.Equal("500", count);
+                Assert.Equal("\"500\"", count);
 
                 var order = await EvalAsync(
                     web,
                     "(function(){var m=document.querySelectorAll('#chat-history-container > .chat-message');"
                     + "return m[0].id + ',' + m[m.length-1].id;})()");
-                Assert.Equal("history-0,history-499", order);
+                Assert.Equal("\"history-0,history-499\"", order);
             }
             finally
             {
@@ -738,12 +745,12 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var previousSibling = await EvalAsync(
                     web,
                     "document.getElementById('history-2').previousElementSibling.id");
-                Assert.Equal("history-1", previousSibling);
+                Assert.Equal("\"history-1\"", previousSibling);
 
                 var parent = await EvalAsync(
                     web,
                     "document.getElementById('history-2').parentElement.id");
-                Assert.Equal("chat-history-container", parent);
+                Assert.Equal("\"chat-history-container\"", parent);
             }
             finally
             {
@@ -766,7 +773,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 history.Add(ToolCallItem("write_file", "call-2"));
 
                 var groupExists = await EvalAsync(web, "(document.getElementById('tool-group-0') !== null).toString()");
-                Assert.Equal("true", groupExists);
+                Assert.Equal("\"true\"", groupExists);
 
                 var summaryText = await EvalAsync(web, "document.getElementById('tool-group-0-summary').textContent");
                 Assert.Contains("2", summaryText, StringComparison.Ordinal);
@@ -774,7 +781,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var bodyMessages = await EvalAsync(
                     web,
                     "document.querySelectorAll('#tool-group-0-body .chat-message').length.toString()");
-                Assert.Equal("2", bodyMessages);
+                Assert.Equal("\"2\"", bodyMessages);
             }
             finally
             {
@@ -799,7 +806,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var danglingCount = await EvalAsync(
                     web,
                     "document.querySelectorAll('.insert-after, [id*=\"insert-after\"]').length.toString()");
-                Assert.Equal("0", danglingCount);
+                Assert.Equal("\"0\"", danglingCount);
             }
             finally
             {
@@ -822,12 +829,12 @@ public sealed class ChatOutputBrowserIntegrationTests
                 running.Add(runningItem);
 
                 var wrapperParent = await EvalAsync(web, "document.getElementById('run-0').parentElement.id");
-                Assert.Equal("running-items-container", wrapperParent);
+                Assert.Equal("\"running-items-container\"", wrapperParent);
 
                 var initiallyEmpty = await EvalAsync(
                     web,
                     "document.querySelectorAll('#run-0-contents .chat-message').length.toString()");
-                Assert.Equal("0", initiallyEmpty);
+                Assert.Equal("\"0\"", initiallyEmpty);
 
                 runningItem.Items.Add(TextItem("streaming text"));
 
@@ -857,7 +864,7 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var sentinelPresent = await EvalAsync(
                     web,
                     "(document.getElementById('subagent-panel-sentinel') !== null).toString()");
-                Assert.Equal("true", sentinelPresent);
+                Assert.Equal("\"true\"", sentinelPresent);
 
                 var innerText = await EvalAsync(
                     web,
@@ -869,12 +876,12 @@ public sealed class ChatOutputBrowserIntegrationTests
                 sentinelPresent = await EvalAsync(
                     web,
                     "(document.getElementById('subagent-panel-sentinel') !== null).toString()");
-                Assert.Equal("true", sentinelPresent);
+                Assert.Equal("\"true\"", sentinelPresent);
 
                 var innerGone = await EvalAsync(
                     web,
                     "(document.getElementById('subagent-panel-inner') === null).toString()");
-                Assert.Equal("true", innerGone);
+                Assert.Equal("\"true\"", innerGone);
             }
             finally
             {
@@ -901,14 +908,14 @@ public sealed class ChatOutputBrowserIntegrationTests
                 // shell reports as commandFailed for subsequent commands targeting it).
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Remove("run-0"));
                 var removed = await EvalAsync(web, "(document.getElementById('run-0') === null).toString()");
-                Assert.Equal("true", removed);
+                Assert.Equal("\"true\"", removed);
 
                 // Recovery: the model re-inserts using a stable Append into the persistent
                 // running-items region rather than a sibling anchor.
                 model.NotifyInsertionFailed("run-0-contents");
 
                 var wrapperParent = await EvalAsync(web, "document.getElementById('run-0').parentElement.id");
-                Assert.Equal("running-items-container", wrapperParent);
+                Assert.Equal("\"running-items-container\"", wrapperParent);
 
                 var contents = await EvalAsync(web, "document.getElementById('run-0-contents').textContent");
                 Assert.Contains("in flight", contents, StringComparison.Ordinal);

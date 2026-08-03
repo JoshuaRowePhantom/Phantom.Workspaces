@@ -159,6 +159,20 @@ public class ControllableWebViewControl : AcceleratorAwareWebView, IControllable
         this.DeliverBatch(messages);
     }
 
+    /// <summary>
+    /// Immediately delivers any messages queued by <see cref="PostMessageToJavaScript"/> that would
+    /// otherwise wait for the auto-flush <see cref="DispatcherTimer"/> (~16ms). Callers that follow
+    /// <c>PostMessageToJavaScript</c> with a synchronous <see cref="NativeWebView.InvokeScript"/>
+    /// call must invoke this first, otherwise the readback script runs before the queued host-side
+    /// batch reaches the page and DOM state assertions race the timer. Tests that read DOM state
+    /// via <c>InvokeScript</c> use this to eliminate the race (issue #1212).
+    /// </summary>
+    public void FlushPendingMessages()
+    {
+        VerifyOnUiThread();
+        this.FlushPendingBatch();
+    }
+
     // Enforces UI-thread affinity on the message bridge (issue #913). This is an Avalonia control:
     // the auto-flush DispatcherTimer created in PostMessageToJavaScript binds to the *calling*
     // thread's Dispatcher, so an off-UI-thread call would create a timer on a dispatcher that never
