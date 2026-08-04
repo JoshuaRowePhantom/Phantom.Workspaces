@@ -55,7 +55,7 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
         this.urlOpenerProvider = urlOpenerProvider;
         this.accounts = [.. usageMetrics.Accounts];
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
-        this.OpenUrlCommand = new RelayCommand(parameter => _ = this.OpenUrlAsync(parameter as string));
+        this.OpenUrlCommand = new RelayCommand(parameter => _ = this.OpenUrlAsync(CoerceUrl(parameter)));
 
         usageMetrics.Accounts.CollectionChanged += this.OnAccountsChanged;
 
@@ -138,6 +138,17 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
         await opener.OpenAsync(new OpenUrlRequest(url));
     }
+
+    // #1204: XAML binds CommandParameter to a Uri (via FirstNonNullConverter over
+    // UsageMetric.WebUrl / UsageAccount.SettingsUrl, both typed Uri?). Accept both
+    // Uri and string so the command works from XAML and from tests / code that
+    // pass raw strings. Any other type is treated as "no link".
+    private static string? CoerceUrl(object? parameter) => parameter switch
+    {
+        string s when !string.IsNullOrEmpty(s) => s,
+        Uri u => u.ToString(),
+        _ => null,
+    };
 
     /// <summary>
     /// The stable key (see <see cref="UsageAccount.ComposeKey"/>) of the metric the

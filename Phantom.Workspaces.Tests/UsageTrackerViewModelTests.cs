@@ -551,6 +551,80 @@ public sealed class UsageTrackerViewModelTests
         Assert.Single(opener.Requests);
     }
 
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsUri_CallsUrlOpenerWithUriString()
+    {
+        // #1204: XAML supplies CommandParameter as a Uri (via FirstNonNullConverter over
+        // WebUrl / SettingsUrl, both Uri?). Prior behavior cast it with `as string`, which
+        // yielded null and silently dropped every click.
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        var uri = new Uri("https://github.com/settings/billing/summary?user=octocat");
+        vm.OpenUrlCommand.Execute(uri);
+
+        Assert.Single(opener.Requests);
+        Assert.Equal(uri.ToString(), opener.Requests[0].Url);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsString_CallsUrlOpenerWithSameString()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute("https://github.com/settings/copilot");
+
+        Assert.Single(opener.Requests);
+        Assert.Equal("https://github.com/settings/copilot", opener.Requests[0].Url);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsNull_DoesNotCallUrlOpener()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute(null);
+
+        Assert.Empty(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsEmptyString_DoesNotCallUrlOpener()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute(string.Empty);
+
+        Assert.Empty(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenUrlOpenerProviderReturnsNull_DoesNotThrow()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => null);
+
+        var exception = Record.Exception(() => vm.OpenUrlCommand.Execute(new Uri("https://example.com/")));
+        Assert.Null(exception);
+    }
+
     // #1179 — long, unabbreviated metric titles round-trip through the view model without
     // any view-model-side truncation. Truncation only happens (or fails to happen) in XAML.
     [Fact]
