@@ -157,6 +157,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(new ReviewWorktreeShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenInVsCodeShortcutHandler());
         this.shortcutManager.AddShortcutHandler(new OpenInVsCodeWebShortcutHandler());
+        this.shortcutManager.AddShortcutHandler(new CopyEntityIdShortcutHandler());
 
         // The click handler opens configured entity types on a plain card click. It is intentionally
         // NOT registered with the shortcut manager, so it never produces a shortcut button; the entity

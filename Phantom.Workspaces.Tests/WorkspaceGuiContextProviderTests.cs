@@ -509,6 +509,45 @@ public sealed class WorkspaceGuiContextProviderTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_CopyEntityId_IsRecognizedShortcut()
+    {
+        // Issue #1215: the CopyEntityId shortcut must be wired into the MCP tool (enum +
+        // ResolveShortcut + registered handler). In the headless test harness there is no
+        // MainWindow, so the default clipboard accessor yields null and the handler declines
+        // (handled:false with a reason) — but the shortcut is still RECOGNIZED, i.e. the tool
+        // does not return an "Unknown shortcut" error.
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("ff440003-ff44-4ff4-ff44-ff4400000003");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tests", "tasks", "copy-id-shortcut-1"]],
+              "display-name": { "default": "Copy Id Shortcut Test Task" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"CopyEntityId\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        // Recognized: the response carries a "handled" property rather than an "Unknown shortcut" error.
+        Assert.True(resultJson.TryGetProperty("handled", out _));
+        Assert.False(resultJson.TryGetProperty("error", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_ReviewOnGitWorktree_OpensReviewTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

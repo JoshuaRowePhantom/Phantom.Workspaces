@@ -314,7 +314,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 },
                 "shortcut": {
                   "type": "string",
-                  "enum": ["Open", "OpenWorkspace", "Json", "Delete", "Review", "VsCode", "VsCodeWeb", "StartAgentSession", "StartShell"],
+                  "enum": ["Open", "OpenWorkspace", "Json", "Delete", "Review", "VsCode", "VsCodeWeb", "StartAgentSession", "StartShell", "CopyEntityId"],
                   "description": "The shortcut to invoke. 'Open' opens the entity as a workspace pane, tab, or agent chat session — use this for all open/navigate operations. 'OpenWorkspace' opens an associated workspace."
                 }
               },
@@ -342,6 +342,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             + "'VsCodeWeb' opens the entity in VS Code Web via tunnel, "
             + "'StartAgentSession' starts an agent session on the entity's profile, "
             + "'StartShell' starts a shell on the entity's profile. "
+            + "'CopyEntityId' copies the fragment \"entityid\":\"<guid>\" to the clipboard. "
             + "Opening anything navigates to it and pushes a navigation history entry so the user can Ctrl+\u2212 back.";
 
         public override JsonElement JsonSchema => InputSchema;
@@ -371,7 +372,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             {
                 return Serialize(new
                 {
-                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, OpenWorkspace, Json, Delete, Review, VsCode, VsCodeWeb, StartAgentSession, StartShell.",
+                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, OpenWorkspace, Json, Delete, Review, VsCode, VsCodeWeb, StartAgentSession, StartShell, CopyEntityId.",
                 });
             }
 
@@ -425,6 +426,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             "VsCodeWeb" => Shortcut.VsCodeWeb,
             "StartAgentSession" => Shortcut.StartAgentSession,
             "StartShell" => Shortcut.StartShell,
+            "CopyEntityId" => Shortcut.CopyEntityId,
             _ => null,
         };
     }
