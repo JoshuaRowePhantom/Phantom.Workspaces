@@ -84,7 +84,7 @@
         <Setter Property="Opacity" Value="{DynamicResource Theme.Class.caption.Opacity}" />
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
     </Style>
-    <Style Selector="TextBlock.muted">
+    <Style Selector=":is(TextBlock).muted">
         <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.muted.FontWeight}" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
         <Setter Property="Opacity" Value="{DynamicResource Theme.Class.muted.Opacity}" />
@@ -662,10 +662,10 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="MinWidth" Value="100" />
     </Style>
-    <Style Selector="StackPanel.workspace-entity-header-row > TextBlock">
+    <Style Selector="StackPanel.workspace-entity-header-row > :is(TextBlock)">
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
-    <Style Selector="TextBlock.workspace-entity-title">
+    <Style Selector=":is(TextBlock).workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
     </Style>
     <Style Selector="WrapPanel.workspace-entity-actions-row">
@@ -790,7 +790,7 @@
     <Style Selector="StackPanel.workspace-template-browser-root">
         <Setter Property="Spacing" Value="6" />
     </Style>
-    <Style Selector="TextBlock.workspace-field-label">
+    <Style Selector=":is(TextBlock).workspace-field-label">
         <Setter Property="Margin" Value="0,4,8,0" />
         <Setter Property="MinWidth" Value="67" />
     </Style>
@@ -799,7 +799,7 @@
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="MinWidth" Value="67" />
     </Style>
-    <Style Selector="TextBlock.workspace-field-read-value">
+    <Style Selector=":is(TextBlock).workspace-field-read-value">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="Margin" Value="0,4,0,0" />

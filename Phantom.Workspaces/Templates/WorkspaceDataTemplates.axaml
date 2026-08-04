@@ -145,7 +145,7 @@
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*"
               RowDefinitions="Auto,Auto">
-            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <!-- Read mode: navigable link to the referenced entity (resolved display name). -->
             <Button Grid.Column="1" Grid.Row="0"
                     Content="{Binding ResolvedDisplayName}"
@@ -182,7 +182,7 @@
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
-            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <ItemsControl Grid.Column="1"
                           ItemsSource="{Binding Items}">
                 <ItemsControl.ItemTemplate>
@@ -203,8 +203,8 @@
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
-            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
-            <TextBlock Grid.Column="1"
+            <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding Value}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
@@ -219,8 +219,8 @@
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
-            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
-            <TextBlock Grid.Column="1"
+            <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding DisplayValue}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
@@ -237,8 +237,8 @@
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*,Auto"
               RowDefinitions="Auto,Auto">
-            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
-            <TextBlock Grid.Column="1"
+            <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding Value}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
@@ -275,7 +275,7 @@
         <Grid Classes="workspace-field-row"
               ColumnDefinitions="Auto,*"
               RowDefinitions="Auto">
-            <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+            <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:WorkspaceMarkdownView Grid.Column="1"
                          Markdown="{Binding MarkdownText}"
                          IsVisible="{Binding IsReadMode}"
@@ -292,8 +292,8 @@
             <StackPanel Classes="workspace-mime-content">
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="Auto,*">
-                    <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
-                    <TextBlock Grid.Column="1"
+                    <controls:SafeSelectableTextBlock Text="mime-type" Classes="muted workspace-field-label" />
+                    <controls:SafeSelectableTextBlock Grid.Column="1"
                                Text="{Binding MimeType}"
                                Classes="workspace-field-read-value"
                                IsVisible="{Binding IsReadMode}" />
@@ -304,8 +304,8 @@
                 </Grid>
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="Auto,*">
-                    <TextBlock Text="url" Classes="muted workspace-field-label" />
-                    <TextBlock Grid.Column="1"
+                    <controls:SafeSelectableTextBlock Text="url" Classes="muted workspace-field-label" />
+                    <controls:SafeSelectableTextBlock Grid.Column="1"
                                Text="{Binding Url}"
                                Classes="workspace-field-read-value"
                                IsVisible="{Binding IsReadMode}" />
@@ -317,15 +317,15 @@
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="Auto,*"
                       IsVisible="{Binding ShowPlainTextReadMode}">
-                    <TextBlock Text="content.text" Classes="muted workspace-field-label" />
-                    <TextBlock Grid.Column="1"
+                    <controls:SafeSelectableTextBlock Text="content.text" Classes="muted workspace-field-label" />
+                    <controls:SafeSelectableTextBlock Grid.Column="1"
                                Text="{Binding TextContent}"
                                Classes="workspace-field-read-value workspace-markdown-content" />
                 </Grid>
                 <Grid Classes="workspace-field-row"
                       ColumnDefinitions="Auto,*"
                       IsVisible="{Binding ShowPlainTextEditMode}">
-                    <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                    <controls:SafeSelectableTextBlock Text="content.text" Classes="muted workspace-field-label" />
                     <TextBox Grid.Column="1"
                              Text="{Binding TextContent, Mode=TwoWay}"
                              Classes="workspace-field-value workspace-markdown-content" />
@@ -345,8 +345,8 @@
                 <StackPanel Classes="workspace-mime-content">
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="Auto,*">
-                        <TextBlock Text="mime-type" Classes="muted workspace-field-label" />
-                        <TextBlock Grid.Column="1"
+                        <controls:SafeSelectableTextBlock Text="mime-type" Classes="muted workspace-field-label" />
+                        <controls:SafeSelectableTextBlock Grid.Column="1"
                                    Text="{Binding MimeType}"
                                    Classes="workspace-field-read-value"
                                    IsVisible="{Binding IsReadMode}" />
@@ -357,8 +357,8 @@
                     </Grid>
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="Auto,*">
-                        <TextBlock Text="url" Classes="muted workspace-field-label" />
-                        <TextBlock Grid.Column="1"
+                        <controls:SafeSelectableTextBlock Text="url" Classes="muted workspace-field-label" />
+                        <controls:SafeSelectableTextBlock Grid.Column="1"
                                    Text="{Binding Url}"
                                    Classes="workspace-field-read-value"
                                    IsVisible="{Binding IsReadMode}" />
@@ -370,7 +370,7 @@
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="Auto,*"
                           IsVisible="{Binding ShowMarkdownReadMode}">
-                        <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                        <controls:SafeSelectableTextBlock Text="content.text" Classes="muted workspace-field-label" />
                         <controls:WorkspaceMarkdownView Grid.Column="1"
                                      Markdown="{Binding TextContent}"
                                      Classes="workspace-markdown-viewer" />
@@ -378,7 +378,7 @@
                     <Grid Classes="workspace-field-row"
                           ColumnDefinitions="Auto,*"
                           IsVisible="{Binding ShowMarkdownEditMode}">
-                        <TextBlock Text="content.text" Classes="muted workspace-field-label" />
+                        <controls:SafeSelectableTextBlock Text="content.text" Classes="muted workspace-field-label" />
                         <controls:WorkspaceMarkdownView Grid.Column="1"
                                      Markdown="{Binding TextContent}"
                                      Classes="workspace-markdown-editor" />
@@ -396,7 +396,7 @@
                   ColumnDefinitions="Auto,*,Auto"
                   RowDefinitions="Auto,Auto"
                   IsVisible="{Binding ShowChrome}">
-                <TextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
+                <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
                 <ContentControl Grid.Column="1" Content="{Binding ActiveEditor}" />
                 <Button Grid.Column="2"
                         Content="+"
@@ -511,7 +511,7 @@
             <ItemsControl.ItemTemplate>
                 <DataTemplate DataType="vm:ExternalUrlViewModel">
                     <StackPanel Orientation="Horizontal" Spacing="4">
-                        <TextBlock Text="{Binding Key}"
+                        <controls:SafeSelectableTextBlock Text="{Binding Key}"
                                    IsVisible="{Binding ShowKey}"
                                    Classes="muted workspace-field-label" />
                         <Button Content="{Binding Url}"

@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:converters="using:Phantom.Workspaces.Converters"
+             xmlns:sharedControls="using:Phantom.Workspaces.Gui.Shared.Controls"
              x:CompileBindings="False"
              x:Class="Phantom.Workspaces.Controls.EntityCardControl">
     <UserControl.Resources>
@@ -22,12 +23,12 @@
                     <StackPanel Classes="workspace-entity-header-row"
                                 MinWidth="100"
                                 Margin="0,0,12,0">
-                        <TextBlock Classes="workspace-entity-title">
+                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title">
                             <Run Text="{Binding DisplayNameBefore}" />
                             <Run Text="{Binding DisplayNameMatch}" Background="#FFF59D" />
                             <Run Text="{Binding DisplayNameAfter}" />
-                        </TextBlock>
-                        <TextBlock Classes="muted"
+                        </sharedControls:SafeSelectableTextBlock>
+                        <sharedControls:SafeSelectableTextBlock Classes="muted"
                                    Text="{Binding EntityTypeLabels}" />
                     </StackPanel>
                     <WrapPanel Classes="workspace-entity-actions-row"

@@ -66,6 +66,143 @@ public sealed class EntityCardControlTests
         }
     }
 
+    // Issue #1214: every text-data element in the entity card is a SafeSelectableTextBlock so it
+    // can be selected/copied, while preserving wrapping and highlight-match runs.
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_DisplayName_RendersAsSafeSelectableTextBlock()
+    {
+        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .FirstOrDefault(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.NotNull(title);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_EntityTypeLabel_RendersAsSafeSelectableTextBlock()
+    {
+        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var typeLabel = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .FirstOrDefault(t => t.Text is { } text
+                    && text.Contains("tool", StringComparison.Ordinal)
+                    && text.Contains("note", StringComparison.Ordinal));
+
+            Assert.NotNull(typeLabel);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_DisplayName_PreservesHighlightMatchRuns()
+    {
+        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.NotNull(title.Inlines);
+            var runs = title.Inlines!.OfType<Avalonia.Controls.Documents.Run>().ToArray();
+            Assert.True(runs.Length >= 3, $"Expected at least 3 runs, found {runs.Length}.");
+            var runText = string.Concat(runs.Select(r => r.Text));
+            Assert.Contains("Run VS Code Tunnel", runText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_FieldReadMode_ValueIsSafeSelectableTextBlock()
+    {
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", "/home/user/worktrees/9"),
+        };
+        var card = new EntityCardControl { DataContext = new EntityCardViewModel(entity, fieldEditors) };
+        var window = new Window { Content = card, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var readValue = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .FirstOrDefault(t => t.Classes.Contains("workspace-field-read-value"));
+            Assert.NotNull(readValue);
+            Assert.Equal("/home/user/worktrees/9", readValue!.Text);
+
+            // The field label is copyable too, and no read value remains a plain TextBlock.
+            var plainReadValues = window.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Where(t => t is not SafeSelectableTextBlock && t.Classes.Contains("workspace-field-read-value"))
+                .ToArray();
+            Assert.Empty(plainReadValues);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_FieldLabels_AreSafeSelectableTextBlock()
+    {
+        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var labels = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .Where(t => t.Classes.Contains("workspace-field-label"))
+                .ToArray();
+
+            Assert.NotEmpty(labels);
+            // No field label may remain a plain (non-selectable) TextBlock.
+            var plainLabels = window.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Where(t => t is not SafeSelectableTextBlock && t.Classes.Contains("workspace-field-label"))
+                .ToArray();
+            Assert.Empty(plainLabels);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static async Task<EntityCardViewModel> BuildToolNoteCardViewModelAsync()
     {
         using var document = JsonDocument.Parse(

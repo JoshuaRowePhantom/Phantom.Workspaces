@@ -950,7 +950,7 @@ public sealed class SharedStylesTests
     {
         // Issue #1045: property-name and property-value column min-widths drop to 2/3 (100 -> 67).
         var styles = ReadSharedStylesText();
-        var label = ExtractStyle(styles, "TextBlock.workspace-field-label");
+        var label = ExtractStyle(styles, ":is(TextBlock).workspace-field-label");
         Assert.Contains("<Setter Property=\"MinWidth\" Value=\"67\" />", label, StringComparison.Ordinal);
         var value = ExtractStyle(styles, "TextBox.workspace-field-value");
         Assert.Contains("<Setter Property=\"MinWidth\" Value=\"67\" />", value, StringComparison.Ordinal);
