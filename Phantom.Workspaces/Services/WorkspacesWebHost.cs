@@ -1,13 +1,18 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Server;
 using Phantom.Workspaces.Services.Logging;
+using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.Web.Server;
 
@@ -24,6 +29,8 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
     private WebApplication? application;
     private Task? runTask;
     private CancellationTokenSource? cancellationTokenSource;
+    private HttpServerTransportFactory? httpServerTransportFactory;
+    private bool httpServerTransportFactoryDisposed;
 
     public WorkspacesWebHost(ReverseConnectionStatusRegistry statusRegistry)
     {
@@ -38,6 +45,27 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
 
     /// <summary>The listen URL the server is bound to (null if not running).</summary>
     public string? ListenUrl { get; private set; }
+
+    /// <summary>Test-only: the running application's endpoint route patterns.</summary>
+    internal IReadOnlyList<string> GetMappedRoutePatterns()
+    {
+        if (this.application is null)
+        {
+            return [];
+        }
+
+        return ((IEndpointRouteBuilder)this.application).DataSources
+            .SelectMany(static ds => ds.Endpoints)
+            .OfType<Microsoft.AspNetCore.Routing.RouteEndpoint>()
+            .Select(static e => e.RoutePattern.RawText ?? string.Empty)
+            .ToArray();
+    }
+
+    /// <summary>Test-only: the currently mapped HttpServerTransportFactory (null when not running).</summary>
+    internal HttpServerTransportFactory? HttpServerTransportFactory => this.httpServerTransportFactory;
+
+    /// <summary>Test-only: true after StopAsync has disposed the HttpServerTransportFactory it created.</summary>
+    internal bool HttpServerTransportFactoryWasDisposed => this.httpServerTransportFactoryDisposed;
 
     /// <summary>
     /// Starts the web server using the supplied configuration and data-access layer. Does nothing
@@ -87,6 +115,17 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         this.application.MapWebDataAccessEndpoints();
         this.application.MapAgentEndpoints();
         var serverTransportFactory = new ReverseHttpServerTransportFactory(this.statusRegistry);
+
+        // #1209: expose the raw HTTP transport endpoint (/transport/connect) that reverse-HTTP
+        // clients bootstrap against. Backed by a TransportRegistry that lists the reverse-HTTP
+        // server factory so `reverse-register` and `reverse-http` channel-opens dispatch through
+        // the same status registry. Mirrors Phantom.Workspaces.Web.Server/Program.cs.
+        var transportRegistry = new TransportRegistry();
+        transportRegistry.Register(serverTransportFactory);
+        this.httpServerTransportFactory = new HttpServerTransportFactory(transportRegistry);
+        this.httpServerTransportFactory.Map(this.application);
+        this.httpServerTransportFactoryDisposed = false;
+
         this.application.MapTransportReverseEndpoints(serverTransportFactory, this.statusRegistry);
 
         this.ListenUrl = remoteHostingSettings.ListenUrl;
@@ -114,6 +153,13 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
             catch (OperationCanceledException)
             {
             }
+        }
+
+        if (this.httpServerTransportFactory is not null)
+        {
+            await this.httpServerTransportFactory.DisposeAsync().ConfigureAwait(false);
+            this.httpServerTransportFactoryDisposed = true;
+            this.httpServerTransportFactory = null;
         }
 
         this.application = null;
