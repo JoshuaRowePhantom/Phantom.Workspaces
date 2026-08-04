@@ -70,6 +70,16 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         var (periodStart, periodEnd) = SelectPeriod(budgets, account.UserName, now);
 
         var url = BuildRequestUrl(account, periodStart);
+
+        // #1211: Log the fetch URL + period so the request the server received is
+        // reconstructable from the log stream alone (previously any usage
+        // discrepancy could only be root-caused with a debugger attached).
+        this.logger.LogInformation(
+            "GitHubCopilotUsageProvider fetching usage from {Endpoint} for period {PeriodStart:o}..{PeriodEnd:o}.",
+            url,
+            periodStart,
+            periodEnd);
+
         var response = await this.SendRequestAsync(url, token, cancellationToken).ConfigureAwait(false);
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
@@ -116,6 +126,25 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
+        // #1211: Success-path fetch observability. Information-level entries capture
+        // URL + status + body-size so a routine log grep confirms the fetch happened;
+        // the raw JSON body is only emitted at Debug to avoid log bloat. The
+        // Authorization header is set in SendRequestAsync and is deliberately never
+        // passed to the logger — the body itself does not contain credentials.
+        this.logger.LogInformation(
+            "GitHubCopilotUsageProvider received {StatusCode} for {Endpoint} ({ByteCount} bytes).",
+            (int)response.StatusCode,
+            url,
+            json.Length);
+
+        if (this.logger.IsEnabled(LogLevel.Debug))
+        {
+            this.logger.LogDebug(
+                "GitHubCopilotUsageProvider response body for {Endpoint}: {Body}",
+                url,
+                json);
+        }
+
         return ParseMetrics(json, account, budgets, now.UtcDateTime, periodStart, periodEnd);
     }
 
@@ -123,7 +152,12 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
     {
         var userName = Uri.EscapeDataString(account.UserName ?? string.Empty);
         var utc = periodStart.UtcDateTime;
-        return $"https://api.github.com/users/{userName}/settings/billing/usage?year={utc.Year}&month={utc.Month}&day={utc.Day}";
+        // #1211: Do NOT include `day=`. GitHub Enhanced Billing treats `day=` as a
+        // single-calendar-day filter, which would exclude any paid overage /
+        // "additional usage" accrued after the period-start day. Fetch the whole
+        // month at server side and let ParseMetrics trim to [periodStart, periodEnd)
+        // client-side via the #1188 filter.
+        return $"https://api.github.com/users/{userName}/settings/billing/usage?year={utc.Year}&month={utc.Month}";
     }
 
     /// <summary>
@@ -174,6 +208,10 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
         request.Headers.Add("User-Agent", "phantom-workspaces");
         if (!string.IsNullOrWhiteSpace(token))
         {
+            // #1211: Never pass `token` or `request.Headers.Authorization` to the logger.
+            // The URL, status, and body are sufficient for triage; the bearer token has
+            // no operational benefit in a log file and would leak into any attached
+            // bug-report snippet.
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 

@@ -1174,8 +1174,14 @@ public sealed class GitHubCopilotUsageProviderTests
     }
 
     [Fact]
-    public async Task GetMetricsAsync_RequestUrl_IncludesYearMonthDayForCurrentPeriod()
+    public async Task GetMetricsAsync_RequestUrl_OmitsDayParameter()
     {
+        // #1211: Prior implementation appended `&day={utc.Day}`, which the GitHub
+        // Enhanced Billing API treats as a single-calendar-day filter — so paid
+        // "additional usage" accrued on later days of the billing period was never
+        // fetched. Fix: the request URL must include `year=` and `month=` but no
+        // `day=` component; the client then trims to the exact period client-side
+        // via the existing #1188 filter.
         var now = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero);
         var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
 
@@ -1197,7 +1203,173 @@ public sealed class GitHubCopilotUsageProviderTests
         var uri = capturedRequest!.RequestUri!.ToString();
         Assert.Contains("year=2026", uri);
         Assert.Contains("month=8", uri);
-        Assert.Contains("day=1", uri);
+        Assert.DoesNotContain("day=", uri);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_MultiDayUsage_AggregatesNetAmountAcrossAllDaysInPeriod()
+    {
+        // #1211: With `day=` removed the server returns the whole month; the parser
+        // must sum netAmount across every in-period day, not just the period-start
+        // day. Days 1, 8, and 15 all fall inside the fallback (calendar-month)
+        // period starting 2026-08-01.
+        var now = new DateTimeOffset(2026, 8, 20, 0, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        const string json = """
+            {
+              "usageItems": [
+                { "date": "2026-08-01T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 100, "unitType": "AICredits", "netAmount": 1.00 },
+                { "date": "2026-08-08T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 200, "unitType": "AICredits", "netAmount": 2.50 },
+                { "date": "2026-08-15T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 300, "unitType": "AICredits", "netAmount": 4.75 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
+
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(8.25m, cost.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_ClientSidePeriodFilter_StillTrimsItemsOutsidePeriod()
+    {
+        // #1211: Widening the fetch to the whole month must not regress #1188.
+        // With `day=` removed, an item dated in the prior calendar month (returned
+        // by the server) must still be dropped client-side.
+        var now = new DateTimeOffset(2026, 8, 10, 0, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        const string json = """
+            {
+              "usageItems": [
+                { "date": "2026-07-31T23:59:59Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 5000, "unitType": "AICredits", "netAmount": 50.00 },
+                { "date": "2026-08-05T00:00:00Z", "product": "copilot", "sku": "Copilot AI Credits", "quantity": 250,  "unitType": "AICredits", "netAmount": 2.50 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
+
+        var credits = metrics.Single(m => m.Title == "Copilot AI Credits");
+        Assert.Equal(250m, credits.QuantityUsed);
+
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        Assert.Equal(2.50m, cost.QuantityUsed);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenFetchingUsage_LogsRequestUrlAndResponseStatus()
+    {
+        // #1211: Success-path fetch observability. Without this, a user report of
+        // "additional usage is missing" cannot be triaged from logs alone — as
+        // happened with this bug. The Information line must include the URL and
+        // the response status code (200 here).
+        var logger = new TestLogger<GitHubCopilotUsageProvider>();
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, """{ "usageItems": [] }"""),
+            () => "fake-token",
+            logger);
+
+        var account = new UsageAccount
+        {
+            UserName = "octocat",
+            Product = "GitHub",
+            SettingsUrl = new Uri("https://github.com/settings/billing/summary"),
+        };
+
+        await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
+
+        var infos = logger.Entries.Where(e => e.Level == LogLevel.Information).ToList();
+        Assert.Contains(infos, e => e.Message.Contains(
+            "https://api.github.com/users/octocat/settings/billing/usage",
+            StringComparison.Ordinal));
+        Assert.Contains(infos, e => e.Message.Contains("200", StringComparison.Ordinal)
+            && e.Message.Contains("https://api.github.com/users/octocat/settings/billing/usage", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenDebugLoggingEnabled_LogsRawJsonResponseBody()
+    {
+        // #1211: Raw JSON body is the ground truth for triage. It is only emitted
+        // when Debug is enabled — TestLogger.IsEnabled returns true for every level,
+        // so this test verifies the Debug path is active and captures the body
+        // verbatim.
+        const string body = """{ "usageItems": [ { "product": "copilot", "sku": "X" } ] }""";
+
+        var logger = new TestLogger<GitHubCopilotUsageProvider>();
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, body),
+            () => "fake-token",
+            logger);
+
+        await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var debugEntry = Assert.Single(
+            logger.Entries,
+            e => e.Level == LogLevel.Debug && e.Message.Contains(body, StringComparison.Ordinal));
+        Assert.NotNull(debugEntry);
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_WhenLoggingFetch_DoesNotLogAuthorizationTokenOrBearerHeader()
+    {
+        // #1211: Redaction contract. The Authorization header value must never
+        // reach the logger at any level, including Debug.
+        const string sentinel = "SENTINEL-TOKEN-VALUE-1211";
+
+        var logger = new TestLogger<GitHubCopilotUsageProvider>();
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, """{ "usageItems": [] }"""),
+            () => sentinel,
+            logger);
+
+        await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(logger.Entries, e => e.Message.Contains(sentinel, StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, e => e.Message.Contains("Bearer ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetMetricsAsync_RequestUrl_IncludesYearMonthForCurrentPeriod()
+    {
+        // #1188 (adjusted for #1211): the URL is still bounded to the current
+        // billing period, but only via year + month — day= is intentionally omitted
+        // (see GetMetricsAsync_RequestUrl_OmitsDayParameter).
+        var now = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero);
+        var fakeTime = new Microsoft.Extensions.Time.Testing.FakeTimeProvider(now);
+
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new RequestCapturingHandler(
+            req => capturedRequest = req,
+            HttpStatusCode.OK,
+            """{ "usageItems": [] }""");
+
+        var provider = new GitHubCopilotUsageProvider(
+            new HttpClient(handler),
+            () => "token",
+            logger: null,
+            timeProvider: fakeTime);
+
+        await provider.GetMetricsAsync(PersonalAccount("octocat"), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        var uri = capturedRequest!.RequestUri!.ToString();
+        Assert.Contains("year=2026", uri);
+        Assert.Contains("month=8", uri);
     }
 
     [Fact]
