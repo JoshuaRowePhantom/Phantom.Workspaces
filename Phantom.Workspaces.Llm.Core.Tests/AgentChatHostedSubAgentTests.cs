@@ -422,6 +422,138 @@ public sealed class AgentChatHostedSubAgentTests
         Assert.Equal(childSessionId, restoredChild.SessionId.Value);
     }
 
+    [Fact]
+    public async Task RestoreSubAgentsAsync_ThenAcquireLeaseOnEveryStub_LeavesRunningSessionsEmptyOfChildren()
+    {
+        // Issue #1205: after a parent restore with N persisted children, the parent's AgentViewModel
+        // eagerly acquires a lease on each restored SubAgent stub. Those lease acquisitions must NOT
+        // add the children to IRunningAgentChatFactory.RunningSessions — otherwise they surface as
+        // "No Open Tab" rows in the running-agents flyout after every restart (issue #1205).
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "parent-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """);
+        var parentSessionId = Guid.NewGuid().ToString("n");
+        var childSessionIds = new[]
+        {
+            Guid.NewGuid().ToString("n"),
+            Guid.NewGuid().ToString("n"),
+            Guid.NewGuid().ToString("n"),
+        };
+        foreach (var child in childSessionIds)
+        {
+            await store.AddSubAgentLinkAsync(parentSessionId, child);
+            // Persist a definition for each child so GetAsync can load it.
+            await store.StoreAsync(new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = child,
+                    AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(parentDefinition.ToJson()),
+                }
+            });
+        }
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = parentSessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(parentDefinition.ToJson()),
+            }
+        });
+
+        await using var parentLease = await factory.GetAsync(new AgentSessionId(parentSessionId));
+
+        await WaitForSubAgentCountAsync(parentLease.AgentChat, childSessionIds.Length, CancellationToken.None);
+
+        var leases = new List<RunningAgentChatLease>();
+        try
+        {
+            foreach (var stub in parentLease.AgentChat.SubAgents.OfType<SubAgent>())
+            {
+                leases.Add(await stub.AcquireLeaseAsync());
+            }
+
+            // Parent registered as top-level; children must not have been added.
+            Assert.Single(factory.RunningSessions);
+            Assert.Equal(parentSessionId, factory.RunningSessions[0].SessionId.Value);
+        }
+        finally
+        {
+            foreach (var lease in leases)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RepeatedRestartRestore_DoesNotAccumulateRunningSessions()
+    {
+        // Issue #1205: two consecutive restore cycles with the same persisted parent + child
+        // must leave RunningSessions.Count == 1 (no per-restart growth / leak).
+        var store = new InMemoryAgentPersistenceStore();
+        var parentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "parent-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """);
+        var parentSessionId = Guid.NewGuid().ToString("n");
+        var childSessionId = Guid.NewGuid().ToString("n");
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = parentSessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(parentDefinition.ToJson()),
+            }
+        });
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(parentDefinition.ToJson()),
+            }
+        });
+
+        for (var cycle = 0; cycle < 2; cycle++)
+        {
+            var factory = new AgentChatFactory(
+                store,
+                new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+                TaskScheduler.Default);
+
+            await using (var parentLease = await factory.GetAsync(new AgentSessionId(parentSessionId)))
+            {
+                await WaitForSubAgentCountAsync(parentLease.AgentChat, 1, CancellationToken.None);
+                var stub = parentLease.AgentChat.SubAgents.OfType<SubAgent>().Single();
+                await using var childLease = await stub.AcquireLeaseAsync();
+
+                Assert.Single(factory.RunningSessions);
+                Assert.Equal(parentSessionId, factory.RunningSessions[0].SessionId.Value);
+            }
+
+            await factory.DisposeAsync();
+        }
+    }
+
     private static async Task WaitForSubAgentCountAsync(
         AgentChat chat,
         int expectedCount,
@@ -569,7 +701,7 @@ public sealed class AgentChatHostedSubAgentTests
             return Task.FromResult(new RunningAgentChatLease(sessionId, child, () => ValueTask.CompletedTask));
         }
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => throw new NotImplementedException();
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(

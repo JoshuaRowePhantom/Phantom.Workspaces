@@ -149,7 +149,7 @@ public sealed class AgentFactorySubAgentDispatcherIntegrationTests
     {
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => throw new NotSupportedException();
 
         public Task<RunningAgentChatLease> CreateAsync(

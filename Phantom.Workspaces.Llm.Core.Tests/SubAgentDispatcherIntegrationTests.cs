@@ -291,7 +291,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             return lease;
         }
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => GetOrCreateAsync(sessionId, ct: ct);
 
         public Task<RunningAgentChatLease> CreateAsync(
@@ -344,7 +344,7 @@ public sealed class SubAgentDispatcherIntegrationTests
             return lease;
         }
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => GetOrCreateAsync(sessionId, ct: ct);
 
         public Task<RunningAgentChatLease> CreateAsync(

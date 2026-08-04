@@ -15,8 +15,15 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
     /// <summary>
     /// Acquires a ref-counted lease on the AgentChat for <paramref name="sessionId"/>,
     /// loading it from persistence if not already running.
+    /// <paramref name="registerAsRunningAgent"/> — when <see langword="false"/>, the newly-loaded
+    /// session is NOT added to <see cref="RunningSessions"/> (issue #1205 — sub-agents lazily
+    /// materialised from the restore path opt out so they don't leak into the top-right
+    /// "Running agents" popup as "No Open Tab" rows).
     /// </summary>
-    Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default);
+    Task<RunningAgentChatLease> GetAsync(
+        AgentSessionId sessionId,
+        bool registerAsRunningAgent = true,
+        CancellationToken ct = default);
 
     /// <summary>
     /// Creates a new AgentChat from <paramref name="definition"/> + <paramref name="sessionId"/>,

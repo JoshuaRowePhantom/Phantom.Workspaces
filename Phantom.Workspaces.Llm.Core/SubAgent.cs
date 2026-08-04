@@ -69,7 +69,12 @@ public sealed class SubAgent : IRunningSubAgent
         var factory = _factory
             ?? throw new InvalidOperationException(
                 "Cannot acquire a lease: IRunningAgentChatFactory is not available.");
-        var leaseTask = factory.GetAsync(SessionId, ct);
+        // Issue #1205: sub-agents must never appear in the top-right "Running agents" popup.
+        // The lazy restore path routed through GetAsync used to unconditionally register the
+        // materialised child chat as a top-level entry, producing "No Open Tab" pollution rows
+        // for every persisted sub-agent after a GUI restart. Mirror the opt-out that #1150 added
+        // to the live-creation path (GetOrCreateAsync).
+        var leaseTask = factory.GetAsync(SessionId, registerAsRunningAgent: false, ct);
         var overrideState = _restoredCompletionState;
         if (overrideState is null)
         {

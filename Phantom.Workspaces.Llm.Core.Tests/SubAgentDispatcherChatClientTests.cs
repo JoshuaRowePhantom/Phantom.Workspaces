@@ -375,7 +375,7 @@ public sealed class SubAgentDispatcherChatClientTests
             return lease;
         }
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (Leases.TryGetValue(sessionId, out var lease))
             {
@@ -440,7 +440,7 @@ public sealed class SubAgentDispatcherChatClientTests
             return lease;
         }
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (Leases.TryGetValue(sessionId, out var lease))
             {

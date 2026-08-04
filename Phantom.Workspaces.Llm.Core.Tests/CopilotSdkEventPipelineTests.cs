@@ -426,7 +426,7 @@ public sealed class CopilotSdkEventPipelineTests
             return lease;
         }
 
-        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, CancellationToken ct) =>
+        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>
             throw new NotImplementedException();
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetOrCreateAsync(

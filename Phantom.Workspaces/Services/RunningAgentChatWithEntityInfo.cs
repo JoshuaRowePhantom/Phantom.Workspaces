@@ -14,6 +14,13 @@ public sealed class RunningAgentChatWithEntityInfo
     /// <summary>The agent session identifier.</summary>
     public AgentSessionId SessionId => _chat.SessionId;
 
+    /// <summary>
+    /// <see langword="true"/> when the underlying <see cref="RunningAgentChat"/> is a sub-agent.
+    /// The running-agent brain popup filters these out (issue #1205) as a belt-and-braces
+    /// safeguard against sub-agents leaking into the top-level session list.
+    /// </summary>
+    public bool IsSubAgent => _chat.IsSubAgent;
+
     /// <summary>The display name of the agent entity that owns this session.</summary>
     public string EntityName { get; }
 

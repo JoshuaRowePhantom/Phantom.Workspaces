@@ -752,7 +752,7 @@ public sealed class AgentViewModelSubAgentBrowserTests
 
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             var tcs = new TaskCompletionSource<RunningAgentChatLease>();
             

@@ -22,9 +22,9 @@ public sealed class RunningAgentBrainViewModelTests
     {
         public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions { get; } = [];
 
-        public void AddSession(string sessionKey, string entityName = "", string? workspaceId = null)
+        public void AddSession(string sessionKey, string entityName = "", string? workspaceId = null, bool isSubAgent = false)
         {
-            var chat = new RunningAgentChat(new AgentSessionId(sessionKey), null!);
+            var chat = new RunningAgentChat(new AgentSessionId(sessionKey), null!) { IsSubAgent = isSubAgent };
             RunningSessions.Add(new RunningAgentChatWithEntityInfo(chat, entityName, null, workspaceId));
         }
 
@@ -1109,5 +1109,53 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = CreateBrainVm(table, []);
 
         Assert.False(vm.IsAnyRunning);
+    }
+
+    [Fact]
+    public void Refresh_AfterRestartWithRestoredSubAgents_ShowsOnlyParentRow()
+    {
+        // Issue #1205: after a restart-restore with one parent tab and N sub-agents in the
+        // running-sessions table, the flyout must show exactly one row (the parent) — no
+        // "No Open Tab" pollution rows for the restored sub-agents.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("parent-1205", "Parent Chat");
+        table.AddSession("child-a", "", isSubAgent: true);
+        table.AddSession("child-b", "", isSubAgent: true);
+        table.AddSession("child-c", "", isSubAgent: true);
+
+        var parentTab = CreateReadyTab("tab-parent", "Parent Chat", agentSessionId: "parent-1205");
+        var vm = CreateBrainVm(table, [new AgentTabInfo("pane-1", "Workspace", parentTab)]);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("parent-1205", row.SessionKey);
+        Assert.True(row.HasOpenTab);
+    }
+
+    [Fact]
+    public void Refresh_SessionWithoutTabAndBackingChatIsSubAgent_IsNotShownAsFallbackRow()
+    {
+        // Issue #1205 Fix 2 (defensive): even if a sub-agent leaks into RunningSessions,
+        // the view model must skip it instead of rendering a "No Open Tab" fallback row.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("leaked-sub", "Leaked Sub-agent", isSubAgent: true);
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.Empty(vm.Rows);
+    }
+
+    [Fact]
+    public void Refresh_TopLevelSessionWithoutTab_StillShownAsFallbackRow()
+    {
+        // Issue #1205 Fix 2 must not over-filter: a legitimate top-level running chat that has
+        // lost its tab (e.g. pane closed) is still shown as "No Open Tab".
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("orphan-top", "Orphaned Top-level", isSubAgent: false);
+
+        var vm = CreateBrainVm(table, []);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("orphan-top", row.SessionKey);
+        Assert.False(row.HasOpenTab);
     }
 }

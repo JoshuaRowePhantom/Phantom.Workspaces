@@ -718,7 +718,7 @@ public sealed class AgentChatFactoryTests
         // Bound the operation aggressively — a hang here is the exact regression
         // #1186 documents.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId), cts.Token);
+        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId), ct: cts.Token);
         await lease.AgentChat.WaitForRestoredSubAgentsMarkedTerminalAsync().WaitAsync(cts.Token);
 
         Assert.Equal(2, lease.AgentChat.SubAgents.Count);
@@ -898,23 +898,33 @@ public sealed class AgentChatFactoryTests
     // = github-copilot-subagent) without hitting the "Agent definition does not specify a
     // model." throw.
     [Fact]
-    public async Task AgentChatFactory_GetAsync_RestoredHostedSubAgent_ConstructsClientFromRehydratedDefinition()
+    public async Task GetAsync_WithRegisterAsRunningAgentFalse_DoesNotAddToRunningSessions()
     {
-        var sessionId = new AgentSessionId("session-1187-hosted");
-        var hostedDefinition = CopilotSubAgentDefinitionDefaults.Create(
-            subAgentSessionId: sessionId.Value,
-            displayName: null,
-            description: null,
-            name: null);
-        var store = await CreatePopulatedStoreAsync(sessionId, hostedDefinition);
+        // Issue #1205: sub-agents lazily materialised through the restore path (SubAgent.AcquireLeaseAsync)
+        // must not leak into the running-agents flyout as "No Open Tab" rows. GetAsync gains the same
+        // opt-out as GetOrCreateAsync did in #1150.
+        var sessionId = new AgentSessionId("session-1205-noregister");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(sessionId, registerAsRunningAgent: false);
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task GetAsync_DefaultRegisterAsRunningAgent_AddsToRunningSessions()
+    {
+        // Issue #1205 backwards-compat: default overload preserves existing behaviour for
+        // top-level restore callers (e.g. RunningAgentChat.AcquireLeaseAsync).
+        var sessionId = new AgentSessionId("session-1205-default");
+        var store = await CreatePopulatedStoreAsync(sessionId);
         await using var factory = CreateFactory(store: store);
 
         await using var lease = await factory.GetAsync(sessionId);
 
-        Assert.NotNull(lease.AgentChat);
-        var promptAgent = Assert.IsType<PromptAgent>(lease.AgentChat.AgentDefinition);
-        Assert.Equal(
-            CopilotSubAgentDefinitionDefaults.HostedSubAgentProvider,
-            promptAgent.Model?.Provider);
+        Assert.Single(factory.RunningSessions);
+        Assert.Equal(sessionId, factory.RunningSessions[0].SessionId);
     }
 }

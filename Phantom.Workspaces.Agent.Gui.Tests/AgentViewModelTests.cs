@@ -347,7 +347,7 @@ public sealed class AgentViewModelTests
 
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => this.leaseTcs.Task;
 
         public void CompleteLease()
@@ -374,7 +374,7 @@ public sealed class AgentViewModelTests
     {
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             var leaseCtor = typeof(RunningAgentChatLease).GetConstructor(
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
@@ -402,7 +402,7 @@ public sealed class AgentViewModelTests
     {
         public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
             => Task.FromException<RunningAgentChatLease>(new InvalidOperationException("simulated lease acquisition failure"));
 
         public Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, string? nameOverride = null, CancellationToken ct = default)

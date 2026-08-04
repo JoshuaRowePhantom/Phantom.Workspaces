@@ -129,7 +129,10 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         }
     }
 
-    public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+    public async Task<RunningAgentChatLease> GetAsync(
+        AgentSessionId sessionId,
+        bool registerAsRunningAgent = true,
+        CancellationToken ct = default)
     {
         while (true)
         {
@@ -184,7 +187,10 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             if (existingLease is not null)
                 return existingLease;
 
-            await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            if (registerAsRunningAgent)
+            {
+                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            }
             return MakeLease(sessionId, newChat!);
         }
     }

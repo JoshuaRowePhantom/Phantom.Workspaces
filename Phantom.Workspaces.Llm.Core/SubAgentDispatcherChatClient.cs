@@ -488,7 +488,13 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
                     continue;
                 }
 
-                var lease = await _runningAgentChatFactory.GetAsync(new AgentSessionId(sessionId), cancellationToken);
+                // Issue #1205: dispatched sub-agents restored from persistence must not be
+                // registered as top-level running agents (would show up as "No Open Tab" rows
+                // in the running-agents flyout after restart).
+                var lease = await _runningAgentChatFactory.GetAsync(
+                    new AgentSessionId(sessionId),
+                    registerAsRunningAgent: false,
+                    cancellationToken);
 
                 var embeddings = await _embeddingsProvider.ComputeAsync(
                     [new EmbeddingInput { EntityId = snapshot.EntityId, Text = description }],

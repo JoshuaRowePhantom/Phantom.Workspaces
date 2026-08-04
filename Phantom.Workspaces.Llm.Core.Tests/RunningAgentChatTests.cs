@@ -143,7 +143,7 @@ public sealed class RunningAgentChatTests
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             if (_evicted)
                 throw new ObjectDisposedException(nameof(FakeRunningAgentChatFactory));
@@ -178,6 +178,6 @@ public sealed class RunningAgentChatTests
             string? displayNameOverride = null,
             string? descriptionOverride = null,
             bool registerAsRunningAgent = true, CancellationToken ct = default)
-            => GetAsync(sessionId, ct);
+            => GetAsync(sessionId, ct: ct);
     }
 }
