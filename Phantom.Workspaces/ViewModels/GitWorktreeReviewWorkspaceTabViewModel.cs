@@ -5,7 +5,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Avalonia.Threading;
 using LibGit2Sharp;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -20,12 +19,20 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     private CancellationTokenSource? refreshCts;
     private Task? currentRefresh;
     private readonly GitWorktreeWatcher? watcher;
+    private readonly TaskScheduler foregroundScheduler;
     private GitWorktreeCommitListViewModel commitList;
     private GitWorktreeFileListViewModel fileList;
     private ObservableCollection<GitDiffViewModel> fileDiffs;
 
-    public GitWorktreeReviewWorkspaceTabViewModel(SubscribedEntityViewModel entityViewModel)
+    // #1210: `foregroundScheduler` is a required constructor parameter (mirrors AgentViewModel /
+    // #1122). Heavy LibGit2Sharp work runs on the thread pool and only the final observable-collection
+    // mutations marshal back via ContinueWith(..., foregroundScheduler). No blocking git probe runs
+    // in the constructor.
+    public GitWorktreeReviewWorkspaceTabViewModel(
+        SubscribedEntityViewModel entityViewModel,
+        TaskScheduler foregroundScheduler)
     {
+        this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
         var repositoryPath = GetRepositoryPath(entityViewModel);
 
         this.RepositoryPath = repositoryPath ?? string.Empty;
@@ -34,8 +41,12 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         this.fileDiffs = new ObservableCollection<GitDiffViewModel>();
         this.BranchNames = new ObservableCollection<string>();
 
-        // Read target branch synchronously (entity data or repository probe)
-        this.targetBranch = GetDefaultTargetBranch(entityViewModel, repositoryPath);
+        // #1210: seed target branch from entity data ONLY. The main/master repository probe is a
+        // blocking LibGit2Sharp call and must not run on the UI thread; it is deferred into
+        // InitializeAsync's Task.Run body below.
+        var explicitBranch = GetTargetBranchFromEntityData(entityViewModel);
+        this.targetBranch = explicitBranch ?? "main";
+        var needsDefaultBranchProbe = explicitBranch is null;
 
         if (repositoryPath is not null)
         {
@@ -47,8 +58,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         this.fileList.SelectedFiles.CollectionChanged += this.OnSelectedFilesChanged;
         this.commitList.SelectedCommits.CollectionChanged += this.OnSelectedCommitsChanged;
 
-        // Start initialization and expose it as CurrentRefresh immediately
-        var initTask = this.InitializeAsync(entityViewModel, Lifetime.Token);
+        // Start initialization and expose it as CurrentRefresh immediately.
+        var initTask = this.InitializeAsync(needsDefaultBranchProbe, Lifetime.Token);
         this.currentRefresh = initTask;
         Lifetime.Run(_ => initTask);
     }
@@ -169,22 +180,45 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
     public ObservableCollection<string> BranchNames { get; }
 
-    private async Task InitializeAsync(SubscribedEntityViewModel entityViewModel, CancellationToken ct = default)
+    private async Task InitializeAsync(bool needsDefaultBranchProbe, CancellationToken ct = default)
     {
-        var branchNames = await Task.Run(() =>
+        // #1210: All blocking LibGit2Sharp work (branch enumeration + optional main/master probe)
+        // runs on the thread pool with ConfigureAwait(false).
+        var (branchNames, resolvedDefault) = await Task.Run(() =>
         {
             var branches = new System.Collections.Generic.List<string>();
             LoadBranchNames(this.RepositoryPath, branches);
-            return branches;
-        }, ct);
+            string? probedDefault = needsDefaultBranchProbe
+                ? ProbeRepositoryForDefaultBranch(this.RepositoryPath)
+                : null;
+            return (branches, probedDefault);
+        }, ct).ConfigureAwait(false);
 
-        foreach (var branch in branchNames)
-        {
-            this.BranchNames.Add(branch);
-        }
+        ct.ThrowIfCancellationRequested();
+
+        // #1210: marshal only the final ObservableCollection/property updates to the UI thread.
+        await Task.Factory.StartNew(
+            () =>
+            {
+                foreach (var branch in branchNames)
+                {
+                    this.BranchNames.Add(branch);
+                }
+
+                if (resolvedDefault is not null
+                    && !string.Equals(this.targetBranch, resolvedDefault, StringComparison.Ordinal))
+                {
+                    this.targetBranch = resolvedDefault;
+                    this.RaisePropertyChanged(nameof(this.TargetBranch));
+                    this.RaisePropertyChanged(nameof(this.CommitListHeader));
+                }
+            },
+            ct,
+            TaskCreationOptions.None,
+            this.foregroundScheduler).ConfigureAwait(false);
 
         // Call RefreshCoreAsync directly to avoid overwriting currentRefresh
-        await this.RefreshCoreAsync(ct);
+        await this.RefreshCoreAsync(ct).ConfigureAwait(false);
     }
 
     public Task RefreshAsync(CancellationToken ct = default)
@@ -203,11 +237,12 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             this.IsRefreshing = true;
 
-            // Build detached VMs on background thread
+            // Build detached VMs. Their RefreshAsync methods run heavy git work on the thread pool
+            // and marshal only the final ObservableCollection mutations to foregroundScheduler.
             var newCommitList = new GitWorktreeCommitListViewModel();
-            await newCommitList.RefreshAsync(this.RepositoryPath, this.targetBranch, token);
+            await newCommitList.RefreshAsync(this.RepositoryPath, this.targetBranch, this.foregroundScheduler, token)
+                .ConfigureAwait(false);
 
-            // Preserve commit selection by OID
             PreserveCommitSelection(this.CommitList, newCommitList);
 
             var selectedCommits = newCommitList.SelectedCommits.Count > 0
@@ -215,19 +250,27 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
                 : (IReadOnlyList<GitCommitModel>)newCommitList.Commits;
 
             var newFileList = new GitWorktreeFileListViewModel();
-            await newFileList.RefreshAsync(this.RepositoryPath, selectedCommits, token);
+            await newFileList.RefreshAsync(this.RepositoryPath, selectedCommits, this.foregroundScheduler, token)
+                .ConfigureAwait(false);
 
-            // Preserve file selection by path
             PreserveFileSelection(this.FileList, newFileList);
 
-            var newDiffs = await this.BuildFileDiffsAsync(newFileList, selectedCommits, token);
+            var newDiffs = await this.BuildFileDiffsAsync(newFileList, selectedCommits, token)
+                .ConfigureAwait(false);
 
             token.ThrowIfCancellationRequested();
 
-            // Atomic swap - only writes back to visible state
-            this.AttachCommitList(newCommitList);
-            this.AttachFileList(newFileList);
-            this.FileDiffs = newDiffs;
+            // #1210: marshal the final atomic swap onto foregroundScheduler.
+            await Task.Factory.StartNew(
+                () =>
+                {
+                    this.AttachCommitList(newCommitList);
+                    this.AttachFileList(newFileList);
+                    this.FileDiffs = newDiffs;
+                },
+                token,
+                TaskCreationOptions.None,
+                this.foregroundScheduler).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -237,7 +280,11 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         {
             if (!token.IsCancellationRequested)
             {
-                this.IsRefreshing = false;
+                await Task.Factory.StartNew(
+                    () => this.IsRefreshing = false,
+                    CancellationToken.None,
+                    TaskCreationOptions.None,
+                    this.foregroundScheduler).ConfigureAwait(false);
             }
         }
     }
@@ -387,25 +434,30 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }, ct);
     }
 
-    private async Task RebuildFileDiffsAsync(IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct)
+    private Task RebuildFileDiffsAsync(IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct)
     {
-        async Task RebuildCore()
-        {
-            var newDiffs = await this.BuildFileDiffsAsync(this.FileList, selectedCommits, ct);
-            ct.ThrowIfCancellationRequested();
-            
-            // Modify existing collection in-place to fire CollectionChanged
-            this.FileDiffs.Clear();
-            foreach (var diff in newDiffs)
+        // #1210: heavy diff construction runs on the thread pool inside BuildFileDiffsAsync's
+        // Task.Run; only the FileDiffs mutations marshal back to the foreground scheduler.
+        var buildTask = this.BuildFileDiffsAsync(this.FileList, selectedCommits, ct);
+        var rebuildTask = buildTask.ContinueWith(
+            t =>
             {
-                this.FileDiffs.Add(diff);
-            }
-        }
+                var newDiffs = t.GetAwaiter().GetResult();
+                ct.ThrowIfCancellationRequested();
 
-        var rebuildTask = RebuildCore();
+                this.FileDiffs.Clear();
+                foreach (var diff in newDiffs)
+                {
+                    this.FileDiffs.Add(diff);
+                }
+            },
+            ct,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            this.foregroundScheduler);
+
         this.currentRefresh = rebuildTask;
         this.RaisePropertyChanged(nameof(this.CurrentRefresh));
-        await rebuildTask;
+        return rebuildTask;
     }
 
     private void OnWatcherChanged(object? sender, EventArgs e)
@@ -432,8 +484,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
 
         Lifetime.Run(async ct =>
         {
-            await this.FileList.RefreshAsync(this.RepositoryPath, selectedCommits, ct);
-            await this.RebuildFileDiffsAsync(selectedCommits, ct);
+            await this.FileList.RefreshAsync(this.RepositoryPath, selectedCommits, this.foregroundScheduler, ct)
+                .ConfigureAwait(false);
+            await this.RebuildFileDiffsAsync(selectedCommits, ct).ConfigureAwait(false);
         });
     }
 
@@ -510,18 +563,6 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
         }
 
         return "main";
-    }
-
-    private static string GetDefaultTargetBranch(SubscribedEntityViewModel entityViewModel, string? repositoryPath)
-    {
-        // 1. Check entity data for explicit target-branch
-        if (GetTargetBranchFromEntityData(entityViewModel) is { } explicitBranch)
-        {
-            return explicitBranch;
-        }
-
-        // 2. Probe the repository for main/master
-        return ProbeRepositoryForDefaultBranch(repositoryPath);
     }
 
     private static void LoadBranchNames(string? repositoryPath, System.Collections.Generic.List<string> branchNames)

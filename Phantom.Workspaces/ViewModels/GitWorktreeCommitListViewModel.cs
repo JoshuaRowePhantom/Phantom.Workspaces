@@ -12,11 +12,19 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
     public ObservableCollection<GitCommitModel> Commits { get; } = new();
     public ObservableCollection<GitCommitModel> SelectedCommits { get; } = new();
 
-    public async Task RefreshAsync(string repositoryPath, string targetBranch, CancellationToken ct = default)
+    // #1210: `foregroundScheduler` is required so that git I/O runs on the thread pool and only the
+    // final ObservableCollection mutations are marshalled back to the UI thread. See AgentViewModel
+    // (#1122) for the reference pattern.
+    public Task RefreshAsync(
+        string repositoryPath,
+        string targetBranch,
+        TaskScheduler foregroundScheduler,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(foregroundScheduler);
         ct.ThrowIfCancellationRequested();
 
-        var (commits, hasUnstaged, hasStaged) = await Task.Run(() =>
+        var buildTask = Task.Run(() =>
         {
             var commitsList = new System.Collections.Generic.List<GitCommitModel>();
             bool unstaged = false;
@@ -26,12 +34,10 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
             {
                 using var repo = new Repository(repositoryPath);
 
-                // Check for uncommitted changes
                 var status = repo.RetrieveStatus(new StatusOptions());
                 staged = status.Staged.Any();
                 unstaged = status.Modified.Any() || status.Untracked.Any() || status.Missing.Any();
 
-                // Get commits not in target branch
                 var targetCommit = repo.Branches[targetBranch]?.Tip ?? repo.Lookup<Commit>(targetBranch);
                 if (targetCommit is not null && repo.Head.Tip is not null)
                 {
@@ -67,41 +73,50 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
             return (commitsList, unstaged, staged);
         }, ct);
 
-        // Preserve selection state by OID
-        var selectedOids = new System.Collections.Generic.HashSet<string>(
-            this.SelectedCommits.Select(c => c.Oid),
-            StringComparer.Ordinal);
-
-        this.Commits.Clear();
-        this.SelectedCommits.Clear();
-
-        if (hasUnstaged)
-        {
-            var unstaged = GitCommitModel.CreateUnstaged();
-            this.Commits.Add(unstaged);
-            if (selectedOids.Contains(unstaged.Oid))
+        return buildTask.ContinueWith(
+            t =>
             {
-                this.SelectedCommits.Add(unstaged);
-            }
-        }
+                var (commits, hasUnstaged, hasStaged) = t.GetAwaiter().GetResult();
+                ct.ThrowIfCancellationRequested();
 
-        if (hasStaged)
-        {
-            var staged = GitCommitModel.CreateStaged();
-            this.Commits.Add(staged);
-            if (selectedOids.Contains(staged.Oid))
-            {
-                this.SelectedCommits.Add(staged);
-            }
-        }
+                var selectedOids = new System.Collections.Generic.HashSet<string>(
+                    this.SelectedCommits.Select(c => c.Oid),
+                    StringComparer.Ordinal);
 
-        foreach (var commit in commits)
-        {
-            this.Commits.Add(commit);
-            if (selectedOids.Contains(commit.Oid))
-            {
-                this.SelectedCommits.Add(commit);
-            }
-        }
+                this.Commits.Clear();
+                this.SelectedCommits.Clear();
+
+                if (hasUnstaged)
+                {
+                    var unstagedModel = GitCommitModel.CreateUnstaged();
+                    this.Commits.Add(unstagedModel);
+                    if (selectedOids.Contains(unstagedModel.Oid))
+                    {
+                        this.SelectedCommits.Add(unstagedModel);
+                    }
+                }
+
+                if (hasStaged)
+                {
+                    var stagedModel = GitCommitModel.CreateStaged();
+                    this.Commits.Add(stagedModel);
+                    if (selectedOids.Contains(stagedModel.Oid))
+                    {
+                        this.SelectedCommits.Add(stagedModel);
+                    }
+                }
+
+                foreach (var commit in commits)
+                {
+                    this.Commits.Add(commit);
+                    if (selectedOids.Contains(commit.Oid))
+                    {
+                        this.SelectedCommits.Add(commit);
+                    }
+                }
+            },
+            ct,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            foregroundScheduler);
     }
 }

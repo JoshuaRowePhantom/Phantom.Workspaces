@@ -13,11 +13,18 @@ public sealed class GitWorktreeFileListViewModel : ViewModelBase
     public ObservableCollection<GitWorktreeFileEntryViewModel> Files { get; } = new();
     public ObservableCollection<GitWorktreeFileEntryViewModel> SelectedFiles { get; } = new();
 
-    public async Task RefreshAsync(string repositoryPath, IReadOnlyList<GitCommitModel> selectedCommits, CancellationToken ct = default)
+    // #1210: `foregroundScheduler` is required so that git I/O + LINQ merge run on the thread pool
+    // and only the final ObservableCollection mutations marshal back to the UI thread.
+    public Task RefreshAsync(
+        string repositoryPath,
+        IReadOnlyList<GitCommitModel> selectedCommits,
+        TaskScheduler foregroundScheduler,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(foregroundScheduler);
         ct.ThrowIfCancellationRequested();
 
-        var entries = await Task.Run(() =>
+        var buildTask = Task.Run(() =>
         {
             var entryList = new List<(string path, int added, int removed)>();
 
@@ -70,38 +77,46 @@ public sealed class GitWorktreeFileListViewModel : ViewModelBase
             {
             }
 
-            return entryList;
+            var merged = entryList
+                .GroupBy(e => e.path)
+                .Select(g => new GitWorktreeFileEntryViewModel
+                {
+                    RelativePath = g.Key,
+                    LinesAdded = g.Sum(x => x.added),
+                    LinesRemoved = g.Sum(x => x.removed),
+                })
+                .OrderBy(e => e.RelativePath)
+                .ToList();
+
+            return merged;
         }, ct);
 
-        // Merge by path
-        var merged = entries
-            .GroupBy(e => e.path)
-            .Select(g => new GitWorktreeFileEntryViewModel
+        return buildTask.ContinueWith(
+            t =>
             {
-                RelativePath = g.Key,
-                LinesAdded = g.Sum(x => x.added),
-                LinesRemoved = g.Sum(x => x.removed),
-            })
-            .OrderBy(e => e.RelativePath)
-            .ToList();
+                var merged = t.GetAwaiter().GetResult();
+                ct.ThrowIfCancellationRequested();
 
-        // Preserve selection state
-        var selectedPaths = new HashSet<string>(
-            this.SelectedFiles.Select(f => f.RelativePath),
-            StringComparer.Ordinal);
+                var selectedPaths = new HashSet<string>(
+                    this.SelectedFiles.Select(f => f.RelativePath),
+                    StringComparer.Ordinal);
 
-        this.Files.Clear();
-        this.SelectedFiles.Clear();
+                this.Files.Clear();
+                this.SelectedFiles.Clear();
 
-        foreach (var item in merged)
-        {
-            if (selectedPaths.Contains(item.RelativePath))
-            {
-                item.IsSelected = true;
-                this.SelectedFiles.Add(item);
-            }
+                foreach (var item in merged)
+                {
+                    if (selectedPaths.Contains(item.RelativePath))
+                    {
+                        item.IsSelected = true;
+                        this.SelectedFiles.Add(item);
+                    }
 
-            this.Files.Add(item);
-        }
+                    this.Files.Add(item);
+                }
+            },
+            ct,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            foregroundScheduler);
     }
 }
