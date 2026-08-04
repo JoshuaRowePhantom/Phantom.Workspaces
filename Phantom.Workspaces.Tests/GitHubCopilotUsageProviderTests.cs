@@ -150,7 +150,9 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        Assert.Equal(3, metrics.Count);
+        // #1211: additional-usage rows are now emitted unconditionally (one per SKU),
+        // so the fixture (2 SKUs) yields 4 total metrics (2 quantity + 2 additional-usage).
+        Assert.Equal(4, metrics.Count);
 
         var aiCredits = metrics.Single(m => m.Title == "Copilot AI Credits");
         Assert.Equal(395199.59m, aiCredits.QuantityUsed);
@@ -180,8 +182,9 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var metric = Assert.Single(metrics);
-        Assert.Equal("Copilot Premium Request", metric.Title);
+        // #1211: quantity metric + $0 additional-usage metric emitted unconditionally.
+        Assert.Equal(2, metrics.Count);
+        var metric = metrics.Single(m => m.Title == "Copilot Premium Request");
         Assert.Equal(250m, metric.QuantityUsed);
     }
 
@@ -203,8 +206,9 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var metric = Assert.Single(metrics);
-        Assert.Equal("Copilot Premium Request", metric.Title);
+        // #1211: quantity metric + $0 additional-usage metric emitted unconditionally.
+        Assert.Equal(2, metrics.Count);
+        var metric = metrics.Single(m => m.Title == "Copilot Premium Request");
         Assert.Equal(144m, metric.QuantityUsed);
     }
 
@@ -406,11 +410,12 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        // AI Credits: has netAmount=3754.58 → quantity + cost = 2 metrics
-        // Premium Request: netAmount=0 → quantity only = 1 metric
-        Assert.Equal(3, metrics.Count);
+        // #1211: additional-usage rows are now emitted unconditionally per SKU.
+        // AI Credits (netAmount=3754.58): quantity + additional-usage = 2 metrics
+        // Premium Request (netAmount=0): quantity + $0 additional-usage = 2 metrics
+        Assert.Equal(4, metrics.Count);
 
-        var costMetric = Assert.Single(metrics, m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = Assert.Single(metrics, m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(3754.58m, costMetric.QuantityUsed);
         Assert.Equal(0m, costMetric.QuantityTotal);
         Assert.Equal("{0:C2}", costMetric.QuantityPresentationFormatString);
@@ -428,7 +433,7 @@ public sealed class GitHubCopilotUsageProviderTests
             () => "fake-token");
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
 
         Assert.Equal("$3,754.58", costMetric.QuantityPresentation);
     }
@@ -450,13 +455,17 @@ public sealed class GitHubCopilotUsageProviderTests
             () => "fake-token");
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
 
         Assert.Equal(19.75m, costMetric.QuantityUsed);
     }
 
+    // #1211: The additional-usage row is now emitted unconditionally so users can
+    // distinguish "within included allotment ($0.00)" from "no data fetched at all"
+    // (previously indistinguishable — both surfaces were absent). When NetAmount
+    // stays at 0, the row is emitted with QuantityUsed=0 and IsSelectedAsShown=false.
     [Fact]
-    public async Task GetMetricsAsync_WhenNetAmountZeroOrAbsent_EmitsNoCostMetric()
+    public async Task GetMetricsAsync_EmitsAdditionalUsageMetric_EvenWhenNetAmountZeroOrAbsent()
     {
         const string json = """
             {
@@ -473,8 +482,40 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, metrics.Count);
-        Assert.DoesNotContain(metrics, m => m.Title.EndsWith("(Cost)", StringComparison.Ordinal));
+        Assert.Equal(4, metrics.Count);
+        var premiumCost = metrics.Single(m => m.Title == "Copilot Premium Request (Additional Usage)");
+        Assert.Equal(0m, premiumCost.QuantityUsed);
+        Assert.False(premiumCost.IsSelectedAsShown);
+        var otherCost = metrics.Single(m => m.Title == "Copilot Other (Additional Usage)");
+        Assert.Equal(0m, otherCost.QuantityUsed);
+        Assert.False(otherCost.IsSelectedAsShown);
+    }
+
+    // #1211: When any Copilot line item has a non-zero netAmount the additional-usage
+    // metric is emitted with the (Additional Usage) title and IsSelectedAsShown=true
+    // so the toolbar surfaces billable dollars over the credit-quantity metric.
+    [Fact]
+    public async Task GetMetricsAsync_EmitsAdditionalUsageMetric_WhenAnyCopilotItemHasNonZeroNetAmount()
+    {
+        const string json = """
+            {
+              "usageItems": [
+                { "product": "copilot", "sku": "Copilot AI Credits", "quantity": 100, "unitType": "AICredits", "netAmount": 3.25 }
+              ]
+            }
+            """;
+
+        var provider = new GitHubCopilotUsageProvider(
+            MakeHttpClient(HttpStatusCode.OK, json),
+            () => "fake-token");
+
+        var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
+
+        var additional = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
+        Assert.Equal(3.25m, additional.QuantityUsed);
+        Assert.True(additional.IsSelectedAsShown);
+        Assert.EndsWith("(Additional Usage)", additional.Title, StringComparison.Ordinal);
+        Assert.DoesNotContain("(Cost)", additional.Title, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -486,7 +527,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
         var quantity = metrics.Single(m => m.Title == "Copilot AI Credits");
-        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
 
         Assert.NotEqual(quantity.Title, cost.Title);
     }
@@ -505,7 +546,7 @@ public sealed class GitHubCopilotUsageProviderTests
         for (var i = 0; i < metrics.Count; i++)
         {
             if (metrics[i].Title == "Copilot AI Credits") quantityIndex = i;
-            if (metrics[i].Title == "Copilot AI Credits (Cost)") costIndex = i;
+            if (metrics[i].Title == "Copilot AI Credits (Additional Usage)") costIndex = i;
         }
 
         Assert.True(quantityIndex >= 0);
@@ -749,7 +790,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Additional Usage)");
         Assert.Equal(500m, costMetric.QuantityTotal);
     }
 
@@ -782,7 +823,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(200m, costMetric.QuantityTotal);
     }
 
@@ -805,7 +846,7 @@ public sealed class GitHubCopilotUsageProviderTests
             OrgAccount(monthlyBudget: 750m),
             TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Additional Usage)");
         Assert.Equal(750m, costMetric.QuantityTotal);
     }
 
@@ -878,7 +919,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
         var count = metrics.Single(m => m.Title == "Copilot Premium Request");
-        var cost = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        var cost = metrics.Single(m => m.Title == "Copilot Premium Request (Additional Usage)");
         Assert.Equal(0m, count.QuantityTotal);
         Assert.Equal(0m, cost.QuantityTotal);
     }
@@ -925,17 +966,19 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(OrgAccount(), TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot Premium Request (Additional Usage)");
         Assert.Equal(100m, costMetric.QuantityTotal);
     }
 
     // ---------- #1160 tests: net-dollar spend as the budget-relevant metric ----------
 
-    // #1160 — When a line item is fully discounted (grossAmount == discountAmount and
-    // netAmount == 0), no cost metric is emitted for it. This proves the cost metric reflects
-    // billable spend, not gross or included consumption.
+    // #1160 / #1211 — When a line item is fully discounted (grossAmount == discountAmount
+    // and netAmount == 0), the additional-usage metric is now emitted with QuantityUsed==0
+    // and IsSelectedAsShown=false. This preserves #1160's invariant (the cost figure reflects
+    // billable spend, not gross or included consumption) while satisfying #1211's requirement
+    // that "within-allotment" and "no data fetched" be visually distinguishable.
     [Fact]
-    public async Task GetMetricsAsync_CostMetric_ExcludesIncludedUsage_ByUsingNetAmount()
+    public async Task GetMetricsAsync_AdditionalUsageMetric_ExcludesIncludedUsage_ByUsingNetAmount()
     {
         const string json = """
             {
@@ -959,7 +1002,9 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        Assert.DoesNotContain(metrics, m => m.Title == "Copilot Premium Request (Cost)");
+        var additional = metrics.Single(m => m.Title == "Copilot Premium Request (Additional Usage)");
+        Assert.Equal(0m, additional.QuantityUsed);
+        Assert.False(additional.IsSelectedAsShown);
     }
 
     // #1160 — Even when the credit-quantity metric is saturated by the included allotment,
@@ -999,7 +1044,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(3754.58m, costMetric.QuantityUsed);
     }
 
@@ -1026,7 +1071,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(account, TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(5000m, costMetric.QuantityTotal);
         Assert.NotNull(costMetric.FractionUsed);
         Assert.Equal(3754.58 / 5000.0, costMetric.FractionUsed!.Value, 5);
@@ -1049,7 +1094,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(0m, costMetric.QuantityTotal);
         Assert.Null(costMetric.FractionUsed);
         Assert.Equal("{0:C2}", costMetric.QuantityPresentationFormatString);
@@ -1095,7 +1140,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(TestAccount, TestContext.Current.CancellationToken);
 
-        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var costMetric = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         var creditMetric = metrics.Single(m => m.Title == "Copilot AI Credits");
         Assert.True(costMetric.IsSelectedAsShown);
         Assert.False(creditMetric.IsSelectedAsShown);
@@ -1139,7 +1184,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var credits = metrics.Single(m => m.Title == "Copilot AI Credits");
         Assert.Equal(250m, credits.QuantityUsed);
 
-        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(2.50m, cost.QuantityUsed);
     }
 
@@ -1234,7 +1279,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
 
-        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(8.25m, cost.QuantityUsed);
     }
 
@@ -1267,7 +1312,7 @@ public sealed class GitHubCopilotUsageProviderTests
         var credits = metrics.Single(m => m.Title == "Copilot AI Credits");
         Assert.Equal(250m, credits.QuantityUsed);
 
-        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(2.50m, cost.QuantityUsed);
     }
 
@@ -1432,7 +1477,7 @@ public sealed class GitHubCopilotUsageProviderTests
 
         var metrics = await provider.GetMetricsAsync(PersonalAccount(), TestContext.Current.CancellationToken);
 
-        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Cost)");
+        var cost = metrics.Single(m => m.Title == "Copilot AI Credits (Additional Usage)");
         Assert.Equal(12.34m, cost.QuantityUsed);
     }
 

@@ -142,7 +142,7 @@ public sealed class MainWindowUsageTrackerTests
         });
         account.Metrics.Add(new Phantom.Workspaces.Models.UsageMetric
         {
-            Title = "Copilot AI Credits (Cost)",
+            Title = "Copilot AI Credits (Additional Usage)",
             QuantityUsed = 356.00m,
             QuantityTotal = 0m,
             QuantityPresentationFormatString = "{0:C2}",
@@ -160,7 +160,7 @@ public sealed class MainWindowUsageTrackerTests
             var textBlocks = window.GetVisualDescendants()
                 .OfType<Avalonia.Controls.TextBlock>()
                 .ToList();
-            Assert.Contains(textBlocks, tb => tb.Text == "Copilot AI Credits (Cost)");
+            Assert.Contains(textBlocks, tb => tb.Text == "Copilot AI Credits (Additional Usage)");
             Assert.Contains(textBlocks, tb => tb.Text == "$356.00");
         }
         finally

@@ -630,7 +630,7 @@ public sealed class UsageTrackerViewModelTests
     [Fact]
     public void UsageTrackerViewModel_LongMetricTitle_IsExposedUntruncated()
     {
-        const string longTitle = "Copilot AI Credits (Cost)";
+        const string longTitle = "Copilot AI Credits (Additional Usage)";
         var metrics = new UsageMetrics();
         var account = new UsageAccount { Product = "GitHub Copilot", UserName = "testuser" };
         account.Metrics.Add(new UsageMetric
@@ -667,7 +667,7 @@ public sealed class UsageTrackerViewModelTests
         });
         account.Metrics.Add(new UsageMetric
         {
-            Title = "Copilot AI Credits (Cost)",
+            Title = "Copilot AI Credits (Additional Usage)",
             QuantityUsed = 3754.58m,
             QuantityTotal = 5000m,
             QuantityPresentationFormatString = "{0:C2} / {1:C2}",
@@ -699,7 +699,7 @@ public sealed class UsageTrackerViewModelTests
         });
         account.Metrics.Add(new UsageMetric
         {
-            Title = "Copilot AI Credits (Cost)",
+            Title = "Copilot AI Credits (Additional Usage)",
             QuantityUsed = 3754.58m,
             QuantityTotal = 5000m,
             QuantityPresentationFormatString = "{0:C2} / {1:C2}",

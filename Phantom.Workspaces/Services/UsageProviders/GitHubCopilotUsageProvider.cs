@@ -359,7 +359,10 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
 
                 metrics.Add(new UsageMetric
                 {
-                    Title = $"{aggregate.Sku} (Cost)",
+                    // #1211: Renamed from "(Cost)" to "(Additional Usage)" so the label
+                    // matches GitHub's own vocabulary and GitHubActionsUsageProvider's
+                    // convention. This is the paid-overage / metered-billing surface.
+                    Title = $"{aggregate.Sku} (Additional Usage)",
                     QuantityUsed = aggregate.NetAmount,
                     QuantityTotal = costTotal,
                     QuantityPresentationFormatString = costFormat,
@@ -373,6 +376,32 @@ public sealed class GitHubCopilotUsageProvider : IUsageProvider
                     // credit-quantity metric so the toolbar shows billable dollars rather
                     // than credits that saturate at the included allotment.
                     IsSelectedAsShown = true,
+                });
+            }
+            else
+            {
+                // #1211 (Tertiary): Emit the additional-usage row unconditionally so users
+                // can distinguish "within included allotment ($0.00)" from "no data fetched
+                // at all" (previously indistinguishable — both surfaces were absent). When
+                // NetAmount is 0, we do NOT set IsSelectedAsShown so the toolbar continues
+                // to prefer the credit-quantity metric until real spend accrues.
+                var costBudget = SelectCostBudget(budgets, aggregate.Sku, account.UserName);
+                var costTotal = costBudget ?? account.MonthlyBudget ?? 0m;
+                var costFormat = costTotal > 0m
+                    ? "{0:C2} / {1:C2}"
+                    : "{0:C2}";
+
+                metrics.Add(new UsageMetric
+                {
+                    Title = $"{aggregate.Sku} (Additional Usage)",
+                    QuantityUsed = 0m,
+                    QuantityTotal = costTotal,
+                    QuantityPresentationFormatString = costFormat,
+                    Unit = string.Empty,
+                    LastUpdatedAt = now,
+                    WebUrl = webUrl,
+                    ResetsAt = periodEnd,
+                    BillingPeriodStart = periodStart,
                 });
             }
         }

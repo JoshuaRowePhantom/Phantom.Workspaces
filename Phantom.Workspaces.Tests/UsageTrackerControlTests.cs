@@ -448,7 +448,7 @@ public sealed class UsageTrackerControlTests
 
     // ---------------------------------------------------------------------------------------------
     // #1179 — Metric-name column must not clip long names like "Copilot Premium Requests" or
-    // "Copilot AI Credits (Cost)". The row grid uses *,Auto,80 so the name grows and the
+    // "Copilot AI Credits (Additional Usage)". The row grid uses *,Auto,80 so the name grows and the
     // progress bar (with a MinWidth floor) is the shrinker.
     // ---------------------------------------------------------------------------------------------
 
@@ -531,13 +531,13 @@ public sealed class UsageTrackerControlTests
     [AvaloniaFact(Timeout = 15_000)]
     public void UsageTrackerControl_MetricTitleTextBlock_HasNoCharacterEllipsisTrimming()
     {
-        var (vm, window) = BuildControlWithSingleMetric("Copilot AI Credits (Cost)");
+        var (vm, window) = BuildControlWithSingleMetric("Copilot AI Credits (Additional Usage)");
         try
         {
             var link = window.GetVisualDescendants().OfType<HyperlinkButton>()
                 .First(hb => hb.Name == "MetricRowHyperlink");
             var titleBlock = link.GetVisualDescendants().OfType<TextBlock>()
-                .First(tb => (tb.Text ?? string.Empty) == "Copilot AI Credits (Cost)");
+                .First(tb => (tb.Text ?? string.Empty) == "Copilot AI Credits (Additional Usage)");
             Assert.NotEqual(TextTrimming.CharacterEllipsis, titleBlock.TextTrimming);
         }
         finally
@@ -685,6 +685,63 @@ public sealed class UsageTrackerControlTests
         {
             this.Requests.Add(request);
             return System.Threading.Tasks.Task.CompletedTask;
+        }
+    }
+
+    // #1211 — End-to-end: with a provider emitting both the credit-quantity metric and the
+    // additional-usage cost metric, the Accounts[0].Metrics collection surfaced by the
+    // UsageTrackerViewModel contains both, and both render as HyperlinkButton rows in the
+    // control flyout.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerViewModel_AdditionalUsageMetricPresent_IsRenderedInAccountsList()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 20000m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits (Additional Usage)",
+            QuantityUsed = 3754.58m,
+            QuantityTotal = 5000m,
+            QuantityPresentationFormatString = "{0:C2} / {1:C2}",
+            Unit = string.Empty,
+            IsSelectedAsShown = true,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        var control = new UsageTrackerControl { DataContext = vm };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            Assert.Single(vm.Accounts);
+            Assert.Equal(2, vm.Accounts[0].Metrics.Count);
+            Assert.Contains(vm.Accounts[0].Metrics, m => m.Title == "Copilot AI Credits");
+            Assert.Contains(vm.Accounts[0].Metrics, m => m.Title == "Copilot AI Credits (Additional Usage)");
+
+            var textBlocks = window.GetVisualDescendants().OfType<TextBlock>()
+                .Select(tb => tb.Text ?? string.Empty)
+                .ToList();
+            Assert.Contains(textBlocks, t => t == "Copilot AI Credits");
+            Assert.Contains(textBlocks, t => t == "Copilot AI Credits (Additional Usage)");
+        }
+        finally
+        {
+            window.Close();
         }
     }
 }
