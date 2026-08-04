@@ -284,19 +284,19 @@ public class StreamingPersistenceMiddlewareTests
         // emits a terminal ChatResponseUpdate carrying FinishReason on SessionIdleEvent, so the
         // single assistant message of the turn is treated as stable and persisted. Previously
         // the final message was dropped from persisted history (Count == 1 → stableCount == 0).
-        var channel = System.Threading.Channels.Channel.CreateUnbounded<GitHub.Copilot.SDK.SessionEvent>();
-        channel.Writer.TryWrite(new GitHub.Copilot.SDK.AssistantMessageDeltaEvent
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<GitHub.Copilot.SessionEvent>();
+        channel.Writer.TryWrite(new GitHub.Copilot.AssistantMessageDeltaEvent
         {
             AgentId = string.Empty,
-            Data = new GitHub.Copilot.SDK.AssistantMessageDeltaData
+            Data = new GitHub.Copilot.AssistantMessageDeltaData
             {
                 DeltaContent = "final reply",
                 MessageId = "msg-1",
             },
         });
-        channel.Writer.TryWrite(new GitHub.Copilot.SDK.SessionIdleEvent
+        channel.Writer.TryWrite(new GitHub.Copilot.SessionIdleEvent
         {
-            Data = new GitHub.Copilot.SDK.SessionIdleData { Aborted = false },
+            Data = new GitHub.Copilot.SessionIdleData { Aborted = false },
         });
         channel.Writer.Complete();
 

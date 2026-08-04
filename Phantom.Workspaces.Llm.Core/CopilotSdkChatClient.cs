@@ -3,7 +3,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using AgentSchema;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -296,7 +296,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.WorkingDirectory = workingDirectory;
         }
 
-        var tools = options?.Tools?.OfType<AIFunction>().ToList();
+        var tools = options?.Tools?.OfType<AIFunctionDeclaration>().ToList();
         if (tools is { Count: > 0 })
         {
             sessionConfig.Tools = tools;
@@ -350,7 +350,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             resumeConfig.WorkingDirectory = workingDirectory;
         }
 
-        var tools = options?.Tools?.OfType<AIFunction>().ToList();
+        var tools = options?.Tools?.OfType<AIFunctionDeclaration>().ToList();
         if (tools is { Count: > 0 })
         {
             resumeConfig.Tools = tools;
@@ -404,7 +404,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Ensures the <see cref="CopilotClient"/> is started before calling
     /// <see cref="CopilotClient.ListModelsAsync"/>.
     /// </summary>
-    public async Task<IReadOnlyList<GitHub.Copilot.SDK.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
     {
         await this.EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
         var models = await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
@@ -433,8 +433,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 GitHubToken = this.gitHubToken,
                 Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                CliPath = this.cliPath,
             };
+
+            if (!string.IsNullOrWhiteSpace(this.cliPath))
+            {
+                clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
+            }
 
             var client = new CopilotClient(clientOptions);
             await client.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -479,7 +483,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var toolCalls = new List<FunctionCallContent>();
             var toolResults = new List<FunctionResultContent>();
 
-            using var subscription = session.On(sessionEvent =>
+            using var subscription = session.On<SessionEvent>(sessionEvent =>
             {
                 switch (sessionEvent)
                 {
@@ -561,7 +565,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var eventChannel = Channel.CreateUnbounded<SessionEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-            var eventSubscription = session.On(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
+            var eventSubscription = session.On<SessionEvent>(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
 
             var dispatchLoop = Task.Run(async () =>
             {
@@ -1041,7 +1045,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         options.Attachments = dataItems
-            .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+            .Select(static d => (Attachment)new AttachmentBlob
             {
                 Data = Convert.ToBase64String(d.Data.ToArray()),
                 MimeType = d.MediaType ?? string.Empty,
@@ -1111,13 +1115,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     GitHubToken = this.gitHubToken,
                     Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                    CliPath = this.cliPath,
                 };
+
+                if (!string.IsNullOrWhiteSpace(this.cliPath))
+                {
+                    clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
+                }
 
                 var workingDirectory = GetWorkingDirectory(options);
                 if (!string.IsNullOrWhiteSpace(workingDirectory))
                 {
-                    clientOptions.Cwd = workingDirectory;
+                    clientOptions.WorkingDirectory = workingDirectory;
                 }
 
                 var client = new CopilotClient(clientOptions);

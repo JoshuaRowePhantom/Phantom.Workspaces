@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Xunit;
@@ -311,7 +311,7 @@ public sealed class CopilotSdkChatClientTests
         var sent = Assert.Single(sentOptions);
         Assert.Equal("immediate", sent.Mode);
         Assert.Equal("steer the agent", sent.Prompt);
-        var blob = Assert.IsType<UserMessageAttachmentBlob>(Assert.Single(sent.Attachments!));
+        var blob = Assert.IsType<AttachmentBlob>(Assert.Single(sent.Attachments!));
         Assert.Equal("image/jpeg", blob.MimeType);
         Assert.Equal(Convert.ToBase64String(imageBytes), blob.Data);
         Assert.True(subscription.Disposed);
@@ -340,6 +340,9 @@ public sealed class CopilotSdkChatClientTests
         // Build a fake CopilotSession (sealed; no public ctor) by bypassing the constructor and
         // injecting a known SessionId via its compiler-generated backing field.
         var fakeSession = (CopilotSession)RuntimeHelpers.GetUninitializedObject(typeof(CopilotSession));
+        // GitHub.Copilot.SDK 1.0.8 gives CopilotSession a finalizer whose RemoveFromClient() NREs on
+        // an uninitialized instance; suppress it so GC of this fake does not crash the finalizer thread.
+        GC.SuppressFinalize(fakeSession);
         typeof(CopilotSession)
             .GetField("<SessionId>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(fakeSession, expectedSessionId);
@@ -726,7 +729,7 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal("describe this", result.Prompt);
         Assert.NotNull(result.Attachments);
         Assert.Single(result.Attachments);
-        var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments[0]);
+        var blob = Assert.IsType<GitHub.Copilot.AttachmentBlob>(result.Attachments[0]);
         Assert.Equal("image/png", blob.MimeType);
         Assert.Equal(Convert.ToBase64String(pngBytes), blob.Data);
     }
@@ -773,7 +776,7 @@ public sealed class CopilotSdkChatClientTests
         Assert.NotNull(result);
         Assert.Equal("immediate", result!.Mode);
         Assert.Equal("look", result.Prompt);
-        var blob = Assert.IsType<UserMessageAttachmentBlob>(Assert.Single(result.Attachments!));
+        var blob = Assert.IsType<AttachmentBlob>(Assert.Single(result.Attachments!));
         Assert.Equal("image/jpeg", blob.MimeType);
         Assert.Equal(Convert.ToBase64String(imageBytes), blob.Data);
     }
@@ -790,7 +793,7 @@ public sealed class CopilotSdkChatClientTests
         Assert.NotNull(result);
         Assert.Equal("immediate", result!.Mode);
         Assert.Equal(string.Empty, result.Prompt);
-        var blob = Assert.IsType<UserMessageAttachmentBlob>(Assert.Single(result.Attachments!));
+        var blob = Assert.IsType<AttachmentBlob>(Assert.Single(result.Attachments!));
         Assert.Equal("image/png", blob.MimeType);
     }
 
@@ -839,7 +842,7 @@ public sealed class CopilotSdkChatClientTests
         var result = CopilotSdkChatClient.BuildMessageOptions(messages);
 
         Assert.Single(result.Attachments!);
-        var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments![0]);
+        var blob = Assert.IsType<GitHub.Copilot.AttachmentBlob>(result.Attachments![0]);
         Assert.Equal("application/pdf", blob.MimeType);
     }
 
@@ -890,9 +893,9 @@ public sealed class CopilotSdkChatClientTests
         Assert.Equal("img1\n\n---\n\nimg2", result.Prompt);
         Assert.NotNull(result.Attachments);
         Assert.Equal(2, result.Attachments.Count);
-        var blob1 = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments[0]);
+        var blob1 = Assert.IsType<GitHub.Copilot.AttachmentBlob>(result.Attachments[0]);
         Assert.Equal("image/png", blob1.MimeType);
-        var blob2 = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(result.Attachments[1]);
+        var blob2 = Assert.IsType<GitHub.Copilot.AttachmentBlob>(result.Attachments[1]);
         Assert.Equal("image/jpeg", blob2.MimeType);
     }
 
@@ -1027,7 +1030,7 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.Equal("current", result.Prompt);
         Assert.NotNull(result.Attachments);
-        var blob = Assert.IsType<GitHub.Copilot.SDK.UserMessageAttachmentBlob>(Assert.Single(result.Attachments));
+        var blob = Assert.IsType<GitHub.Copilot.AttachmentBlob>(Assert.Single(result.Attachments));
         Assert.Equal("image/png", blob.MimeType);
     }
 
@@ -1229,6 +1232,9 @@ public sealed class CopilotSdkChatClientTests
 
         // Install a fake session so CAS inside InvalidateCopilotSession succeeds.
         var fakeSession = (CopilotSession)RuntimeHelpers.GetUninitializedObject(typeof(CopilotSession));
+        // GitHub.Copilot.SDK 1.0.8 gives CopilotSession a finalizer whose RemoveFromClient() NREs on
+        // an uninitialized instance; suppress it so GC of this fake does not crash the finalizer thread.
+        GC.SuppressFinalize(fakeSession);
         typeof(CopilotSession)
             .GetField("<SessionId>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(fakeSession, "test-copilot-session-id");
