@@ -957,26 +957,57 @@ public sealed class SharedStylesTests
     }
 
     [Fact]
-    public void EntityCardControl_HeaderAndActionsRow_MinWidthIsSixtySeven()
+    public void EntityCardControl_HeaderAndActionsRow_MinWidthIsHundred()
     {
-        // Issue #1045: display-name column and actions row min-widths drop to 2/3 (100 -> 67).
+        // Issue #1213: header wrap layout restores the 100px min-width floor on both the
+        // display-name column and the actions row so they reflow together as a unit.
         var card = ReadEntityCardControlText();
 
         var headerStart = card.IndexOf("Classes=\"workspace-entity-header-row\"", StringComparison.Ordinal);
         Assert.True(headerStart >= 0);
         var headerEnd = card.IndexOf(">", headerStart, StringComparison.Ordinal);
         var header = card[headerStart..headerEnd];
-        Assert.Contains("MinWidth=\"67\"", header, StringComparison.Ordinal);
+        Assert.Contains("MinWidth=\"100\"", header, StringComparison.Ordinal);
 
-        var actionsStart = card.IndexOf("<WrapPanel Grid.Column=\"2\"", StringComparison.Ordinal);
+        var actionsStart = card.IndexOf("Classes=\"workspace-entity-actions-row\"", StringComparison.Ordinal);
         Assert.True(actionsStart >= 0, "Actions row must be a WrapPanel so action buttons wrap.");
         var actionsEnd = card.IndexOf(">", actionsStart, StringComparison.Ordinal);
         var actions = card[actionsStart..actionsEnd];
-        Assert.Contains("Classes=\"workspace-entity-actions-row\"", actions, StringComparison.Ordinal);
-        Assert.Contains("MinWidth=\"67\"", actions, StringComparison.Ordinal);
+        Assert.Contains("MinWidth=\"100\"", actions, StringComparison.Ordinal);
 
         var styles = ReadSharedStylesText();
         Assert.Contains("<Style Selector=\"WrapPanel.workspace-entity-actions-row\">", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardHeaderWrapPanel_IsWrapPanel_NotThreeColumnGrid()
+    {
+        // Issue #1213: the header container must be a wrap-capable layout so the display-name
+        // block and the actions row reflow together, not a fixed 3-column Grid.
+        var card = ReadEntityCardControlText();
+        Assert.DoesNotContain("ColumnDefinitions=\"Auto,*,Auto\"", card, StringComparison.Ordinal);
+        Assert.Contains("Classes=\"workspace-entity-header-wrap\"", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardHeaderRow_HasMinWidthHundred_MatchingActionsRow()
+    {
+        // Issue #1213: the display-name column min-width floor (100) matches the actions row.
+        var styles = ReadSharedStylesText();
+        var headerRow = ExtractStyle(styles, "StackPanel.workspace-entity-header-row");
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"100\" />", headerRow, StringComparison.Ordinal);
+        var actionsRow = ExtractStyle(styles, "WrapPanel.workspace-entity-actions-row");
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"100\" />", actionsRow, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardHeaderWrapPanel_StyleExists_IsHorizontalStretch()
+    {
+        // Issue #1213: the header wrap panel is a horizontal, stretched wrap layout.
+        var styles = ReadSharedStylesText();
+        var wrap = ExtractStyle(styles, "WrapPanel.workspace-entity-header-wrap");
+        Assert.Contains("<Setter Property=\"Orientation\" Value=\"Horizontal\" />", wrap, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", wrap, StringComparison.Ordinal);
     }
 
     [Fact]
