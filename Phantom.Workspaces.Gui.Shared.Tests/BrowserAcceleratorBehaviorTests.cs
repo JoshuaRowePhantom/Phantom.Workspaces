@@ -305,4 +305,171 @@ public sealed class BrowserAcceleratorBehaviorTests
             window.Close();
         }
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // Expected Tests (#1208) — validate the observable end-to-end outcomes after the transport
+    // fix. Each accelerator goes through the routed re-raise (host.RaiseEvent, tunnel + bubble)
+    // plus the ancestor KeyBinding walk in BrowserAcceleratorBehavior.Dispatch — the code path
+    // that mirrors KeyboardDevice.ProcessRawEvent.
+    // ---------------------------------------------------------------------------------------------
+
+    [AvaloniaFact]
+    public void Injection_WhenCtrlWReceived_FiresTopLevelKeyBindingCloseTabCommand()
+    {
+        var host = new TestBrowserHost();
+        var closeCommand = new RecordingCommand();
+        var window = new Window
+        {
+            Content = host,
+            KeyBindings =
+            {
+                new KeyBinding
+                {
+                    Gesture = new KeyGesture(Key.W, KeyModifiers.Control),
+                    Command = closeCommand,
+                },
+            },
+        };
+        window.Show();
+        try
+        {
+            BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+            host.RaiseAccelerator(KindKeyDown, Key.W, KeyModifiers.Control);
+
+            Assert.Equal(1, closeCommand.InvokeCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Injection_WhenAltDigitReceived_ActivatesDockTabSwitchViaTunnelRouting()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+        var activatedIndex = -1;
+        parent.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) =>
+            {
+                if (e.KeyModifiers == KeyModifiers.Alt && e.Key >= Key.D1 && e.Key <= Key.D9)
+                {
+                    activatedIndex = (int)e.Key - (int)Key.D1;
+                    e.Handled = true;
+                }
+            },
+            RoutingStrategies.Tunnel);
+
+        host.RaiseAccelerator(KindSystemKeyDown, Key.D1, KeyModifiers.Alt);
+
+        Assert.Equal(0, activatedIndex);
+    }
+
+    [AvaloniaFact]
+    public void Injection_WhenSystemKeyUpReceived_InjectsRawKeyUpMirror()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+        var altHeld = false;
+        parent.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) => { if (e.Key == Key.LeftAlt) altHeld = true; },
+            RoutingStrategies.Tunnel);
+        parent.AddHandler(
+            InputElement.KeyUpEvent,
+            (_, e) => { if (e.Key == Key.LeftAlt) altHeld = false; },
+            RoutingStrategies.Tunnel);
+
+        host.RaiseAccelerator(KindSystemKeyDown, Key.LeftAlt, KeyModifiers.Alt);
+        Assert.True(altHeld);
+
+        host.RaiseAccelerator(new AcceleratorKeyEventArgs(3 /* SystemKeyUp */, Key.LeftAlt, KeyModifiers.Alt));
+        Assert.False(altHeld);
+    }
+
+    [AvaloniaFact]
+    public void Injection_WhenAvaloniaHandlesKey_MarksWebView2ArgsHandled()
+    {
+        var host = new TestBrowserHost();
+        var closeCommand = new RecordingCommand();
+        var window = new Window
+        {
+            Content = host,
+            KeyBindings =
+            {
+                new KeyBinding
+                {
+                    Gesture = new KeyGesture(Key.W, KeyModifiers.Control),
+                    Command = closeCommand,
+                },
+            },
+        };
+        window.Show();
+        try
+        {
+            BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+            var args = new AcceleratorKeyEventArgs(KindKeyDown, Key.W, KeyModifiers.Control);
+
+            host.RaiseAccelerator(args);
+
+            Assert.True(args.Handled);
+            Assert.Equal(1, closeCommand.InvokeCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Injection_WhenNoKeyBindingMatches_LeavesWebView2ArgsHandledFalse()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+        var args = new AcceleratorKeyEventArgs(KindKeyDown, Key.A, KeyModifiers.None);
+        host.RaiseAccelerator(args);
+
+        Assert.False(args.Handled);
+    }
+
+    [AvaloniaFact]
+    public void Behavior_WhenAdapterSubscriptionFails_TracesInsteadOfSwallowing()
+    {
+        // A plain Control does not implement IBrowserAcceleratorSource. The old design swallowed
+        // this in a silent `catch { }`; the new design must emit a diagnostic trace so we can
+        // actually observe the misconfiguration.
+        var stringWriter = new System.IO.StringWriter();
+        var listener = new System.Diagnostics.TextWriterTraceListener(stringWriter);
+        System.Diagnostics.Trace.Listeners.Add(listener);
+        try
+        {
+            var host = new Control();
+            var parent = new StackPanel();
+            parent.Children.Add(host);
+
+            BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+            System.Diagnostics.Trace.Flush();
+            var written = stringWriter.ToString();
+            Assert.Contains("IBrowserAcceleratorSource", written, System.StringComparison.Ordinal);
+        }
+        finally
+        {
+            System.Diagnostics.Trace.Listeners.Remove(listener);
+            listener.Dispose();
+        }
+    }
 }
+

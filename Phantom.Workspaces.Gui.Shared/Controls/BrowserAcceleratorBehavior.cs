@@ -1,11 +1,9 @@
 using System;
-using System.Reflection;
-using System.Runtime.Versioning;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
-using Avalonia.Threading;
 using Avalonia.VisualTree;
 
 namespace Phantom.Workspaces.Gui.Shared.Controls;
@@ -146,9 +144,7 @@ internal sealed class BrowserAcceleratorController : IDisposable
 {
     private readonly Control host;
     private EventHandler<AcceleratorKeyEventArgs>? sourceHandler;
-    private EventHandler<WebViewAdapterEventArgs>? adapterCreatedHandler;
     private EventHandler<VisualTreeAttachmentEventArgs>? detachedHandler;
-    private object? comHandlerRef;
     private bool disposed;
 
     public BrowserAcceleratorController(Control host)
@@ -161,61 +157,26 @@ internal sealed class BrowserAcceleratorController : IDisposable
 
     public void Attach()
     {
-        // Preferred path: if the host already exposes AcceleratorKeyPressed (e.g.
-        // AcceleratorAwareWebView or a headless test double), subscribe to the managed event.
+        // Preferred path: if the host already exposes AcceleratorKeyPressed (production is
+        // AcceleratorAwareWebView, headless is a test double), subscribe to the managed event.
+        // AcceleratorAwareWebView itself owns the SDK-typed COM subscription (see #1208), so
+        // there is no reflection or adapter-level fallback here — a host that does not implement
+        // IBrowserAcceleratorSource is a configuration error and is traced.
         if (this.host is IBrowserAcceleratorSource src)
         {
             this.sourceHandler = (_, e) => this.OnAccelerator(e);
             src.AcceleratorKeyPressed += this.sourceHandler;
         }
-        else if (this.host is NativeWebView nativeWebView)
+        else
         {
-            // Otherwise, subscribe when the WebView2 platform adapter becomes available.
-            this.adapterCreatedHandler = (_, e) => this.OnAdapterCreated(nativeWebView, e);
-            nativeWebView.AdapterCreated += this.adapterCreatedHandler;
+            Trace.TraceWarning(
+                "BrowserAcceleratorController: host {0} does not implement IBrowserAcceleratorSource; "
+                + "accelerator forwarding will be inactive.",
+                this.host.GetType().FullName);
         }
 
         this.detachedHandler = (_, _) => this.Dispose();
         this.host.DetachedFromVisualTree += this.detachedHandler;
-    }
-
-    private void OnAdapterCreated(NativeWebView nativeWebView, WebViewAdapterEventArgs _)
-    {
-        if (!OperatingSystem.IsWindows() || this.disposed)
-        {
-            return;
-        }
-
-        this.SubscribeAdapter(nativeWebView);
-    }
-
-    [SupportedOSPlatform("windows")]
-    private void SubscribeAdapter(NativeWebView nativeWebView)
-    {
-        try
-        {
-            var tryGetAdapter = typeof(NativeWebView).GetMethod(
-                "TryGetAdapter",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            var adapter = tryGetAdapter?.Invoke(nativeWebView, null);
-
-            this.comHandlerRef = WebView2AcceleratorInterop.Subscribe(
-                adapter,
-                onAltKeyState: _ => { },
-                onGoToTab: _ => { },
-                onCloseTab: () => { },
-                onGoToWorkspacePane: _ => { },
-                onAcceleratorKeyPressed: args =>
-                {
-                    if (!this.disposed)
-                    {
-                        Dispatcher.UIThread.Post(() => this.OnAccelerator(args), DispatcherPriority.Send);
-                    }
-                });
-        }
-        catch (Exception)
-        {
-        }
     }
 
     private void OnAccelerator(AcceleratorKeyEventArgs e)
@@ -249,19 +210,12 @@ internal sealed class BrowserAcceleratorController : IDisposable
             src.AcceleratorKeyPressed -= this.sourceHandler;
         }
 
-        if (this.adapterCreatedHandler is not null && this.host is NativeWebView nativeWebView)
-        {
-            nativeWebView.AdapterCreated -= this.adapterCreatedHandler;
-        }
-
         if (this.detachedHandler is not null)
         {
             this.host.DetachedFromVisualTree -= this.detachedHandler;
         }
 
         this.sourceHandler = null;
-        this.adapterCreatedHandler = null;
         this.detachedHandler = null;
-        this.comHandlerRef = null;
     }
 }
