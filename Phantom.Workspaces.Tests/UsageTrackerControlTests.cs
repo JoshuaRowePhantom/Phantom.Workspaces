@@ -618,4 +618,73 @@ public sealed class UsageTrackerControlTests
             vm.Dispose();
         }
     }
+
+    // #1204 — End-to-end XAML→ViewModel: invoking the MetricRowHyperlink's Command with the
+    // bound Uri CommandParameter (as XAML supplies it) must reach the injected IUrlOpener with
+    // the metric's WebUrl. Regression guard: prior behavior cast the parameter with `as string`,
+    // silently dropped every click, and never invoked the opener.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void UsageTrackerControl_MetricRow_InvokingOpenRoutesUriThroughUrlOpener()
+    {
+        var expectedUrl = new Uri("https://github.com/settings/billing/summary?user=testuser");
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "GitHub Copilot",
+            UserName = "testuser",
+            SettingsUrl = new Uri("https://github.com/settings/copilot"),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 100m,
+            QuantityTotal = 200m,
+            QuantityPresentationFormatString = "{0} / {1}",
+            WebUrl = expectedUrl,
+        });
+        metrics.Accounts.Add(account);
+
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: null,
+            persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+        var control = new UsageTrackerControl { DataContext = vm };
+        var window = new Window { Content = control };
+        window.Show();
+
+        try
+        {
+            var metricHyperlink = window.GetVisualDescendants().OfType<HyperlinkButton>()
+                .First(hb => hb.Name == "MetricRowHyperlink");
+
+            Assert.NotNull(metricHyperlink.Command);
+            Assert.IsType<Uri>(metricHyperlink.CommandParameter);
+
+            // Drive the same seam XAML uses: Command + CommandParameter (a Uri).
+            metricHyperlink.Command!.Execute(metricHyperlink.CommandParameter);
+
+            var request = Assert.Single(opener.Requests);
+            Assert.Equal(expectedUrl.ToString(), request.Url);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private sealed class RecordingUrlOpener : Phantom.Workspaces.Services.IUrlOpener
+    {
+        public System.Collections.Generic.List<Phantom.Workspaces.Services.OpenUrlRequest> Requests { get; } = new();
+
+        public System.Threading.Tasks.Task OpenAsync(
+            Phantom.Workspaces.Services.OpenUrlRequest request,
+            System.Threading.CancellationToken cancellationToken = default)
+        {
+            this.Requests.Add(request);
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
+    }
 }
