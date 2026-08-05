@@ -203,6 +203,134 @@ public sealed class EntityCardControlTests
         }
     }
 
+    // Issue #1214: for a git-worktree entity card, every rendered property value element
+    // (path / branch / head-commit / target-branch) must be a copyable SafeSelectableTextBlock.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_GitWorktree_AllPropertyValuesAreCopyable()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", "/home/user/worktrees/9"),
+            new StringFieldEditorViewModel("branch", "feature/wrap-fix"),
+            new StringFieldEditorViewModel("head-commit", "a1b2c3d4e5f6"),
+            new StringFieldEditorViewModel("target-branch", "main"),
+        };
+        var card = new EntityCardControl { DataContext = new EntityCardViewModel(entity, fieldEditors) };
+        var window = new Window { Content = card, Width = 500, Height = 500 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var readValueTexts = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .Where(t => t.Classes.Contains("workspace-field-read-value"))
+                .Select(t => t.Text)
+                .ToArray();
+
+            foreach (var expected in new[] { "/home/user/worktrees/9", "feature/wrap-fix", "a1b2c3d4e5f6", "main" })
+            {
+                Assert.Contains(expected, readValueTexts);
+            }
+
+            // No property value may remain a plain (non-copyable) TextBlock.
+            var plainReadValues = window.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Where(t => t is not SafeSelectableTextBlock && t.Classes.Contains("workspace-field-read-value"))
+                .ToArray();
+            Assert.Empty(plainReadValues);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1214: regression guard for #1006/#1177 — header-row selectable text blocks still wrap
+    // (word-level, not character-clipped) when the row is constrained narrow after the swap to
+    // SafeSelectableTextBlock.
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_HeaderRow_TextBlocksWrapWhenNarrow()
+    {
+        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var window = new Window { Content = card, Width = 90, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
+            Assert.True(
+                title.TextLayout.TextLines.Count >= 2,
+                $"Header-row title should wrap to multiple lines when narrow; got {title.TextLayout.TextLines.Count} line(s).");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1214: regression guard — the read-mode field value SafeSelectableTextBlock still wraps
+    // under the workspace-field-read-value style when the value column is narrow.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_FieldReadValue_WrapsWhenNarrow()
+    {
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel(
+                "path",
+                "the quick brown fox jumps over the lazy dog several times over again here"),
+        };
+        var card = new EntityCardControl { DataContext = new EntityCardViewModel(entity, fieldEditors) };
+        var window = new Window { Content = card, Width = 160, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var readValue = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-field-read-value"));
+
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, readValue.TextWrapping);
+            Assert.True(
+                readValue.TextLayout.TextLines.Count >= 2,
+                $"Read-mode field value should wrap to multiple lines when narrow; got {readValue.TextLayout.TextLines.Count} line(s).");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static EntitySnapshot BuildGitWorktreeSnapshotForTests()
+    {
+        var entityId = Guid.NewGuid();
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "git-worktree"],
+              "names": [["git-worktrees", "wt-{{entityId:N}}"]],
+              "display-name": { "default": "worktree, system-defined" }
+            }
+            """);
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+    }
+
     private static async Task<EntityCardViewModel> BuildToolNoteCardViewModelAsync()
     {
         using var document = JsonDocument.Parse(
