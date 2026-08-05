@@ -18,7 +18,7 @@ public sealed class ExecutorTargetRouterTests
     }
 
     [Fact]
-    public void ResolveDescriptor_RemoteTarget_CarriesTargetClientInstance()
+    public void ResolveDescriptor_RemoteTarget_CarriesEntityId()
     {
         var topology = new ExecutorTopology { GuiLocalClientInstance = "G" };
         var router = new ExecutorTargetRouter(topology, new RecordingRegistry());
@@ -26,7 +26,7 @@ public sealed class ExecutorTargetRouterTests
         var descriptor = router.ResolveDescriptor(ExecutorTarget.GuiLocal);
 
         Assert.Equal("user-computer-profile", descriptor.GetProperty("type").GetString());
-        Assert.Equal("G", descriptor.GetProperty("target-client-instance").GetString());
+        Assert.Equal("G", descriptor.GetProperty("entity-id").GetString());
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class ExecutorTargetRouterTests
         Assert.Same(registry.Transport, transport);
         Assert.NotNull(registry.LastDescriptor);
         Assert.Equal("user-computer-profile", registry.LastDescriptor!.Value.GetProperty("type").GetString());
-        Assert.Equal("G", registry.LastDescriptor!.Value.GetProperty("target-client-instance").GetString());
+        Assert.Equal("G", registry.LastDescriptor!.Value.GetProperty("entity-id").GetString());
     }
 
     [Fact]

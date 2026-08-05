@@ -114,7 +114,7 @@ public sealed class Scenario2_GuiLocalToolRoutingTests
         {
             if (connectionDescriptor.TryGetProperty("type", out var type)
                 && string.Equals(type.GetString(), "user-computer-profile", StringComparison.OrdinalIgnoreCase)
-                && connectionDescriptor.TryGetProperty("target-client-instance", out var instance)
+                && connectionDescriptor.TryGetProperty("entity-id", out var instance)
                 && instance.GetString() is { } clientInstance
                 && this.machines.TryGetValue(clientInstance, out var registry))
             {
