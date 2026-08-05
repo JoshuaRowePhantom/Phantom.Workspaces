@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Styling;
 using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
@@ -44,6 +45,29 @@ public sealed class BrowserAcceleratorBehaviorTests
     private const int KindKeyDown = 0;
     private const int KindKeyUp = 1;
     private const int KindSystemKeyDown = 2;
+
+    [AvaloniaFact]
+    public void Behavior_WhenIsEnabledSetViaStyle_AttachesControllerToMatchingHost()
+    {
+        // Mirrors the universal SharedStyles selector (issue #1231): a Style setter for
+        // BrowserAcceleratorBehavior.IsEnabled must install the controller with no code-behind call.
+        var host = new TestBrowserHost();
+        var style = new Style(x => x.OfType<TestBrowserHost>())
+        {
+            Setters = { new Setter(BrowserAcceleratorBehavior.IsEnabledProperty, true) },
+        };
+        var window = new Window { Content = host };
+        window.Styles.Add(style);
+        window.Show();
+        try
+        {
+            Assert.NotNull(BrowserAcceleratorBehavior.GetController(host));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 
     [AvaloniaFact]
     public void Behavior_WhenIsEnabledSetTrue_AttachesControllerToNativeWebView()

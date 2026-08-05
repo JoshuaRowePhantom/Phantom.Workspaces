@@ -1330,6 +1330,17 @@
         <Setter Property="Text" Value="&gt;&gt;" />
     </Style>
 
+    <!-- Universal accelerator-key forwarding for every NativeWebView-derived control (issue #1231).
+         Matching AcceleratorAwareWebView (and its subclasses ConfiguredWebView / ControllableWebViewControl)
+         via :is() installs BrowserAcceleratorBehavior so every WebView2 accelerator key (Ctrl+W, Alt+N,
+         Alt-hold, ...) is re-raised as a routed KeyDown/KeyUp event. This makes the attachment automatic
+         for every WebView host — including the standalone WebBrowserTabView — rather than per-site
+         code-behind. SetIsEnabled is idempotent, so the explicit call in AgentChatOutputControl remains
+         a harmless safety belt. See #1208 for the underlying WebView2 subscription mechanism. -->
+    <Style Selector=":is(controls|AcceleratorAwareWebView)">
+        <Setter Property="controls:BrowserAcceleratorBehavior.IsEnabled" Value="True" />
+    </Style>
+
 </Styles>
 
 

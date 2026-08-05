@@ -339,6 +339,27 @@ public sealed class SharedStylesTests
         Assert.IsAssignableFrom<Markdown.Avalonia.MarkdownScrollViewer>(view.Renderer);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SharedStyles_AcceleratorAwareWebView_EnablesBrowserAcceleratorBehavior()
+    {
+        var styles = LoadSharedStyles();
+
+        var acceleratorStyle = styles
+            .OfType<Style>()
+            .FirstOrDefault(s => s.Selector?.ToString()?.Contains("AcceleratorAwareWebView", StringComparison.Ordinal) == true);
+
+        Assert.NotNull(acceleratorStyle);
+        var setter = acceleratorStyle!.Setters
+            .OfType<Setter>()
+            .FirstOrDefault(s => s.Property == BrowserAcceleratorBehavior.IsEnabledProperty);
+        Assert.NotNull(setter);
+
+        var enabled = setter!.Value is bool boolValue
+            ? boolValue
+            : bool.Parse(setter.Value!.ToString()!);
+        Assert.True(enabled);
+    }
+
     private static Avalonia.Styling.Styles LoadSharedStyles()
     {
         var source = new Uri("avares://Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml");
