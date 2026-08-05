@@ -107,6 +107,13 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
         if (browserControl is Avalonia.Controls.Control avaloniaControl)
         {
             BrowserAcceleratorBehavior.SetIsEnabled(avaloniaControl, true);
+
+            // Leave Ctrl+F for the hosted page's in-page find rather than capturing it for the
+            // app's global entity-find bar (issue #1255).
+            BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(avaloniaControl, new List<KeyGesture>
+            {
+                new(Key.F, KeyModifiers.Control),
+            });
         }
     }
 
