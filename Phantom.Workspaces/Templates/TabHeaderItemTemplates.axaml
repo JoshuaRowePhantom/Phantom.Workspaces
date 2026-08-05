@@ -20,4 +20,30 @@
                      IsIndeterminate="{Binding HasUnread}" />
     </DataTemplate>
 
+    <!-- #1196: Single source of truth for the OUTER tab-header body used by every
+         DocumentControl.HeaderTemplate. Referenced explicitly via
+         ContentTemplate="{StaticResource TabHeaderTemplate}" so the Dock.Avalonia
+         tab-strip does NOT depend on an implicit DataTemplate DataType="vm:TabHeaderViewModel"
+         lookup, which fails from inside the DocumentTabStripItem container scope. -->
+    <DataTemplate x:Key="TabHeaderTemplate"
+                  DataType="vm:TabHeaderViewModel">
+        <Grid HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding Title}"
+                           ToolTip.Tip="{Binding Title}" />
+                <ItemsControl ItemsSource="{Binding Items}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="2" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.DataTemplates>
+                        <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
+                    </ItemsControl.DataTemplates>
+                </ItemsControl>
+            </StackPanel>
+        </Grid>
+    </DataTemplate>
+
 </ResourceDictionary>

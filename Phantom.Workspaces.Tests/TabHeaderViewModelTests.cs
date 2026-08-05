@@ -252,17 +252,41 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    // ── DockDataTemplates — DataTemplate presence for Dock header scope (#775) ─
+    // ── #1196: The outer tab-header body is a single keyed resource ───────────
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void DockDataTemplates_HasDataTemplateFor_TabHeaderViewModel()
+    public void TabHeaderTemplate_IsDefinedExactlyOnceInApplicationResources()
     {
-        var templates = new DockDataTemplates();
-        var viewModel = new TabHeaderViewModel { Title = "T" };
+        // #1196: the outer DocumentControl.HeaderTemplate references this keyed
+        // resource explicitly via ContentControl.ContentTemplate; there must be
+        // exactly one definition so no implicit vm:TabHeaderViewModel lookup is
+        // required from inside the Dock.Avalonia tab-strip item scope.
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "TabHeaderTemplate", null, out var resource);
 
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new TabHeaderViewModel { Title = "T" }));
 
-        Assert.NotNull(matchingTemplate);
+        // The keyed template body must not be duplicated as an implicit
+        // DataTemplate in either DockDataTemplates or WorkspaceDataTemplates.
+        Assert.DoesNotContain(
+            new DockDataTemplates().OfType<IDataTemplate>(),
+            t => t.Match(new TabHeaderViewModel { Title = "T" }));
+        Assert.DoesNotContain(
+            new WorkspaceDataTemplates().OfType<IDataTemplate>(),
+            t => t.Match(new TabHeaderViewModel { Title = "T" }));
+    }
+
+    private static IDataTemplate ResolveTabHeaderTemplate()
+    {
+        // #1196: the single-source header body lives in App.Resources as the
+        // keyed "TabHeaderTemplate" (TabHeaderItemTemplates.axaml).
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "TabHeaderTemplate", null, out var resource));
+        return Assert.IsAssignableFrom<IDataTemplate>(resource);
     }
 
     // ── #1181: TabHeader title TextBlock exposes full title via ToolTip.Tip ──
@@ -299,8 +323,7 @@ public sealed class TabHeaderViewModelTests
 
     private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
     {
-        var templates = new DockDataTemplates();
-        var template = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        var template = ResolveTabHeaderTemplate();
         var control = template.Build(viewModel);
         Assert.NotNull(control);
         control!.DataContext = viewModel;
@@ -413,8 +436,7 @@ public sealed class TabHeaderViewModelTests
 
     private static Avalonia.Controls.Control InflateAndRenderTabHeader(TabHeaderViewModel viewModel)
     {
-        var templates = new DockDataTemplates();
-        var template = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        var template = ResolveTabHeaderTemplate();
         var control = template.Build(viewModel);
         Assert.NotNull(control);
         control!.DataContext = viewModel;

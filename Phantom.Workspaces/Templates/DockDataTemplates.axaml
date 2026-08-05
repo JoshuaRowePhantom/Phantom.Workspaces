@@ -32,28 +32,28 @@
             PreviewResize="{Binding ResizePreview}" />
     </DataTemplate>
 
-    <!-- Supply base DocumentDock template (normally auto-created).
-         Required because the app's typed subclasses (WorkspaceContentDock /
-         WorkspacesPaneDock) do not cover the plain Dock.Model.Mvvm.Controls.DocumentDock
-         that WorkspaceDockFactory (inherits from Dock.Model.Mvvm.Factory) creates
-         via CreateDocumentDock() during a runtime split. Without it the newly
-         created dock half renders as its raw type name
-         (Dock.Model.Mvvm.Controls.DocumentDock). See #1130. -->
-    <DataTemplate DataType="dmc:IDocumentDock">
-        <dock:DocumentDockControl />
-    </DataTemplate>
-
     <!-- WorkspaceContentDock is our typed subclass of DocumentDock.
          Using a concrete subtype means Dock's FuncDataTemplate<IDocumentDock>
          (on PART_ContentControl) is bypassed, so AutoCreateDataTemplates=False
          lets our DataTemplate on DockControl be found first. Setting
          HeaderTemplate here is a local value (priority 1), which beats the
-         ControlTheme setter (priority 3). -->
+         ControlTheme setter (priority 3).
+
+         #1196: These concrete-subtype templates (WorkspaceContentDock and
+         WorkspacesPaneDock) MUST appear BEFORE the generic
+         DataTemplate DataType="dmc:IDocumentDock" below. Avalonia's
+         DataTemplates lookup is first-match-wins by declaration order, and both
+         subclasses implement IDocumentDock; if the generic template preceded
+         them, the top-level WorkspacesPaneDock would match DocumentDockControl
+         first and render with Dock's default header (a plain Title TextBlock),
+         so the pulsating-brain / exclamation indicators would never appear on
+         workspace tabs. -->
     <DataTemplate DataType="vm:WorkspaceContentDock">
         <dock:DocumentControl>
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspaceDocument">
-                    <ContentControl Content="{Binding EffectiveTabHeader}" />
+                    <ContentControl Content="{Binding EffectiveTabHeader}"
+                                    ContentTemplate="{StaticResource TabHeaderTemplate}" />
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
         </dock:DocumentControl>
@@ -71,10 +71,24 @@
         <dock:DocumentControl>
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspacePaneDocument">
-                    <ContentControl Content="{Binding EffectiveTabHeader}" />
+                    <ContentControl Content="{Binding EffectiveTabHeader}"
+                                    ContentTemplate="{StaticResource TabHeaderTemplate}" />
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
         </dock:DocumentControl>
+    </DataTemplate>
+
+    <!-- Supply base DocumentDock template (normally auto-created).
+         Required because the app's typed subclasses (WorkspaceContentDock /
+         WorkspacesPaneDock) do not cover the plain Dock.Model.Mvvm.Controls.DocumentDock
+         that WorkspaceDockFactory (inherits from Dock.Model.Mvvm.Factory) creates
+         via CreateDocumentDock() during a runtime split. Without it the newly
+         created dock half renders as its raw type name
+         (Dock.Model.Mvvm.Controls.DocumentDock). See #1130.
+         #1196: MUST stay AFTER the concrete WorkspaceContentDock / WorkspacesPaneDock
+         templates above so those more-specific matches win first. -->
+    <DataTemplate DataType="dmc:IDocumentDock">
+        <dock:DocumentDockControl />
     </DataTemplate>
 
     <!-- Workspace-level tab: shows the workspace's ContentLayout.
@@ -98,7 +112,8 @@
                     <dock:DocumentControl>
                         <dock:DocumentControl.HeaderTemplate>
                             <DataTemplate x:DataType="vm:WorkspaceDocument">
-                                <ContentControl Content="{Binding EffectiveTabHeader}" />
+                                <ContentControl Content="{Binding EffectiveTabHeader}"
+                                                ContentTemplate="{StaticResource TabHeaderTemplate}" />
                             </DataTemplate>
                         </dock:DocumentControl.HeaderTemplate>
                     </dock:DocumentControl>
@@ -125,32 +140,5 @@
                 </DataTemplate>
             </dock:DockControl.DataTemplates>
         </dock:DockControl>
-    </DataTemplate>
-
-    <!-- These DataTemplates are duplicated from WorkspaceDataTemplates.axaml so that they are
-         reachable from within Dock.Avalonia's tab-header rendering scope, which does not walk
-         up to the App-level DataTemplates collection (same class of issue as #374). -->
-    <DataTemplate DataType="vm:TabHeaderViewModel">
-        <Grid HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-                <TextBlock Text="{Binding Title}"
-                           ToolTip.Tip="{Binding Title}" />
-                <ItemsControl ItemsSource="{Binding Items}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="2" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <!-- #1196: Dock.Avalonia tab-strip scope does not walk up to
-                         ancestor DataTemplates. Reference the keyed DataTemplate
-                         resources from App.axaml so the pulsating-brain / exclamation
-                         indicators materialise inside the tab header. -->
-                    <ItemsControl.DataTemplates>
-                        <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
-                        <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
-                    </ItemsControl.DataTemplates>
-                </ItemsControl>
-            </StackPanel>
-        </Grid>
     </DataTemplate>
 </DataTemplates>

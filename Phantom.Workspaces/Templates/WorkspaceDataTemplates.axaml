@@ -476,32 +476,15 @@
 
     <!-- #1196: AgentRunningIndicator / NotificationIndicator DataTemplates
          are defined once as keyed resources in TabHeaderItemTemplates.axaml
-         (merged into App.axaml) and referenced from
-         ItemsControl.DataTemplates in the TabHeaderViewModel template below. -->
+         (merged into App.axaml). The outer tab-header body is likewise a single
+         keyed resource (TabHeaderTemplate) referenced explicitly via
+         ContentControl.ContentTemplate on each DocumentControl.HeaderTemplate,
+         so no implicit vm:TabHeaderViewModel DataTemplate is needed here. -->
 
     <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
         <entityControls:StatusControl Item="{Binding Status}" />
     </DataTemplate>
 
-    <DataTemplate DataType="vm:TabHeaderViewModel">
-        <Grid HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-                <TextBlock Text="{Binding Title}" />
-                <ItemsControl ItemsSource="{Binding Items}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="2" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <!-- #1196: single source of truth for the indicator templates. -->
-                    <ItemsControl.DataTemplates>
-                        <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
-                        <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
-                    </ItemsControl.DataTemplates>
-                </ItemsControl>
-            </StackPanel>
-        </Grid>
-    </DataTemplate>
     <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
         <templates:GitWorktreeReviewView />
     </DataTemplate>

@@ -54,19 +54,25 @@ public sealed class MainWindowDockTemplateTests
     [AvaloniaFact(Timeout = 15_000)]
     public void MainWindowDockControl_TopLevelDockControl_HasTabHeaderGlyphTemplates()
     {
-        // #1196: TabHeaderViewModel template lives on the DockControl so the
-        // tab-strip scope can resolve it; the two indicator DataTemplates now
-        // live in Application.Resources (TabHeaderItemTemplates.axaml) and
-        // are referenced via {StaticResource} from inside the TabHeaderViewModel
-        // DataTemplate. Verify both wiring points.
+        // #1196: The outer tab-header body is a single keyed resource
+        // (TabHeaderTemplate) referenced explicitly via
+        // ContentControl.ContentTemplate from each DocumentControl.HeaderTemplate,
+        // and the two indicator DataTemplates live in Application.Resources
+        // (TabHeaderItemTemplates.axaml), referenced via {StaticResource} from
+        // inside the TabHeaderTemplate. Verify all three wiring points.
         var topLevelDockControl = GetTopLevelDockControl();
 
+        // The implicit vm:TabHeaderViewModel DataTemplate must NOT live on the
+        // DockControl any more — the tab-strip scope could not reach it, which
+        // was the root cause of the regression.
         var tabHeader = new TabHeaderViewModel { Title = "T" };
-        Assert.NotNull(topLevelDockControl.DataTemplates
+        Assert.Null(topLevelDockControl.DataTemplates
             .OfType<IDataTemplate>()
             .FirstOrDefault(t => t.Match(tabHeader)));
 
         Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "TabHeaderTemplate", null, out _));
         Assert.True(Avalonia.Application.Current!.TryFindResource(
             "AgentRunningIndicatorTabHeaderItemTemplate", null, out _));
         Assert.True(Avalonia.Application.Current!.TryFindResource(
@@ -578,13 +584,16 @@ public sealed class MainWindowDockTemplateTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowDockControl_WorkspacePaneWithRunningTab_RendersPulsatingBrainOnOuterTabHeader()
+    public async Task MainWindowDockControl_WorkspacePaneTabStrip_RendersPulsatingBrainOnOuterTabHeader()
     {
-        // Regression for #1196 Part A: inflating a TabHeaderViewModel with an
-        // AgentRunningIndicator item through the exact DataTemplates instance
-        // used by the MainWindow's outer TopLevelDockControl tab-strip must
-        // materialise a pulsating-brain ProgressBar. The regression was that
-        // the indicator DataTemplates were unreachable from that scope.
+        // Regression for #1196 (reopened): the outer workspace-level tab header
+        // must render through the REAL Dock.Avalonia pipeline
+        // (DocumentTabStrip → DocumentTabStripItem.PART_HeaderPresenter →
+        // DocumentControl.HeaderTemplate). WorkspacePaneDocument always adds an
+        // AgentRunningIndicator item, so its pulsating-brain ProgressBar must
+        // materialise under the header presenter. On HEAD (before the explicit
+        // ContentTemplate fix) the header collapsed to TabHeaderViewModel.ToString()
+        // and no ProgressBar appeared.
         await using var viewModel = CreateBootedMainWindowViewModel();
         await viewModel.InitializeAsync();
 
@@ -592,17 +601,9 @@ public sealed class MainWindowDockTemplateTests
         window.Show();
         try
         {
-            Dispatcher.UIThread.RunJobs();
+            var progressBars = await GetOuterPaneHeaderProgressBarsAsync(window);
 
-            var header = new TabHeaderViewModel { Title = "outer" };
-            header.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
-
-            var pulsatingBrain = InflateHeaderViaTopLevelDockTemplates(window, header)
-                .GetLogicalDescendants()
-                .OfType<ProgressBar>()
-                .FirstOrDefault(pb => pb.Classes.Contains("pulsating-brain"));
-
-            Assert.NotNull(pulsatingBrain);
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
         }
         finally
         {
@@ -611,8 +612,11 @@ public sealed class MainWindowDockTemplateTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task MainWindowDockControl_WorkspacePaneWithUnreadTab_RendersExclamationOnOuterTabHeader()
+    public async Task MainWindowDockControl_WorkspacePaneTabStrip_RendersExclamationOnOuterTabHeader()
     {
+        // Regression for #1196 (reopened): as above, the NotificationIndicator
+        // item that WorkspacePaneDocument always adds must materialise its
+        // exclamation-indicator ProgressBar via the real tab-strip render path.
         await using var viewModel = CreateBootedMainWindowViewModel();
         await viewModel.InitializeAsync();
 
@@ -620,17 +624,9 @@ public sealed class MainWindowDockTemplateTests
         window.Show();
         try
         {
-            Dispatcher.UIThread.RunJobs();
+            var progressBars = await GetOuterPaneHeaderProgressBarsAsync(window);
 
-            var header = new TabHeaderViewModel { Title = "outer" };
-            header.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
-
-            var exclamation = InflateHeaderViaTopLevelDockTemplates(window, header)
-                .GetLogicalDescendants()
-                .OfType<ProgressBar>()
-                .FirstOrDefault(pb => pb.Classes.Contains("exclamation-indicator"));
-
-            Assert.NotNull(exclamation);
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
         }
         finally
         {
@@ -638,31 +634,46 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
-    private static Control InflateHeaderViaTopLevelDockTemplates(
-        Avalonia.Controls.Window window,
-        TabHeaderViewModel header)
+    private static async Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
+        GetOuterPaneHeaderProgressBarsAsync(Avalonia.Controls.Window window, int timeoutMs = 10_000)
     {
-        // Resolve the TabHeaderViewModel template from the same DataTemplates
-        // instance the outer TopLevelDockControl uses, then host the built
-        // control under a fresh Window so the ItemsControl's {StaticResource}
-        // references walk up to Application.Current and resolve the shared
-        // indicator DataTemplates from TabHeaderItemTemplates.axaml.
-        var topLevelDockControl = window.GetVisualDescendants()
-            .OfType<DockControl>()
-            .FirstOrDefault(dc => dc.Name == "TopLevelDockControl")
-            ?? window.GetLogicalDescendants()
-                .OfType<DockControl>()
-                .First(dc => dc.Name == "TopLevelDockControl");
-        var template = topLevelDockControl.DataTemplates
-            .OfType<IDataTemplate>()
-            .First(t => t.Match(header));
-        var control = template.Build(header)!;
-        control.DataContext = header;
+        // Drive the real Dock.Avalonia render path: locate the outer
+        // workspace-level DocumentTabStrip (DataContext = WorkspacesPaneDock),
+        // find its DocumentTabStripItem's PART_HeaderPresenter, and collect the
+        // ProgressBars that the DocumentControl.HeaderTemplate inflated. This is
+        // the exact scope that the implicit vm:TabHeaderViewModel lookup failed
+        // to resolve before the #1196 fix.
+        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
+        while (DateTime.UtcNow < deadline)
+        {
+            Dispatcher.UIThread.RunJobs();
 
-        var renderWindow = new Avalonia.Controls.Window { Content = control };
-        renderWindow.Show();
-        Dispatcher.UIThread.RunJobs();
-        return control;
+            var tabStrip = window.GetVisualDescendants()
+                .OfType<DocumentTabStrip>()
+                .FirstOrDefault(ts => ts.DataContext is WorkspacesPaneDock);
+
+            var item = tabStrip?.GetVisualDescendants()
+                .OfType<DocumentTabStripItem>()
+                .FirstOrDefault();
+
+            var headerPresenter = item?.GetVisualDescendants()
+                .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
+
+            if (headerPresenter is not null)
+            {
+                var progressBars = headerPresenter.GetVisualDescendants()
+                    .OfType<ProgressBar>()
+                    .ToList();
+                if (progressBars.Count > 0)
+                    return progressBars;
+            }
+
+            await Task.Delay(50);
+        }
+
+        throw new TimeoutException(
+            "Outer WorkspacesPaneDock tab-strip header ProgressBars not found within timeout.");
     }
 
     [AvaloniaFact(Timeout = 15_000)]
