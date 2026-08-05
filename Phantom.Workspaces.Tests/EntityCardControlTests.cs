@@ -309,6 +309,43 @@ public sealed class EntityCardControlTests
         }
     }
 
+    // Issue #1213: rendering EntityCardControl at a narrow width must not character-clip the display
+    // name — the header wrap layout reflows the name across multiple lines at word boundaries and
+    // preserves every character.
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityCardControl_HeaderMeasuredNarrow_DoesNotClipDisplayName()
+    {
+        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var window = new Window { Content = card, Width = 90, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            // Word-boundary wrapping (not character clipping): the title uses TextWrapping=Wrap and
+            // reflows the display name across multiple lines rather than truncating it.
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
+            var lines = title.TextLayout.TextLines;
+            Assert.True(lines.Count >= 2, $"Expected wrapped display name, got {lines.Count} line(s).");
+
+            // Every character of the display name remains present across the wrapped lines.
+            var renderedLength = lines.Sum(l => l.Length);
+            var displayName = string.Concat(
+                title.Inlines!.OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text));
+            Assert.True(
+                renderedLength >= displayName.Length,
+                $"Rendered {renderedLength} chars < display name {displayName.Length}; text was clipped.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static EntitySnapshot BuildGitWorktreeSnapshotForTests()
     {
         var entityId = Guid.NewGuid();

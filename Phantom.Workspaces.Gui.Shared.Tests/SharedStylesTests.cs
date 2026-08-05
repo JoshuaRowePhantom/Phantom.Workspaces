@@ -1010,6 +1010,152 @@ public sealed class SharedStylesTests
         Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", wrap, StringComparison.Ordinal);
     }
 
+    // Issue #1213 — behavioural/rendering coverage for the header wrap layout. These render the
+    // shipped header styles (extracted verbatim from SharedStyles.axaml) around a header structure
+    // that mirrors EntityCardControl.axaml, then run layout at narrow/wide widths and assert the
+    // actual reflow behaviour, not merely the static style declarations.
+
+    private static readonly string[] HeaderWrapStyleSelectors =
+    {
+        "WrapPanel.workspace-entity-header-wrap",
+        "StackPanel.workspace-entity-header-row",
+        "StackPanel.workspace-entity-header-row > :is(TextBlock)",
+        ":is(TextBlock).workspace-entity-title",
+        "WrapPanel.workspace-entity-actions-row",
+    };
+
+    private const string HeaderCardTitleText = "worktree, system-defined entity display name";
+
+    private static (Window Window, WrapPanel HeaderWrap, StackPanel HeaderRow, TextBlock Title, WrapPanel ActionsRow)
+        LayoutEntityCardHeader(double width, double height, string title = HeaderCardTitleText)
+    {
+        var styles = ReadSharedStylesText();
+        var injected = string.Concat(HeaderWrapStyleSelectors.Select(s => ExtractStyle(styles, s)));
+        var xaml = $$"""
+            <Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+              <Window.Styles>
+                {{injected}}
+              </Window.Styles>
+              <WrapPanel Name="HeaderWrap" Classes="workspace-entity-header-wrap"
+                         Orientation="Horizontal" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                <StackPanel Name="HeaderRow" Classes="workspace-entity-header-row" MinWidth="100" Margin="0,0,12,0">
+                  <TextBlock Name="Title" Classes="workspace-entity-title" Text="{{title}}" />
+                </StackPanel>
+                <WrapPanel Name="ActionsRow" Classes="workspace-entity-actions-row" MinWidth="100">
+                  <Border Width="90" Height="24" />
+                </WrapPanel>
+              </WrapPanel>
+            </Window>
+            """;
+        var window = (Window)AvaloniaRuntimeXamlLoader.Load(xaml);
+        window.SizeToContent = SizeToContent.Manual;
+        window.Width = width;
+        window.Height = height;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var headerWrap = window.GetVisualDescendants().OfType<WrapPanel>().First(p => p.Name == "HeaderWrap");
+        var headerRow = window.GetVisualDescendants().OfType<StackPanel>().First(p => p.Name == "HeaderRow");
+        var titleBlock = window.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "Title");
+        var actionsRow = window.GetVisualDescendants().OfType<WrapPanel>().First(p => p.Name == "ActionsRow");
+        return (window, headerWrap, headerRow, titleBlock, actionsRow);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardHeader_WhenNarrow_ActionsRowWrapsBelowDisplayName()
+    {
+        // When the viewport is narrower than display-name + actions on one line, the actions row
+        // moves to a new row of the header wrap panel (not squeezed beside a starved text column).
+        var (window, _, headerRow, _, actionsRow) = LayoutEntityCardHeader(width: 180, height: 400);
+        try
+        {
+            Assert.True(
+                actionsRow.Bounds.Y >= headerRow.Bounds.Bottom - 1,
+                $"Actions row (Y={actionsRow.Bounds.Y}) should wrap below the header row " +
+                $"(bottom={headerRow.Bounds.Bottom}).");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardHeader_WhenNarrow_DisplayNameWrapsOnWordBoundaries()
+    {
+        // The title TextBlock breaks at whitespace, not mid-word, when the header wraps.
+        var (window, _, _, title, _) = LayoutEntityCardHeader(width: 180, height: 400);
+        try
+        {
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
+
+            var lines = title.TextLayout.TextLines;
+            Assert.True(lines.Count >= 2, $"Expected the title to wrap; got {lines.Count} line(s).");
+
+            // Every internal line break must occur at a whitespace boundary — no word is split.
+            var text = HeaderCardTitleText;
+            var position = 0;
+            for (var i = 0; i < lines.Count - 1; i++)
+            {
+                position += lines[i].Length;
+                Assert.True(position > 0 && position <= text.Length);
+                // A wrap that splits a word breaks between two alphanumeric characters. Breaks at
+                // whitespace, commas, or hyphens ("system-defined" → "system-" / "defined") are
+                // legitimate word-boundary wraps, not the character-clipping bug.
+                var splitsWord =
+                    position < text.Length &&
+                    char.IsLetterOrDigit(text[position - 1]) &&
+                    char.IsLetterOrDigit(text[position]);
+                Assert.False(
+                    splitsWord,
+                    $"Line break at index {position} splits a word in \"{text}\".");
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardHeader_WhenWide_DisplayNameAndActionsShareOneRow()
+    {
+        // With ample width the header remains a single row: display-name StackPanel and actions
+        // WrapPanel are laid out side-by-side.
+        var (window, _, headerRow, _, actionsRow) = LayoutEntityCardHeader(width: 1400, height: 400);
+        try
+        {
+            Assert.True(
+                Math.Abs(actionsRow.Bounds.Y - headerRow.Bounds.Y) < 5,
+                $"Header row (Y={headerRow.Bounds.Y}) and actions row (Y={actionsRow.Bounds.Y}) " +
+                "should share one row when wide.");
+            Assert.True(
+                actionsRow.Bounds.X >= headerRow.Bounds.Right - 1,
+                $"Actions row (X={actionsRow.Bounds.X}) should sit to the right of the header row " +
+                $"(right={headerRow.Bounds.Right}).");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTitleTextBlock_TextWrapping_IsWrap()
+    {
+        // The header-row title TextBlock resolves TextWrapping=Wrap (word-level wrapping), not
+        // NoWrap clipping.
+        var (window, _, _, title, _) = LayoutEntityCardHeader(width: 400, height: 400);
+        try
+        {
+            Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [Fact]
     public void EntityCardTreeViewStyle_ItemMinWidth_IsTwoThirdsOfPrior()
     {
