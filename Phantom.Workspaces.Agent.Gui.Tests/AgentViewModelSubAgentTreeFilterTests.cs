@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using AgentSchema;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Xunit;
@@ -10,6 +11,25 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgentViewModelSubAgentTreeFilterTests
 {
+    // #1226: Inject a controllable clock so back-to-back SetCompletionState calls produce
+    // strictly-ordered LastUpdatedAt values. Without this the tests inherited the OS clock's
+    // ~15ms resolution and the timestamp-ordered assertions flaked when completions landed in
+    // one tick.
+    private readonly FakeTimeProvider timeProvider = new();
+
+    // #1226: Run the chat (and its sub-agents) on a scheduler that executes queued work inline on
+    // the calling thread. SetCompletionState marshals its CompletionStateChanged notification onto
+    // the foreground scheduler; on the default (thread-pool-backed) scheduler that notification —
+    // which mutates the nav tree's visible-children collection — races with the test thread's
+    // reads, intermittently throwing during enumeration. Executing it inline makes the whole
+    // add/complete/read sequence deterministic.
+    private readonly TaskScheduler foregroundScheduler = new SynchronousTaskScheduler();
+
+    public AgentViewModelSubAgentTreeFilterTests()
+    {
+        this.timeProvider.SetUtcNow(new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero));
+    }
+
     [Fact]
     public async Task SubAgentsTree_HideCompleted_DefaultsToTrue()
     {
@@ -172,9 +192,12 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
         var b = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "b");
         var c = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "c");
 
-        // Complete in order a, b, c so that c has the most recent LastUpdatedAt.
+        // Complete in order a, b, c so that c has the most recent LastUpdatedAt. Advance the
+        // injected clock between completions so ordering is deterministic (#1226).
         a.SetCompletionState(AgentChatCompletionState.Succeeded);
+        this.timeProvider.Advance(TimeSpan.FromSeconds(1));
         b.SetCompletionState(AgentChatCompletionState.Succeeded);
+        this.timeProvider.Advance(TimeSpan.FromSeconds(1));
         c.SetCompletionState(AgentChatCompletionState.Succeeded);
 
         var root = Assert.Single(viewModel.EditorItems);
@@ -340,6 +363,7 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
         var newChat = (AgentChat)chat.SubAgents.Single(s => s.AgentId == "new");
 
         oldChat.SetCompletionState(AgentChatCompletionState.Succeeded);
+        this.timeProvider.Advance(TimeSpan.FromSeconds(1));
         newChat.SetCompletionState(AgentChatCompletionState.Succeeded);
 
         var root = Assert.Single(viewModel.EditorItems);
@@ -409,11 +433,13 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
             }
             """);
 
-    private static Task<AgentChat> CreateChatAsync()
+    private Task<AgentChat> CreateChatAsync()
         => AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
             {
                 AgentDefinition = CreateAgentDefinition(),
+                TimeProvider = this.timeProvider,
+                ForegroundScheduler = this.foregroundScheduler,
             });
 
     private static async Task AddSubAgentAsync(AgentChat chat, string agentId, string displayName)
@@ -433,5 +459,18 @@ public sealed class AgentViewModelSubAgentTreeFilterTests
             """);
 
         await chat.GetOrCreateAsync(agentId, definition, $"tool-call-{agentId}", TestContext.Current.CancellationToken);
+    }
+
+    // #1226: Executes queued tasks inline on the queuing thread, so foreground-marshalled
+    // notifications (e.g. AgentChat.SetCompletionState's CompletionStateChanged) run synchronously
+    // and cannot race the test thread's reads of the nav tree's children.
+    private sealed class SynchronousTaskScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task> GetScheduledTasks() => Enumerable.Empty<Task>();
+
+        protected override void QueueTask(Task task) => this.TryExecuteTask(task);
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+            => this.TryExecuteTask(task);
     }
 }

@@ -594,6 +594,7 @@ public static class AgentFactory
                 ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
                 ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
+                TimeProvider = createAgentChatRequest.TimeProvider ?? TimeProvider.System,
             });
 
         // Complete the late-bound reference so AgentSessionToolset tools can access the parent chat.

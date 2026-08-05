@@ -58,6 +58,16 @@ public struct CreateAgentChatRequest
     public CancellationToken CancellationToken { get; init; }
 
     /// <summary>
+    /// Optional time source used to stamp chat-history timestamps and <c>LastUpdatedAt</c> values,
+    /// and to drive time-based waits. When <see langword="null"/>,
+    /// <see cref="System.TimeProvider.System"/> is used. Tests inject a fake provider so that
+    /// timestamp-ordered behaviour (e.g. the sub-agent tree ordering in issue #1226) is
+    /// deterministic and does not depend on OS clock resolution. The provider flows to sub-agents
+    /// created via <c>AgentChat.GetOrCreateAsync</c>.
+    /// </summary>
+    public TimeProvider? TimeProvider { get; init; }
+
+    /// <summary>
     /// Overrides the factory used to create a persistence store from a
     /// <see cref="ChatHistoryProviderDefinition"/> extracted from the agent definition's
     /// <c>chat-history</c> tool options. When <see langword="null"/>,

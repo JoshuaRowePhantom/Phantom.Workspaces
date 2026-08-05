@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -2492,6 +2493,63 @@ public sealed class AgentChatTests
         });
 
         Assert.Equal(string.Empty, chat.Name);
+    }
+
+    [Fact]
+    public async Task SetCompletionState_StampsLastUpdatedAtFromInjectedTimeProvider()
+    {
+        // #1226: guards the write site at AgentChat.SetCompletionState — LastUpdatedAt must be
+        // stamped from the injected TimeProvider, not the OS wall clock.
+        var timeProvider = new FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 3, 4, 5, 6, 7, TimeSpan.Zero));
+
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "chat",
+            TimeProvider = timeProvider,
+        });
+
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        chat.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        Assert.Equal(timeProvider.GetUtcNow().UtcDateTime, chat.LastUpdatedAt);
+    }
+
+    [Fact]
+    public async Task SetCompletionState_SecondCallAfterAdvance_BumpsLastUpdatedAt()
+    {
+        // #1226: two completions on distinct chats with an Advance between them must yield strictly
+        // increasing LastUpdatedAt — the ordering invariant the sub-agent tree relies on.
+        var timeProvider = new FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 3, 4, 5, 6, 7, TimeSpan.Zero));
+
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        await using var first = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "first",
+            TimeProvider = timeProvider,
+        });
+        await using var second = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "second",
+            TimeProvider = timeProvider,
+        });
+
+        first.SetCompletionState(AgentChatCompletionState.Succeeded);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        second.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        Assert.True(second.LastUpdatedAt > first.LastUpdatedAt);
     }
 
 }

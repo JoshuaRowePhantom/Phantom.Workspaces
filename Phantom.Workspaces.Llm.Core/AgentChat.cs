@@ -1048,6 +1048,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 DescriptionOverride = subAgentDefinition.Description ?? string.Empty,
                 ForegroundScheduler = this.foregroundScheduler,
                 CancellationToken = cancellationToken,
+                TimeProvider = this.timeProvider,
             }),
             cancellationToken,
             TaskCreationOptions.DenyChildAttach,
