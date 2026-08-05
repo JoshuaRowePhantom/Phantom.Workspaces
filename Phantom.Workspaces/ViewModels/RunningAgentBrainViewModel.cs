@@ -8,6 +8,7 @@ using System.Windows.Input;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Navigation;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -18,8 +19,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 {
     private readonly IRunningAgentChatTable table;
     private readonly Func<IEnumerable<AgentTabInfo>> getAllAgentTabs;
-    private readonly Action<string, string?> activateTab;
-    private readonly Action<string> openAgentForSession;
+    private readonly ITabNavigator navigator;
     private readonly Action<Action> dispatch;
     private readonly TimeProvider timeProvider;
 
@@ -39,15 +39,13 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     public RunningAgentBrainViewModel(
         IRunningAgentChatTable table,
         Func<IEnumerable<AgentTabInfo>> getAllAgentTabs,
-        Action<string, string?> activateTab,
-        Action<string> openAgentForSession,
+        ITabNavigator navigator,
         Action<Action> dispatch,
         TimeProvider? timeProvider = null)
     {
         this.table = table;
         this.getAllAgentTabs = getAllAgentTabs;
-        this.activateTab = activateTab;
-        this.openAgentForSession = openAgentForSession;
+        this.navigator = navigator;
         this.dispatch = dispatch;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
@@ -180,10 +178,17 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         var capturedTabId = tabInfo.Tab.Id;
         var capturedPaneId = tabInfo.PaneId;
 
-        ICommand activateCmd = new RelayCommand(_ =>
+        ICommand activateCmd = new RelayCommand(async _ =>
         {
             this.IsOpen = false;
-            this.activateTab(capturedTabId, capturedPaneId);
+            await this.navigator.NavigateAsync(
+                new NavigationTarget
+                {
+                    TabId = capturedTabId,
+                    WorkspacePaneId = capturedPaneId,
+                    AgentSessionKey = sessionKey,
+                },
+                new NavigationOptions { OpenEntityIfNoTab = true });
         });
 
         return new RunningAgentRowViewModel(
@@ -199,10 +204,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     {
         var capturedSessionKey = session.SessionId.Value;
 
-        ICommand activateCmd = new RelayCommand(_ =>
+        ICommand activateCmd = new RelayCommand(async _ =>
         {
             this.IsOpen = false;
-            this.openAgentForSession(capturedSessionKey);
+            await this.navigator.NavigateAsync(
+                new NavigationTarget { AgentSessionKey = capturedSessionKey },
+                new NavigationOptions { OpenEntityIfNoTab = true });
         });
 
         return new RunningAgentRowViewModel(

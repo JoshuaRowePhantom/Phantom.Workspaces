@@ -56,18 +56,15 @@ public sealed class RunningAgentBrainViewModelTests
     private static RunningAgentBrainViewModel CreateBrainVm(
         FakeRunningAgentChatTable table,
         IEnumerable<AgentTabInfo> tabs,
-        List<(string tabId, string? paneId)>? activatedTabs = null,
-        List<string>? openedSessions = null)
+        FakeTabNavigator? navigator = null)
     {
         var tabList = tabs.ToList();
-        activatedTabs ??= [];
-        openedSessions ??= [];
+        navigator ??= new FakeTabNavigator();
 
         return new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => tabList,
-            activateTab: (tabId, paneId) => activatedTabs.Add((tabId, paneId)),
-            openAgentForSession: sessionKey => openedSessions.Add(sessionKey),
+            navigator: navigator,
             dispatch: action => action());
     }
 
@@ -101,8 +98,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "My Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         Assert.Single(vm.Rows);
@@ -118,8 +114,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Project Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -136,8 +131,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         Assert.Empty(vm.Rows);
@@ -183,8 +177,7 @@ public sealed class RunningAgentBrainViewModelTests
             getAllAgentTabs: () => returnTabs
                 ? [new AgentTabInfo("pane-1", "Workspace", tab)]
                 : [],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         Assert.Single(vm.Rows);
@@ -214,8 +207,7 @@ public sealed class RunningAgentBrainViewModelTests
             getAllAgentTabs: () => returnTabs
                 ? [new AgentTabInfo("pane-1198", "Workspace 1198", tab)]
                 : [],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         Assert.Single(vm.Rows);
@@ -230,30 +222,31 @@ public sealed class RunningAgentBrainViewModelTests
     }
 
     [Fact]
-    public void RowActivateCommand_CallsActivateTab()
+    public void RowActivateCommand_DelegatesToTabNavigator()
     {
         var table = new FakeRunningAgentChatTable();
         table.AddSession("session-abc", "Agent");
         var tab = CreateReadyTab("tab-abc", "Agent", agentSessionId: "session-abc");
-        var activated = new List<(string tabId, string? paneId)>();
+        var navigator = new FakeTabNavigator();
 
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-xyz", "Workspace", tab)],
-            activateTab: (tabId, paneId) => activated.Add((tabId, paneId)),
-            openAgentForSession: _ => { },
+            navigator: navigator,
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
         row.ActivateCommand.Execute(null);
 
-        Assert.Single(activated);
-        Assert.Equal("tab-abc", activated[0].tabId);
-        Assert.Equal("pane-xyz", activated[0].paneId);
+        var call = Assert.Single(navigator.Calls);
+        Assert.Equal("tab-abc", call.Target.TabId);
+        Assert.Equal("pane-xyz", call.Target.WorkspacePaneId);
+        Assert.Equal("session-abc", call.Target.AgentSessionKey);
+        Assert.True(call.Options.OpenEntityIfNoTab);
     }
 
     [Fact]
-    public void RowActivateCommand_ClosesPopup()
+    public void RowActivateCommand_ClosesPopupBeforeNavigating()
     {
         var table = new FakeRunningAgentChatTable();
         table.AddSession("session-1", "Agent");
@@ -262,8 +255,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         vm.IsOpen = true;
@@ -300,8 +292,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         Assert.Single(vm.Rows);
@@ -322,8 +313,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -332,24 +322,25 @@ public sealed class RunningAgentBrainViewModelTests
     }
 
     [Fact]
-    public void WithNoMatchingTab_FallbackRowActivateCommand_CallsOpenAgentForSession()
+    public void WithNoMatchingTab_FallbackRowActivateCommand_DelegatesToTabNavigator()
     {
         var table = new FakeRunningAgentChatTable();
         table.AddSession("session-orphan", "Orphaned Agent");
-        var openedSessions = new List<string>();
+        var navigator = new FakeTabNavigator();
 
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [],
-            activateTab: (_, _) => { },
-            openAgentForSession: sessionKey => openedSessions.Add(sessionKey),
+            navigator: navigator,
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
         row.ActivateCommand.Execute(null);
 
-        Assert.Single(openedSessions);
-        Assert.Equal("session-orphan", openedSessions[0]);
+        var call = Assert.Single(navigator.Calls);
+        Assert.Null(call.Target.TabId);
+        Assert.Equal("session-orphan", call.Target.AgentSessionKey);
+        Assert.True(call.Options.OpenEntityIfNoTab);
     }
 
     [Fact]
@@ -361,8 +352,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         vm.IsOpen = true;
@@ -376,21 +366,18 @@ public sealed class RunningAgentBrainViewModelTests
     public void RunningAgentBrain_ClickSessionWithNoOwningWorkspace_IsSafeNoOp()
     {
         // #1135: A fallback row whose session has no resolvable owning workspace
-        // (WorkspaceId == null) must not throw and must not attempt to focus a tab
-        // in the currently-active pane (no call into activateTab). The row simply
-        // forwards to openAgentForSession, which is the delegate that resolves and
-        // switches to the owning workspace; when there is no owning workspace, the
-        // delegate is expected to be a safe no-op.
+        // (WorkspaceId == null) must not throw and must route through the navigator's
+        // entity-fallback path (TabId == null, OpenEntityIfNoTab == true) rather than a
+        // tab activation, so the currently-active pane is not disturbed. When there is no
+        // owning workspace, OpenAgentForSessionAsync is a safe no-op.
         var table = new FakeRunningAgentChatTable();
         table.AddSession("session-no-owner", "Orphaned Agent", workspaceId: null);
-        var openedSessions = new List<string>();
-        var activated = new List<(string tabId, string? paneId)>();
+        var navigator = new FakeTabNavigator();
 
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [],
-            activateTab: (tabId, paneId) => activated.Add((tabId, paneId)),
-            openAgentForSession: sessionKey => openedSessions.Add(sessionKey),
+            navigator: navigator,
             dispatch: action => action());
 
         vm.IsOpen = true;
@@ -399,11 +386,10 @@ public sealed class RunningAgentBrainViewModelTests
         var exception = Record.Exception(() => row.ActivateCommand.Execute(null));
         Assert.Null(exception);
 
-        // Fallback row must route through openAgentForSession (the workspace-switching
-        // delegate), NOT the activateTab short-circuit which would focus a tab in the
-        // currently-active pane.
-        Assert.Empty(activated);
-        Assert.Equal(new[] { "session-no-owner" }, openedSessions);
+        var call = Assert.Single(navigator.Calls);
+        Assert.Null(call.Target.TabId);
+        Assert.Equal("session-no-owner", call.Target.AgentSessionKey);
+        Assert.True(call.Options.OpenEntityIfNoTab);
         Assert.False(vm.IsOpen);
     }
 
@@ -577,8 +563,7 @@ public sealed class RunningAgentBrainViewModelTests
                 new AgentTabInfo("pane-1", "Workspace", tabA),
                 new AgentTabInfo("pane-1", "Workspace", tabB),
             ],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         // Give session-A an older activity timestamp so session-B is initially first.
@@ -632,8 +617,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action(),
             timeProvider: fake);
 
@@ -673,8 +657,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace Pane", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -693,8 +676,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace Pane", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -712,8 +694,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         // Initially no tabs - should show fallback row
@@ -747,8 +728,7 @@ public sealed class RunningAgentBrainViewModelTests
                 new AgentTabInfo("pane-1", "Workspace One", tabA),
                 new AgentTabInfo("pane-2", "Workspace Two", tabB),
             ],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         Assert.Equal(2, vm.Rows.Count);
@@ -778,8 +758,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         // Initially has open tab
@@ -805,8 +784,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace Pane", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -854,8 +832,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -890,8 +867,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -922,8 +898,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -955,8 +930,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => { dispatchCount++; action(); });
 
         // The constructor's Refresh runs inline (not via dispatch), so no dispatch yet.
@@ -989,8 +963,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -1025,8 +998,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => currentTabs,
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         // Close the tab while the session keeps running: Refresh downgrades to a fallback row and
@@ -1056,8 +1028,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);
@@ -1077,8 +1048,7 @@ public sealed class RunningAgentBrainViewModelTests
         var vm = new RunningAgentBrainViewModel(
             table: table,
             getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
-            activateTab: (_, _) => { },
-            openAgentForSession: _ => { },
+            navigator: new FakeTabNavigator(),
             dispatch: action => action());
 
         var row = Assert.Single(vm.Rows);

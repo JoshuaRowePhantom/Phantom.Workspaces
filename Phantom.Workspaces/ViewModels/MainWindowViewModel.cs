@@ -31,7 +31,7 @@ using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable, ITabNavigatorHost
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -93,6 +93,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
+    private ITabNavigator tabNavigator = null!;
+    private Action? focusWindowAction;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
     private readonly List<RunningAgentChatLease> autoResumeLeases = [];
@@ -168,9 +170,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
         this.notificationService = new NotificationService(this);
+        this.tabNavigator = new MainWindowTabNavigator(
+            this,
+            this.navigationHistoryService,
+            this.notificationService);
         this.notificationsViewModel = new NotificationsViewModel(
             this.notificationService,
-            tabId => this.NavigateToNotificationTab(tabId));
+            this.tabNavigator);
         this.NavigateNextNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(+1));
         this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
@@ -181,8 +187,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.runningAgentBrain = new RunningAgentBrainViewModel(
             runningAgentChats,
             this.GetAllAgentTabs,
-            this.ActivateTabById,
-            sessionKey => _ = this.OpenAgentForSessionAsync(sessionKey),
+            this.tabNavigator,
             action => Dispatcher.UIThread.Post(action));
     }
 
@@ -249,19 +254,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     /// <summary>
     /// Navigate directly to the history entry at <paramref name="historyIndex"/> without
-    /// pushing a new entry onto the navigation stack.
+    /// pushing a new entry onto the navigation stack. Delegates to the shared
+    /// <see cref="ITabNavigator"/> so the Ctrl nav-stack popup navigates identically to the
+    /// brain button and notifications (issue #1254).
     /// </summary>
-    public void NavigateToHistoryEntry(int historyIndex)
+    public void NavigateToHistoryEntry(int historyIndex) =>
+        _ = this.NavigateToHistoryEntryAsync(historyIndex);
+
+    internal async Task NavigateToHistoryEntryAsync(int historyIndex)
     {
         if (!this.navigationHistoryService.GoToIndex(historyIndex, out var entry) || entry is null)
         {
             return;
         }
 
+        // The guard is still required so OpenTabAsync's dock-factory re-entry does not re-push a
+        // history entry while we are replaying one; NavigationOptions.PushHistory is false as well.
         this.navigatingViaHistory = true;
         try
         {
-            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            await this.tabNavigator.NavigateAsync(
+                new NavigationTarget { TabId = entry.TabId, WorkspacePaneId = entry.WorkspacePaneId },
+                new NavigationOptions { PushHistory = false });
         }
         finally
         {
@@ -4363,24 +4377,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var workspacePaneId = this.notificationService.Notifications
             .FirstOrDefault(e => e.TabKey == tabId)
             ?.TabDescriptor.WorkspaceId;
-        this.ActivateTabById(tabId, workspacePaneId);
-        if (!this.navigatingViaHistory)
-        {
-            var paneId = workspacePaneId ?? this.SelectedWorkspacePane?.Id;
-            if (paneId is not null)
-            {
-                this.navigationHistoryService.Push(new NavigationEntry(tabId, paneId));
-            }
-        }
+        _ = this.tabNavigator.NavigateAsync(
+            new NavigationTarget { TabId = tabId, WorkspacePaneId = workspacePaneId },
+            new NavigationOptions { PushHistory = true });
     }
 
     public void WireWindowFocus(Action focusWindow)
     {
-        if (this.notificationsViewModel is not null)
-        {
-            this.notificationsViewModel.FocusWindowCallback = focusWindow;
-        }
+        this.focusWindowAction = focusWindow;
     }
+
+    Task ITabNavigatorHost.ActivateTabByIdAsync(string tabId, string? workspacePaneId) =>
+        this.ActivateTabByIdAsync(tabId, workspacePaneId);
+
+    Task ITabNavigatorHost.OpenAgentForSessionAsync(string sessionKey) =>
+        this.OpenAgentForSessionAsync(sessionKey);
+
+    string? ITabNavigatorHost.SelectedWorkspacePaneId => this.SelectedWorkspacePane?.Id;
+
+    bool ITabNavigatorHost.NavigatingViaHistory => this.navigatingViaHistory;
+
+    void ITabNavigatorHost.FocusMainWindow() => this.focusWindowAction?.Invoke();
 
     public override async ValueTask DisposeAsync()
     {

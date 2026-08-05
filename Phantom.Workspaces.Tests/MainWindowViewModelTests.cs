@@ -629,6 +629,43 @@ public sealed class MainWindowViewModelTests
         Assert.Null(dockFactory.GetDocumentForTab(tab.Id));
     }
 
+    [AvaloniaFact]
+    public async Task NavigateToHistoryEntry_ReplaysTargetTabViaTabNavigator_WithoutRePushingHistory()
+    {
+        // #1254: the Ctrl nav-stack popup replay path routes through the shared ITabNavigator with
+        // PushHistory = false, so replaying a history entry activates the target tab without adding
+        // a new entry (which would corrupt back/forward navigation).
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        await viewModel.OpenTabAsync(new WebViewModel("https://hist-a.example.com/") { Id = "hist-a", Title = "A" });
+        await viewModel.OpenTabAsync(new WebViewModel("https://hist-b.example.com/") { Id = "hist-b", Title = "B" });
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var historyField = typeof(MainWindowViewModel).GetField(
+            "navigationHistoryService", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var history = (Phantom.Workspaces.Services.Navigation.INavigationHistoryService)historyField.GetValue(viewModel)!;
+        var entryCountBefore = history.Entries.Count;
+
+        var targetIndex = -1;
+        for (var i = 0; i < history.Entries.Count; i++)
+        {
+            if (history.Entries[i].TabId == "hist-a")
+            {
+                targetIndex = i;
+                break;
+            }
+        }
+
+        Assert.True(targetIndex >= 0);
+
+        await viewModel.NavigateToHistoryEntryAsync(targetIndex);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.Equal("hist-a", viewModel.ActiveTabId);
+        Assert.Equal(entryCountBefore, history.Entries.Count);
+    }
+
     private static WorkspacePaneViewModel AddPane(MainWindowViewModel viewModel, string id)
     {
         var entityId = Guid.NewGuid();

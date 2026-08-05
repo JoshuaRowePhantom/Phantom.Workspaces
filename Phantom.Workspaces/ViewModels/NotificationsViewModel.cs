@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows.Input;
+using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -10,17 +11,17 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposable
 {
     private readonly NotificationService notificationService;
-    private readonly Action<string> navigateToTab;
+    private readonly ITabNavigator navigator;
     private readonly TimeProvider timeProvider;
     private int lastKnownUnreadCount;
 
     public NotificationsViewModel(
         NotificationService notificationService,
-        Action<string> navigateToTab,
+        ITabNavigator navigator,
         TimeProvider? timeProvider = null)
     {
         this.notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
-        this.navigateToTab = navigateToTab ?? throw new ArgumentNullException(nameof(navigateToTab));
+        this.navigator = navigator ?? throw new ArgumentNullException(nameof(navigator));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
@@ -40,8 +41,6 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
     public bool HasRows => this.Rows.Count > 0;
 
     public bool HasActiveRun => this.notificationService.HasActiveRun;
-
-    internal Action? FocusWindowCallback { get; set; }
 
     public void ToggleOpen()
     {
@@ -152,12 +151,17 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
     private NotificationRowViewModel CreateRow(NotificationEntry entry)
     {
         var tabKey = entry.TabKey;
-        var navigateCmd = new RelayCommand(_ =>
+        var navigateCmd = new RelayCommand(async _ =>
         {
             this.TriggerFadeClose();
-            this.notificationService.MarkRead(tabKey);
-            this.FocusWindowCallback?.Invoke();
-            this.navigateToTab(tabKey);
+            await this.navigator.NavigateAsync(
+                new NavigationTarget
+                {
+                    TabId = tabKey,
+                    WorkspacePaneId = this.notificationService.Notifications
+                        .FirstOrDefault(e => e.TabKey == tabKey)?.TabDescriptor.WorkspaceId,
+                },
+                new NavigationOptions { PushHistory = true, FocusWindow = true });
         });
         var snoozeCmd = new RelayCommand(_ =>
         {

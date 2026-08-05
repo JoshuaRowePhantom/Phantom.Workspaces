@@ -23,7 +23,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         Assert.False(viewModel.HasRows);
     }
@@ -33,7 +33,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         
         service.Notify(InterestingNotification(Tab("tab-1"), "Test notification"));
 
@@ -45,7 +45,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         
         bool hasRowsChanged = false;
         viewModel.PropertyChanged += (sender, args) =>
@@ -67,7 +67,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(RunningNotification(Tab("tab-1")));
 
@@ -79,7 +79,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         Assert.False(viewModel.HasActiveRun);
     }
@@ -89,7 +89,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         bool hasActiveRunChanged = false;
         viewModel.PropertyChanged += (sender, args) =>
@@ -110,7 +110,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(RunningNotification(Tab("tab-1")));
 
         bool hasActiveRunChanged = false;
@@ -132,7 +132,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "Test notification"));
 
@@ -144,7 +144,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "Test notification"));
 
@@ -156,7 +156,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         var changedProperties = new List<string?>();
         viewModel.PropertyChanged += (_, args) => changedProperties.Add(args.PropertyName);
@@ -171,7 +171,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));  // opens it
 
         viewModel.ToggleOpen();
@@ -184,7 +184,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));  // sets IsAutoClosing = true
 
         viewModel.ToggleOpen();
@@ -197,7 +197,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         viewModel.IsAutoClosing = true;
 
         var changedProperties = new List<string?>();
@@ -213,7 +213,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));  // unread count goes 0 → 1, auto-shows
         viewModel.IsOpen = false;
@@ -230,7 +230,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));  // unread count goes 0 → 1, auto-shows
         viewModel.IsOpen = false;
@@ -247,7 +247,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "first"));   // unread 0 → 1
         service.MarkRead("tab-1");               // unread 1 → 0
@@ -265,7 +265,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         // NotInteresting (running state update) should not auto-show popup
         service.Notify(RunningNotification(Tab("tab-1")));
@@ -279,7 +279,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "Test notification"));
 
@@ -294,7 +294,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
         viewModel.IsOpen = false;
         viewModel.IsAutoClosing = false;
@@ -309,7 +309,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
         viewModel.IsOpen = false;
         viewModel.IsAutoClosing = false;
@@ -324,7 +324,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
 
         viewModel.OpenWithHighlight("tab-1");
@@ -338,7 +338,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "first"));
         service.Notify(InterestingNotification(Tab("tab-2"), "second"));
 
@@ -353,7 +353,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "first"));
         service.Notify(InterestingNotification(Tab("tab-2"), "second"));
 
@@ -371,7 +371,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
         viewModel.IsOpen = false;
         viewModel.IsAutoClosing = false;
@@ -388,7 +388,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         var exception = Record.Exception(() => viewModel.OpenWithHighlight("tab-1"));
 
@@ -401,7 +401,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
         viewModel.OpenWithHighlight("tab-1");
 
@@ -415,7 +415,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
 
         viewModel.ToggleOpen();
@@ -433,7 +433,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         var baseTime = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
         // tab-2 is older (added first); popup opens. tab-1 is newer; popup already open so tab-1 is prepended.
@@ -457,7 +457,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         service.Notify(InterestingNotification(Tab("tab-1"), "first"));
         // Popup is now open with tab-1 at index 0
@@ -477,7 +477,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
 
         var baseTime = new DateTime(2025, 1, 1, 12, 0, 0, DateTimeKind.Utc);
         // tab-2 older, tab-1 newer; both unread; tab-1 ends up at index 0 after both are notified
@@ -503,7 +503,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
         Assert.True(viewModel.IsOpen);
         Assert.True(viewModel.IsAutoClosing);
@@ -519,7 +519,7 @@ public sealed class NotificationsViewModelTests
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
         Assert.True(viewModel.IsAutoClosing);
 
@@ -530,48 +530,68 @@ public sealed class NotificationsViewModelTests
     }
 
     [Fact]
-    public void NavigateCommand_InvokesNavigateCallback()
+    public void NavigateCommand_DelegatesToTabNavigator()
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        string? navigatedTabKey = null;
-        var viewModel = new NotificationsViewModel(service, key => navigatedTabKey = key);
+        var navigator = new FakeTabNavigator();
+        var viewModel = new NotificationsViewModel(service, navigator);
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
 
         var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
         row.NavigateCommand.Execute(null);
 
-        Assert.Equal("tab-1", navigatedTabKey);
+        var call = Assert.Single(navigator.Calls);
+        Assert.Equal("tab-1", call.Target.TabId);
+        Assert.True(call.Options.PushHistory);
+        Assert.True(call.Options.FocusWindow);
     }
 
     [Fact]
-    public void NotificationRowNavigateCommand_InvokesFocusWindowCallback()
+    public void NavigateCommand_ResolvesWorkspacePaneIdFromNotificationDescriptor()
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
-        bool focusWindowCalled = false;
-        viewModel.FocusWindowCallback = () => focusWindowCalled = true;
-        service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
+        var navigator = new FakeTabNavigator();
+        var viewModel = new NotificationsViewModel(service, navigator);
+        service.Notify(new Notification(
+            new TabDescriptor { TabId = "tab-1", WorkspaceId = "pane-9" },
+            "Completed",
+            "done",
+            DateTime.UtcNow,
+            RunningState.Idle,
+            NotificationState.Interesting));
 
         var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
         row.NavigateCommand.Execute(null);
 
-        Assert.True(focusWindowCalled);
+        var call = Assert.Single(navigator.Calls);
+        Assert.Equal("pane-9", call.Target.WorkspacePaneId);
     }
 
     [Fact]
-    public void NotificationRowNavigateCommand_NullCallback_DoesNotThrow()
+    public void NavigateCommand_TriggersFadeCloseBeforeNavigating()
     {
         var provider = new FakeActiveTabProvider();
         var service = new NotificationService(provider);
-        var viewModel = new NotificationsViewModel(service, _ => { });
-        viewModel.FocusWindowCallback = null;
+        var navigator = new FakeTabNavigator();
+        var viewModel = new NotificationsViewModel(service, navigator);
         service.Notify(InterestingNotification(Tab("tab-1"), "notification"));
 
-        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
-        var exception = Record.Exception(() => row.NavigateCommand.Execute(null));
+        var events = new List<string>();
+        viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(viewModel.IsAutoClosing))
+            {
+                events.Add("fade");
+            }
+        };
 
-        Assert.Null(exception);
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        row.NavigateCommand.Execute(null);
+
+        // TriggerFadeClose (which raises IsAutoClosing) runs before the navigator is invoked.
+        Assert.Contains("fade", events);
+        Assert.Single(navigator.Calls);
     }
 }
