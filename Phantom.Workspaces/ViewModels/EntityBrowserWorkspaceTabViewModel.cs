@@ -24,6 +24,10 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingSubscriptions = new(StringComparer.Ordinal);
+    // #1232: folders the user has expanded at least once. Their already-loaded child node view models
+    // are preserved when the folder is later collapsed so that re-expanding is instant (no re-subscribe
+    // or rebuild-from-scratch). Never-expanded folders are absent here and stay unmaterialized.
+    private readonly HashSet<string> expandedFolderPaths = new(StringComparer.Ordinal);
     private readonly TaskScheduler foregroundScheduler;
     private bool isRebuilding;
     private bool isRebuildPending;
@@ -214,10 +218,23 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 node.SetHasChildren(hasChildren);
 
                 var isExpanded = expansionStateByPath.TryGetValue(descriptor.SortKey, out var expanded) && expanded;
-                if (isExpanded && hasChildren)
+                if (isExpanded)
                 {
-                    // Only an expanded folder materializes its immediate children (which may in turn
-                    // recurse only into their own expanded descendants).
+                    // #1232: record that this folder has been expanded at least once so its loaded
+                    // children survive a later collapse.
+                    this.expandedFolderPaths.Add(descriptor.SortKey);
+                }
+
+                // Materialize immediate children when the folder is currently expanded OR was expanded
+                // before and then collapsed (loaded). This keeps re-expansion instant. Folders that have
+                // never been expanded stay unmaterialized, preserving the lazy-load / no-freeze guarantee.
+                var materializeChildren = hasChildren
+                    && (isExpanded || this.expandedFolderPaths.Contains(descriptor.SortKey));
+                if (materializeChildren)
+                {
+                    // Recurse only into this folder's own expanded/loaded descendants; a collapsed-but-
+                    // loaded folder retains its child node view models but does not force its descendants
+                    // open.
                     node.SetChildren(await this.BuildChildrenAsync(descriptor.NameComponents, childGet.Results, expansionStateByPath, ct));
                 }
                 else
@@ -497,38 +514,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             this.isRebuildPending = true;
             return;
         }
-        
-        if (!isExpanded)
-        {
-            // Node collapsed: dispose subscriptions for all descendants to save resources
-            this.DisposeDescendantSubscriptions(node);
-        }
-        
-        // Expansion state changed - rebuild tree to reflect new state
+
+        // #1232: collapsing a folder must NOT dispose its descendants' subscriptions or drop their
+        // already-loaded child node view models — doing so forces a re-subscribe + rebuild on
+        // re-expand. Preserving them (see BuildChildrenAsync / expandedFolderPaths) keeps re-expansion
+        // instant. Subscriptions are released together in DisposeAsync when the tab closes.
         _ = this.RebuildTreeAsync();
-    }
-
-    private void DisposeDescendantSubscriptions(EntityListNodeViewModel node)
-    {
-        // Recursively dispose subscriptions for all descendants
-        foreach (var child in node.Children)
-        {
-            var childKey = JsonSerializer.Serialize(child.NameComponents);
-            this.DisposeChildSubscription(childKey);
-            this.DisposeDescendantSubscriptions(child);
-        }
-    }
-
-    private void DisposeChildSubscription(string pathKey)
-    {
-        if (!this.subscribedGetsByPath.TryGetValue(pathKey, out var subscribedGet))
-        {
-            return;
-        }
-
-        subscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
-        this.subscribedGetsByPath.Remove(pathKey);
-        // The SubscribedGet will be garbage collected and EntityBroker will clean up the WeakReference
     }
 
     private bool TryFindEntityForPath(

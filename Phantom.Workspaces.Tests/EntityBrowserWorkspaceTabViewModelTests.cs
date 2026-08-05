@@ -683,6 +683,56 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task BrowserList_CollapsingFolder_DoesNotDropAlreadyLoadedChildren()
+    {
+        var broker = await CreateBrokerAsync();
+        await SeedDeepTreeAsync(broker);
+
+        var rootSubscription = await CreateRootSubscriptionAsync(broker);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-collapse-preserve",
+            Title = "Entity Browser",
+        };
+
+        var alphaItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+
+        // Expand "alpha" so its immediate child "beta" is loaded and materialized.
+        alphaItem.IsExpanded = true;
+        await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal));
+        Assert.Single(alphaItem.Node.Children);
+
+        // Collapse "alpha": its child item leaves the visible flat list...
+        alphaItem.IsExpanded = false;
+        await WaitForConditionAsync(
+            viewModel,
+            () => viewModel.EntityList.Items.All(
+                item => !string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal)));
+
+        // ...but the already-loaded "beta" node view model is PRESERVED under "alpha" (issue #1232),
+        // rather than dropped and re-subscribed, so re-expanding is instant.
+        Assert.False(alphaItem.IsExpanded);
+        Assert.Single(alphaItem.Node.Children);
+        Assert.Equal(
+            "[\"alpha\",\"beta\"]",
+            JsonSerializer.Serialize(alphaItem.Node.Children[0].NameComponents));
+
+        // Re-expanding surfaces the preserved child again.
+        alphaItem.IsExpanded = true;
+        var reExpandedBeta = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal));
+        Assert.Equal(alphaItem.ItemKey, reExpandedBeta.ParentItemKey);
+
+        await viewModel.DisposeAsync();
+    }
+
+    [AvaloniaFact]
     public async Task BrowserList_RebuildPublishesItemsThroughForegroundScheduler()
     {
         var broker = await CreateBrokerAsync();
