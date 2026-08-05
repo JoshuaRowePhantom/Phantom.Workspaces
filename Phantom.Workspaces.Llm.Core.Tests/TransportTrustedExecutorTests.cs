@@ -52,7 +52,7 @@ public sealed class TransportTrustedExecutorTests
     }
 
     [Fact]
-    public async Task CreateAgentChat_RemoteProfile_UsesTransportFactoryRegistry()
+    public async Task TransportTrustedExecutor_RemoteProfile_PassesEntityIdDescriptorToRegistry()
     {
         var registry = new FakeTransportFactoryRegistry(new FakeTransport());
         await using var executor = new TransportTrustedExecutor(registry, new ExecutionTargetResolver());
@@ -67,7 +67,8 @@ public sealed class TransportTrustedExecutorTests
         Assert.NotNull(chat);
         var descriptor = Assert.Single(registry.Descriptors);
         Assert.Equal("user-computer-profile", descriptor.GetProperty("type").GetString());
-        Assert.Equal("remote-a", descriptor.GetProperty("target-client-instance").GetString());
+        Assert.Equal("remote-a", descriptor.GetProperty("entity-id").GetString());
+        Assert.False(descriptor.TryGetProperty("target-client-instance", out _));
     }
 
     [Fact]

@@ -89,6 +89,19 @@ public sealed class UserComputerProfileTransportFactoryTests
         Assert.Equal("agent", registry.Transport.LastChannelRequest.Value.GetProperty("name").GetString());
     }
 
+    [Fact]
+    public async Task UserComputerProfileTransportFactory_DescriptorMissingEntityId_ThrowsTransportException()
+    {
+        var registry = new CapturingTransportFactoryRegistry();
+        var factory = CreateFactory(new EntityLookupDataAccessLayer(), registry);
+
+        var exception = await Assert.ThrowsAsync<TransportException>(
+            () => factory.ConnectToAsync(JsonDocument.Parse("""{"type":"user-computer-profile"}""").RootElement));
+
+        Assert.Equal("User computer profile descriptors must include entity-id.", exception.Message);
+        Assert.Empty(registry.Descriptors);
+    }
+
     private static UserComputerProfileTransportFactory CreateFactory(
         IDataAccessLayer dataAccessLayer,
         ITransportFactoryRegistry registry)

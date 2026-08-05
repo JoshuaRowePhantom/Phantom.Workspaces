@@ -40,7 +40,7 @@ public sealed class ExecutionTargetResolver
             : new JsonObject
             {
                 ["type"] = RemoteDescriptorType,
-                ["target-client-instance"] = targetClientInstance,
+                ["entity-id"] = targetClientInstance,
             };
 
         return JsonSerializer.SerializeToElement(descriptor);
