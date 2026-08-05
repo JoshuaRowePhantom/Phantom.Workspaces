@@ -634,46 +634,116 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
-    private static async Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
-        GetOuterPaneHeaderProgressBarsAsync(Avalonia.Controls.Window window, int timeoutMs = 10_000)
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_ContentTabWithRunningIndicator_RendersPulsatingBrainInsidePartHeaderPresenter()
     {
-        // Drive the real Dock.Avalonia render path: locate the outer
-        // workspace-level DocumentTabStrip (DataContext = WorkspacesPaneDock),
-        // find its DocumentTabStripItem's PART_HeaderPresenter, and collect the
-        // ProgressBars that the DocumentControl.HeaderTemplate inflated. This is
-        // the exact scope that the implicit vm:TabHeaderViewModel lookup failed
-        // to resolve before the #1196 fix.
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
-        {
-            Dispatcher.UIThread.RunJobs();
+        // Regression for #1196 (reopened): the inner-pane content-level tab header
+        // (WorkspaceContentDock.DocumentControl.HeaderTemplate in
+        // DockDataTemplates.axaml) must inflate its indicator items through the REAL
+        // Dock.Avalonia render path (DocumentTabStrip →
+        // DocumentTabStripItem.PART_HeaderPresenter). A content tab whose
+        // EffectiveTabHeader carries an AgentRunningIndicator (IsRunning=true) must
+        // materialise its pulsating-brain ProgressBar. The explicit
+        // ContentTemplate="{StaticResource TabHeaderTemplate}" fix repaired this
+        // content-level path; before it the header collapsed to
+        // TabHeaderViewModel.ToString() and no ProgressBar appeared. This locks in
+        // the inner-pane HeaderTemplate replacement, complementing the outer
+        // WorkspacesPaneDock coverage above.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
 
+        var tab = new WebViewModel("https://running.example.com")
+        {
+            Id = "inner-running-indicator",
+            Title = "Running Tab",
+        };
+        // Attach a running-agent indicator so the content tab's EffectiveTabHeader
+        // exposes a pulsating-brain item to the inner-pane HeaderTemplate.
+        tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var progressBars = await GetTabStripHeaderProgressBarsAsync(
+                window, dc => dc is WorkspaceContentDock);
+
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
+        GetOuterPaneHeaderProgressBarsAsync(Avalonia.Controls.Window window)
+    {
+        // Drive the real Dock.Avalonia render path for the outer workspace-level
+        // DocumentTabStrip (DataContext = WorkspacesPaneDock). This is the exact
+        // scope that the implicit vm:TabHeaderViewModel lookup failed to resolve
+        // before the #1196 fix.
+        return GetTabStripHeaderProgressBarsAsync(window, dc => dc is WorkspacesPaneDock);
+    }
+
+    private static Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
+        GetTabStripHeaderProgressBarsAsync(
+            Avalonia.Controls.Window window,
+            Func<object?, bool> dataContextPredicate)
+    {
+        // Event-driven synchronization (no Task.Delay / polling loop): locate the
+        // DocumentTabStrip whose DataContext matches the predicate, walk each
+        // DocumentTabStripItem's PART_HeaderPresenter, and resolve as soon as the
+        // DocumentControl.HeaderTemplate has inflated indicator ProgressBars.
+        // Progress is anchored to the window's LayoutUpdated event, which fires on
+        // every layout pass performed during Dock.Avalonia tab-strip realization,
+        // matching the WaitForLayoutAsync/WaitForDocumentTabStripAsync helpers used
+        // elsewhere in this test suite.
+        var tcs = new TaskCompletionSource<System.Collections.Generic.IReadOnlyList<ProgressBar>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        System.Collections.Generic.IReadOnlyList<ProgressBar>? TryCollect()
+        {
             var tabStrip = window.GetVisualDescendants()
                 .OfType<DocumentTabStrip>()
-                .FirstOrDefault(ts => ts.DataContext is WorkspacesPaneDock);
+                .FirstOrDefault(ts => dataContextPredicate(ts.DataContext));
+            if (tabStrip is null)
+                return null;
 
-            var item = tabStrip?.GetVisualDescendants()
+            var progressBars = tabStrip.GetVisualDescendants()
                 .OfType<DocumentTabStripItem>()
-                .FirstOrDefault();
+                .SelectMany(item => item.GetVisualDescendants()
+                    .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                    .Where(cp => cp.Name == "PART_HeaderPresenter"))
+                .SelectMany(headerPresenter => headerPresenter.GetVisualDescendants()
+                    .OfType<ProgressBar>())
+                .ToList();
 
-            var headerPresenter = item?.GetVisualDescendants()
-                .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
-                .FirstOrDefault(cp => cp.Name == "PART_HeaderPresenter");
-
-            if (headerPresenter is not null)
-            {
-                var progressBars = headerPresenter.GetVisualDescendants()
-                    .OfType<ProgressBar>()
-                    .ToList();
-                if (progressBars.Count > 0)
-                    return progressBars;
-            }
-
-            await Task.Delay(50);
+            return progressBars.Count > 0 ? progressBars : null;
         }
 
-        throw new TimeoutException(
-            "Outer WorkspacesPaneDock tab-strip header ProgressBars not found within timeout.");
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            var bars = TryCollect();
+            if (bars is null)
+                return;
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult(bars);
+        };
+        window.LayoutUpdated += handler;
+
+        // TOCTOU: re-check after subscribing in case the bars already materialised
+        // between construction and the subscribe.
+        var initial = TryCollect();
+        if (initial is not null)
+        {
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult(initial);
+        }
+
+        return tcs.Task;
     }
 
     [AvaloniaFact(Timeout = 15_000)]
