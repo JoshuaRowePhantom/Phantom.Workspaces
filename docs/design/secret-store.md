@@ -1266,8 +1266,25 @@ Test framework: **xUnit** (already used across the tree). GUI tests use
 
 Uses the real `Meziantou.Framework.Win32.CredentialManager` package against
 credentials named `"Phantom.Workspaces.Tests:{guid}"` to avoid colliding
-with the user's real credentials; each test deletes its credential in a
-`finally`.
+with the user's real credentials.
+
+Credential-leak hygiene — **imperative** that no test ever leaves a credential
+behind on the user's machine, even when a prior run was interrupted (crash,
+Ctrl-C, debugger detach, machine reboot mid-test):
+
+- The `{guid}` is a **single constant** compiled into the test class (not
+  `Guid.NewGuid()`), reused across every test run on every machine, so that
+  any orphaned credential from an interrupted previous run is deterministically
+  discoverable and cleaned up by the next run.
+- All tests in `WindowsCredentialManagerSecretStoreTests` serialize through a
+  **process-wide named semaphore** (e.g. a `System.Threading.Semaphore` with a
+  fixed name such as `Global\Phantom.Workspaces.Tests.WindowsCredentialManagerSecretStore`)
+  so that parallel test-runner workers — or two concurrent `dotnet test`
+  invocations on the same box — cannot race on the shared constant credential
+  name.
+- Each test opens with a best-effort delete of the constant credential (to
+  clean up an orphan from a prior interrupted run), does its work, and ends
+  with an unconditional delete in `finally`.
 
 - `Write_ThenRead_ReturnsSameValue` (`SkipUnless(OperatingSystem.IsWindows)`)
 - `Read_Missing_ReturnsNull`
