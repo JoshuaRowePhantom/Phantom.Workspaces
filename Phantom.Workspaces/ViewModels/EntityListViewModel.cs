@@ -112,6 +112,8 @@ public sealed class EntityListViewModel : ViewModelBase
                     newItem.ParentItemKey,
                     newItem.ChildItemKeys);
                 existing.Node.SetChildren(newItem.Node.Children.ToList());
+                existing.Node.SetImmediateChildKeys(newItem.Node.ImmediateChildKeys);
+                existing.Node.SetHasChildren(newItem.Node.HasChildren);
                 int currentIndex = this.Items.IndexOf(existing);
                 if (currentIndex != i)
                 {

@@ -47,7 +47,7 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public IReadOnlyCollection<string> ChildItemKeys { get; private set; }
 
-    public bool HasChildren => this.ChildItemKeys.Count > 0;
+    public bool HasChildren => this.ChildItemKeys.Count > 0 || this.Node.HasChildren;
 
     public int? StickyRow => this.HasChildren ? this.Level : null;
 
@@ -170,6 +170,16 @@ public sealed class EntityListItemViewModel : ViewModelBase
         else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.EntityType), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.EntityType));
+        }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.HasChildren), StringComparison.Ordinal))
+        {
+            // #1232: a collapsed folder reports HasChildren via the node's lazy override before its
+            // children are materialized. Propagate that so the expand affordance appears.
+            this.RaisePropertyChanged(nameof(this.HasChildren));
+            this.RaisePropertyChanged(nameof(this.StickyRow));
+            this.RaisePropertyChanged(nameof(this.ContentCornerRadius));
+            this.RaisePropertyChanged(nameof(this.ExpandSectionCornerRadius));
+            this.ToggleExpandCommand.RaiseCanExecuteChanged();
         }
     }
 
