@@ -139,9 +139,7 @@ public sealed class GitWorkspaceScanTool : IWorkspaceTool
                 }
             }
 
-            if (participantTypes.Contains("filesystem-folder", StringComparer.Ordinal)
-                || participantTypes.Contains("filesystem-path", StringComparer.Ordinal)
-                || participantTypes.Contains("folder", StringComparer.Ordinal))
+            if (participantTypes.Contains("filesystem-path", StringComparer.Ordinal))
             {
                 if (!IsForCurrentProfile(participant, currentProfileNames))
                 {

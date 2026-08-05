@@ -107,4 +107,36 @@ public sealed class EntitySchemaComposerTests
 
         Assert.Empty(errors);
     }
+
+    [Fact]
+    public void SchemaDefinitions_DoesNotDefineFilesystemFolderEntityType()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        var resourceNames = assembly.GetManifestResourceNames();
+
+        Assert.Contains(
+            resourceNames,
+            name => name.EndsWith(".filesystem-path-entity-type.json", StringComparison.Ordinal));
+        Assert.Contains(
+            resourceNames,
+            name => name.EndsWith(".folder-entity-type.json", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            resourceNames,
+            name => name.Contains("filesystem-folder", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void GitWorkspaceScanToolDefaults_DocumentationDoesNotMentionFilesystemFolder()
+    {
+        var assembly = typeof(SchemaPopulator).Assembly;
+        var resourceName = assembly.GetManifestResourceNames()
+            .Single(name => name.EndsWith("defaults.tools.git-workspace-scan-tool.json", StringComparison.Ordinal));
+
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        Assert.NotNull(stream);
+        using var reader = new StreamReader(stream!);
+        var text = reader.ReadToEnd();
+
+        Assert.DoesNotContain("filesystem-folder", text, StringComparison.Ordinal);
+    }
 }

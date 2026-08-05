@@ -52,6 +52,71 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
     }
 
     [Fact]
+    public async Task ExecuteAsync_ParticipantIsFilesystemPathEntityForCurrentProfile_PathIsScanned()
+    {
+        var currentProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "current-profile-root"));
+        var otherProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root"));
+        var repositoryPath = Path.GetFullPath(Path.Combine(currentProfileRoot, "repo-fs-path"));
+        InitializeGitRepository(repositoryPath, "https://example.com/fs-path.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            currentProfileRoot,
+            otherProfileRoot);
+
+        // No local drive roots: the current profile's filesystem-path participant is the only scan-root source.
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider(Array.Empty<string>()));
+        await tool.ExecuteAsync(context);
+
+        var discovered = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath));
+        Assert.NotNull(discovered);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_ParticipantTypedFilesystemFolderOnly_PathIsNotScanned()
+    {
+        var currentProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "current-profile-root"));
+        var otherProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other-profile-root"));
+        var folderRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "filesystem-folder-root"));
+        var repositoryPath = Path.GetFullPath(Path.Combine(folderRoot, "repo-fs-folder"));
+        InitializeGitRepository(repositoryPath, "https://example.com/fs-folder.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var context = await CreateExecutionContextAsync(
+            dataAccessLayer,
+            currentProfileRoot,
+            otherProfileRoot);
+
+        // Participant typed only with the non-existent "filesystem-folder" type, belonging to the current profile.
+        var filesystemFolderOnlyParticipant = await UpsertEntityAsync(
+            dataAccessLayer,
+            new EntityId("88888888-8888-8888-8888-888888888888"),
+            $$"""
+            {
+              "entity-id": "88888888-8888-8888-8888-888888888888",
+              "entity-types": ["entity", "filesystem-folder"],
+              "names": [
+                ["filesystem-folders", "current-profile-folder"],
+                ["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]
+              ],
+              "path": "{{EscapeForJsonString(folderRoot)}}"
+            }
+            """,
+            concurrencyTag: null);
+        context = context with
+        {
+            Participants = [context.CurrentComputerUserProfileEntity, filesystemFolderOnlyParticipant],
+        };
+
+        var tool = new GitWorkspaceScanTool(new FixedLocalDriveRootProvider(Array.Empty<string>()));
+        await tool.ExecuteAsync(context);
+
+        var discovered = await GetEntityByNameAsync(dataAccessLayer, new EntityName("git-worktrees", repositoryPath));
+        Assert.Null(discovered);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WhenRunningAgainstComputerUserProfile_ScansProvidedLocalDrives()
     {
         var currentProfileRoot = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "local-drive-root"));
@@ -298,7 +363,7 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
                 "%" + variableName + "%",
                 Path.GetFullPath(Path.Combine(this.temporaryRootPath, "other")));
             // Restrict participants to just the current profile so the profile's home-directory
-            // (rather than a filesystem-folder participant) is the sole scan root.
+            // (rather than a filesystem-path participant) is the sole scan root.
             context = context with
             {
                 Participants = [context.CurrentComputerUserProfileEntity],
@@ -500,30 +565,30 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
             }
             """,
             concurrencyTag: null);
-        var currentFilesystemFolderParticipant = await UpsertEntityAsync(
+        var currentFilesystemPathParticipant = await UpsertEntityAsync(
             dataAccessLayer,
             new EntityId("55555555-5555-5555-5555-555555555555"),
             $$"""
             {
               "entity-id": "55555555-5555-5555-5555-555555555555",
-              "entity-types": ["entity", "filesystem-folder", "filesystem-path"],
+              "entity-types": ["entity", "filesystem-path"],
               "names": [
-                ["filesystem-folders", "current-profile-root"],
+                ["filesystem-paths", "current-profile-root"],
                 ["computer-user-profiles", "users", "username", "test-user", "computers", "hostname", "test-computer"]
               ],
               "path": "{{EscapeForJsonString(currentProfileRoot)}}"
             }
             """,
             concurrencyTag: null);
-        var otherFilesystemFolderParticipant = await UpsertEntityAsync(
+        var otherFilesystemPathParticipant = await UpsertEntityAsync(
             dataAccessLayer,
             new EntityId("66666666-6666-6666-6666-666666666666"),
             $$"""
             {
               "entity-id": "66666666-6666-6666-6666-666666666666",
-              "entity-types": ["entity", "filesystem-folder", "filesystem-path"],
+              "entity-types": ["entity", "filesystem-path"],
               "names": [
-                ["filesystem-folders", "other-profile-root"],
+                ["filesystem-paths", "other-profile-root"],
                 ["computer-user-profiles", "users", "username", "other-user", "computers", "hostname", "other-computer"]
               ],
               "path": "{{EscapeForJsonString(otherProfileRoot)}}"
@@ -559,8 +624,8 @@ public sealed class GitWorkspaceScanToolTests : IDisposable
             [
                 currentComputerUserProfileEntity,
                 otherComputerUserProfileParticipant,
-                currentFilesystemFolderParticipant,
-                otherFilesystemFolderParticipant,
+                currentFilesystemPathParticipant,
+                otherFilesystemPathParticipant,
             ],
             Tool = toolEntity,
             Schedule = currentComputerEntity,
