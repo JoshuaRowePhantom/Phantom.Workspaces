@@ -1,12 +1,15 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Threading.Tasks;
 using AgentSchema;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -101,12 +104,12 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentGoesIdle_PostsNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -140,7 +143,7 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentIsActiveTab_NotificationStillPassedToService()
     {
         // INotificationService.Notify is always called — it is the service's responsibility
@@ -148,7 +151,7 @@ public sealed class AgentSessionNotificationTests
         // AgentSessionWorkspaceTabViewModel passes the notification through unconditionally.
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "agent-tab-active" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -182,12 +185,12 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentStartsNewRun_PostsRunningNotification()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
 
@@ -245,12 +248,12 @@ public sealed class AgentSessionNotificationTests
         await WaitForRunningItemsEmptyAsync(agentChat);
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task AgentSessionNotification_WhenAgentGoesIdle_TabDescriptorHasTabTitleFromViewModelTitle()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -284,12 +287,12 @@ public sealed class AgentSessionNotificationTests
         }
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task Notify_SetsWorkspaceId_FromWorkspacePaneId()
     {
         await using var agentChat = await CreateEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
         var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -323,5 +326,179 @@ public sealed class AgentSessionNotificationTests
                 call => call.RunningState == RunningState.Idle
                     && call.TabDescriptor.WorkspaceId == "workspace-pane-1");
         }
+    }
+
+    [AvaloniaFact]
+    public async Task AgentSessionWorkspaceTabViewModel_RecordsEvent_StampsTimestampFromInjectedTimeProvider()
+    {
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var start = new DateTimeOffset(2024, 7, 4, 10, 0, 0, TimeSpan.Zero);
+        var fake = new FakeTimeProvider(start);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+
+        // Construct via the internal TimeProvider ctor so all three event-stamp sites
+        // (running / idle / streaming transitions in OnAgentPropertyChanged) read the fake clock.
+        var tab = new AgentSessionWorkspaceTabViewModel(fake)
+        {
+            Id = "agent-tab-stamp",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        // First run: fires a Running notification then, on going idle, an Idle notification —
+        // both stamped from the (un-advanced) fake clock.
+        var firstIdleTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void FirstIdleHandler(Notification notification)
+        {
+            if (notification.RunningState == RunningState.Idle)
+            {
+                firstIdleTcs.TrySetResult();
+            }
+        }
+
+        notificationService.NotifyCallReceived += FirstIdleHandler;
+
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using (var cts1 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            cts1.Token.Register(() => firstIdleTcs.TrySetCanceled());
+            await firstIdleTcs.Task;
+        }
+
+        notificationService.NotifyCallReceived -= FirstIdleHandler;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running && call.When == start.UtcDateTime);
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Idle && call.When == start.UtcDateTime);
+
+            // Every event so far was stamped from the injected provider, never wall-clock.
+            Assert.All(notificationService.Calls, call => Assert.Equal(start.UtcDateTime, call.When));
+        }
+
+        // Advance the fake clock to prove the stamps read the injected provider, not wall-clock time.
+        fake.Advance(TimeSpan.FromHours(3));
+        var advanced = fake.GetUtcNow().UtcDateTime;
+
+        var runningTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Running
+                && notification.NotificationState == NotificationState.Interesting
+                && notification.TabDescriptor.TabId == "agent-tab-stamp")
+            {
+                runningTcs.TrySetResult();
+            }
+        };
+
+        agentChat.EnqueueUserMessage("hello again");
+
+        using (var cts2 = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5)))
+        {
+            cts2.Token.Register(() => runningTcs.TrySetCanceled());
+            await runningTcs.Task;
+        }
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running
+                && call.NotificationState == NotificationState.Interesting
+                && call.TabDescriptor.TabId == "agent-tab-stamp"
+                && call.When == advanced);
+        }
+
+        await WaitForRunningItemsEmptyAsync(agentChat);
+    }
+
+    [AvaloniaFact]
+    public async Task Notify_SetsWorkspaceId_FromOwningPane()
+    {
+        // #1135: When an agent-session tab is added to a WorkspacePaneViewModel, the pane
+        // authoritatively stamps the tab's WorkspacePaneId with its own Id — overwriting any
+        // stale value captured from SelectedWorkspacePane?.Id at construction time (e.g. during
+        // workspace restore where the tab is created before it lands in its actual pane).
+        // The subsequently posted notification's TabDescriptor.WorkspaceId reflects the pane
+        // the tab actually lives in, so cross-workspace notification navigation resolves the
+        // right owning workspace.
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var notifyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Idle)
+            {
+                notifyTcs.TrySetResult();
+            }
+        };
+
+        // The tab is created with a stale/wrong workspace-pane id (mirroring the buggy
+        // pre-#1135 behaviour where restore paths captured SelectedWorkspacePane?.Id at
+        // construction time — a different pane than the one the tab was actually restored into).
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab-owning-pane",
+            Title = "Agent",
+            WorkspacePaneId = "stale-active-pane",
+            NotificationService = notificationService,
+        };
+
+        var owningPane = new WorkspacePaneViewModel(
+            CreateWorkspaceEntity(),
+            id: "owning-pane-1");
+        owningPane.Tabs.Add(tab);
+
+        // Adding the tab to the pane must stamp WorkspacePaneId with the pane's actual id.
+        Assert.Equal("owning-pane-1", tab.WorkspacePaneId);
+
+        tab.SetReady(agentViewModel, loggerFactory);
+        agentChat.EnqueueUserMessage("hello");
+        await WaitForRunningItemsEmptyAsync(agentChat);
+
+        using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+        timeoutCts.Token.Register(() => notifyTcs.TrySetCanceled());
+        await notifyTcs.Task;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.TabDescriptor.TabId == "agent-tab-owning-pane"
+                && call.TabDescriptor.WorkspaceId == "owning-pane-1");
+            Assert.DoesNotContain(notificationService.Calls, call =>
+                call.TabDescriptor.WorkspaceId == "stale-active-pane");
+        }
+    }
+
+    private static SubscribedEntityViewModel CreateWorkspaceEntity()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(
+            """
+            {
+              "entity-id": "22222222-2222-2222-2222-222222222222",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Test Owning Pane" }
+            }
+            """);
+        return new SubscribedEntityViewModel(
+            new Phantom.Workspaces.Data.EntitySnapshot
+            {
+                EntityId = new Phantom.Workspaces.Data.EntityId("22222222-2222-2222-2222-222222222222"),
+                ConcurrencyTag = new Phantom.Workspaces.Data.ConcurrencyTag("1"),
+                ModifiedTime = new Phantom.Workspaces.Data.Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<Phantom.Workspaces.Data.EntitySnapshot>(),
+            });
     }
 }

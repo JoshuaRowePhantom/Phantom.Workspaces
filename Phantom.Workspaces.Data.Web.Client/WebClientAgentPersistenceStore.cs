@@ -280,6 +280,7 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
         AgentSessionJson = agent.AgentSessionJson.ToJsonElement(),
         AgentDefinitionJson = agent.AgentDefinitionJson.ToJsonElement(),
         CopilotSdkSessionId = agent.CopilotSdkSessionId,
+        LastUpdatedUtc = agent.LastUpdatedUtc,
     };
 
     private static PersistedAgent FromDto(PersistedAgentDto dto) => new()
@@ -288,5 +289,6 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
         AgentSessionJson = dto.AgentSessionJson.ToBsonDocument(),
         AgentDefinitionJson = dto.AgentDefinitionJson.ToBsonDocument(),
         CopilotSdkSessionId = dto.CopilotSdkSessionId,
+        LastUpdatedUtc = dto.LastUpdatedUtc,
     };
 }

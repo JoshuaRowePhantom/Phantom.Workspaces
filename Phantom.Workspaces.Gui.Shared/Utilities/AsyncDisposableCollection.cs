@@ -14,10 +14,21 @@ public sealed class AsyncDisposableCollection : IAsyncDisposable
 {
     // Starts at 1 — the "close" token held by DisposeAsync itself.
     private int _pending = 1;
+    private readonly Action<Exception>? _onDisposeError;
     private readonly TaskCompletionSource _disposed =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _allCompleted =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    /// <param name="onDisposeError">
+    /// Optional callback invoked when a registered disposable throws during disposal. The exception
+    /// is always observed and swallowed so that a faulting <see cref="IAsyncDisposable.DisposeAsync"/>
+    /// can never escape as an unobserved <see cref="Task"/> exception and crash the finalizer thread.
+    /// </param>
+    public AsyncDisposableCollection(Action<Exception>? onDisposeError = null)
+    {
+        _onDisposeError = onDisposeError;
+    }
 
     public ValueTask DisposeAsync()
     {
@@ -35,8 +46,20 @@ public sealed class AsyncDisposableCollection : IAsyncDisposable
     private async Task RunDisposalAsync(IAsyncDisposable disposable)
     {
         await _disposed.Task.ConfigureAwait(false);
-        try   { await disposable.DisposeAsync().ConfigureAwait(false); }
-        finally { DecrementPending(); }
+        try
+        {
+            await disposable.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Observe and swallow: a fire-and-forget disposal fault must never reach the finalizer
+            // thread as an unobserved Task exception (which would crash the process).
+            _onDisposeError?.Invoke(ex);
+        }
+        finally
+        {
+            DecrementPending();
+        }
     }
 
     private void DecrementPending()

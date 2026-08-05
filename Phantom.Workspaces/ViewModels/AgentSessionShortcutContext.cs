@@ -18,18 +18,17 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class AgentSessionShortcutContext
 {
     private const string AgentSessionCollectionSuffix = "-agent-sessions";
-    private readonly Func<DateTimeOffset> currentTimeProvider;
+    private readonly TimeProvider timeProvider;
     private readonly string? userComputerProfileOverride;
     private readonly IAgentPersistenceStoreCache? persistenceStoreCache;
     private Task<IAgentPersistenceStore>? agentPersistenceStoreTask;
 
     public AgentSessionShortcutContext(
-        Func<DateTimeOffset>? currentTimeProvider = null,
+        TimeProvider? timeProvider = null,
         string? userComputerProfileOverride = null,
         IAgentPersistenceStoreCache? persistenceStoreCache = null)
     {
-        this.currentTimeProvider = currentTimeProvider
-            ?? (() => DateTimeOffset.UtcNow);
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.userComputerProfileOverride = userComputerProfileOverride;
         this.persistenceStoreCache = persistenceStoreCache;
     }
@@ -50,7 +49,10 @@ public sealed class AgentSessionShortcutContext
             dataAccessLayer,
             ToolsetFactory.CreateWorkspaceGuiToolsetFactory(
                 workspaceGuiContextProvider,
-                ToolsetFactory.CreateDefaultToolsetFactory()));
+                ToolsetFactory.CreateCurrentSessionToolsetFactory(
+                    dataAccessLayer,
+                    await this.BuildCurrentSessionContextAsync(dataAccessLayer),
+                    ToolsetFactory.CreateDefaultToolsetFactory())));
 
         // Materialize a user-account entity the first time a Copilot session resolves a GitHub
         // token (issue #1047). Without this the upsert service is orphaned and no account entity
@@ -67,6 +69,49 @@ public sealed class AgentSessionShortcutContext
             ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
             AccountUpsertService = accountUpsertService,
         };
+    }
+
+    private async Task<CurrentSessionContext> BuildCurrentSessionContextAsync(
+        IDataAccessLayer dataAccessLayer)
+    {
+        var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
+        var userEntityName = new EntityName("users", "username", executionContext.UserName);
+        var computerEntityName = new EntityName("computers", "hostname", executionContext.ComputerName);
+        var profileEntityName = new EntityName(
+            "computer-user-profiles",
+            "users", "username", executionContext.UserName,
+            "computers", "hostname", executionContext.EffectiveComputerName);
+
+        var userComputerProfile = await ResolveEntityAsync(dataAccessLayer, profileEntityName);
+        var user = await ResolveEntityAsync(dataAccessLayer, userEntityName);
+        var computer = await ResolveEntityAsync(dataAccessLayer, computerEntityName);
+
+        return new CurrentSessionContext
+        {
+            AgentSessionId = string.Empty,
+            UserComputerProfile = userComputerProfile,
+            User = user,
+            Computer = computer,
+        };
+    }
+
+    private static async Task<EntitySnapshot?> ResolveEntityAsync(
+        IDataAccessLayer dataAccessLayer,
+        EntityName entityName)
+    {
+        var getResult = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest { EntityName = entityName },
+                ],
+            },
+            System.Threading.CancellationToken.None);
+
+        return getResult.Batches
+            .SelectMany(static batch => batch.Entities)
+            .FirstOrDefault(static entity => entity.Data is not null);
     }
 
     private IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)
@@ -105,12 +150,12 @@ public sealed class AgentSessionShortcutContext
         SubscribedEntityViewModel agentDefinitionEntity,
         string agentSessionId,
         IReadOnlyDictionary<string, string>? parameterValues = null,
-        EntityId? owningProfileEntityId = null)
+        EntityId? hostProfileEntityId = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var sessionObjectSimpleName = CreateSessionObjectSimpleName(
             agentSessionId,
-            this.currentTimeProvider());
+            this.timeProvider.GetUtcNow());
         var agentSessionNames = await WorkspaceEntityNameFactory.CreateEntityNames(
             mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer,
             workspaceEntitySession,
@@ -122,7 +167,7 @@ public sealed class AgentSessionShortcutContext
             agentSessionId,
             agentSessionNames,
             parameterValues,
-            owningProfileEntityId);
+            hostProfileEntityId);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {
@@ -256,7 +301,7 @@ public sealed class AgentSessionShortcutContext
         string agentSessionId,
         IReadOnlyCollection<EntityName> agentSessionNames,
         IReadOnlyDictionary<string, string>? parameterValues = null,
-        EntityId? owningProfileEntityId = null)
+        EntityId? hostProfileEntityId = null)
     {
         var entityId = new EntityId();
         var namesJson = string.Join(
@@ -266,8 +311,8 @@ public sealed class AgentSessionShortcutContext
         var parameterValuesPart = parameterValues is { Count: > 0 }
             ? $",\n  \"parameter-values\": {System.Text.Json.JsonSerializer.Serialize(parameterValues)}"
             : string.Empty;
-        var owningProfilePart = owningProfileEntityId is { } profileId && profileId != default
-            ? $",\n  \"owning-profile-entity-id\": \"{profileId}\""
+        var hostProfilePart = hostProfileEntityId is { } profileId && profileId != default
+            ? $",\n  \"host-profile-entity-id\": \"{profileId}\""
             : string.Empty;
         using var agentSessionDocument = JsonDocument.Parse(
             $$"""
@@ -277,7 +322,7 @@ public sealed class AgentSessionShortcutContext
               "names": [{{namesJson}}],
               "display-name": { "default": "{{agentDisplayName}} session" },
               "agent-source-entity-id": "{{agentDefinitionEntityId}}",
-              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}{{owningProfilePart}}
+              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}{{hostProfilePart}}
             }
             """);
         return agentSessionDocument.RootElement.Clone();

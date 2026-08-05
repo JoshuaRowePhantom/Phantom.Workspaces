@@ -1,125 +1,174 @@
+using System;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using Avalonia.Platform;
 using Phantom.Workspaces.Gui.Shared.Controls;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests;
 
+/// <summary>
+/// Coverage for the transport half of the WebView accelerator pipeline. Exercises
+/// <see cref="WebView2AcceleratorInterop.Subscribe(IPlatformHandle?, Action{AcceleratorKeyEventArgs})"/>
+/// against a stub <see cref="IWindowsWebView2PlatformHandle"/> that hands back a COM pointer to
+/// an in-process fake <see cref="Controls.ICoreWebView2Controller"/>, so we can assert the
+/// SDK-typed <c>add_AcceleratorKeyPressed</c> / <c>remove_AcceleratorKeyPressed</c> path is
+/// actually taken (issue #1208). Windows-only because the interop marshals COM pointers.
+/// </summary>
+[SupportedOSPlatform("windows")]
 public sealed class WebView2AcceleratorInteropTests
 {
-    private const int SystemKeyDown = 2;
-    private const int SystemKeyUp   = 3;
-    private const int VK_MENU = 0x12; // Alt
-    private const int VK_CONTROL = 0x11;
-    private const int VK_SHIFT = 0x10;
-    private const int VK_W = 0x57;
-    private const int VK_1    = 0x31;
-    private const int VK_2    = 0x32;
-    private const int VK_0    = 0x30;
-
     [Fact]
-    public void Dispatch_SystemKeyDownAlt_CallsOnAltKeyStateWithTrue()
+    public void Interop_WhenPlatformHandleExposesController_SubscribesViaSdkRawInterface()
     {
-        bool? received = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_MENU,
-            onAltKeyState: v => received = v,
-            onGoToTab:     _ => { });
+        if (!OperatingSystem.IsWindows()) return;
 
-        Assert.True(received);
+        var fake = new FakeController();
+        var handle = new FakeHandle(fake.ComPointer);
+
+        var subscription = WebView2AcceleratorInterop.Subscribe(handle, _ => { });
+
+        try
+        {
+            Assert.NotNull(subscription);
+            Assert.Equal(1, fake.AddCallCount);
+            Assert.NotNull(fake.LastHandler);
+        }
+        finally
+        {
+            subscription?.Dispose();
+            fake.Release();
+        }
     }
 
     [Fact]
-    public void Dispatch_SystemKeyDownAlt1_CallsOnGoToTabWithIndex0()
+    public void Interop_WhenPlatformHandleMissing_ReturnsNullAndTraces()
     {
-        int? received = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_1,
-            onAltKeyState: _ => { },
-            onGoToTab:     v => received = v);
+        if (!OperatingSystem.IsWindows()) return;
 
-        Assert.Equal(0, received);
+        var listener = new TraceListenerBuffer();
+        Trace.Listeners.Add(listener);
+        try
+        {
+            var subscription = WebView2AcceleratorInterop.Subscribe(handle: null, _ => { });
+            Assert.Null(subscription);
+            Assert.Contains(
+                "not IWindowsWebView2PlatformHandle",
+                listener.Text,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Trace.Listeners.Remove(listener);
+        }
     }
 
     [Fact]
-    public void Dispatch_SystemKeyUpAlt_CallsOnAltKeyStateWithFalse()
+    public void Interop_HandlerReleasesComReferencesOnDispose()
     {
-        bool? received = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyUp, VK_MENU,
-            onAltKeyState: v => received = v,
-            onGoToTab:     _ => { });
+        if (!OperatingSystem.IsWindows()) return;
 
-        Assert.False(received);
+        var fake = new FakeController();
+        var handle = new FakeHandle(fake.ComPointer);
+
+        var subscription = WebView2AcceleratorInterop.Subscribe(handle, _ => { });
+        Assert.NotNull(subscription);
+        Assert.Equal(0, fake.RemoveCallCount);
+
+        subscription!.Dispose();
+
+        Assert.Equal(1, fake.RemoveCallCount);
+        Assert.Equal(fake.LastAddToken, fake.LastRemoveToken);
+        fake.Release();
     }
 
-    [Fact]
-    public void Dispatch_SystemKeyDownAlt2_CallsOnGoToTabWithIndex1()
-    {
-        int? received = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_2,
-            onAltKeyState: _ => { },
-            onGoToTab:     v => received = v);
+    // ---------------------------------------------------------------------------------------------
+    // Test doubles
+    // ---------------------------------------------------------------------------------------------
 
-        Assert.Equal(1, received);
+    private sealed class FakeHandle : IWindowsWebView2PlatformHandle
+    {
+        public FakeHandle(nint controllerPtr) { this.CoreWebView2Controller = controllerPtr; }
+        public nint CoreWebView2 => nint.Zero;
+        public nint CoreWebView2Controller { get; }
+        public nint Handle => nint.Zero;
+        public string HandleDescriptor => "WebView2ControllerForTest";
     }
 
-    [Fact]
-    public void Dispatch_SystemKeyDownAlt0_CallsOnGoToTabWithIndex9()
+    /// <summary>
+    /// Managed CCW that stands in for a real <c>ICoreWebView2Controller</c>. We only need to
+    /// answer <c>add_AcceleratorKeyPressed</c> and <c>remove_AcceleratorKeyPressed</c>; every
+    /// earlier vtable slot returns S_OK so the layout matches the real interface.
+    /// </summary>
+    [ComVisible(true)]
+    [ClassInterface(ClassInterfaceType.None)]
+    private sealed class FakeController : ICoreWebView2Controller
     {
-        int? received = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_0,
-            onAltKeyState: _ => { },
-            onGoToTab:     v => received = v);
+        private nint pointer;
 
-        Assert.Equal(9, received);
+        public FakeController()
+        {
+            this.pointer = Marshal.GetIUnknownForObject(this);
+        }
+
+        public nint ComPointer => this.pointer;
+        public int AddCallCount { get; private set; }
+        public int RemoveCallCount { get; private set; }
+        public long LastAddToken { get; private set; }
+        public long LastRemoveToken { get; private set; }
+        public ICoreWebView2AcceleratorKeyPressedEventHandler? LastHandler { get; private set; }
+
+        public void Release()
+        {
+            if (this.pointer != nint.Zero)
+            {
+                Marshal.Release(this.pointer);
+                this.pointer = nint.Zero;
+            }
+        }
+
+        // Placeholder implementations for the vtable slots we never call.
+        public int get_IsVisible(out int isVisible) { isVisible = 0; return 0; }
+        public int set_IsVisible(int isVisible) => 0;
+        public int get_Bounds(out RECT bounds) { bounds = default; return 0; }
+        public int set_Bounds(RECT bounds) => 0;
+        public int get_ZoomFactor(out double z) { z = 1.0; return 0; }
+        public int set_ZoomFactor(double z) => 0;
+        public int add_ZoomFactorChanged(nint h, out long t) { t = 0; return 0; }
+        public int remove_ZoomFactorChanged(long t) => 0;
+        public int SetBoundsAndZoomFactor(RECT b, double z) => 0;
+        public int MoveFocus(int reason) => 0;
+        public int add_MoveFocusRequested(nint h, out long t) { t = 0; return 0; }
+        public int remove_MoveFocusRequested(long t) => 0;
+        public int add_GotFocus(nint h, out long t) { t = 0; return 0; }
+        public int remove_GotFocus(long t) => 0;
+        public int add_LostFocus(nint h, out long t) { t = 0; return 0; }
+        public int remove_LostFocus(long t) => 0;
+
+        public int add_AcceleratorKeyPressed(
+            ICoreWebView2AcceleratorKeyPressedEventHandler eventHandler,
+            out long token)
+        {
+            this.AddCallCount++;
+            this.LastHandler = eventHandler;
+            token = 0x1234_5678L + this.AddCallCount;
+            this.LastAddToken = token;
+            return 0;
+        }
+
+        public int remove_AcceleratorKeyPressed(long token)
+        {
+            this.RemoveCallCount++;
+            this.LastRemoveToken = token;
+            return 0;
+        }
     }
 
-    [Fact]
-    public void Dispatch_KeyDownCtrlW_CallsOnCloseTab()
+    private sealed class TraceListenerBuffer : TraceListener
     {
-        var called = false;
-        WebView2AcceleratorInterop.Dispatch(0, VK_W,
-            onAltKeyState: _ => { },
-            onGoToTab: _ => { },
-            onCloseTab: () => called = true,
-            isKeyDown: key => key == VK_CONTROL);
-
-        Assert.True(called);
-    }
-
-    [Fact]
-    public void Dispatch_KeyDownCtrlW_WithoutCtrl_DoesNotCallOnCloseTab()
-    {
-        var called = false;
-        WebView2AcceleratorInterop.Dispatch(0, VK_W,
-            onAltKeyState: _ => { },
-            onGoToTab: _ => { },
-            onCloseTab: () => called = true,
-            isKeyDown: _ => false);
-
-        Assert.False(called);
-    }
-
-    [Fact]
-    public void Dispatch_SystemKeyDownShiftAlt2_CallsOnGoToWorkspacePaneWithIndex1()
-    {
-        int? tab = null;
-        int? pane = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_2,
-            onAltKeyState: _ => { },
-            onGoToTab: v => tab = v,
-            onGoToWorkspacePane: v => pane = v,
-            isKeyDown: key => key == VK_SHIFT);
-
-        Assert.Null(tab);
-        Assert.Equal(1, pane);
-    }
-
-    [Fact]
-    public void Dispatch_SystemKeyDownShiftAlt0_CallsOnGoToWorkspacePaneWithIndex9()
-    {
-        int? pane = null;
-        WebView2AcceleratorInterop.Dispatch(SystemKeyDown, VK_0,
-            onAltKeyState: _ => { },
-            onGoToTab: _ => { },
-            onGoToWorkspacePane: v => pane = v,
-            isKeyDown: key => key == VK_SHIFT);
-
-        Assert.Equal(9, pane);
+        private readonly System.Text.StringBuilder buffer = new();
+        public string Text => this.buffer.ToString();
+        public override void Write(string? message) => this.buffer.Append(message);
+        public override void WriteLine(string? message) => this.buffer.AppendLine(message);
     }
 }

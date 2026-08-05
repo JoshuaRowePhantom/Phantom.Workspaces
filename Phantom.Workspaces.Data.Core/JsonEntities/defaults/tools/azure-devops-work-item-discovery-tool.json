@@ -1,9 +1,17 @@
 {
   "entity-id": "c4d5e6f7-a8b9-4c5d-0e1f-2a3b4c5d6e7f",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "azure-devops-work-item-discovery"]
   ],
   "display-name": "Azure DevOps Work Item Discovery",
-  "tool-type": "azure-devops-work-item-discovery"
+  "tool-type": "azure-devops-work-item-discovery",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Azure DevOps Work Item Discovery\n\nScans every participant `azure-devops-project` entity, calls the Azure DevOps REST API to enumerate work items in that project, and upserts each one as an `azure-devops-work-item` entity keyed by the stable name path `[\"azure-devops\", org, project, \"work-items\", id]` so re-runs update rather than duplicate.\n\n## Configuration\n\nRead from the tool entity's top-level properties (not a nested `configuration` object):\n\n| Key | Type | Semantics |\n|---|---|---|\n| `personal-access-token` | string | Optional PAT used for the Azure DevOps REST calls. When absent, the tool reads the `AZURE_DEVOPS_TOKEN` environment variable. Store the token on a per-machine tool clone rather than the shared default. |\n| `max-items` | integer | Maximum work items to fetch per project. Defaults to `200`. |\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.target` \u2014 one or more `azure-devops-project` entities whose organization/project URLs should be scanned.\n- `participants.schedule` \u2014 a `schedule` entity governing how often the scan runs.\n\nSet `paused: true` on the relationship to temporarily disable discovery without deleting it. The tool logs a scan summary (`Scanned N project(s). Upserted M work item(s).`) after each run."
+      }
+    }
+  }
 }

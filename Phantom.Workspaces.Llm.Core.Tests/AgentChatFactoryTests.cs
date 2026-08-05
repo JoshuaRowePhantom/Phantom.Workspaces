@@ -163,6 +163,42 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithDisplayNameOverride_PopulatesAgentChatDisplayName()
+    {
+        // Fix #1133: AgentChatFactory.CreateAsync must forward the displayNameOverride /
+        // descriptionOverride arguments into the InternalCreateAgentChatRequest so the newly
+        // created AgentChat's DisplayName/Description reflect the caller-supplied values.
+        var sessionId = new AgentSessionId("session-1133-with");
+        await using var factory = CreateFactory();
+
+        await using var lease = await factory.CreateAsync(
+            EchoAgentDefinition,
+            sessionId,
+            services: null,
+            displayNameOverride: "fix-reload1",
+            descriptionOverride: "reload the workspace");
+
+        Assert.Equal("fix-reload1", lease.AgentChat.DisplayName);
+        Assert.Equal("reload the workspace", lease.AgentChat.Description);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithoutDisplayNameOverride_UsesClientInfoDefault()
+    {
+        // Fix #1133 fallback: with no override provided, AgentChat.DisplayName degrades to the
+        // client-info default (never throws, never leaks the session GUID) so pre-existing
+        // callers that do not opt into the new arguments retain their previous behaviour.
+        var sessionId = new AgentSessionId("session-1133-without");
+        await using var factory = CreateFactory();
+
+        await using var lease = await factory.CreateAsync(EchoAgentDefinition, sessionId);
+
+        // No override was supplied ⇒ DisplayName falls back to the empty client-info default,
+        // and — critically — does NOT equal the session id (which was the observed #1133 bug).
+        Assert.NotEqual(sessionId.Value, lease.AgentChat.DisplayName);
+    }
+
+    [Fact]
     public async Task CreateAsync_PersistsSessionBeforeReturning()
     {
         var sessionId = new AgentSessionId("session-8");
@@ -432,6 +468,39 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
+    public async Task GetOrCreateAsync_ManifestRequest_ExposesFactoryAsRunningAgentChatFactory()
+    {
+        // Issue #1180 regression pin: the manifest-open path in AgentManifestLaunchpadViewModel
+        // resolves an AgentDefinition from an AgentManifest (via RunningAgentChatTable) and then
+        // calls AgentChatFactory.GetOrCreateAsync with bare AgentServices (no RunningAgentChatFactory
+        // pre-set). The factory must self-inject via WithSelfAsFactory so AgentServices reaching
+        // AgentChat.CreateAsync carries the factory — otherwise the #1109 guard in AgentChat
+        // throws "must be supplied at construction time" as soon as a Copilot SDK client resolves,
+        // which is exactly the crash reported in #1180.
+        var sessionId = new AgentSessionId("session-manifest-1180");
+        var store = new InMemoryAgentPersistenceStore();
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        var bareServices = new AgentServices
+        {
+            ChatClientOverride = new DeterministicTestChatClient(),
+            // Intentionally not setting RunningAgentChatFactory — the factory MUST self-inject.
+        };
+        Assert.Null(bareServices.RunningAgentChatFactory);
+
+        await using var lease = await factory.GetOrCreateAsync(
+            sessionId,
+            definition: EchoAgentDefinition,
+            services: bareServices);
+
+        var services = GetRequestServices(lease.AgentChat);
+        Assert.Same(factory, services.RunningAgentChatFactory);
+    }
+
+    [Fact]
     public async Task GetOrCreateAsync_CreatedChat_ExposesFactoryAsRunningAgentChatFactory()
     {
         var sessionId = new AgentSessionId("session-selffactory-getorcreate");
@@ -442,6 +511,35 @@ public sealed class AgentChatFactoryTests
 
         var services = GetRequestServices(lease.AgentChat);
         Assert.Same(factory, services.RunningAgentChatFactory);
+    }
+
+    [Fact]
+    public async Task GetOrCreateAsync_WhenRegisterAsRunningAgentFalse_DoesNotAppearInRunningSessions()
+    {
+        // Issue #1150: sub-agents dispatched via SubAgentDispatcherChatClient must not appear in
+        // the top-right "Running agents" popup. They opt out via registerAsRunningAgent: false.
+        var sessionId = new AgentSessionId("session-noregister");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetOrCreateAsync(sessionId, registerAsRunningAgent: false);
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task GetOrCreateAsync_WhenRegisterAsRunningAgentTrue_AppearsInRunningSessions()
+    {
+        // Issue #1150: top-level agents (the default) must still show up in RunningSessions.
+        var sessionId = new AgentSessionId("session-register");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetOrCreateAsync(sessionId, registerAsRunningAgent: true);
+
+        Assert.Single(factory.RunningSessions);
+        Assert.Equal(sessionId, factory.RunningSessions[0].SessionId);
     }
 
     [Fact]
@@ -457,8 +555,12 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
-    public async Task GetAsync_ExplicitFactoryInServices_IsNotOverwritten()
+    public async Task GetAsync_ExplicitFactoryInServices_IsOverwrittenBySelf()
     {
+        // Fix #1109: WithSelfAsFactory now ALWAYS injects the outer factory unconditionally.
+        // The previous "preserve intentional override" behavior let a foreign factory be wired
+        // past the outer factory's sub-agent lifecycle bookkeeping — the same silent-misroute
+        // that #1109/#1110 remove for the null case.
         var sessionId = new AgentSessionId("session-selffactory-explicit");
         var store = await CreatePopulatedStoreAsync(sessionId);
         var explicitFactory = CreateFactory(store: store);
@@ -473,7 +575,8 @@ public sealed class AgentChatFactoryTests
         await using var lease = await factory.GetAsync(sessionId);
 
         var chatServices = GetRequestServices(lease.AgentChat);
-        Assert.Same(explicitFactory, chatServices.RunningAgentChatFactory);
+        Assert.Same(factory, chatServices.RunningAgentChatFactory);
+        Assert.NotSame(explicitFactory, chatServices.RunningAgentChatFactory);
     }
 
     [Fact]
@@ -490,6 +593,160 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
 
+        await WaitForSubAgentCountAsync(lease.AgentChat, 2);
+        Assert.Equal(2, lease.AgentChat.SubAgents.Count);
+    }
+
+    // ── Issue #1186: restore-time null-model resilience ──────────────────────
+    //
+    // Regression: a startup restore of a default workspace whose parent agent chat
+    // has persisted sub-agents with empty AgentDefinitions (Model == null) used to
+    // throw "Agent definition does not specify a model." from AgentFactory during
+    // MarkRestoredSubAgentTerminalAsync's eager materialisation. The exception
+    // originated from a foreground-scheduled construction path and prevented the
+    // parent chat's InitializeAsync from returning, hanging the startup splash
+    // (LoadingWindow.Close() at App.axaml.cs:310 never ran).
+    //
+    // The fix: MarkRestoredSubAgentTerminalAsync no longer materialises the child.
+    // It records the terminal state on the SubAgent stub via
+    // SetRestoredCompletionState; the state applies lazily when a later
+    // AcquireLeaseAsync actually needs the child chat.
+
+    private const string EmptyPersistedAgentDefinitionJson =
+        """
+        {
+          "kind": "prompt",
+          "name": "empty-persisted-child"
+        }
+        """;
+
+    private static async Task StoreChildWithDefinitionJsonAsync(
+        InMemoryAgentPersistenceStore store,
+        string parentSessionId,
+        string childSessionId,
+        string persistedAgentDefinitionJson)
+    {
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = BsonDocument.Parse(persistedAgentDefinitionJson),
+            }
+        });
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+    }
+
+    [Fact]
+    public async Task MarkRestoredSubAgentTerminal_EmptyPersistedAgentDefinition_DoesNotThrow()
+    {
+        // #1186 regression guard: restoring a parent whose persisted child has an
+        // empty (Model == null) AgentDefinition must complete AgentChat.InitializeAsync
+        // successfully, not hang or throw.
+        var parentSessionId = "parent-1186-restore-nothrow";
+        var store = await CreatePopulatedStoreAsync(new AgentSessionId(parentSessionId));
+        await StoreChildWithDefinitionJsonAsync(
+            store,
+            parentSessionId,
+            "child-1186-empty",
+            EmptyPersistedAgentDefinitionJson);
+
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
+
+        await WaitForSubAgentCountAsync(lease.AgentChat, 1);
+        Assert.Single(lease.AgentChat.SubAgents);
+    }
+
+    [Fact]
+    public async Task MarkRestoredSubAgentTerminal_EmptyPersistedAgentDefinition_DoesNotConstructChatClient()
+    {
+        // #1186 mechanism guard: the restore path must NOT invoke the ChatClient
+        // factory for the child (empty AgentDefinition would throw). A spy
+        // ChatClientOverride records every construction attempt.
+        var parentSessionId = "parent-1186-no-construct";
+        var store = await CreatePopulatedStoreAsync(new AgentSessionId(parentSessionId));
+        await StoreChildWithDefinitionJsonAsync(
+            store,
+            parentSessionId,
+            "child-1186-empty-no-construct",
+            EmptyPersistedAgentDefinitionJson);
+
+        // Use a spy that records every GetService lookup — a proxy for "was any
+        // ChatClient ever handed to a materialised child chat?". Since the parent
+        // itself uses this client, we count uses AFTER parent construction.
+        var spy = new UsageCountingChatClient();
+        var services = new AgentServices { ChatClientOverride = spy };
+        await using var factory = new AgentChatFactory(store, services, TaskScheduler.Default);
+
+        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
+        await WaitForSubAgentCountAsync(lease.AgentChat, 1);
+
+        // Snapshot: parent has been constructed. Now if the restore path attempted
+        // to materialise the child, an extra AgentChat.InitializeAsync run would
+        // pull the client from services.ChatClientOverride and enumerate it.
+        var stub = Assert.IsType<SubAgent>(Assert.Single(lease.AgentChat.SubAgents));
+        Assert.Null(stub.AgentChat); // child NOT materialised
+        Assert.Equal(
+            AgentChatCompletionState.Succeeded,
+            ((IRunningSubAgent)stub).CompletionState);
+    }
+
+    [Fact]
+    public async Task RestoreSubAgentsAsync_ChildTerminalTaskFaults_ParentInitializeCompletes()
+    {
+        // #1186 robustness guard: even if a per-child terminal task were to fault
+        // (currently impossible because the task is now synchronous, but this pins
+        // the invariant), the parent's InitializeAsync must still return so that
+        // startup never hangs.
+        var parentSessionId = "parent-1186-child-fault";
+        var store = await CreatePopulatedStoreAsync(new AgentSessionId(parentSessionId));
+        await StoreChildWithDefinitionJsonAsync(
+            store,
+            parentSessionId,
+            "child-1186-fault-a",
+            EmptyPersistedAgentDefinitionJson);
+        await StoreChildWithDefinitionJsonAsync(
+            store,
+            parentSessionId,
+            "child-1186-fault-b",
+            EmptyPersistedAgentDefinitionJson);
+
+        await using var factory = CreateFactory(store: store);
+
+        // Bound the operation aggressively — a hang here is the exact regression
+        // #1186 documents.
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId), ct: cts.Token);
+        await lease.AgentChat.WaitForRestoredSubAgentsMarkedTerminalAsync().WaitAsync(cts.Token);
+
+        Assert.Equal(2, lease.AgentChat.SubAgents.Count);
+    }
+
+    [Fact]
+    public async Task AgentChatFactory_GetAsync_ResumeSessionWithEmptyPersistedSubAgents_DoesNotThrow()
+    {
+        // #1186 top-level regression guard, paralleling
+        // GetAsync_ResumeSessionWithPersistedSubAgents_RestoresThem but with empty
+        // persisted child AgentDefinitions. The resume must complete without
+        // "Agent definition does not specify a model." bubbling up.
+        var parentSessionId = "parent-1186-resume-empty";
+        var store = await CreatePopulatedStoreAsync(new AgentSessionId(parentSessionId));
+        await StoreChildWithDefinitionJsonAsync(
+            store,
+            parentSessionId,
+            "child-1186-resume-empty-a",
+            EmptyPersistedAgentDefinitionJson);
+        await StoreChildWithDefinitionJsonAsync(
+            store,
+            parentSessionId,
+            "child-1186-resume-empty-b",
+            EmptyPersistedAgentDefinitionJson);
+
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
         await WaitForSubAgentCountAsync(lease.AgentChat, 2);
         Assert.Equal(2, lease.AgentChat.SubAgents.Count);
     }
@@ -525,6 +782,36 @@ public sealed class AgentChatFactoryTests
             Disposed = true;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class UsageCountingChatClient : IChatClient
+    {
+        private int _uses;
+        public int UseCount => Volatile.Read(ref _uses);
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _uses);
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, string.Empty)));
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _uses);
+            await Task.CompletedTask;
+            yield break;
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceKey is null && serviceType.IsInstanceOfType(this) ? this : null;
+
+        public void Dispose() { }
     }
 
     private sealed class DisposalTrackingMultipleClient : IChatClient, IAsyncDisposable
@@ -604,5 +891,40 @@ public sealed class AgentChatFactoryTests
             WasInvoked = true;
             return TryExecuteTask(task);
         }
+    }
+
+    // Fix #1187: GetAsync must construct the child AgentChat for a persisted hosted
+    // Copilot sub-agent from the rehydrated full AgentDefinition (kind/name/model.provider
+    // = github-copilot-subagent) without hitting the "Agent definition does not specify a
+    // model." throw.
+    [Fact]
+    public async Task GetAsync_WithRegisterAsRunningAgentFalse_DoesNotAddToRunningSessions()
+    {
+        // Issue #1205: sub-agents lazily materialised through the restore path (SubAgent.AcquireLeaseAsync)
+        // must not leak into the running-agents flyout as "No Open Tab" rows. GetAsync gains the same
+        // opt-out as GetOrCreateAsync did in #1150.
+        var sessionId = new AgentSessionId("session-1205-noregister");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(sessionId, registerAsRunningAgent: false);
+
+        Assert.NotNull(lease.AgentChat);
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    [Fact]
+    public async Task GetAsync_DefaultRegisterAsRunningAgent_AddsToRunningSessions()
+    {
+        // Issue #1205 backwards-compat: default overload preserves existing behaviour for
+        // top-level restore callers (e.g. RunningAgentChat.AcquireLeaseAsync).
+        var sessionId = new AgentSessionId("session-1205-default");
+        var store = await CreatePopulatedStoreAsync(sessionId);
+        await using var factory = CreateFactory(store: store);
+
+        await using var lease = await factory.GetAsync(sessionId);
+
+        Assert.Single(factory.RunningSessions);
+        Assert.Equal(sessionId, factory.RunningSessions[0].SessionId);
     }
 }

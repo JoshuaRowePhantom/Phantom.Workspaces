@@ -75,6 +75,11 @@
       },
       {
         "kind": "tool",
+        "id": "fixed",
+        "name": "current-session"
+      },
+      {
+        "kind": "tool",
         "id": "mcp-server-entity",
         "name": "github"
       }

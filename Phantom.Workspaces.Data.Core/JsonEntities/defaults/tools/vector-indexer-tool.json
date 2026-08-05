@@ -1,9 +1,17 @@
 {
   "entity-id": "b9c0d1e2-f3a4-4b5c-8d9e-0f1a2b3c4d5e",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "vector-indexer"]
   ],
   "display-name": "Vector Indexer",
-  "tool-type": "vector-indexer"
+  "tool-type": "vector-indexer",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Vector Indexer\n\nKeeps the workspace's vector index up to date. On each run the tool drains batches of recently-changed entities from the `vector-index` queue, computes embeddings for live entities, clears embeddings for tombstoned (deleted) entities, and writes the results back through `UpdateEmbeddingsAsync`. The queue head advances per batch so a later run resumes where this one stopped. See `docs/design/vector-search.md` and `docs/design/scheduled-tools.md`.\n\n## Configuration\n\nThis tool has no configurable properties on the tool entity. Batch size (default `100`) is a code-level constructor parameter, and the queue name is fixed to `vector-index`. Embedding backend selection is handled by the data access layer's `ComputeEmbeddingsAsync` implementation.\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.schedule` \u2014 a `schedule` entity controlling run cadence. Because the tool drains the queue in a loop until empty, one relationship with a modest schedule (for example every few minutes) is sufficient.\n- `participants.target` \u2014 typically not needed; the tool works over the workspace-wide vector-index queue.\n\nSet `paused: true` on the relationship to halt indexing without losing queue position; the next un-paused run picks up where the paused one stopped."
+      }
+    }
+  }
 }

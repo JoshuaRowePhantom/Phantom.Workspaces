@@ -22,7 +22,7 @@ namespace Phantom.Workspaces.Services;
 public sealed class RunningAgentChatTable : IRunningAgentChatTable
 {
     private readonly IRunningAgentChatFactory _factory;
-    private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId)> _entityInfo = new();
+    private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId, string? WorkspaceId)> _entityInfo = new();
     private readonly object _entityInfoLock = new();
     private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
 
@@ -45,7 +45,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         // when the factory posts the Add mutation on the foreground scheduler.
         lock (_entityInfoLock)
         {
-            _entityInfo.TryAdd(sessionId, (request.EntityName, request.EntityId));
+            _entityInfo.TryAdd(sessionId, (request.EntityName, request.EntityId, request.WorkspaceId));
         }
 
         var definition = await ResolveDefinitionIfNeededAsync(request, ct).ConfigureAwait(false);
@@ -55,7 +55,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             request.AgentServices,
             request.EntityDisplayName,
             request.EntityDescription,
-            ct);
+            ct: ct);
     }
 
     private async Task<AgentDefinition?> ResolveDefinitionIfNeededAsync(
@@ -111,8 +111,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             foreach (RunningAgentChat added in e.NewItems)
             {
-                var (name, id) = GetEntityInfo(added.SessionId);
-                _runningSessions.Add(new RunningAgentChatWithEntityInfo(added, name, id));
+                var (name, id, workspaceId) = GetEntityInfo(added.SessionId);
+                _runningSessions.Add(new RunningAgentChatWithEntityInfo(added, name, id, workspaceId));
             }
         }
         else if (e.Action == NotifyCollectionChangedAction.Remove && e.OldItems is not null)
@@ -131,11 +131,11 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         }
     }
 
-    private (string EntityName, string? EntityId) GetEntityInfo(AgentSessionId sessionId)
+    private (string EntityName, string? EntityId, string? WorkspaceId) GetEntityInfo(AgentSessionId sessionId)
     {
         lock (_entityInfoLock)
         {
-            return _entityInfo.TryGetValue(sessionId, out var info) ? info : ("", null);
+            return _entityInfo.TryGetValue(sessionId, out var info) ? info : ("", null, null);
         }
     }
 }

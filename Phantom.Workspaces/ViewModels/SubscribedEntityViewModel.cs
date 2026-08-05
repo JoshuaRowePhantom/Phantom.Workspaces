@@ -17,7 +17,6 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     private readonly Func<SubscribedEntityViewModel, Task>? deleteEntityAsync;
     private readonly Func<SubscribedEntityViewModel, string, Task>? toggleInterestAsync;
     private readonly Func<SubscribedEntityViewModel, JsonElement, Task>? saveEntityAsync;
-    private readonly List<EntityDisplayItemViewModel> displayItems = [];
 
     public SubscribedEntityViewModel(
         EntitySnapshot snapshot,
@@ -30,7 +29,6 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
         this.deleteEntityAsync = deleteEntityAsync;
         this.toggleInterestAsync = toggleInterestAsync;
         this.saveEntityAsync = saveEntityAsync;
-        this.displayItems.AddRange(EntityPresentation.GetDisplayItems(snapshot));
         this.DeleteEntityCommand = new RelayCommand(
             async _ => await this.DeleteEntityAsync(),
             _ => this.CanDeleteEntity);
@@ -73,9 +71,6 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
             this.RaisePropertyChanged(nameof(this.CanEditEntity));
             this.RaisePropertyChanged(nameof(this.Relationships));
             this.Deleted = value.Data is null;
-            this.displayItems.Clear();
-            this.displayItems.AddRange(EntityPresentation.GetDisplayItems(value));
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
             this.ToggleRawJsonVisibilityCommand.RaiseCanExecuteChanged();
             this.DeleteEntityCommand.RaiseCanExecuteChanged();
         }
@@ -101,8 +96,6 @@ public sealed class SubscribedEntityViewModel : ViewModelBase
     public JsonElement? Data => this.snapshot.Data;
 
     public IReadOnlyCollection<EntitySnapshot> Relationships => this.snapshot.Relationships;
-
-    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
 
     public RelayCommand DeleteEntityCommand { get; }
 

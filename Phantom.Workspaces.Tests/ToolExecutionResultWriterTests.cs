@@ -143,4 +143,26 @@ public sealed class ToolExecutionResultWriterTests
         Assert.True(parent.NameComponents.SequenceEqual(name.Take(parent.NameComponents.Count)));
         Assert.Equal("classify-entity-42", name[parent.NameComponents.Count]);
     }
+
+    [Fact]
+    public async Task ToolExecutionResultWriter_WhenRunCompletes_RecordsOutcomeDurationAndContent()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var time = new FixedTimeProvider();
+        var writer = new ToolExecutionResultWriter(dataAccessLayer, time);
+
+        var handle = await writer.StartAsync(HostName, "git-workspace-scan", TestContext.Current.CancellationToken);
+        var startTime = time.Now;
+        time.Now = time.Now.AddSeconds(7);
+        await writer.CompleteAsync(handle, success: true, content: "Scanned 1 root(s); found 3 repositories.", TestContext.Current.CancellationToken);
+
+        var entity = await ReadEntityAsync(dataAccessLayer, handle.EntityId);
+        Assert.Equal("succeeded", entity.GetProperty("status").GetString());
+        Assert.True(entity.TryGetProperty("end-time", out var endEl));
+        var end = DateTimeOffset.Parse(endEl.GetString()!, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind);
+        Assert.Equal(TimeSpan.FromSeconds(7), end - startTime);
+        Assert.Equal(
+            "Scanned 1 root(s); found 3 repositories.",
+            entity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString());
+    }
 }

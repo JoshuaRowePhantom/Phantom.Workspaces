@@ -1,6 +1,7 @@
 using AgentSchema;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -821,6 +822,81 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task Interrupt_ThenNextMessage_RunsNewTurnOnRecoveredSession()
+    {
+        // GitHub issue #1142: after Ctrl-Break interrupts a live run, the user's NEXT typed
+        // message must not be dropped — the AgentChat processing loop must dequeue it (from the
+        // Immediate queue, per AgentChat's enqueue path) and run a full turn to completion on
+        // the recovered session. This is the end-to-end recovery guarantee that pairs with the
+        // CopilotSdkChatClient teardown-gate fix (which prevents the crash and prevents the
+        // interrupting message from being dequeued-and-dropped by the dying turn's
+        // OnQueueChanged handler).
+        var client = new DeterministicTestChatClient();
+
+        // First response: hangs on an unready update so the turn stays "in progress" until the
+        // interrupt cancels it — mirroring Interrupt_DuringRun_RecordsInterruptedDiagnosticAndCompletes.
+        var firstStream = client.EnqueueStreamingResponse();
+        firstStream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "thinking... "));
+        firstStream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "more")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        firstStream.Complete(isReady: false);
+
+        // Second response: the recovery turn. Runs to completion normally.
+        var secondStream = client.EnqueueStreamingResponse();
+        secondStream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "recovered answer.")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            });
+        secondStream.Complete();
+
+        await using var chat = CreateChat(client);
+        chat.EnqueueUserMessage("first user message");
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 1,
+            "first run to start");
+        await WaitForConditionAsync(
+            chat.RunningItems[0].Items,
+            () => RunningItemContents(chat).OfType<TextContent>().Any(c => c.Text.Contains("thinking", StringComparison.Ordinal)),
+            "first run to stream initial content");
+
+        chat.Interrupt();
+
+        await WaitForConditionAsync(
+            [chat.RunningItems, chat.History],
+            () => chat.RunningItems.Count == 0
+                && chat.History.Any(item => item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                    && GetText(item.Contents).Contains("Interrupted", StringComparison.Ordinal)),
+            "interrupt to complete the first run");
+
+        var historyCountAfterInterrupt = chat.History.Count;
+
+        // Type a NEW message after the interrupt. This is the exact scenario from issue #1142.
+        chat.EnqueueUserMessage("second user message after interrupt");
+
+        // The new turn must run to completion — the message must not be silently dropped, and
+        // the app must not crash (regression protection lives in CopilotSdkChatClientTests).
+        await WaitForConditionAsync(
+            [chat.RunningItems, chat.History],
+            () => chat.RunningItems.Count == 0
+                && chat.History.Count > historyCountAfterInterrupt
+                && chat.History.Any(item => item.Role == ChatRole.Assistant
+                    && GetText(item.Contents).Contains("recovered answer", StringComparison.Ordinal)),
+            "second turn to run to completion after the interrupt");
+
+        Assert.Contains(chat.History, item => item.Role == ChatRole.User
+            && GetText(item.Contents).Contains("second user message after interrupt", StringComparison.Ordinal));
+        Assert.Contains(chat.History, item => item.Role == ChatRole.Assistant
+            && GetText(item.Contents).Contains("recovered answer", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Completion_WritesFullyCoalescedStreamingResponseToHistory()
     {
         // Streaming updates are conflated (intermediate frames may be skipped while a coalesce is in
@@ -934,9 +1010,55 @@ public sealed class AgentChatTests
     }
 
     [Fact]
+    public async Task CreateAsync_WithCopilotSdkClientAndNoFactory_ThrowsRunningAgentChatFactoryRequired()
+    {
+        // Regression pin for issue #1109 / #1180: when an AgentChat is constructed with a Copilot
+        // SDK client but AgentServices.RunningAgentChatFactory is null, AgentChat.CreateAsync must
+        // throw the "must be supplied at construction time" InvalidOperationException. Weakening
+        // this guard would re-open the manifest-launchpad crash from #1180.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        using var copilotClient = new CopilotSdkChatClient(
+            "gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+            {
+                AgentDefinition = agentDefinition,
+                ConfiguredStore = persistenceStore,
+                ClientOverride = copilotClient,
+                DisplayNameOverride = "test-chat",
+                AgentServices = new AgentServices { RunningAgentChatFactory = null },
+            }));
+
+        Assert.Contains("RunningAgentChatFactory", ex.Message);
+        Assert.Contains("must be supplied at construction time", ex.Message);
+    }
+
+    [Fact]
     public void CopilotSdkChatClient_IsSelfInvokingToolChatClient()
     {
         Assert.True(typeof(ISelfInvokingToolChatClient).IsAssignableFrom(typeof(CopilotSdkChatClient)));
+    }
+
+    [Fact]
+    public void CopilotSubAgentChatClient_ImplementsISelfInvokingToolChatClient()
+    {
+        Assert.True(typeof(ISelfInvokingToolChatClient).IsAssignableFrom(typeof(CopilotSubAgentChatClient)));
+    }
+
+    [Fact]
+    public void CopilotSubAgentChatClient_GetService_ReturnsSelfInvokingToolChatClientMarker()
+    {
+        var client = new CopilotSubAgentChatClient();
+        Assert.NotNull(client.GetService(typeof(ISelfInvokingToolChatClient)));
+    }
+
+    [Fact]
+    public void ResolveUseProvidedChatClientAsIs_HostedSubAgentClient_ReturnsTrue()
+    {
+        var client = new CopilotSubAgentChatClient();
+        Assert.True(AgentChat.ResolveUseProvidedChatClientAsIs(hasClientOverride: false, client));
     }
 
     private sealed class SelfInvokingTestChatClient : IChatClient, ISelfInvokingToolChatClient
@@ -1536,6 +1658,285 @@ public sealed class AgentChatTests
             "run to complete after releasing the second stream");
     }
 
+    private const string ScriptedToolsetAgentDefinitionJson =
+        """
+        {
+          "kind": "prompt",
+          "name": "echo-agent",
+          "model": {
+            "id": "echo",
+            "provider": "echo",
+            "apiType": "Echo"
+          },
+          "tools": [
+            { "kind": "scripted_kind", "description": "Scripted toolset" }
+          ]
+        }
+        """;
+
+    private static DeterministicTestChatClient CreateEchoClient()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "pong")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        return client;
+    }
+
+    // Starts creation of a chat whose only toolset is backed by the supplied provider, returning the
+    // in-flight creation task together with the constructed chat instance (captured via the
+    // onConstructed hook before InitializeAsync runs) so a test can interact with the chat while
+    // tool initialization is still in progress.
+    private static (Task<AgentChat> CreateTask, AgentChat Chat) StartChatWithScriptedToolset(
+        AIContextProvider provider,
+        IChatClient? client = null)
+    {
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "scripted_kind",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(provider));
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(ScriptedToolsetAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client ?? new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+            AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
+        };
+
+        AgentChat? captured = null;
+        var task = AgentChat.CreateAsync(request, c => captured = c);
+        return (task, captured!);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WithQueuedInputBeforeReady_LeavesNoOrphanRunningItem()
+    {
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        // Enqueue user input while tool initialization is still gated (i.e. before "ready").
+        await invoked.Task;
+        chat.EnqueueUserMessage("early");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "queued message to be answered before tool init completes");
+
+        release.TrySetResult();
+        await createTask;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "all running items to clear with no orphan");
+
+        Assert.Empty(chat.RunningItems);
+        Assert.Contains(chat.History, item => item.Role == ChatRole.Assistant);
+    }
+
+    [Fact]
+    public async Task InitializeMcpTools_WhileProcessingQueuedInput_DoesNotRaceRunningItems()
+    {
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        await invoked.Task;
+        chat.EnqueueUserMessage("ping");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "queued run to complete during gated tool init");
+
+        release.TrySetResult();
+
+        // Completes without a concurrent-mutation exception and leaves no leftover running item.
+        await createTask;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "running items to drain");
+
+        Assert.Empty(chat.RunningItems);
+        Assert.Contains(chat.Tools, root => root.Kind == "scripted_kind");
+    }
+
+    [Fact]
+    public async Task IsChatRunning_WhenRunningItemsEmptied_BecomesFalse()
+    {
+        // AgentViewModel.IsChatRunning is derived purely from RunningItems.Count > 0, so the
+        // indicator turns off exactly when the running-item collection is cleared.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+
+        // Gate the turn's terminal update so the run is deterministically held in-flight. Without
+        // this the loop can drive RunningItems 0 -> 1 -> 0 before the test observes the transient
+        // count > 0 state, causing the untimeouted wait to miss it and hang under load. Holding the
+        // gate guarantees the running item is present when we assert IsChatRunning is true; releasing
+        // it lets the collection drain so IsChatRunning turns back off.
+        var gate = stream.EnqueueUpdate(
+            new ChatResponseUpdate(ChatRole.Assistant, "answer")
+            {
+                FinishReason = ChatFinishReason.Stop,
+            },
+            isReady: false);
+        stream.Complete();
+        await using var chat = CreateChat(client);
+
+        // Bounded timeout so a regression fails fast with a clear message instead of hanging.
+        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        bool IsChatRunning() => chat.RunningItems.Count > 0;
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count > 0, "run to start", cts.Token);
+        Assert.True(IsChatRunning());
+
+        gate.MarkReady();
+
+        await WaitForConditionAsync(chat.RunningItems, () => chat.RunningItems.Count == 0, "run to finish", cts.Token);
+        Assert.False(IsChatRunning());
+    }
+
+    private static string DiagnosticText(AgentChatHistoryItem item)
+        => string.Concat(item.Contents.Select(static content => content switch
+        {
+            TextContent text => text.Text,
+            ErrorContent error => error.Message,
+            _ => string.Empty,
+        }));
+
+    private static string FirstDiagnosticText(AgentChatRunningItem runningItem)
+        => runningItem.Items.Count > 0 ? DiagnosticText(runningItem.Items[0]) : string.Empty;
+
+    [Fact]
+    public async Task InitializeAsync_SessionInitialization_CreatesAndClearsRunningItem()
+    {
+        var seenRunningTexts = new List<string>();
+        void Capture(AgentChat chat)
+            => ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(FirstDiagnosticText(item));
+                        }
+                    }
+                };
+
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        };
+        await using var chat = await AgentChat.CreateAsync(request, Capture);
+
+        Assert.Contains(seenRunningTexts, text => text == "Loading session");
+        Assert.Empty(chat.RunningItems);
+    }
+
+    [Fact]
+    public async Task InitializeCustomTool_WhenToolsetLoadThrows_UnpersistedHistoryContainsExceptionAndFailedStep()
+    {
+        var failure = new InvalidOperationException("toolset boom");
+        var provider = new ScriptedToolsetContextProvider(failure: failure);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider);
+        await using var _ = chat;
+        await createTask;
+
+        var diagnostics = chat.History.Select(DiagnosticText).ToArray();
+        Assert.Contains(diagnostics, text =>
+            text.Contains("Failed to load toolset 'scripted_kind'", StringComparison.Ordinal)
+            && text.Contains("toolset boom", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, text => text.Contains("Agent startup failed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InitializeMcpTools_MultipleToolsets_EmitsIndividualRunningItemsNotSingleLumpedItem()
+    {
+        var firstFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "kind_a",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(
+                ToolsetFactory.CreateFixedToolset(new WebSearchTool())));
+        var toolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+            kind: "kind_b",
+            createToolsetAsync: (_, _) => Task.FromResult<AIContextProvider?>(
+                ToolsetFactory.CreateFixedToolset(new WebRequestTool())),
+            underlyingInstance: firstFactory);
+
+        var seenRunningTexts = new List<string>();
+        void Capture(AgentChat chat)
+            => ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(FirstDiagnosticText(item));
+                        }
+                    }
+                };
+
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "echo-agent",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                  "tools": [
+                    { "kind": "kind_a", "description": "Toolset A" },
+                    { "kind": "kind_b", "description": "Toolset B" }
+                  ]
+                }
+                """),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+            AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
+        };
+        await using var chat = await AgentChat.CreateAsync(request, Capture);
+
+        Assert.Contains(seenRunningTexts, text => text == "Loading toolset kind_a");
+        Assert.Contains(seenRunningTexts, text => text == "Loading toolset kind_b");
+        Assert.DoesNotContain(seenRunningTexts, text => text.Contains("Agent ready", StringComparison.Ordinal));
+
+        var diagnostics = chat.History.Select(DiagnosticText).ToArray();
+        Assert.DoesNotContain(diagnostics, text => text.Contains("Agent ready", StringComparison.Ordinal));
+        Assert.Equal(
+            2,
+            diagnostics.Count(text => text.Contains("Opened toolset", StringComparison.Ordinal)));
+    }
+
     private static string GetText(IReadOnlyList<AIContent> contents)
         => string.Concat(contents.OfType<TextContent>().Select(static content => content.Text));
 
@@ -2051,6 +2452,104 @@ public sealed class AgentChatTests
     {
         var result = new Phantom.Workspaces.Llm.SlashCommands.SlashCommandResult { StatusMessage = "x" };
         Assert.True(result.IsTransient);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithNameOverride_SetsAgentChatName()
+    {
+        // Fix #1151: NameOverride on the internal creation request flows onto AgentChat.Name,
+        // independent of the DisplayName (which remains the type-level label from client info /
+        // DisplayNameOverride).
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new DeterministicTestChatClient();
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "General purpose",
+            NameOverride = "fix-crash1142",
+        });
+
+        Assert.Equal("fix-crash1142", chat.Name);
+        Assert.Equal("General purpose", chat.DisplayName);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WithoutNameOverride_HasEmptyName()
+    {
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        var chatClient = new DeterministicTestChatClient();
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = chatClient,
+            DisplayNameOverride = "General purpose",
+        });
+
+        Assert.Equal(string.Empty, chat.Name);
+    }
+
+    [Fact]
+    public async Task SetCompletionState_StampsLastUpdatedAtFromInjectedTimeProvider()
+    {
+        // #1226: guards the write site at AgentChat.SetCompletionState — LastUpdatedAt must be
+        // stamped from the injected TimeProvider, not the OS wall clock.
+        var timeProvider = new FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 3, 4, 5, 6, 7, TimeSpan.Zero));
+
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "chat",
+            TimeProvider = timeProvider,
+        });
+
+        timeProvider.Advance(TimeSpan.FromSeconds(30));
+        chat.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        Assert.Equal(timeProvider.GetUtcNow().UtcDateTime, chat.LastUpdatedAt);
+    }
+
+    [Fact]
+    public async Task SetCompletionState_SecondCallAfterAdvance_BumpsLastUpdatedAt()
+    {
+        // #1226: two completions on distinct chats with an Advance between them must yield strictly
+        // increasing LastUpdatedAt — the ordering invariant the sub-agent tree relies on.
+        var timeProvider = new FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 3, 4, 5, 6, 7, TimeSpan.Zero));
+
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        await using var first = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "first",
+            TimeProvider = timeProvider,
+        });
+        await using var second = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "second",
+            TimeProvider = timeProvider,
+        });
+
+        first.SetCompletionState(AgentChatCompletionState.Succeeded);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        second.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        Assert.True(second.LastUpdatedAt > first.LastUpdatedAt);
     }
 
 }

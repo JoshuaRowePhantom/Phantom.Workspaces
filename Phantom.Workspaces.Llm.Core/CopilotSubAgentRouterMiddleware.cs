@@ -8,22 +8,22 @@ namespace Phantom.Workspaces.Llm;
 public sealed class CopilotSubAgentRouterMiddleware : IChatClient
 {
     private readonly IChatClient inner;
-    private readonly IRunningAgentChatFactory? factory;
-    private readonly ISubAgentTable? subAgentTable;
-    private readonly ISubAgentChatRegistry? registry;
+    private readonly IRunningAgentChatFactory factory;
+    private readonly ISubAgentTable subAgentTable;
     private readonly ILogger? logger;
 
     public CopilotSubAgentRouterMiddleware(
         IChatClient inner,
-        IRunningAgentChatFactory? factory = null,
-        ISubAgentTable? subAgentTable = null,
-        ISubAgentChatRegistry? registry = null,
+        IRunningAgentChatFactory factory,
+        ISubAgentTable subAgentTable,
         ILogger? logger = null)
     {
         this.inner = inner ?? throw new ArgumentNullException(nameof(inner));
-        this.factory = factory;
-        this.subAgentTable = subAgentTable;
-        this.registry = registry;
+        // Fix #1109: factory and subAgentTable are mandatory — the router no longer supports the
+        // legacy registry-only path, and null dependencies here would misroute sub-agent output
+        // into the parent transcript at construction time.
+        this.factory = factory ?? throw new ArgumentNullException(nameof(factory));
+        this.subAgentTable = subAgentTable ?? throw new ArgumentNullException(nameof(subAgentTable));
         this.logger = logger;
     }
 
@@ -47,7 +47,7 @@ public sealed class CopilotSubAgentRouterMiddleware : IChatClient
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var rootUpdates = Channel.CreateUnbounded<ChatResponseUpdate>();
-        var router = new CopilotSubAgentRouter(rootUpdates.Writer, this.registry, this.factory, this.subAgentTable, this.logger);
+        var router = new CopilotSubAgentRouter(rootUpdates.Writer, this.factory, this.subAgentTable, this.logger);
         try
         {
             await foreach (var update in this.inner.GetStreamingResponseAsync(messages, options, cancellationToken).ConfigureAwait(false))

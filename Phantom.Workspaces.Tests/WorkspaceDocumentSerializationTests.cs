@@ -276,17 +276,17 @@ public sealed class WorkspaceDocumentSerializationTests
         var dock1 = new WorkspaceContentDock
         {
             Id = "dock-1",
-            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable> { doc1 },
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { doc1 },
         };
         var dock2 = new WorkspaceContentDock
         {
             Id = "dock-2",
-            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable> { doc2 },
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { doc2 },
         };
-        var root = new Dock.Model.Mvvm.Controls.RootDock
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
         {
             Id = "root",
-            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<Dock.Model.Core.IDockable> { dock1, dock2 },
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<global::Dock.Model.Core.IDockable> { dock1, dock2 },
         };
 
         var found = MainWindowViewModel.EnumerateAllDocuments(root).ToList();
@@ -312,15 +312,15 @@ public sealed class WorkspaceDocumentSerializationTests
         var contentDock = new WorkspaceContentDock
         {
             Id = "content-dock",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { doc },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { doc },
         };
         contentDock.ActiveDockable = doc;
         contentDock.DefaultDockable = doc;
 
-        var root = new Dock.Model.Mvvm.Controls.RootDock
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
         {
             Id = "root",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { contentDock },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { contentDock },
         };
         root.ActiveDockable = contentDock;
         root.DefaultDockable = contentDock;
@@ -372,7 +372,7 @@ public sealed class WorkspaceDocumentSerializationTests
             """;
 
         var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
-        var ex = Record.Exception(() => serializer.Deserialize<Dock.Model.Controls.IRootDock>(jsonWithExtra));
+        var ex = Record.Exception(() => serializer.Deserialize<global::Dock.Model.Controls.IRootDock>(jsonWithExtra));
         Assert.Null(ex);
     }
 
@@ -390,14 +390,14 @@ public sealed class WorkspaceDocumentSerializationTests
         var contentDock = new WorkspaceContentDock
         {
             Id = "content-dock-vm",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { doc },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { doc },
         };
         contentDock.ActiveDockable = doc;
 
-        var root = new Dock.Model.Mvvm.Controls.RootDock
+        var root = new global::Dock.Model.Mvvm.Controls.RootDock
         {
             Id = "root-vm-fields",
-            VisibleDockables = new ObservableCollection<Dock.Model.Core.IDockable> { contentDock },
+            VisibleDockables = new ObservableCollection<global::Dock.Model.Core.IDockable> { contentDock },
         };
         root.ActiveDockable = contentDock;
         // Wire Owner back-references; ReferenceHandler.Preserve handles cycles via $ref.
@@ -419,6 +419,95 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.DoesNotContain("HasUnreadNotification", json);
         Assert.DoesNotContain("EntitySnapshot", json);
         Assert.DoesNotContain("WorkspacePane", json);
+    }
+
+    // ── #1158: DockTabDescriptor.Title round-trips through DockSerializer ─────
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_EntityKind_PreservesTitle_OnRoundTrip()
+    {
+        var descriptor = new EntityDockTabDescriptor(
+            "11111111-1111-4111-1111-111111111111", "Open")
+        {
+            Title = "User-Visible Entity Title",
+        };
+        var tab = new StubWorkspaceTab("tab-title-entity", "User-Visible Entity Title");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<EntityDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("User-Visible Entity Title", restoredDesc.Title);
+        Assert.Equal("11111111-1111-4111-1111-111111111111", restoredDesc.EntityId);
+        Assert.Equal("Open", restoredDesc.ShortcutName);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_BrowserKind_PreservesTitle_OnRoundTrip()
+    {
+        var descriptor = new BrowserDockTabDescriptor("https://title-test.example.com")
+        {
+            Title = "Custom Browser Tab Title",
+        };
+        var tab = new StubWorkspaceTab("tab-title-browser", "Custom Browser Tab Title");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("Custom Browser Tab Title", restoredDesc.Title);
+        Assert.Equal("https://title-test.example.com", restoredDesc.Url);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_AgentSessionKind_PreservesTitle_OnRoundTrip()
+    {
+        var descriptor = new AgentSessionDockTabDescriptor("22222222-2222-4222-2222-222222222222")
+        {
+            Title = "Preserved Agent Session Title",
+        };
+        var tab = new StubWorkspaceTab("tab-title-agent", "Preserved Agent Session Title");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<AgentSessionDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("Preserved Agent Session Title", restoredDesc.Title);
+        Assert.Equal("22222222-2222-4222-2222-222222222222", restoredDesc.EntityId);
+    }
+
+    [Fact]
+    public void BuildDescriptor_WithNonEmptyTabTitle_CapturesTitleOnDescriptor()
+    {
+        // Use reflection to call the internal WorkspaceDocument.BuildDescriptor static method
+        // against a StubWorkspaceTab that carries a non-empty Title but no Entity — falls into
+        // the browser branch when combined with the entity-less path, so use a WebViewModel here
+        // to exercise the URL-bearing branch.
+        var browserTab = new WebViewModel("https://build-desc.example.com")
+        {
+            Id = "bd-tab",
+            Title = "Non-Empty Title",
+        };
+
+        var method = typeof(WorkspaceDocument).GetMethod(
+            "BuildDescriptor",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var descriptor = (DockTabDescriptor?)method!.Invoke(null, [browserTab]);
+        Assert.NotNull(descriptor);
+        var browserDesc = Assert.IsType<BrowserDockTabDescriptor>(descriptor);
+        Assert.Equal("Non-Empty Title", browserDesc.Title);
+        Assert.Equal("https://build-desc.example.com", browserDesc.Url);
     }
 
     [Fact]
@@ -445,6 +534,86 @@ public sealed class WorkspaceDocumentSerializationTests
         var restoredDesc = Assert.IsType<EntityDockTabDescriptor>(restored!.Descriptor);
         Assert.Equal("ffffffff-ffff-4fff-ffff-ffffffffffff", restoredDesc.EntityId);
         Assert.Equal("Open", restoredDesc.ShortcutName);
+    }
+
+    // ── #1190: Descriptor stays in sync with live tab Title ──────────────────
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_RefreshesTitle_WhenTabTitleChangesAfterInitialize()
+    {
+        // Regression for #1190: Descriptor was captured once via `??=` at InitializeCore
+        // time and never refreshed, so any Title change after Initialize was lost on save.
+        var tab = new WebViewModel("https://desc-refresh.example.com")
+        {
+            Id = "tab-refresh-desc",
+            Title = string.Empty,
+        };
+        var doc = new WorkspaceDocument(tab);
+
+        // At construction time the initial Title is empty, so descriptor.Title is null.
+        var initial = Assert.IsType<BrowserDockTabDescriptor>(doc.Descriptor);
+        Assert.Null(initial.Title);
+
+        tab.Title = "New Title After Init";
+
+        var refreshed = Assert.IsType<BrowserDockTabDescriptor>(doc.Descriptor);
+        Assert.Equal("New Title After Init", refreshed.Title);
+        Assert.Equal("https://desc-refresh.example.com", refreshed.Url);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Descriptor_SerializedAfterTitleChange_PersistsNewTitle()
+    {
+        // Same setup as above: after mutating tab.Title, DockSerializer.Serialize(doc)
+        // must produce JSON containing the new title, and Deserialize must recover it.
+        var tab = new WebViewModel("https://desc-persist.example.com")
+        {
+            Id = "tab-persist-desc",
+            Title = "Original",
+        };
+        var doc = new WorkspaceDocument(tab);
+
+        tab.Title = "Updated Title";
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        Assert.Contains("Updated Title", json);
+        Assert.DoesNotContain("\"Title\":\"Original\"", json);
+
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("Updated Title", restoredDesc.Title);
+    }
+
+    [Theory]
+    [InlineData("entity")]
+    [InlineData("agent-session")]
+    [InlineData("browser")]
+    public void DockTabDescriptor_RoundTrip_PreservesTitle_AcrossAllKinds(string kind)
+    {
+        // Consolidates the per-kind PreservesTitle_OnRoundTrip tests into a parametrised
+        // form. Any future descriptor kind must also carry Title through DockSerializer.
+        DockTabDescriptor descriptor = kind switch
+        {
+            "entity" => new EntityDockTabDescriptor(
+                "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "Open") { Title = "Round-Trip Entity" },
+            "agent-session" => new AgentSessionDockTabDescriptor(
+                "aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff") { Title = "Round-Trip Agent" },
+            "browser" => new BrowserDockTabDescriptor(
+                "https://round-trip.example.com") { Title = "Round-Trip Browser" },
+            _ => throw new System.ArgumentOutOfRangeException(nameof(kind)),
+        };
+        var tab = new StubWorkspaceTab($"tab-rt-{kind}", $"Tab {kind}");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        Assert.NotNull(restored!.Descriptor);
+        Assert.Equal(descriptor.Title, restored.Descriptor!.Title);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

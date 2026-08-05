@@ -1,11 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Extensions.AI;
-using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport.ReverseHttp;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -13,52 +8,35 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ConnectionStatusViewModelTests
 {
-    private sealed class FakeConnection : IReverseConnection
-    {
-        public FakeConnection(string clientInstanceId, DateTimeOffset connectedAt, int inFlight = 0)
-        {
-            this.ClientInstanceId = clientInstanceId;
-            this.ConnectedAt = connectedAt;
-            this.InFlightCount = inFlight;
-        }
-
-        public string ClientInstanceId { get; }
-        public string? AnnouncedEndpoint => null;
-        public DateTimeOffset ConnectedAt { get; }
-        public int InFlightCount { get; }
-
-        public async IAsyncEnumerable<ChatResponseUpdate> ExecuteAsync(
-            RemoteAgentRequest request,
-            [EnumeratorCancellation] CancellationToken cancellationToken)
-        {
-            await Task.Yield();
-            yield break;
-        }
-
-        public Task<System.IO.Stream> OpenStreamAsync(TrustedStreamRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-
-        public Task RunToolAsync(TrustedToolRequest request, CancellationToken cancellationToken)
-            => throw new NotSupportedException();
-    }
-
     [Fact]
-    public void Inbound_ReflectsRegistry_LiveOnConnectAndDisconnect()
+    public void Inbound_SourcedFromReverseConnectionStatusRegistry_ReflectsSnapshot()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
+        registry.OnRegistered("computer-a", new DateTimeOffset(2026, 6, 16, 1, 0, 0, TimeSpan.Zero));
+        registry.OnInFlightChanged("computer-a", 1);
+
         using var viewModel = new ConnectionStatusViewModel(registry);
-
-        Assert.False(viewModel.HasInboundConnections);
-
-        var connection = new FakeConnection("computer-a", new DateTimeOffset(2026, 6, 16, 1, 0, 0, TimeSpan.Zero), inFlight: 1);
-        registry.Register(connection);
 
         Assert.True(viewModel.HasInboundConnections);
         var inbound = Assert.Single(viewModel.Inbound);
         Assert.Equal("computer-a", inbound.ClientInstanceId);
         Assert.Equal(1, inbound.InFlightCount);
+    }
 
-        registry.Unregister(connection);
+    [Fact]
+    public void ConnectionsChanged_RefreshesInboundCollection()
+    {
+        var registry = new ReverseConnectionStatusRegistry();
+        using var viewModel = new ConnectionStatusViewModel(registry);
+
+        Assert.False(viewModel.HasInboundConnections);
+
+        registry.OnRegistered("computer-a", new DateTimeOffset(2026, 6, 16, 1, 0, 0, TimeSpan.Zero));
+
+        Assert.True(viewModel.HasInboundConnections);
+        Assert.Equal("computer-a", Assert.Single(viewModel.Inbound).ClientInstanceId);
+
+        registry.OnUnregistered("computer-a");
 
         Assert.False(viewModel.HasInboundConnections);
         Assert.Empty(viewModel.Inbound);
@@ -67,9 +45,9 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void Inbound_OrdersByConnectedTime()
     {
-        var registry = new ReverseExecutionRegistry();
-        registry.Register(new FakeConnection("later", new DateTimeOffset(2026, 6, 16, 2, 0, 0, TimeSpan.Zero)));
-        registry.Register(new FakeConnection("earlier", new DateTimeOffset(2026, 6, 16, 1, 0, 0, TimeSpan.Zero)));
+        var registry = new ReverseConnectionStatusRegistry();
+        registry.OnRegistered("later", new DateTimeOffset(2026, 6, 16, 2, 0, 0, TimeSpan.Zero));
+        registry.OnRegistered("earlier", new DateTimeOffset(2026, 6, 16, 1, 0, 0, TimeSpan.Zero));
 
         using var viewModel = new ConnectionStatusViewModel(registry);
 
@@ -79,11 +57,11 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void Dispose_StopsTrackingRegistryChanges()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
         var viewModel = new ConnectionStatusViewModel(registry);
         viewModel.Dispose();
 
-        registry.Register(new FakeConnection("computer-a", DateTimeOffset.UnixEpoch));
+        registry.OnRegistered("computer-a", DateTimeOffset.UnixEpoch);
 
         Assert.Empty(viewModel.Inbound);
     }
@@ -91,7 +69,7 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void AccessPoint_IsHiddenUntilSet_ThenExposedForCopying()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
         using var viewModel = new ConnectionStatusViewModel(registry);
 
         Assert.False(viewModel.HasAccessPoint);
@@ -110,7 +88,7 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void LocalAccessPoint_IsShownIndependentlyOfDevTunnelAccessPoint()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
         using var viewModel = new ConnectionStatusViewModel(registry);
 
         Assert.False(viewModel.HasLocalAccessPoint);
@@ -126,7 +104,7 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void TunnelName_DrivesHasDevTunnel()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
         using var viewModel = new ConnectionStatusViewModel(registry);
 
         Assert.False(viewModel.HasDevTunnel);
@@ -140,7 +118,7 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void DevTunnelStatus_HostingPublishesAccessPoint_AndNoProblem()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
         using var viewModel = new ConnectionStatusViewModel(registry);
 
         viewModel.SetDevTunnelStatus(
@@ -158,7 +136,7 @@ public sealed class ConnectionStatusViewModelTests
     [Fact]
     public void DevTunnelStatus_ErrorAndReconnecting_FlagProblemWithText()
     {
-        var registry = new ReverseExecutionRegistry();
+        var registry = new ReverseConnectionStatusRegistry();
         using var viewModel = new ConnectionStatusViewModel(registry);
 
         viewModel.SetDevTunnelStatus(

@@ -37,6 +37,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private readonly object sessionLock = new();
     private readonly InternalCreateAgentChatRequest request;
+    private readonly TimeProvider timeProvider;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
     private IChatClient? client;
@@ -44,6 +45,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private IncrementalPersistenceChatHistoryProvider? persistenceProvider;
     private ChatClientAgent? chatClientAgent;
     private ChatClientAgentOptions? chatOptions;
+
+#pragma warning disable MAAI001
+    /// <summary>
+    /// Test hook: exposes the resolved <c>UseProvidedChatClientAsIs</c> flag from the
+    /// underlying <see cref="ChatClientAgentOptions"/> so tests can verify that hosted
+    /// sub-agent pipelines do not have <c>FunctionInvokingChatClient</c> wrapped around
+    /// them (bug #1174).
+    /// </summary>
+    internal bool? UseProvidedChatClientAsIs => this.chatOptions?.UseProvidedChatClientAsIs;
+#pragma warning restore MAAI001
+
     private IReadOnlyList<RuntimeContextProviderRegistration> runtimeContextProviderRegistrations = [];
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;
@@ -82,7 +94,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private string agentId = string.Empty;
     private AgentChat? parentAgent;
     private bool acceptsUserInput = true;
-    private DateTime lastUpdatedAt = DateTime.UtcNow;
+    private DateTime lastUpdatedAt;
     private AgentChatCompletionState? completionStateOverride;
 
     // Steering messages injected mid-run (via ToolResultSteeringMiddleware or CopilotSdkChatClient)
@@ -116,6 +128,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     {
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
+       this.timeProvider = request.TimeProvider;
+       this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
@@ -152,9 +166,18 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
-    internal static async Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
+    internal static Task<AgentChat> CreateAsync(InternalCreateAgentChatRequest request)
+        => CreateAsync(request, onConstructed: null);
+
+    // The onConstructed hook runs on the construction (foreground) context after the chat is
+    // constructed but before InitializeAsync, so callers (tests) can observe running-item
+    // mutations that occur during initialization (issue #1068).
+    internal static async Task<AgentChat> CreateAsync(
+        InternalCreateAgentChatRequest request,
+        Action<AgentChat>? onConstructed)
     {
        var chat = new AgentChat(request);
+       onConstructed?.Invoke(chat);
        await chat.InitializeAsync();
        return chat;
     }
@@ -175,10 +198,34 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        var restoredAgentDefinitionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentDefinitionJson : null;
        var restoredAgentSessionJson = restoredAgent.HasValue ? restoredAgent.Value.AgentSessionJson : null;
 
+       // #1140: Seed the in-memory last-activity timestamp from the persisted UpdatedUtc so
+       // restored (already-completed) sub-agent cards show the true "N days ago" time rather
+       // than the reload time. Without this, construction stamps lastUpdatedAt = now (see
+       // ctor) and RestoreSubAgentsAsync's #1128 forced SetCompletionState would then re-stamp
+       // it. Stores that don't track a timestamp return null and we keep the construction-time
+       // value.
+       if (restoredAgent is { LastUpdatedUtc: { } persistedUpdatedUtc })
+       {
+           this.lastUpdatedAt = persistedUpdatedUtc;
+       }
+
        var resolvedAgentDefinition = this.request.AgentDefinition
            ?? (restoredAgentDefinitionJson is not null
                ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
                : null);
+       if (resolvedAgentDefinition is null && restoredAgent.HasValue)
+       {
+           // Fix #1187: legacy hosted Copilot sub-agents rehydrate with a null
+           // AgentDefinitionJson (the empty-definition case behind #1186). Substitute the
+           // canonical full hosted-Copilot sub-agent definition so downstream code (and
+           // AgentFactory model resolution in particular) always sees a well-formed
+           // document rather than propagating the null through to the model-null throw.
+           resolvedAgentDefinition = CopilotSubAgentDefinitionDefaults.Create(
+               subAgentSessionId: restoredAgent.Value.AgentSessionId,
+               displayName: this.request.DisplayNameOverride,
+               description: this.request.DescriptionOverride,
+               name: this.request.NameOverride);
+       }
        if (resolvedAgentDefinition is null)
        {
            throw new InvalidOperationException("Agent definition could not be resolved from request or persistence store.");
@@ -191,12 +238,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            : new AgentServices { SlashCommandRegistry = innerRegistry };
        var clientInfo = this.request.ClientOverride is not null
            ? new ChatClientResult(this.request.ClientOverride, this.request.DisplayNameOverride ?? string.Empty)
-           : await AgentFactory.CreateChatClientAsync(
-               resolvedAgentDefinition,
-               servicesWithRegistry,
-               queueManager: this.queueManager,
-               subAgentChatRegistry: this,
-               cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
+           : this.request.ChatClientFactoryOverride is not null
+               ? new ChatClientResult(
+                   await this.request.ChatClientFactoryOverride(this.request.CancellationToken).ConfigureAwait(false),
+                   this.request.DisplayNameOverride ?? string.Empty)
+               : await AgentFactory.CreateChatClientAsync(
+                   resolvedAgentDefinition,
+                   servicesWithRegistry,
+                   queueManager: this.queueManager,
+                   subAgentChatRegistry: this,
+                   cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
        this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
@@ -228,6 +279,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.client = resolvedClient;
        this.DisplayName = this.request.DisplayNameOverride ?? clientInfo.DisplayName;
        this.Description = this.request.DescriptionOverride ?? resolvedAgentDefinition.Description ?? string.Empty;
+       // #1151: caller-supplied sub-agent name/id (e.g. fix-crash1142) is distinct from the
+       // type-level DisplayName. Blank when no caller name was supplied so downstream UI can
+       // fall back to DisplayName / session id without inventing a fake value.
+       this.Name = this.request.NameOverride ?? string.Empty;
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -241,9 +296,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotChatClient)
        {
            copilotChatClient.SteeringMessageForwarded += message => this.AppendSteeringMessagesToHistory([message]);
-           copilotChatClient.SetSubAgentDependencies(
-               this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory,
-               this);
+           // Fix #1109: RunningAgentChatFactory is mandatory for any AgentChat that hosts a Copilot
+           // SDK client — the sub-agent router has no fallback path if it's missing. Fail fast so
+           // callers cannot construct an AgentChat that would silently misroute sub-agent output
+           // (issue #1110) into the parent transcript.
+           var runningChatFactory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory
+               ?? throw new InvalidOperationException(
+                   "AgentServices.RunningAgentChatFactory must be supplied at construction time. " +
+                   "AgentChatFactory injects itself via WithSelfAsFactory; ensure this AgentChat was " +
+                   "created through IAgentChatFactory or the request explicitly carries a factory.");
+           copilotChatClient.SetSubAgentDependencies(runningChatFactory, this);
        }
 
        if (resolvedClient is IAsyncDisposable asyncDisposableClient)
@@ -256,7 +318,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        var streamingMiddleware = new StreamingPersistenceMiddleware(resolvedClient, this.persistenceProvider, this.request.ConfiguredStore);
        this.chatHistoryProvider.InvocationStarting += (_, args) => streamingMiddleware.SetCurrentSession(args.Session);
        this.client = streamingMiddleware;
-       this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider);
+       this.historyService = new AgentChatHistoryService(this.History, this.chatHistoryProvider, this.timeProvider);
 #pragma warning disable MAAI001
        this.chatOptions = new ChatClientAgentOptions
        {
@@ -321,25 +383,97 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            new ReadMessagesRequest { AgentSessionId = resolvedAgentSessionId },
            this.request.CancellationToken);
 
-       this.LoadInitialHistory(persistedMessages);
-
-       // Signal that persisted history has been loaded into History. Consumers (e.g. the chat
-       // output control) await this before taking the initial history snapshot so the first render
-       // never captures an empty/partial History (issue #1009).
-       this.historyPopulated.TrySetResult();
-
-       this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
-       this.SetAgentSessionId(resolvedAgentSessionId);
-
-       if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+       // RunSessionInitAsync runs the running-item mutations, the initial persisted-history load
+       // (History.Add fires CollectionChanged), and historyPopulated.TrySetResult(). These mutate
+       // the non-thread-safe, UI-observed collections and so must run on the foreground scheduler.
+       //
+       // The continuation after the .ConfigureAwait(false) on the CreateChatClientAsync await (see
+       // the chat-client resolution above) is NOT guaranteed to run on the foreground context: when
+       // that await genuinely suspends (the real Copilot SDK client), the captured
+       // SynchronizationContext/scheduler is discarded and the rest of this method resumes on a
+       // thread-pool thread even when foregroundScheduler is a SynchronizationContextTaskScheduler
+       // over the UI thread (issues #1084 / #1068 / #1072). So RunSessionInitAsync is always
+       // dispatched onto the foreground scheduler via RunOnForegroundAsync and awaited (mirroring
+       // the tool-init dispatch and EnqueueSystemNote/EnqueueHelpNote).
+       //
+       // Awaiting the dispatched foreground work here can never deadlock because production
+       // foreground schedulers are self-draining: the UI SynchronizationContextTaskScheduler pumps
+       // via the dispatcher, and the headless ConcurrentExclusiveSchedulerPair.ExclusiveScheduler
+       // drains via the thread pool -- so the dispatched task runs while this method is suspended
+       // awaiting it (issues #1098 / #1084). The session-init running item is fully completed before
+       // the processing loop starts, so it never races the loop.
+       async Task RunSessionInitAsync()
        {
-           await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+           var sessionInitItem = this.CreateRunningItem(new AgentChatHistoryItem
+           {
+               Role = AgentChatHistoryItem.DiagnosticChatRole,
+               Contents = new AIContent[] { new TextContent("Loading session") },
+               Timestamp = this.timeProvider.GetUtcNow(),
+           });
+           try
+           {
+               this.LoadInitialHistory(persistedMessages);
+
+               // Signal that persisted history has been loaded into History. Consumers (e.g. the
+               // chat output control) await this before taking the initial history snapshot so the
+               // first render never captures an empty/partial History (issue #1009).
+               this.historyPopulated.TrySetResult();
+
+               this.SetSession(new AgentChatSession(this.chatClientAgent, frameworkSession));
+               this.SetAgentSessionId(resolvedAgentSessionId);
+
+               if (!string.IsNullOrWhiteSpace(this.request.AgentSessionId))
+               {
+                   await this.RestoreSubAgentsAsync(this.request.CancellationToken);
+               }
+
+               // The session-init step is transient progress only: clear the running item without
+               // echoing "Loading session" into the History transcript. Failures (below) still
+               // surface an error diagnostic (issue #1072).
+               this.CompleteRunningItem(sessionInitItem, writeToHistory: false);
+           }
+           catch (Exception ex)
+           {
+               this.UpdateRunningItem(sessionInitItem, [new AgentChatHistoryItem
+               {
+                   Role = AgentChatHistoryItem.DiagnosticChatRole,
+                   Contents = new AIContent[] { new ErrorContent($"Failed to load session: {ex}") },
+                   Timestamp = this.timeProvider.GetUtcNow(),
+               }]);
+               this.CompleteRunningItem(sessionInitItem, writeToHistory: true);
+               throw;
+           }
        }
+
+       await this.RunOnForegroundAsync(RunSessionInitAsync);
 
        this.StartProcessingLoop();
 
-       await this.InitializeMcpToolsAsync(this.request.CancellationToken);
+       // Tool initialization mutates running items (one per toolset / MCP server) and must be
+       // serialized with the processing loop on the foreground scheduler (issue #1068). Only
+       // dispatch when there is actual tool work: a tool-less agent performs no running-item
+       // mutations, so skipping the dispatch keeps CreateAsync from blocking on a foreground
+       // scheduler that defers execution until externally pumped (e.g. sub-agent restore tests).
+       var runtimeTools = AgentFactory.ExtractTools(resolvedAgentDefinition);
+       var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0
+           || (runtimeTools?.OfType<McpTool>().Any() ?? false);
+       if (hasToolWork)
+       {
+           await this.RunOnForegroundAsync(
+               () => this.InitializeMcpToolsAsync(this.request.CancellationToken));
+       }
     }
+
+    // Binds the continuation chain of the supplied action to the foreground scheduler, mirroring
+    // StartProcessingLoop's Task.Factory.StartNew(..., foregroundScheduler) pattern so that
+    // running-item mutations performed by the action are serialized with the processing loop and
+    // never mutate the non-thread-safe running-item collections concurrently (issue #1068).
+    private Task RunOnForegroundAsync(Func<Task> action) =>
+        Task.Factory.StartNew(
+            action,
+            this.cts.Token,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler).Unwrap();
 
     /// <summary>
     /// Fired when the active streaming turn finishes.
@@ -399,7 +533,15 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public bool IsBusy => this.isBusy;
 
     /// <summary>The agent ID used to identify this chat within its parent's sub-agent registry.</summary>
-    public string AgentId => this.agentId;
+    /// <remarks>
+    /// Fix #1152: Falls back to <see cref="AgentSessionId"/> when the tool-call-driven
+    /// <c>agentId</c> field has never been assigned. This ensures every AgentChat exposes a
+    /// stable, non-empty navigation key — needed for root chats (whose <c>agentId</c> is only
+    /// set by AddSubAgent's tool-call path, which the root never enters) and for sub-agents
+    /// registered through <see cref="ISubAgentTable.Add"/>. Without this, the UI emitted
+    /// empty <c>data-navigate-agent-id</c> attributes and clicks collapsed into no-ops.
+    /// </remarks>
+    public string AgentId => string.IsNullOrEmpty(this.agentId) ? this.agentSessionId : this.agentId;
 
     /// <summary>The parent chat that spawned this sub-agent, or <see langword="null"/> for root agents.</summary>
     public AgentChat? ParentAgent => this.parentAgent;
@@ -424,6 +566,14 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public string DisplayName { get; private set; } = string.Empty;
 
     public string Description { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (e.g. <c>fix-crash1142</c>) from
+    /// <c>SubagentStartedData.AgentName</c>. Empty for root chats and for sub-agents whose
+    /// caller did not supply a name. Distinct from <see cref="DisplayName"/>, which carries the
+    /// agent-type label.
+    /// </summary>
+    public string Name { get; private set; } = string.Empty;
 
     public string AgentSessionId => this.agentSessionId;
 
@@ -589,7 +739,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     [
                         new ChatMessage(ChatRole.User, contents.ToList())
                         {
-                            CreatedAt = DateTimeOffset.UtcNow,
+                            CreatedAt = this.timeProvider.GetUtcNow(),
                         },
                     ],
                 },
@@ -614,7 +764,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
                     Contents = [new TextContent(text)],
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 });
             },
             CancellationToken.None,
@@ -636,7 +786,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = AgentChatHistoryItem.HelpChatRole,
                     Contents = [new TextContent(text)],
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 });
             },
             CancellationToken.None,
@@ -749,7 +899,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private void AddHistoryItem(AgentChatHistoryItem item)
     {
-        this.lastUpdatedAt = DateTime.UtcNow;
+        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
         this.History.Add(item);
     }
 
@@ -766,7 +916,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = ChatRole.User,
                 Contents = message.Contents.ToArray(),
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             };
 
             this.History.Add(nextItem);
@@ -791,7 +941,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = ChatRole.User,
                 Contents = message.Contents.ToArray(),
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             });
         }
 
@@ -878,7 +1028,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             }
         }
 
-        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty);
+        var chatClient = new SubAgentChatClient(agentId, subAgentDefinition.Name ?? agentId, subAgentDefinition.Description ?? string.Empty, this.timeProvider);
 
         // Fix for issue #913: without ForegroundScheduler the child chat falls back to its own
         // ConcurrentExclusiveSchedulerPair, so every "foreground" mutation (UpdateRunningItem,
@@ -898,6 +1048,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 DescriptionOverride = subAgentDefinition.Description ?? string.Empty,
                 ForegroundScheduler = this.foregroundScheduler,
                 CancellationToken = cancellationToken,
+                TimeProvider = this.timeProvider,
             }),
             cancellationToken,
             TaskCreationOptions.DenyChildAttach,
@@ -955,6 +1106,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// <inheritdoc/>
     async Task<SubAgent> ISubAgentTable.Add(AgentChat agentChat)
     {
+        // Fix #1152: When a sub-agent is registered via ISubAgentTable.Add (the manual path,
+        // used by hosted sub-agents and tests) rather than through AddSubAgent's tool-call flow,
+        // its ``agentId`` field is never seeded and AgentId returns "". The UI's
+        // NavigateToSubAgent then can't route to it (and RunningSubAgents HTML emits an empty
+        // ``data-navigate-agent-id`` attribute). Fall back to AgentSessionId so every registered
+        // sub-agent has a stable, non-empty navigation id.
+        if (string.IsNullOrEmpty(agentChat.agentId))
+        {
+            agentChat.agentId = agentChat.AgentSessionId;
+        }
+
         var sessionId = new AgentSessionId(agentChat.AgentSessionId);
         var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
         var subAgent = new SubAgent(sessionId, agentChat, factory);
@@ -999,8 +1161,48 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     internal void SetCompletionState(AgentChatCompletionState state)
+        => this.SetCompletionState(state, preserveLastUpdatedAt: false);
+
+    /// <summary>
+    /// Sets the sub-agent completion-state override.
+    /// </summary>
+    /// <param name="state">The new completion state.</param>
+    /// <param name="preserveLastUpdatedAt">
+    /// When <see langword="true"/>, the transition does NOT bump
+    /// <see cref="LastUpdatedAt"/>. Used by the restore path so that forcing a persisted
+    /// (already-completed) sub-agent to its terminal state on reload does not overwrite the
+    /// seeded, persisted last-activity timestamp with the reload time (issue #1140). The event
+    /// still fires so UI subscribers (running-item markers) clear as required by #1128.
+    /// </param>
+    internal void SetCompletionState(
+        AgentChatCompletionState state,
+        bool preserveLastUpdatedAt)
     {
+        // #1128: Idempotent — bail if the override is already at the requested state so
+        // repeated calls (e.g. from restore + a stray terminal event) don't re-fire the
+        // completion notification and cause duplicate UI updates.
+        if (this.completionStateOverride == state)
+        {
+            return;
+        }
+
         this.completionStateOverride = state;
+        if (!preserveLastUpdatedAt)
+        {
+            // #1140: Only stamp lastUpdatedAt for genuine activity-driven state changes.
+            this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
+        }
+
+        // #1128: SetCompletionState is the only path that flips a sub-agent to a terminal
+        // state on reload (RestoreSubAgentsAsync) and — until now — did not raise the event
+        // the UI listens on, so restored sub-agents' pulsating-brain / running markers never
+        // cleared. Marshal onto the injected foreground scheduler (#909/#913/#1122
+        // invariant) so UI subscribers observe the change on the UI thread.
+        _ = Task.Factory.StartNew(
+            () => this.CompletionStateChanged?.Invoke(this, EventArgs.Empty),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
     }
 
     private async Task RestoreSubAgentsAsync(CancellationToken cancellationToken)
@@ -1008,18 +1210,20 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var childIds = await this.request.ConfiguredStore.ReadSubAgentChildIdsAsync(
             this.agentSessionId, cancellationToken);
 
-        var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory;
-        if (factory is null)
+        if (childIds.Count == 0)
         {
-            if (childIds.Count > 0)
-            {
-                var logger = this.request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>();
-                logger?.LogWarning(
-                    "Cannot restore {Count} subagent(s): IRunningAgentChatFactory unavailable",
-                    childIds.Count);
-            }
             return;
         }
+
+        // Fix #1109: RunningAgentChatFactory is mandatory. The previous null-tolerant warn-and-skip
+        // branch let restored sub-agents silently vanish and then leak their output into the parent
+        // transcript (issue #1110). Fail fast with a clear message.
+        var factory = this.request.AgentServices?.RunningAgentChatFactory as IRunningAgentChatFactory
+            ?? throw new InvalidOperationException(
+                $"Cannot restore {childIds.Count} sub-agent(s): AgentServices.RunningAgentChatFactory " +
+                "is required but was not supplied. AgentChatFactory.WithSelfAsFactory injects itself " +
+                "for chats created through the factory; construct this chat through IAgentChatFactory " +
+                "or supply an explicit RunningAgentChatFactory in AgentServices.");
 
         foreach (var childId in childIds)
         {
@@ -1033,7 +1237,63 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler);
+
+            // #1128: A reloaded sub-agent's SDK run is no longer executing, so no terminal
+            // Complete/Fail event will ever arrive to move it out of the default Running
+            // state; the UI would otherwise show a perpetual pulsating brain / running
+            // marker. Materialise the child eagerly, hold the lease for the lifetime of the
+            // parent chat (so subsequent lease acquisitions — e.g. AgentViewModel's
+            // AddSubAgentSlotLazy — see the same AgentChat with the terminal override
+            // already applied), and force it Succeeded via SetCompletionState (which now
+            // raises CompletionStateChanged on the child's foreground scheduler).
+            var terminalTask = this.MarkRestoredSubAgentTerminalAsync(stub, cancellationToken);
+            lock (this.restoredSubAgentTerminalTasksLock)
+            {
+                this.restoredSubAgentTerminalTasks.Add(terminalTask);
+            }
         }
+    }
+
+    private readonly List<Task> restoredSubAgentTerminalTasks = new();
+    private readonly object restoredSubAgentTerminalTasksLock = new();
+
+    /// <summary>
+    /// Test-only: awaits completion of every fire-and-forget "mark restored sub-agent
+    /// terminal" task queued by <see cref="RestoreSubAgentsAsync"/>. Enables deterministic
+    /// verification of the #1128 restore transition without polling.
+    /// </summary>
+    internal Task WaitForRestoredSubAgentsMarkedTerminalAsync()
+    {
+        Task[] tasks;
+        lock (this.restoredSubAgentTerminalTasksLock)
+        {
+            tasks = this.restoredSubAgentTerminalTasks.ToArray();
+        }
+        return Task.WhenAll(tasks);
+    }
+
+    private Task MarkRestoredSubAgentTerminalAsync(
+        SubAgent stub,
+        CancellationToken cancellationToken)
+    {
+        // #1186: Previously this method acquired a full lease on the child stub
+        // (SubAgent.AcquireLeaseAsync -> AgentChatFactory.GetAsync -> full
+        // AgentChat.CreateAsync -> AgentChat.InitializeAsync -> AgentFactory.CreateChatClientAsync)
+        // just to flip the terminal completion state. For hosted Copilot sub-agents whose
+        // persisted AgentDefinition was empty (Model == null), CreateChatClientAsync's
+        // null-model guard threw "Agent definition does not specify a model.", faulting
+        // the whole restore path and hanging the startup splash indefinitely.
+        //
+        // Restored sub-agents are receive-only stubs whose SDK run is long gone, so we do
+        // not need a real IChatClient or a validated model to represent their terminal
+        // state. Record the override on the stub itself; SubAgent.AcquireLeaseAsync applies
+        // it lazily when (and only when) a caller — e.g. AgentViewModel's
+        // AddSubAgentSlotLazy — actually needs the child materialised. In the meantime,
+        // IRunningSubAgent.CompletionState surfaces the restored state directly, so the
+        // pulsating-brain / running marker never appears for a reloaded terminal child.
+        _ = cancellationToken; // no I/O; nothing to cancel
+        stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+        return Task.CompletedTask;
     }
 
     private void LoadInitialHistory(IReadOnlyList<ChatMessage>? initialMessages)
@@ -1247,7 +1507,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 var previousItems = this.cachedItems;
 
                 // Build the chat history items on a background task (does not touch the foreground).
-                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot));
+                var chatHistoryItems = await Task.Run(() => CoalesceAsync(snapshot, previousItems, interstitialSnapshot, this.owner.timeProvider));
 
                 // Store the newly-coalesced result so the next cycle can reuse stable references.
                 this.cachedItems = chatHistoryItems;
@@ -1284,14 +1544,15 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         private static async Task<AgentChatHistoryItem[]> CoalesceAsync(
             AgentResponseUpdate[] snapshot,
             AgentChatHistoryItem[] previous,
-            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials)
+            (int AfterUpdateCount, AgentChatHistoryItem Item)[] interstitials,
+            TimeProvider timeProvider)
         {
             AgentChatHistoryItem[] newItems;
 
             if (interstitials.Length == 0)
             {
                 // Fast path: no interstitials, single pass.
-                newItems = await CoalesceSegmentAsync(snapshot);
+                newItems = await CoalesceSegmentAsync(snapshot, timeProvider);
             }
             else
             {
@@ -1306,7 +1567,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     int segEnd = Math.Min(afterCount, snapshot.Length);
                     if (segEnd > segStart)
                     {
-                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd]));
+                        result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..segEnd], timeProvider));
                     }
 
                     result.Add(item);
@@ -1316,7 +1577,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 // Tail: remaining updates after the last interstitial.
                 if (segStart < snapshot.Length)
                 {
-                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..]));
+                    result.AddRange(await CoalesceSegmentAsync(snapshot[segStart..], timeProvider));
                 }
 
                 newItems = result.ToArray();
@@ -1328,7 +1589,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 && snapshot[^1].Contents.OfType<ToolResultContent>().Any();
             if (lastIsToolResult)
             {
-                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = DateTimeOffset.UtcNow }];
+                newItems = [..newItems, new AgentChatHistoryItem { Role = ChatRole.Assistant, Timestamp = timeProvider.GetUtcNow() }];
             }
 
             // Re-use the cached reference for each item whose content is structurally unchanged.
@@ -1341,7 +1602,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
         // returns an empty array; no assistant placeholder is added here (that is handled by the
         // caller on the full snapshot).
-        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates)
+        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
         {
             if (updates.Length == 0)
             {
@@ -1356,7 +1617,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = message.Role,
                     Contents = message.Contents.ToArray(),
-                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? DateTimeOffset.UtcNow,
+                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? timeProvider.GetUtcNow(),
                 })
                 .ToArray();
         }
@@ -1467,7 +1728,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     new AgentChatHistoryItem
                     {
                         Role = ChatRole.Assistant,
-                        Timestamp = DateTimeOffset.UtcNow,
+                        Timestamp = this.timeProvider.GetUtcNow(),
                     }]);
 
                 // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
@@ -1548,7 +1809,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                                 Contents = [new TextContent("Interrupted by user.")],
-                                Timestamp = DateTimeOffset.UtcNow,
+                                Timestamp = this.timeProvider.GetUtcNow(),
                             },
                         ])
                         .ToArray();
@@ -1568,7 +1829,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                             {
                                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                                 Contents = [new ErrorContent($"Provider error: {ex}")],
-                                Timestamp = DateTimeOffset.UtcNow,
+                                Timestamp = this.timeProvider.GetUtcNow(),
                             },
                         ])
                         .ToArray();
@@ -1626,7 +1887,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 new AgentChatHistoryItem
                 {
                     Role = ChatRole.Assistant,
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 }]);
 
             partialResponses = new PartialResponseConflator(
@@ -1674,7 +1935,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                         {
                             Role = AgentChatHistoryItem.DiagnosticChatRole,
                             Contents = [new ErrorContent($"Hosted sub-agent error: {ex.Message}")],
-                            Timestamp = DateTimeOffset.UtcNow,
+                            Timestamp = this.timeProvider.GetUtcNow(),
                         },
                     ])
                     .ToArray();
@@ -1970,22 +2231,21 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             var roots = results.SelectMany(static result => result.Roots).ToList();
 
             this.ReplaceToolNodes(roots);
-            var summaryRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
-            {
-                Role = AgentChatHistoryItem.DiagnosticChatRole,
-                Contents = new AIContent[] { new TextContent(BuildStartupReadyMessage(this.GetEnabledRuntimeTools())) },
-                Timestamp = DateTimeOffset.UtcNow,
-            });
-            this.CompleteRunningItem(summaryRunningItem, true);
+
+            // Per-step running items (one per toolset / MCP server) already emit their own
+            // "Loading …" -> tool-listing diagnostics into unpersisted history, so no lumped
+            // "Agent ready. Loaded tools: …" summary running item is emitted here (issue #1072).
             this.ToolsChanged?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
         {
+            // Each toolset / MCP step now captures its own failure into a per-step diagnostic that
+            // names the failed step, so this only handles truly unexpected orchestration errors.
             var startupRunningItem = this.CreateRunningItem(new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent($"Agent startup failed: {ex}") },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             });
             this.CompleteRunningItem(startupRunningItem, true);
         }
@@ -1994,7 +2254,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             this.toolMutationLock.Release();
         }
     }
-
+
     private async Task<IReadOnlyList<RuntimeContextProviderRegistration>> CreateRuntimeContextProviderRegistrationsAsync(
         AgentDefinition agent,
         AgentServices? services,
@@ -2022,7 +2282,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             return new RuntimeContextProviderRegistration(
                 tool,
                 provider,
-                provider is null ? $"No tool provider is mapped for kind '{tool.Kind}'." : null);
+                provider is null ? $"No tool provider is mapped for kind '{tool.Kind}'." : null,
+                Core.Transport.ExecutorTargetResolver.ForTool(tool));
         }).ToArray();
 
         var registrations = await Task.WhenAll(providerTasks);
@@ -2046,8 +2307,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
-            Contents = new AIContent[] { new TextContent($"Initializing toolset '{displayName}'...") },
-            Timestamp = DateTimeOffset.UtcNow,
+            Contents = new AIContent[] { new TextContent($"Loading toolset {displayName}") },
+            Timestamp = this.timeProvider.GetUtcNow(),
         });
 
         try
@@ -2070,7 +2331,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     Role = AgentChatHistoryItem.DiagnosticChatRole,
                     Contents = new AIContent[] { new ErrorContent(errorText) },
-                    Timestamp = DateTimeOffset.UtcNow,
+                    Timestamp = this.timeProvider.GetUtcNow(),
                 }]);
                 return new ToolInitializationResult([failedNode], []);
             }
@@ -2124,9 +2385,34 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("toolset", displayName, runtimeTools)) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
             return new ToolInitializationResult([root], runtimeTools.ToList());
+        }
+        catch (Exception ex)
+        {
+            // Attribute a custom-toolset failure to this step (mirroring the MCP path) so the
+            // exception and the failed step name land in the unpersisted history diagnostic rather
+            // than being swallowed into the generic "Agent startup failed" summary (issue #1072).
+            var failureMessage = $"Failed to load toolset '{displayName}': {ex}";
+            this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = new AIContent[] { new ErrorContent(failureMessage) },
+                Timestamp = this.timeProvider.GetUtcNow(),
+            }]);
+
+            var failedNode = new ToolStateNode(
+                id: BuildCustomToolId(tool),
+                name: displayName,
+                description: summary,
+                instructions: summary,
+                kind: kind,
+                runtimeTool: null,
+                parent: null,
+                isEnabled: false,
+                status: failureMessage);
+            return new ToolInitializationResult([failedNode], []);
         }
         finally
         {
@@ -2144,8 +2430,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = AgentChatHistoryItem.DiagnosticChatRole,
-            Contents = new AIContent[] { new TextContent($"Initializing MCP server '{displayName}'...") },
-            Timestamp = DateTimeOffset.UtcNow,
+            Contents = new AIContent[] { new TextContent($"Loading mcp server {displayName}") },
+            Timestamp = this.timeProvider.GetUtcNow(),
         });
 
         try
@@ -2161,7 +2447,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 isEnabled: true,
                 status: null);
 
-            var provider = new McpToolContextProvider(mcpTool, services?.LoggerFactory);
+            var provider = new McpToolContextProvider(
+                mcpTool,
+                services?.LoggerFactory,
+                Core.Transport.ExecutorTargetResolver.ForTool(mcpTool));
             this.RegisterOwnedResource(provider);
 
             var mcpTools = await AIContextProviderToolReader.GetToolsAsync(
@@ -2197,7 +2486,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new TextContent(McpClientToolListing.BuildOpenedToolsMessage("MCP server", displayName, mcpTools)) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
             return new ToolInitializationResult([serverNode], mcpTools.Cast<AITool>().ToList());
         }
@@ -2208,7 +2497,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
                 Contents = new AIContent[] { new ErrorContent(errorMessage) },
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = this.timeProvider.GetUtcNow(),
             }]);
 
             var failedNode = new ToolStateNode(
@@ -2414,9 +2703,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private static string BuildMcpChildToolId(string? serverName, string toolName)
         => $"{BuildMcpServerToolId(serverName)}:{toolName}";
 
-    private static string BuildStartupReadyMessage(IReadOnlyList<AITool> runtimeTools)
-        => $"Agent ready. {McpClientToolListing.BuildLoadedToolsMessage(runtimeTools)}";
-
     private void ReplaceToolNodes(IReadOnlyList<ToolStateNode> roots)
     {
         lock (this.toolsLock)
@@ -2564,6 +2850,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private sealed record RuntimeContextProviderRegistration(
         CustomTool Tool,
         AIContextProvider? Provider,
-        string? ErrorMessage);
+        string? ErrorMessage,
+        Core.Transport.ExecutorTarget ExecutorTarget);
 
 }

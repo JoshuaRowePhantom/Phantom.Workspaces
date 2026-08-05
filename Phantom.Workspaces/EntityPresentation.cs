@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
-using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces;
 
@@ -91,6 +90,10 @@ public static class EntityPresentation
             return Array.Empty<string>();
         }
 
+        // Preserve the entity-types declaration order so multi-typed cards compose their per-type
+        // presentations in the order the entity declares (issue #1164). Only the base abstract
+        // types "entity" and "abstract" are dropped; concrete types (e.g. "tool", "note") stay
+        // in the order they appear on the entity.
         return types.EnumerateArray()
             .Where(static type => type.ValueKind == JsonValueKind.String)
             .Select(static type => type.GetString())
@@ -99,26 +102,7 @@ public static class EntityPresentation
                 && !string.Equals(type, "abstract", StringComparison.Ordinal))
             .Cast<string>()
             .Distinct(StringComparer.Ordinal)
-            .OrderBy(static type => type, StringComparer.Ordinal)
             .ToArray();
-    }
-
-    public static IReadOnlyCollection<EntityDisplayItemViewModel> GetDisplayItems(
-        EntitySnapshot snapshot)
-    {
-        var items = new List<EntityDisplayItemViewModel>();
-        if (snapshot.Data is not JsonElement data)
-        {
-            return items;
-        }
-
-        var markdown = GetMarkdownText(data);
-        if (!string.IsNullOrWhiteSpace(markdown))
-        {
-            items.Add(new EntityDisplayItemViewModel(markdown));
-        }
-
-        return items;
     }
 
     private static string? ReadLocalString(
@@ -179,41 +163,21 @@ public static class EntityPresentation
 
         if (first.ValueKind == JsonValueKind.Array)
         {
+            // #1200: return null (not "") when the joined parts collection is empty, so the
+            // null-coalescing chain in GetDisplayName falls through to the EntityId fallback.
+            // Otherwise Ctrl-F entity find sees "" as a real DisplayName and matches nothing.
             var parts = first.EnumerateArray()
                 .Where(static item => item.ValueKind == JsonValueKind.String)
                 .Select(static item => item.GetString())
-                .Where(static value => !string.IsNullOrWhiteSpace(value));
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .ToArray();
+            if (parts.Length == 0)
+            {
+                return null;
+            }
             return string.Join("/", parts!);
         }
 
-        return null;
-    }
-
-    private static string? GetMarkdownText(
-        JsonElement entityData)
-    {
-        if (entityData.TryGetProperty("markdown", out var markdown)
-            && markdown.ValueKind == JsonValueKind.String)
-        {
-            return markdown.GetString();
-        }
-
-        if (!entityData.TryGetProperty("content", out var content)
-            || content.ValueKind != JsonValueKind.Object
-            || !content.TryGetProperty("default", out var defaultContent)
-            || defaultContent.ValueKind != JsonValueKind.Object)
-        {
-            return null;
-        }
-
-        if (defaultContent.TryGetProperty("content", out var inlineContent)
-            && inlineContent.ValueKind == JsonValueKind.Object
-            && inlineContent.TryGetProperty("text", out var text)
-            && text.ValueKind == JsonValueKind.String)
-        {
-            return text.GetString();
-        }
-        
         return null;
     }
 }

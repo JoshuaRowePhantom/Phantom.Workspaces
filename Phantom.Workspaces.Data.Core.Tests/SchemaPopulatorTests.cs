@@ -151,6 +151,7 @@ public sealed class SchemaPopulatorTests
             ["defaults", "agent-manifests", "workspaces"],
             ["defaults", "agent-manifests", "github-copilot"],
             ["defaults", "agent-manifests", "github-models"],
+            ["defaults", "agent-manifests", "sub-agent-dispatcher"],
             ["defaults", "profiles", "default"],
             ["schedule", "every-day-at-09"],
         ];
@@ -554,6 +555,87 @@ public sealed class SchemaPopulatorTests
             && openedWorkspaces.ValueKind == JsonValueKind.Array
             && openedWorkspaces.EnumerateArray().Select(static item => item.GetString()).SequenceEqual(["6cc39f41-2a36-4be6-ab95-3f3fd355e463"]),
             "default workspaces profile was not populated correctly");
+    }
+
+    [Fact]
+    public async Task Populate_RegistersDefaultAsInterestTypeWithValueAppliedToMapping()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var defaultDefinition = await FindInterestTypeDefinitionAsync(inMemoryDataAccessLayer, "default");
+
+        var entityTypes = defaultDefinition.GetProperty("entity-types").EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains("interest-type", entityTypes);
+        Assert.Contains("relationship-type", entityTypes);
+
+        Assert.Equal("value", defaultDefinition.GetProperty("target-participant").GetString());
+
+        var appliesTo = defaultDefinition.GetProperty("applies-to");
+        var scope = Assert.Single(appliesTo.EnumerateArray());
+        Assert.Equal("applied-to", scope.GetProperty("participant-property-name").GetString());
+        Assert.Equal("user-computer-profile-entity-id", scope.GetProperty("session-value").GetString());
+        var scopeEntityTypes = scope.GetProperty("entity-types").EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+        Assert.Contains("user-computer-profile", scopeEntityTypes);
+
+        var displayEntityTypes = defaultDefinition.GetProperty("display-entity-types").EnumerateArray()
+            .Select(static item => item.GetString())
+            .ToArray();
+        Assert.Equal(new[] { "workspace" }, displayEntityTypes);
+    }
+
+    [Fact]
+    public async Task Populate_ExistingInterestTypes_DeclareTargetAndUserAppliesTo()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        foreach (var name in new[] { "actionable", "blocked", "assigned-to", "not-interesting" })
+        {
+            var definition = await FindInterestTypeDefinitionAsync(inMemoryDataAccessLayer, name);
+
+            Assert.Equal("target", definition.GetProperty("target-participant").GetString());
+
+            var appliesTo = definition.GetProperty("applies-to");
+            var scope = Assert.Single(appliesTo.EnumerateArray());
+            Assert.Equal("user", scope.GetProperty("participant-property-name").GetString());
+            Assert.Equal("user-entity-id", scope.GetProperty("session-value").GetString());
+        }
+    }
+
+    private static async Task<JsonElement> FindInterestTypeDefinitionAsync(InMemoryDataAccessLayer inMemoryDataAccessLayer, string interestTypeName)
+    {
+        var exportResult = await inMemoryDataAccessLayer.ExportAsync(new ExportRequest());
+        return exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .First(entity =>
+                entity.TryGetProperty("names", out var names)
+                && names.ValueKind == JsonValueKind.Array
+                && names.EnumerateArray().Any(name =>
+                    name.ValueKind == JsonValueKind.Array
+                    && name.EnumerateArray()
+                        .Select(static part => part.GetString())
+                        .SequenceEqual(new[] { "entity-types", interestTypeName })));
     }
 
     [Fact]
@@ -1056,6 +1138,209 @@ public sealed class SchemaPopulatorTests
     {
         return new SchemaValidatingDataAccessLayer(
             new ReferentialIntegrityDataAccessLayer(underlyingDataAccessLayer));
+    }
+
+    [Fact]
+    public async Task Populate_EverySeededToolEntity_CarriesNonEmptyMarkdownNoteContent()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var toolEntities = await GetSeededToolEntitiesAsync(inMemoryDataAccessLayer);
+        Assert.NotEmpty(toolEntities);
+        foreach (var toolEntity in toolEntities)
+        {
+            Assert.True(
+                HasEntityType(toolEntity, "note"),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} is missing entity-type 'note'.");
+            Assert.True(
+                TryGetDefaultMarkdownAttachment(toolEntity, out var mimeType, out var text),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} does not have a content.default markdown attachment.");
+            Assert.Equal("text/markdown", mimeType);
+            Assert.False(
+                string.IsNullOrWhiteSpace(text),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} has empty markdown content.");
+        }
+    }
+
+    [Fact]
+    public async Task Populate_ToolNoteContent_MaterializesInlineMarkdownText()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var toolEntities = await GetSeededToolEntitiesAsync(inMemoryDataAccessLayer);
+        Assert.NotEmpty(toolEntities);
+        foreach (var toolEntity in toolEntities)
+        {
+            Assert.True(
+                toolEntity.TryGetProperty("content", out var content)
+                && content.ValueKind == JsonValueKind.Object,
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} does not have content.");
+            Assert.True(
+                content.TryGetProperty("default", out var defaultContent)
+                && defaultContent.ValueKind == JsonValueKind.Object,
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} does not have content.default.");
+            Assert.False(
+                defaultContent.TryGetProperty("url", out _),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} still has a dangling content.default.url after materialization.");
+            Assert.True(
+                defaultContent.TryGetProperty("mime-type", out var mimeType)
+                && mimeType.ValueKind == JsonValueKind.String
+                && string.Equals(mimeType.GetString(), "text/markdown", StringComparison.Ordinal),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} content.default.mime-type is not text/markdown.");
+            Assert.True(
+                defaultContent.TryGetProperty("content", out var inlineContent)
+                && inlineContent.ValueKind == JsonValueKind.Object
+                && inlineContent.TryGetProperty("text", out var text)
+                && text.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(text.GetString()),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} content.default.content.text is missing or empty.");
+        }
+    }
+
+    [Fact]
+    public async Task Populate_ToolEntity_PassesToolAndNoteJsonSchemaValidation()
+    {
+        // The InMemoryDataAccessLayer is wrapped in SchemaValidatingDataAccessLayer, which validates
+        // every entity against the JSON schemas of every entity-type it declares. So a Populate()
+        // that returns zero errors AND emits tool entities carrying entity-types ["entity","tool","note"]
+        // is a proof that those entities validate against both tool.json and note.json.
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var toolEntities = await GetSeededToolEntitiesAsync(inMemoryDataAccessLayer);
+        Assert.NotEmpty(toolEntities);
+        foreach (var toolEntity in toolEntities)
+        {
+            Assert.True(
+                HasEntityType(toolEntity, "tool"),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} is missing entity-type 'tool'.");
+            Assert.True(
+                HasEntityType(toolEntity, "note"),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} is missing entity-type 'note'.");
+            Assert.True(
+                toolEntity.TryGetProperty("tool-type", out var toolType)
+                && toolType.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(toolType.GetString()),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} is missing 'tool-type' required by tool.json.");
+            Assert.True(
+                toolEntity.TryGetProperty("content", out _),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} is missing 'content' required by note.json.");
+        }
+    }
+
+    [Fact]
+    public async Task Populate_ToolNoteMarkdown_MentionsConfigurationAndUsageSections()
+    {
+        var inMemoryDataAccessLayer = new InMemoryDataAccessLayer();
+        var validatedDataAccessLayer = CreateValidatedDataAccessLayer(inMemoryDataAccessLayer);
+        var schemaPopulator = new SchemaPopulator(validatedDataAccessLayer);
+        var errors = await schemaPopulator.Populate();
+        Assert.True(
+            errors.Count == 0,
+            string.Join(
+                Environment.NewLine,
+                errors.Select(error => $"{error.RelatedEntityId?.Value}: {error.Message}")));
+
+        var toolEntities = await GetSeededToolEntitiesAsync(inMemoryDataAccessLayer);
+        Assert.NotEmpty(toolEntities);
+        foreach (var toolEntity in toolEntities)
+        {
+            Assert.True(
+                TryGetDefaultMarkdownAttachment(toolEntity, out _, out var text),
+                $"Tool entity {GetToolTypeForDiagnostics(toolEntity)} has no default markdown attachment.");
+            Assert.Contains("## Configuration", text, StringComparison.Ordinal);
+            Assert.Contains("## Usage", text, StringComparison.Ordinal);
+        }
+    }
+
+    private static async Task<IReadOnlyList<JsonElement>> GetSeededToolEntitiesAsync(
+        IDataAccessLayer dataAccessLayer)
+    {
+        var exportResult = await dataAccessLayer.ExportAsync(new ExportRequest());
+        return exportResult.ChangeBatches
+            .SelectMany(static batch => batch.Entities)
+            .GroupBy(static entity => entity.EntityId)
+            .Select(static group => group.OrderByDescending(entity => entity.ModifiedTime.DateTime).First())
+            .Select(static entity => entity.Data)
+            .OfType<JsonElement>()
+            .Where(static entity => HasEntityType(entity, "tool"))
+            .ToArray();
+    }
+
+    private static bool HasEntityType(JsonElement entity, string entityType)
+    {
+        return entity.ValueKind == JsonValueKind.Object
+            && entity.TryGetProperty("entity-types", out var entityTypes)
+            && entityTypes.ValueKind == JsonValueKind.Array
+            && entityTypes.EnumerateArray().Any(t =>
+                t.ValueKind == JsonValueKind.String
+                && string.Equals(t.GetString(), entityType, StringComparison.Ordinal));
+    }
+
+    private static bool TryGetDefaultMarkdownAttachment(
+        JsonElement entity,
+        out string mimeType,
+        out string text)
+    {
+        mimeType = string.Empty;
+        text = string.Empty;
+        if (!entity.TryGetProperty("content", out var content)
+            || content.ValueKind != JsonValueKind.Object
+            || !content.TryGetProperty("default", out var defaultContent)
+            || defaultContent.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (defaultContent.TryGetProperty("mime-type", out var mimeTypeElement)
+            && mimeTypeElement.ValueKind == JsonValueKind.String)
+        {
+            mimeType = mimeTypeElement.GetString() ?? string.Empty;
+        }
+
+        if (defaultContent.TryGetProperty("content", out var inlineContent)
+            && inlineContent.ValueKind == JsonValueKind.Object
+            && inlineContent.TryGetProperty("text", out var textElement)
+            && textElement.ValueKind == JsonValueKind.String)
+        {
+            text = textElement.GetString() ?? string.Empty;
+        }
+
+        return true;
+    }
+
+    private static string GetToolTypeForDiagnostics(JsonElement entity)
+    {
+        if (entity.TryGetProperty("tool-type", out var toolType)
+            && toolType.ValueKind == JsonValueKind.String)
+        {
+            return toolType.GetString() ?? "<unknown>";
+        }
+
+        return "<unknown>";
     }
 
     private static void CollectMissingInlineMarkdownPaths(

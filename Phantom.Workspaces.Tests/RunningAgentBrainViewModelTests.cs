@@ -1,14 +1,17 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using AgentSchema;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.ViewModels;
+using Phantom.Workspaces.Testing.Gui;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
@@ -19,10 +22,10 @@ public sealed class RunningAgentBrainViewModelTests
     {
         public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions { get; } = [];
 
-        public void AddSession(string sessionKey, string entityName = "")
+        public void AddSession(string sessionKey, string entityName = "", string? workspaceId = null, bool isSubAgent = false)
         {
-            var chat = new RunningAgentChat(new AgentSessionId(sessionKey), null!);
-            RunningSessions.Add(new RunningAgentChatWithEntityInfo(chat, entityName, null));
+            var chat = new RunningAgentChat(new AgentSessionId(sessionKey), null!) { IsSubAgent = isSubAgent };
+            RunningSessions.Add(new RunningAgentChatWithEntityInfo(chat, entityName, null, workspaceId));
         }
 
         public void RemoveSession(string sessionKey)
@@ -192,6 +195,40 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.Empty(vm.Rows);
     }
 
+    // ── #1198: workspace-pane close releases lease → row removed ────────────
+
+    [Fact]
+    public void RunningAgentBrainViewModel_WhenAgentTabDisposedOnPaneClose_ClearsRow()
+    {
+        // Simulates the observable effect of #1198's fix: when a workspace pane hosting an
+        // agent-session tab is closed, cascaded disposal releases the RunningAgentChatLease,
+        // which drops the entry from IRunningAgentChatFactory.RunningSessions. The brain
+        // view-model must react by clearing its row and reporting IsAnyRunning = false.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1198", "Agent 1198");
+        var tab = CreateReadyTab("tab-1198", "Agent 1198", agentSessionId: "session-1198");
+
+        var returnTabs = true;
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => returnTabs
+                ? [new AgentTabInfo("pane-1198", "Workspace 1198", tab)]
+                : [],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        Assert.Single(vm.Rows);
+        Assert.True(vm.IsAnyRunning);
+
+        // Pane close cascade → tab.DisposeAsync → lease.DisposeAsync → factory removes session.
+        returnTabs = false;
+        table.RemoveSession("session-1198");
+
+        Assert.Empty(vm.Rows);
+        Assert.False(vm.IsAnyRunning);
+    }
+
     [Fact]
     public void RowActivateCommand_CallsActivateTab()
     {
@@ -336,6 +373,41 @@ public sealed class RunningAgentBrainViewModelTests
     }
 
     [Fact]
+    public void RunningAgentBrain_ClickSessionWithNoOwningWorkspace_IsSafeNoOp()
+    {
+        // #1135: A fallback row whose session has no resolvable owning workspace
+        // (WorkspaceId == null) must not throw and must not attempt to focus a tab
+        // in the currently-active pane (no call into activateTab). The row simply
+        // forwards to openAgentForSession, which is the delegate that resolves and
+        // switches to the owning workspace; when there is no owning workspace, the
+        // delegate is expected to be a safe no-op.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-no-owner", "Orphaned Agent", workspaceId: null);
+        var openedSessions = new List<string>();
+        var activated = new List<(string tabId, string? paneId)>();
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [],
+            activateTab: (tabId, paneId) => activated.Add((tabId, paneId)),
+            openAgentForSession: sessionKey => openedSessions.Add(sessionKey),
+            dispatch: action => action());
+
+        vm.IsOpen = true;
+        var row = Assert.Single(vm.Rows);
+
+        var exception = Record.Exception(() => row.ActivateCommand.Execute(null));
+        Assert.Null(exception);
+
+        // Fallback row must route through openAgentForSession (the workspace-switching
+        // delegate), NOT the activateTab short-circuit which would focus a tab in the
+        // currently-active pane.
+        Assert.Empty(activated);
+        Assert.Equal(new[] { "session-no-owner" }, openedSessions);
+        Assert.False(vm.IsOpen);
+    }
+
+    [Fact]
     public void Refresh_AfterDispose_DoesNotThrow()
     {
         var table = new FakeRunningAgentChatTable();
@@ -381,7 +453,7 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.DoesNotContain("<Border Classes=\"interactive-row\"", axaml, StringComparison.Ordinal);
         
         // Verify the header text is correct
-        Assert.Contains("Running sub-agents", axaml, StringComparison.Ordinal);
+        Assert.Contains("Running agents", axaml, StringComparison.Ordinal);
     }
     // ── Sorting by activity ───────────────────────────────────────────────────
 
@@ -486,8 +558,8 @@ public sealed class RunningAgentBrainViewModelTests
         var chatA = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
         var chatB = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
 
-        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory());
-        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory());
+        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tabA = new AgentSessionWorkspaceTabViewModel { Id = "tab-A", Title = "A", AgentSessionId = "session-A" };
         var tabB = new AgentSessionWorkspaceTabViewModel { Id = "tab-B", Title = "B", AgentSessionId = "session-B" };
@@ -526,6 +598,65 @@ public sealed class RunningAgentBrainViewModelTests
         });
 
         Assert.Equal("session-A", vm.Rows[0].SessionKey);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public async Task RunningAgentBrainViewModel_OnActivity_StampsRowLastActivityAtFromInjectedTimeProvider()
+    {
+        var agentDefinitionJson =
+            """
+            {
+              "kind": "prompt",
+              "name": "test",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": []
+            }
+            """;
+
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(agentDefinitionJson);
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = definition });
+
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "A", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "Agent A");
+
+        var start = new DateTimeOffset(2024, 5, 1, 9, 0, 0, TimeSpan.Zero);
+        var fake = new FakeTimeProvider(start);
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action(),
+            timeProvider: fake);
+
+        var row = vm.Rows.Single(r => r.SessionKey == "session-1");
+
+        // The row's LastActivityAt starts at the fake clock's construction-time value.
+        Assert.Equal(start.UtcDateTime, row.LastActivityAt);
+
+        // Advance the fake clock to prove the activity stamp reads the injected provider
+        // (not wall-clock time) at the moment the activity callback fires.
+        fake.Advance(TimeSpan.FromMinutes(42));
+
+        // Adding a history item fires History.CollectionChanged synchronously, which the
+        // ViewModel handles by stamping LastActivityAt via the injected TimeProvider.
+        chat.History.Add(new AgentChatHistoryItem
+        {
+            Role = Microsoft.Extensions.AI.ChatRole.Assistant,
+            Contents = [new Microsoft.Extensions.AI.TextContent("hello")],
+            Timestamp = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Equal(fake.GetUtcNow().UtcDateTime, row.LastActivityAt);
+        Assert.NotEqual(start.UtcDateTime, row.LastActivityAt);
 
         vm.Dispose();
     }
@@ -710,7 +841,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -747,7 +878,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -775,12 +906,12 @@ public sealed class RunningAgentBrainViewModelTests
         vm.Dispose();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task CreateAgentHandler_WhenTabMatches_UpdatesRowIsThinkingFromAgent()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -807,12 +938,12 @@ public sealed class RunningAgentBrainViewModelTests
         vm.Dispose();
     }
 
-    [Fact]
+    [AvaloniaFact]
     public async Task CreateAgentHandler_WhenAgentRaisesFromNonUiThread_MarshalsThroughDispatch()
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -844,7 +975,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -882,7 +1013,7 @@ public sealed class RunningAgentBrainViewModelTests
     {
         var chat = await AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
-        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory());
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
 
         var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "Agent Tab", AgentSessionId = "session-1" };
         tab.SetReady(agentVm, new ObservableLoggerFactory());
@@ -912,5 +1043,119 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.False(row.IsThinking);
 
         vm.Dispose();
+    }
+
+    [Fact]
+    public void WithTopLevelSessionOnly_HasRowForTopLevelAgent()
+    {
+        // Issue #1150: top-level agents appear in RunningSessions and produce a row.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("top-level-1", "Top Level Agent");
+        var tab = CreateReadyTab("tab-1", "Top Level Agent", agentSessionId: "top-level-1");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("top-level-1", row.SessionKey);
+    }
+
+    [Fact]
+    public void WithSubAgentRunningUnderTopLevel_ListsOnlyTopLevelAgent()
+    {
+        // Issue #1150: sub-agents opt out at the factory via registerAsRunningAgent:false, so
+        // they never appear in the table's RunningSessions. Only the top-level agent produces a row.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("top-level-1", "Top Level Agent");
+        // Sub-agent intentionally NOT added: registerAsRunningAgent:false at the source.
+        var tab = CreateReadyTab("tab-1", "Top Level Agent", agentSessionId: "top-level-1");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            activateTab: (_, _) => { },
+            openAgentForSession: _ => { },
+            dispatch: action => action());
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("top-level-1", row.SessionKey);
+    }
+
+    [Fact]
+    public void WithOnlySubAgentSessions_HasNoRows()
+    {
+        // Issue #1150: if every running session is a dispatcher-created sub-agent, they all opt
+        // out of RunningSessions, so the popup shows the empty state.
+        var table = new FakeRunningAgentChatTable();
+        // No sessions added: sub-agents don't register.
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.Empty(vm.Rows);
+        Assert.False(vm.HasRows);
+    }
+
+    [Fact]
+    public void WithOnlySubAgentSessions_IsAnyRunning_IsFalse()
+    {
+        // Issue #1150: IsAnyRunning is driven off RunningSessions.Count. When all live sessions are
+        // sub-agents that opted out of registration, IsAnyRunning must remain false.
+        var table = new FakeRunningAgentChatTable();
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.False(vm.IsAnyRunning);
+    }
+
+    [Fact]
+    public void Refresh_AfterRestartWithRestoredSubAgents_ShowsOnlyParentRow()
+    {
+        // Issue #1205: after a restart-restore with one parent tab and N sub-agents in the
+        // running-sessions table, the flyout must show exactly one row (the parent) — no
+        // "No Open Tab" pollution rows for the restored sub-agents.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("parent-1205", "Parent Chat");
+        table.AddSession("child-a", "", isSubAgent: true);
+        table.AddSession("child-b", "", isSubAgent: true);
+        table.AddSession("child-c", "", isSubAgent: true);
+
+        var parentTab = CreateReadyTab("tab-parent", "Parent Chat", agentSessionId: "parent-1205");
+        var vm = CreateBrainVm(table, [new AgentTabInfo("pane-1", "Workspace", parentTab)]);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("parent-1205", row.SessionKey);
+        Assert.True(row.HasOpenTab);
+    }
+
+    [Fact]
+    public void Refresh_SessionWithoutTabAndBackingChatIsSubAgent_IsNotShownAsFallbackRow()
+    {
+        // Issue #1205 Fix 2 (defensive): even if a sub-agent leaks into RunningSessions,
+        // the view model must skip it instead of rendering a "No Open Tab" fallback row.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("leaked-sub", "Leaked Sub-agent", isSubAgent: true);
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.Empty(vm.Rows);
+    }
+
+    [Fact]
+    public void Refresh_TopLevelSessionWithoutTab_StillShownAsFallbackRow()
+    {
+        // Issue #1205 Fix 2 must not over-filter: a legitimate top-level running chat that has
+        // lost its tab (e.g. pane closed) is still shown as "No Open Tab".
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("orphan-top", "Orphaned Top-level", isSubAgent: false);
+
+        var vm = CreateBrainVm(table, []);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal("orphan-top", row.SessionKey);
+        Assert.False(row.HasOpenTab);
     }
 }

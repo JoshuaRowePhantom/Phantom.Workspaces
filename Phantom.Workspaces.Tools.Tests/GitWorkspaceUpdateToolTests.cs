@@ -5,23 +5,19 @@ using LibGit2Sharp;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.Tools.Tests;
 
 public sealed class GitWorkspaceUpdateToolTests : IDisposable
 {
-    private readonly string temporaryRootPath = Path.GetFullPath(
-        Path.Combine(Path.GetTempPath(), $"git-workspace-update-{Guid.NewGuid():N}"));
-
-    public GitWorkspaceUpdateToolTests()
-    {
-        Directory.CreateDirectory(this.temporaryRootPath);
-    }
+    private readonly TempDirectory temporaryRoot = new("git-workspace-update-");
+    private string temporaryRootPath => this.temporaryRoot.Path;
 
     public void Dispose()
     {
-        TryDeleteDirectory(this.temporaryRootPath);
+        this.temporaryRoot.Dispose();
     }
 
     [Fact]
@@ -317,6 +313,43 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
         Assert.Equal(deterministicId, refreshedEntity.EntityId);
     }
 
+    [Fact]
+    public async Task ExecuteAsync_UpdatedWorktree_SetsComputerUserProfileIdToCurrentProfileEntityId()
+    {
+        var repoPath = Path.GetFullPath(Path.Combine(this.temporaryRootPath, "update-profile-id"));
+        InitializeGitRepository(repoPath, "https://example.com/update-profile-id.git");
+
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var normalizedPath = Path.GetFullPath(repoPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).ToLowerInvariant();
+        var deterministicId = DeterministicEntityId.Create("git-workspace", normalizedPath);
+
+        // Pre-existing entity WITHOUT computer-user-profile-id — simulating a worktree
+        // written by a pre-fix scanner version.
+        await UpsertEntityAsync(
+            dataAccessLayer,
+            deterministicId,
+            $$"""
+            {
+              "entity-id": "{{deterministicId}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["git-worktrees", "{{EscapeForJsonString(repoPath)}}"]],
+              "display-name": {"default": "update-profile-id"},
+              "path": "{{EscapeForJsonString(repoPath)}}"
+            }
+            """,
+            concurrencyTag: null);
+
+        var context = CreateContext(dataAccessLayer);
+        var tool = new GitWorkspaceUpdateTool();
+
+        await tool.ExecuteAsync(context);
+
+        var refreshedEntity = await GetEntityByIdAsync(dataAccessLayer, deterministicId);
+        Assert.NotNull(refreshedEntity);
+        Assert.True(refreshedEntity.Data!.Value.TryGetProperty("computer-user-profile-id", out var profileIdElement));
+        Assert.Equal(context.CurrentComputerUserProfileEntity.EntityId.ToString(), profileIdElement.GetString());
+    }
+
     private static WorkspaceToolExecutionContext CreateContext(IDataAccessLayer dataAccessLayer)
     {
         var placeholder = CreateSnapshot(
@@ -432,25 +465,4 @@ public sealed class GitWorkspaceUpdateToolTests : IDisposable
 
     private static string EscapeForJsonString(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal);
-
-    private static void TryDeleteDirectory(string directoryPath)
-    {
-        if (!Directory.Exists(directoryPath))
-        {
-            return;
-        }
-
-        for (var attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                Directory.Delete(directoryPath, recursive: true);
-                return;
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                Thread.Sleep(50);
-            }
-        }
-    }
 }

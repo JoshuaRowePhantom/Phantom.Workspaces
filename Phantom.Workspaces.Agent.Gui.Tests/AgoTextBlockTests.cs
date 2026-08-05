@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using Avalonia.Controls;
 using Phantom.Workspaces.Agent.Gui.Controls;
@@ -8,7 +9,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 
 public sealed class AgoTextBlockTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void AgoTextBlock_Value_SetsRelativeText()
     {
         var control = new AgoTextBlock
@@ -19,7 +20,7 @@ public sealed class AgoTextBlockTests
         Assert.Equal("5 minutes ago", control.Text);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void AgoTextBlock_Tooltip_ShowsAbsoluteTimestamp()
     {
         var value = new DateTime(2024, 3, 7, 13, 45, 9, DateTimeKind.Utc);
@@ -32,7 +33,7 @@ public sealed class AgoTextBlockTests
         Assert.Equal("2024-03-07 13:45:09", tip);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void AgoTextBlock_NullValue_ClearsTextAndTooltip()
     {
         var control = new AgoTextBlock

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Text.Json;
@@ -10,7 +11,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ExternalEntityCardViewModelTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ExternalEntityCardViewModel_SingleDefaultUrl_SuppressesKeyLabel()
     {
         var entity = new SubscribedEntityViewModel(CreateExternalEntity(
@@ -24,7 +25,7 @@ public sealed class ExternalEntityCardViewModelTests
         Assert.Equal("https://example.com", url.Url);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ExternalEntityCardViewModel_SingleNonDefaultUrl_ShowsKeyLabel()
     {
         var entity = new SubscribedEntityViewModel(CreateExternalEntity(
@@ -38,7 +39,7 @@ public sealed class ExternalEntityCardViewModelTests
         Assert.Equal("https://example.com/docs", url.Url);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ExternalEntityCardViewModel_MultipleUrls_AllShowKeyLabels()
     {
         var entity = new SubscribedEntityViewModel(CreateExternalEntity(
@@ -51,7 +52,7 @@ public sealed class ExternalEntityCardViewModelTests
             u => Assert.True(u.ShowKey));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityCardViewResolver_ExternalEntity_ReturnsExternalViewName()
     {
         var entity = new SubscribedEntityViewModel(CreateExternalEntity(
@@ -63,7 +64,7 @@ public sealed class ExternalEntityCardViewModelTests
         Assert.Equal("external", viewName);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityCardViewResolver_NonExternalEntity_ReturnsRaw()
     {
         var snapshot = CreateSnapshot(
@@ -82,7 +83,7 @@ public sealed class ExternalEntityCardViewModelTests
         Assert.Equal(EntityCardViewResolver.RawViewName, viewName);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityCardViewResolver_ExternalEntity_WithRawRequested_ReturnsRaw()
     {
         var entity = CreateExternalEntity("""{ "default": "https://example.com" }""");

@@ -7,12 +7,16 @@ consistently (rendering, editing, styling, and safety).
 
 ## Current state
 
-The workspace application already uses the official Avalonia markdown package:
+The workspace application renders markdown with the free, MIT-licensed **`Markdown.Avalonia`**
+renderer (`Markdown.Avalonia.Tight` + `Markdown.Avalonia.SyntaxHigh`, pinned to `12.0.0-a3`, the only
+build compatible with the repository's Avalonia `12.1.0`):
 
-1. `Avalonia.Controls.Markdown` is referenced in `Phantom.Workspaces.csproj`.
-2. the markdown theme is loaded in `Phantom.Workspaces/App.axaml`.
+1. the packages are referenced from `Phantom.Workspaces.Gui.Shared.csproj` with
+   `PrivateAssets=compile` (see the licensing/namespace note below).
+2. the markdown, `AvaloniaEdit`, and syntax-highlight themes are loaded in
+   `Phantom.Workspaces.Gui.Shared/Styles/SharedStyles.axaml`.
 3. markdown fields are rendered in `Phantom.Workspaces/Templates/WorkspaceDataTemplates.axaml`
-   with `md:Markdown`.
+   with the shared `WorkspaceMarkdownView` control.
 
 Current markdown surfaces include:
 
@@ -25,26 +29,46 @@ selectable text and flow document blocks.
 
 ## Decision
 
-Use **one markdown control family everywhere**: the official Avalonia control
-(`Avalonia.Controls.Markdown`).
+Use **one markdown control family everywhere**: the free, MIT-licensed `Markdown.Avalonia` renderer
+(`Markdown.Avalonia.Tight` + `Markdown.Avalonia.SyntaxHigh`, exposed through the shared
+`WorkspaceMarkdownView` control).
 
-Do not introduce parallel markdown engines (for example `Markdown.Avalonia`, Markdig-driven custom
-controls, web view markdown renderers, or ad hoc converters) for normal in-application markdown.
+Do **not** use the commercial `Avalonia.Controls.Markdown`/`Avalonia.Controls.RichTextEditor`
+controls: without an Avalonia Accelerate license they raise `AVLIC0001` at build time. The free
+`Markdown.Avalonia` packages carry no commercial (AVLIC) dependencies.
+
+Do not introduce parallel markdown engines (for example Markdig-driven custom controls, web view
+markdown renderers, or ad hoc converters) for normal in-application markdown.
+
+### Namespace and licensing isolation
+
+`Markdown.Avalonia.dll` declares a root `Markdown` namespace that collides with the pervasive domain
+type `Markdown` (used as `new Markdown { Text = ... }`) and with Markdig's `Markdown.Parse` in
+`Phantom.Workspaces.Agent.Gui`. Assembly aliases do not suppress this collision. To keep the renderer
+confined:
+
+1. `WorkspaceMarkdownView` **composes** (hosts) a `Markdown.Avalonia.MarkdownScrollViewer` internally
+   rather than inheriting from it, so consuming projects reference only the shared control.
+2. the `Markdown.Avalonia` references use `PrivateAssets=compile`: compile assets stay private to
+   `Phantom.Workspaces.Gui.Shared` (no namespace leak into other projects) while runtime assets still
+   flow so the application ships the renderer DLLs.
 
 ## Single-control architecture
 
-To enforce one implementation across the application, add a shared wrapper control:
+To enforce one implementation across the application, a shared wrapper control is used:
 
-`WorkspaceMarkdownView` (name can be adjusted to project naming conventions).
+`WorkspaceMarkdownView` (in `Phantom.Workspaces.Gui.Shared/Controls`).
 
 The wrapper:
 
-1. internally hosts the official `md:Markdown` control,
-2. exposes the common inputs used by the application (`Text`, edit-mode binding behavior, classes),
+1. internally hosts `Markdown.Avalonia.MarkdownScrollViewer` (with `SelectionEnabled` and the
+   `SyntaxHighlight` plugin, which also renders fenced-code language labels),
+2. exposes the common inputs used by the application (a `Markdown` string property, `SelectionEnabled`,
+   style classes),
 3. applies shared styling and safe defaults centrally,
 4. is the only markdown control used by templates and views in this repository.
 
-This keeps all markdown behavior in one place even if the underlying official control changes.
+This keeps all markdown behavior in one place even if the underlying renderer changes.
 
 ## Rendering and editing model
 
@@ -62,43 +86,40 @@ This keeps all markdown behavior in one place even if the underlying official co
 
 ## Source layout and touched code
 
-In `Phantom.Workspaces.Gui.Shared` (or the shared controls assembly used by the workspace
-application):
+In `Phantom.Workspaces.Gui.Shared`:
 
-1. `Controls/WorkspaceMarkdownView.axaml` (new)
-2. `Controls/WorkspaceMarkdownView.axaml.cs` (new)
-3. optional helper policy classes for markdown link and asset handling (new)
+1. `Controls/WorkspaceMarkdownView.cs` (a `Decorator` hosting `MarkdownScrollViewer`)
+2. `Styles/SharedStyles.axaml` (markdown/`AvaloniaEdit`/syntax-highlight theme includes and
+   `workspace-markdown-viewer`/`workspace-markdown-editor` styles)
 
 In `Phantom.Workspaces`:
 
 1. `Templates/WorkspaceDataTemplates.axaml`
-   - replace direct `md:Markdown` usage with `WorkspaceMarkdownView`.
+   - all markdown surfaces use `controls:WorkspaceMarkdownView`.
 2. any other direct markdown control usage discovered later
    - migrate to `WorkspaceMarkdownView`.
 
 In shared styles:
 
-1. move markdown-specific visual behavior into centralized styles for `WorkspaceMarkdownView`.
+1. markdown-specific visual behavior lives in centralized styles for `WorkspaceMarkdownView`.
 
 ## Migration plan
 
-1. add `WorkspaceMarkdownView` as a thin wrapper over official `md:Markdown`.
-2. migrate all existing direct `md:Markdown` usages in workspace templates to the wrapper.
-3. add a repository check (test or analyzer-style guard) that flags new direct `md:Markdown`
+1. add `WorkspaceMarkdownView` as a wrapper over the free `Markdown.Avalonia` renderer.
+2. migrate all existing direct markdown usages in workspace templates to the wrapper.
+3. add a repository check (test or analyzer-style guard) that flags new direct markdown-control
    references outside the wrapper implementation.
 4. update design and architecture docs when new markdown surfaces are added.
 
 ## Test tasks
 
 1. wrapper control tests:
-   - text binding renders markdown correctly,
+   - markdown binding renders markdown correctly (bold/italic, headings, links, fenced code),
    - wrapper applies shared style classes,
-   - wrapper uses the official markdown control internally.
+   - wrapper uses the `Markdown.Avalonia` renderer internally.
 2. template migration tests:
    - workspace data templates render expected markdown content through the wrapper.
-3. consistency guard tests:
-   - no direct `md:Markdown` usage exists outside approved wrapper locations.
-4. behavior tests:
+3. behavior tests:
    - markdown attachment read and edit experiences remain unchanged after migration.
 
 ## Non-goals
@@ -106,4 +127,5 @@ In shared styles:
 1. converting agent chat output into markdown rendering.
 2. introducing a second markdown rendering engine.
 3. replacing markdown content storage format.
+4. taking any dependency on the commercial `Avalonia.Controls.Markdown` control.
 

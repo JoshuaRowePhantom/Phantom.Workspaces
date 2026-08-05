@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
@@ -979,5 +980,225 @@ public sealed class UsageMetricsServiceTests
         {
             return TryExecuteTask(task);
         }
+    }
+
+    /// <summary>Capturing logger that lets a test await a specific log entry deterministically.</summary>
+    private sealed class SignalingLogger<T> : ILogger<T>
+    {
+        private readonly object gate = new();
+        private readonly List<(LogLevel Level, string Message)> entries = new();
+        private readonly List<(Func<(LogLevel Level, string Message), bool> Predicate, TaskCompletionSource Tcs)> waiters = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message)> Entries
+        {
+            get { lock (this.gate) { return this.entries.ToList(); } }
+        }
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var entry = (logLevel, formatter(state, exception));
+            lock (this.gate)
+            {
+                this.entries.Add(entry);
+                for (var i = this.waiters.Count - 1; i >= 0; i--)
+                {
+                    if (this.waiters[i].Predicate(entry))
+                    {
+                        this.waiters[i].Tcs.TrySetResult();
+                        this.waiters.RemoveAt(i);
+                    }
+                }
+            }
+        }
+
+        public Task WaitForAsync(Func<(LogLevel Level, string Message), bool> predicate)
+        {
+            lock (this.gate)
+            {
+                if (this.entries.Any(predicate))
+                {
+                    return Task.CompletedTask;
+                }
+
+                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                this.waiters.Add((predicate, tcs));
+                return tcs.Task;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RefreshAccountAsync_WhenMetricsEmpty_LogsWarningWithAccountAndReason()
+    {
+        var provider = new FakeUsageProvider(
+            new Uri("https://example.com"),
+            (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>()));
+        var dal = new FakeDataAccessLayer([CreateUserAccountEntity("https://example.com", "user1")]);
+        var usageMetrics = new UsageMetrics();
+        var logger = new SignalingLogger<UsageMetricsService>();
+
+        await using var service = new UsageMetricsService(
+            dal, usageMetrics, new[] { provider }, new FakeTimeProvider(), logger);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await logger.WaitForAsync(e => e.Level == LogLevel.Warning
+            && e.Message.Contains("empty", StringComparison.OrdinalIgnoreCase));
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("user1", entry.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RefreshAccountAsync_WhenAccountSkipped_LogsSkipReason()
+    {
+        var provider = new FakeUsageProvider(
+            new Uri("https://example.com"),
+            (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>(Array.Empty<UsageMetric>()));
+        var dal = new FakeDataAccessLayer([CreateUserAccountEntity("https://example.com", "user1")]);
+        var usageMetrics = new UsageMetrics();
+        var logger = new SignalingLogger<UsageMetricsService>();
+
+        await using var service = new UsageMetricsService(
+            dal, usageMetrics, new[] { provider }, new FakeTimeProvider(), logger);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await logger.WaitForAsync(e => e.Level == LogLevel.Warning
+            && e.Message.Contains("skipping", StringComparison.OrdinalIgnoreCase));
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains("skipping", entry.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(usageMetrics.Accounts);
+    }
+
+    [Fact]
+    public async Task RefreshAccountAsync_WhenMetricsReturned_LogsInformationAccountAdded()
+    {
+        var provider = new FakeUsageProvider(
+            new Uri("https://example.com"),
+            (_, _) => Task.FromResult<IReadOnlyList<UsageMetric>>([new UsageMetric { Title = "API Calls" }]));
+        var dal = new FakeDataAccessLayer([CreateUserAccountEntity("https://example.com", "user1")]);
+        var mutationScheduler = new ActionBlockScheduler(task => task());
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var logger = new SignalingLogger<UsageMetricsService>();
+
+        await using var service = new UsageMetricsService(
+            dal, usageMetrics, new[] { provider }, new FakeTimeProvider(), logger);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await logger.WaitForAsync(e => e.Level == LogLevel.Information
+            && e.Message.Contains("added/updated", StringComparison.OrdinalIgnoreCase));
+
+        var entry = Assert.Single(logger.Entries, e => e.Level == LogLevel.Information);
+        Assert.Contains("user1", entry.Message, StringComparison.Ordinal);
+        Assert.Contains("1", entry.Message, StringComparison.Ordinal);
+    }
+
+    // #1188 — When a subsequent poll returns a different BillingPeriodStart than what
+    // is currently cached on the account, the service must replace all previously
+    // cached metrics for that account with the new-period set (no stale carry-over).
+    [Fact]
+    public async Task UsageMetricsService_CachedPreviousPeriodUsage_InvalidatedOnPeriodChange()
+    {
+        var providerUri = new Uri("https://example.com");
+        var augStart = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var sepStart = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+
+        var firstCall = true;
+        var secondCallCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new FakeUsageProvider(
+            providerUri,
+            (_, _) =>
+            {
+                if (firstCall)
+                {
+                    firstCall = false;
+                    return Task.FromResult<IReadOnlyList<UsageMetric>>(
+                    [
+                        new UsageMetric
+                        {
+                            Title = "Copilot AI Credits",
+                            QuantityUsed = 15000m,
+                            QuantityTotal = 20000m,
+                            BillingPeriodStart = augStart,
+                            ResetsAt = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero),
+                        },
+                    ]);
+                }
+                secondCallCompleted.TrySetResult();
+                return Task.FromResult<IReadOnlyList<UsageMetric>>(
+                [
+                    new UsageMetric
+                    {
+                        Title = "Copilot AI Credits",
+                        QuantityUsed = 250m,
+                        QuantityTotal = 20000m,
+                        BillingPeriodStart = sepStart,
+                        ResetsAt = new DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero),
+                    },
+                ]);
+            });
+
+        var dal = new FakeDataAccessLayer([
+            CreateUserAccountEntity("https://example.com", "user1"),
+        ]);
+
+        var mutationCount = 0;
+        var firstMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondMutationCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var mutationScheduler = new ActionBlockScheduler(task =>
+        {
+            task();
+            if (Interlocked.Increment(ref mutationCount) == 1)
+                firstMutationCompleted.TrySetResult();
+            else
+                secondMutationCompleted.TrySetResult();
+        });
+        var usageMetrics = new UsageMetrics(mutationScheduler);
+        var timeProvider = new FakeTimeProvider();
+
+        var delayScheduled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var service = new UsageMetricsService(
+            dal,
+            usageMetrics,
+            new[] { provider },
+            timeProvider,
+            NullLogger<UsageMetricsService>.Instance)
+        {
+            DelayScheduled = () =>
+            {
+                delayScheduled.TrySetResult();
+                return Task.CompletedTask;
+            }
+        };
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await firstMutationCompleted.Task;
+
+        var account = Assert.Single(usageMetrics.Accounts);
+        Assert.Equal(augStart, account.BillingPeriodStart);
+        var firstMetric = Assert.Single(account.Metrics);
+        Assert.Equal(15000m, firstMetric.QuantityUsed);
+
+        await delayScheduled.Task;
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await secondCallCompleted.Task;
+        await secondMutationCompleted.Task;
+
+        // Period rolled: prior 15,000 AI-credit metric must have been dropped; only the
+        // new-period metric (250 credits) remains, and the account's cached period start
+        // is updated to reflect September.
+        Assert.Equal(sepStart, account.BillingPeriodStart);
+        var secondMetric = Assert.Single(account.Metrics);
+        Assert.Equal(250m, secondMetric.QuantityUsed);
+        Assert.DoesNotContain(account.Metrics, m => m.QuantityUsed == 15000m);
     }
 }

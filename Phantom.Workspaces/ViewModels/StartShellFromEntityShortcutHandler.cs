@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -56,7 +57,19 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
         var workingDirectory = TryGetWorkingDirectory(entityViewModel);
         var targetClientInstance = await ResolveTargetClientInstanceAsync(mainWindowViewModel, entityViewModel);
 
-        var session = await this.OpenSessionAsync(targetClientInstance, workingDirectory, CancellationToken.None);
+        ITerminalSession session;
+        try
+        {
+            session = await this.OpenSessionAsync(targetClientInstance, workingDirectory, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Silent-fail paths inside executor selection / OpenStreamAsync previously
+            // propagated to the MCP dispatcher and produced {handled:false} with no
+            // diagnostic — see #1194.
+            NotifyShellStartFailure(mainWindowViewModel, entityViewModel, targetClientInstance, ex);
+            return false;
+        }
 
         var command = GetDefaultCommand();
         var tab = new ShellTabViewModel(session)
@@ -67,6 +80,26 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
 
         await mainWindowViewModel.OpenTabAsync(tab);
         return true;
+    }
+
+    private static void NotifyShellStartFailure(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel,
+        string targetClientInstance,
+        Exception exception)
+    {
+        mainWindowViewModel.NotificationService.Notify(
+            new Notification(
+                new TabDescriptor
+                {
+                    TabId = $"shell-start:{entityViewModel.EntityId}",
+                    TabTitle = "Start Shell",
+                },
+                "Could not start shell",
+                $"Could not start shell on {targetClientInstance}: {exception.Message}",
+                DateTime.UtcNow,
+                RunningState.Idle,
+                NotificationState.Interesting));
     }
 
     /// <summary>
@@ -224,7 +257,13 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
         {
             HostingWorkspacesClientInstances = [TrustProfile.WildcardClientInstance],
         };
-        var executor = this.executorSelector!.SelectExecutor(trustProfile, targetClientInstance);
+        if (this.executorSelector is null)
+        {
+            throw new InvalidOperationException(
+                "No trusted-executor selector is configured on StartShellFromEntityShortcutHandler.");
+        }
+
+        var executor = this.executorSelector.SelectExecutor(trustProfile, targetClientInstance);
         return OpenStreamSessionAsync(executor, request, ct);
     }
 

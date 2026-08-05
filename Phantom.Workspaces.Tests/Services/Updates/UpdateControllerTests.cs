@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Time.Testing;
 using Moq;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Install;
@@ -11,6 +13,105 @@ namespace Phantom.Workspaces.Tests.Updates;
 public sealed class UpdateControllerTests
 {
     private const string InstallRoot = @"C:\app";
+
+    [Fact]
+    public void StartPeriodicChecks_SchedulesTimerOnInjectedTimeProvider()
+    {
+        var fakeTimeProvider = new FakeTimeProvider();
+        var harness = new Harness(
+            runningVersion: "1.0.0",
+            latestTag: "v1.2.0",
+            timeProvider: fakeTimeProvider,
+            schedulerInterval: TimeSpan.FromMinutes(1));
+
+        harness.Controller.StartPeriodicChecks(
+            initialDelay: TimeSpan.FromSeconds(30),
+            pollInterval: TimeSpan.FromMinutes(15));
+
+        // No poll before time advances; advancing the fake clock fires the timer, proving the
+        // timer is registered on the injected TimeProvider rather than a raw System.Threading.Timer.
+        Assert.Equal(0, harness.CheckCount);
+        fakeTimeProvider.Advance(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, harness.CheckCount);
+    }
+
+    [Fact]
+    public void StartPeriodicChecks_AdvanceByInitialDelay_TriggersSinglePoll()
+    {
+        var fakeTimeProvider = new FakeTimeProvider();
+        var harness = new Harness(
+            runningVersion: "1.0.0",
+            latestTag: "v1.2.0",
+            timeProvider: fakeTimeProvider,
+            schedulerInterval: TimeSpan.FromMinutes(1));
+
+        harness.Controller.StartPeriodicChecks(
+            initialDelay: TimeSpan.FromSeconds(30),
+            pollInterval: TimeSpan.FromMinutes(15));
+
+        fakeTimeProvider.Advance(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(1, harness.CheckCount);
+    }
+
+    [Fact]
+    public void StartPeriodicChecks_AdvanceByMultipleIntervals_TriggersMultiplePolls()
+    {
+        var fakeTimeProvider = new FakeTimeProvider();
+        var harness = new Harness(
+            runningVersion: "1.0.0",
+            latestTag: "v1.2.0",
+            timeProvider: fakeTimeProvider,
+            schedulerInterval: TimeSpan.FromMinutes(1));
+
+        var interval = TimeSpan.FromMinutes(15);
+        harness.Controller.StartPeriodicChecks(initialDelay: interval, pollInterval: interval);
+
+        fakeTimeProvider.Advance(interval);
+        fakeTimeProvider.Advance(interval);
+        fakeTimeProvider.Advance(interval);
+
+        Assert.Equal(3, harness.CheckCount);
+    }
+
+    [Fact]
+    public void StartPeriodicChecks_AdvanceLessThanInterval_DoesNotPoll()
+    {
+        var fakeTimeProvider = new FakeTimeProvider();
+        var harness = new Harness(
+            runningVersion: "1.0.0",
+            latestTag: "v1.2.0",
+            timeProvider: fakeTimeProvider,
+            schedulerInterval: TimeSpan.FromMinutes(1));
+
+        harness.Controller.StartPeriodicChecks(
+            initialDelay: TimeSpan.FromSeconds(30),
+            pollInterval: TimeSpan.FromMinutes(15));
+
+        fakeTimeProvider.Advance(TimeSpan.FromSeconds(29));
+
+        Assert.Equal(0, harness.CheckCount);
+    }
+
+    [Fact]
+    public void Dispose_AfterStart_StopsFurtherPolls()
+    {
+        var fakeTimeProvider = new FakeTimeProvider();
+        var harness = new Harness(
+            runningVersion: "1.0.0",
+            latestTag: "v1.2.0",
+            timeProvider: fakeTimeProvider,
+            schedulerInterval: TimeSpan.FromMinutes(1));
+
+        var interval = TimeSpan.FromMinutes(15);
+        harness.Controller.StartPeriodicChecks(initialDelay: interval, pollInterval: interval);
+
+        harness.Controller.Dispose();
+
+        fakeTimeProvider.Advance(TimeSpan.FromMinutes(150));
+
+        Assert.Equal(0, harness.CheckCount);
+    }
 
     [Fact]
     public async Task CheckForUpdatesAsync_ReportsAvailabilityAndRaisesEvent()
@@ -81,7 +182,13 @@ public sealed class UpdateControllerTests
 
     private sealed class Harness
     {
-        public Harness(string runningVersion, string latestTag)
+        private int checkCount;
+
+        public Harness(
+            string runningVersion,
+            string latestTag,
+            TimeProvider? timeProvider = null,
+            TimeSpan? schedulerInterval = null)
         {
             var release = new ReleaseInfo
             {
@@ -99,7 +206,8 @@ public sealed class UpdateControllerTests
             var releaseSource = new Mock<IReleaseSource>();
             releaseSource
                 .Setup(source => source.GetReleasesAsync(It.IsAny<CancellationToken>()))
-                .ReturnsAsync(new[] { release });
+                .ReturnsAsync(new[] { release })
+                .Callback(() => Interlocked.Increment(ref this.checkCount));
 
             var downloader = new Mock<IUpdateDownloader>();
             downloader
@@ -129,6 +237,14 @@ public sealed class UpdateControllerTests
                 .Callback<ProcessStartRequest>(request => this.LaunchedRequest = request)
                 .Returns(Mock.Of<IProcessHandle>());
 
+            UpdateCheckScheduler? scheduler = null;
+            if (timeProvider is not null)
+            {
+                scheduler = new UpdateCheckScheduler(
+                    new TimeProviderClock(timeProvider),
+                    schedulerInterval ?? UpdateCheckScheduler.DefaultInterval);
+            }
+
             this.Controller = new UpdateController(
                 updateService,
                 startupTaskService,
@@ -137,7 +253,9 @@ public sealed class UpdateControllerTests
                 runningVersion,
                 AutomaticUpdateMode.NotifyOnly,
                 installRootOverride: null,
-                requestShutdown: () => this.ShutdownRequested = true);
+                requestShutdown: () => this.ShutdownRequested = true,
+                scheduler: scheduler,
+                timeProvider: timeProvider);
         }
 
         public InstallLayout Layout { get; }
@@ -147,6 +265,18 @@ public sealed class UpdateControllerTests
         public ProcessStartRequest? LaunchedRequest { get; private set; }
 
         public bool ShutdownRequested { get; private set; }
+
+        public int CheckCount => Volatile.Read(ref this.checkCount);
+    }
+
+    /// <summary>An <see cref="IClock"/> that reads virtual time from an injected <see cref="TimeProvider"/>.</summary>
+    private sealed class TimeProviderClock : IClock
+    {
+        private readonly TimeProvider timeProvider;
+
+        public TimeProviderClock(TimeProvider timeProvider) => this.timeProvider = timeProvider;
+
+        public DateTimeOffset UtcNow => this.timeProvider.GetUtcNow();
     }
 
     private sealed class InMemoryScheduledTasks : IScheduledTasks

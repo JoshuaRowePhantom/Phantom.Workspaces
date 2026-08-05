@@ -14,6 +14,13 @@ public sealed class RunningAgentChatWithEntityInfo
     /// <summary>The agent session identifier.</summary>
     public AgentSessionId SessionId => _chat.SessionId;
 
+    /// <summary>
+    /// <see langword="true"/> when the underlying <see cref="RunningAgentChat"/> is a sub-agent.
+    /// The running-agent brain popup filters these out (issue #1205) as a belt-and-braces
+    /// safeguard against sub-agents leaking into the top-level session list.
+    /// </summary>
+    public bool IsSubAgent => _chat.IsSubAgent;
+
     /// <summary>The display name of the agent entity that owns this session.</summary>
     public string EntityName { get; }
 
@@ -23,11 +30,20 @@ public sealed class RunningAgentChatWithEntityInfo
     /// </summary>
     public string? EntityId { get; }
 
-    internal RunningAgentChatWithEntityInfo(RunningAgentChat chat, string entityName, string? entityId)
+    /// <summary>
+    /// The owning workspace-pane id (the pane the session was started/opened in), if known.
+    /// Used by cross-workspace status-button navigation (#1135) to switch to (and load) the
+    /// owning workspace before focusing the agent, so a click on the brain popup never routes
+    /// the agent into the currently-active pane by mistake.
+    /// </summary>
+    public string? WorkspaceId { get; }
+
+    internal RunningAgentChatWithEntityInfo(RunningAgentChat chat, string entityName, string? entityId, string? workspaceId = null)
     {
         _chat = chat;
         EntityName = entityName;
         EntityId = entityId;
+        WorkspaceId = workspaceId;
     }
 
     /// <summary>

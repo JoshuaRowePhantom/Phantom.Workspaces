@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -28,18 +29,29 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
         this.tabOpener = tabOpener;
     }
 
-    public override ValueTask<bool> ShouldApplyTo(
+    public override async ValueTask<bool> ShouldApplyTo(
         MainWindowViewModel mainWindowViewModel,
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
         if (shortcut != Shortcut.VsCodeWeb)
         {
-            return ValueTask.FromResult(false);
+            return false;
         }
 
         var path = TryGetPath(entityViewModel);
-        return ValueTask.FromResult(path is not null);
+        if (path is null)
+        {
+            return false;
+        }
+
+        // The shortcut should not appear/dispatch when no VS Code tunnel is resolvable for
+        // the entity's owning profile — mirrors OpenInVsCodeShortcutHandler.ShouldApplyTo
+        // and matches the owner's decision in #1194 ("VsCodeWeb shouldn't apply and be
+        // visible if the code tunnel can't be looked up").
+        var owningProfile = await FindOwningProfileAsync(mainWindowViewModel, entityViewModel);
+        var tunnelEntity = await TryFindVsCodeTunnelAsync(mainWindowViewModel, owningProfile);
+        return tunnelEntity is not null && ReadTunnelUrl(tunnelEntity) is not null;
     }
 
     public override async Task<bool> Handle(
@@ -57,12 +69,14 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
         var tunnelEntity = await TryFindVsCodeTunnelAsync(mainWindowViewModel, owningProfile);
         if (tunnelEntity is null)
         {
+            NotifyMissingTunnel(mainWindowViewModel, entityViewModel);
             return false;
         }
 
         var tunnelUrl = ReadTunnelUrl(tunnelEntity);
         if (tunnelUrl is null)
         {
+            NotifyMissingTunnel(mainWindowViewModel, entityViewModel);
             return false;
         }
 
@@ -88,6 +102,24 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
         }
 
         return true;
+    }
+
+    private static void NotifyMissingTunnel(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel)
+    {
+        mainWindowViewModel.NotificationService.Notify(
+            new Notification(
+                new TabDescriptor
+                {
+                    TabId = $"vscode-web:{entityViewModel.EntityId}",
+                    TabTitle = "VS Code Web",
+                },
+                "VS Code Web tunnel not configured",
+                "No vscode-tunnel entity with a tunnel-url was found for this entity's owning profile.",
+                DateTime.UtcNow,
+                RunningState.Idle,
+                NotificationState.Interesting));
     }
 
     private static string? TryGetPath(SubscribedEntityViewModel entityViewModel)
@@ -197,10 +229,14 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
             .Select(static e => e.GetString()!)
             .ToArray();
 
+        // Extract the user segment. Local profiles use
+        // ["computer-user-profiles", "users", "username", <user>, ...] so scan for
+        // "username" first. Accept "user-computer-profile" as a secondary marker for
+        // profiles that use the singular naming style. See #1194.
         string? userSegment = null;
         for (int i = 0; i < nameParts.Length - 1; i++)
         {
-            if (nameParts[i] == "username")
+            if (nameParts[i] is "username" or "user-computer-profile")
             {
                 userSegment = nameParts[i + 1];
                 break;

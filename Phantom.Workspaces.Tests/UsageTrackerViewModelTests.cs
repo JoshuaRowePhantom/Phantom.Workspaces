@@ -17,6 +17,44 @@ public sealed class UsageTrackerViewModelTests
         Thread.CurrentThread.CurrentUICulture = CultureInfo.GetCultureInfo("en-US");
     }
     [Fact]
+    public void RecomputeTopRightLabel_WhenNoAccounts_LogsHiddenReason()
+    {
+        var metrics = new UsageMetrics();
+        var logger = new TestLogger<UsageTrackerViewModel>();
+        using var vm = new UsageTrackerViewModel(metrics, logger);
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Message.Contains("hidden", StringComparison.OrdinalIgnoreCase)
+                && e.Message.Contains("no accounts", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RecomputeTopRightLabel_WhenAccountsExist_LogsPanelShown()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "GitHub", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Included Usage",
+            QuantityUsed = 1m,
+            QuantityTotal = 5m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "minutes",
+        });
+        metrics.Accounts.Add(account);
+
+        var logger = new TestLogger<UsageTrackerViewModel>();
+        using var vm = new UsageTrackerViewModel(metrics, logger);
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                && e.Message.Contains("shown", StringComparison.OrdinalIgnoreCase)
+                && e.Message.Contains("1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void TopRightLabel_IsNull_WhenNoAccounts()
     {
         var metrics = new UsageMetrics();
@@ -301,5 +339,483 @@ public sealed class UsageTrackerViewModelTests
         metric.QuantityUsed = 999m;
         
         Assert.Equal(originalLabel, vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void SelectedUsageMetricKey_WhenSetToMetric_TopRightLabelShowsThatMetric()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 100m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0),
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0),
+        });
+        metrics.Accounts.Add(account);
+
+        vm.SelectedUsageMetricKey = UsageAccount.ComposeKey("github.com", "Copilot AI Credits");
+
+        Assert.Equal("100 AICredits", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void SelectedUsageMetricKey_WhenChanged_PersistsKeyToConfiguration()
+    {
+        var metrics = new UsageMetrics();
+        string? persistedKey = null;
+        var tcs = new System.Threading.Tasks.TaskCompletionSource();
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: null,
+            persistSelectionAsync: k => { persistedKey = k; tcs.TrySetResult(); return System.Threading.Tasks.Task.CompletedTask; });
+
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric { Title = "M", QuantityPresentationFormatString = "{0}" });
+        metrics.Accounts.Add(account);
+
+        vm.SelectedUsageMetricKey = "github.com/M";
+
+        Assert.True(tcs.Task.IsCompletedSuccessfully);
+        Assert.Equal("github.com/M", persistedKey);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_WhenSeededFromConfig_RestoresSelectedMetricAsDefault()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 100m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 10, 0, 0),
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0),
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: UsageAccount.ComposeKey("github.com", "Copilot AI Credits"));
+
+        Assert.Equal("100 AICredits", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void RecomputeTopRightLabel_WhenSelectedMetricAbsent_FallsBackGracefully()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot Premium Request",
+            QuantityUsed = 42m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "Requests",
+            LastUpdatedAt = new DateTime(2026, 1, 1, 12, 0, 0),
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: "github.com/Does Not Exist");
+
+        // Falls back to most-recently-updated metric.
+        Assert.Equal("42 Requests", vm.TopRightLabel);
+        // Key is preserved so pin re-applies if the metric reappears.
+        Assert.Equal("github.com/Does Not Exist", vm.SelectedUsageMetricKey);
+    }
+
+    [Fact]
+    public void SelectedUsageMetric_WhenTwoMetricsExist_OnlyOneRadioIsSelected()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "u" };
+        var m1 = new UsageMetric { Title = "A", QuantityPresentationFormatString = "{0}" };
+        var m2 = new UsageMetric { Title = "B", QuantityPresentationFormatString = "{0}" };
+        account.Metrics.Add(m1);
+        account.Metrics.Add(m2);
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        vm.SelectedUsageMetricKey = UsageAccount.ComposeKey("github.com", "A");
+        Assert.True(m1.IsSelectedAsShown);
+        Assert.False(m2.IsSelectedAsShown);
+
+        vm.SelectedUsageMetricKey = UsageAccount.ComposeKey("github.com", "B");
+        Assert.False(m1.IsSelectedAsShown);
+        Assert.True(m2.IsSelectedAsShown);
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // #1172 — OpenUrlCommand routes through IUrlOpener.
+    // ---------------------------------------------------------------------------------------------
+
+    private sealed class RecordingUrlOpener : Phantom.Workspaces.Services.IUrlOpener
+    {
+        public List<Phantom.Workspaces.Services.OpenUrlRequest> Requests { get; } = new();
+
+        public System.Threading.Tasks.Task OpenAsync(Phantom.Workspaces.Services.OpenUrlRequest request, System.Threading.CancellationToken cancellationToken = default)
+        {
+            this.Requests.Add(request);
+            return System.Threading.Tasks.Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenMetricRowInvoked_CallsUrlOpenerWithMetricWebUrl()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        var webUrl = "https://github.com/settings/billing/summary?user=octocat";
+        vm.OpenUrlCommand.Execute(webUrl);
+
+        Assert.Single(opener.Requests);
+        Assert.Equal(webUrl, opener.Requests[0].Url);
+        Assert.Equal(Phantom.Workspaces.Services.UrlOpenPreference.Auto, opener.Requests[0].Preference);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenAccountHeaderInvoked_CallsUrlOpenerWithSettingsUrl()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute("https://github.com/settings/copilot");
+
+        Assert.Single(opener.Requests);
+        Assert.Equal("https://github.com/settings/copilot", opener.Requests[0].Url);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenUrlIsNullOrEmpty_DoesNotCallUrlOpener()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute(null);
+        vm.OpenUrlCommand.Execute(string.Empty);
+
+        Assert.Empty(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenInvoked_DoesNotCallExternalLauncherDirectly()
+    {
+        // The view model must never touch Launcher / Process.Start directly — routing is entirely
+        // delegated to IUrlOpener. Verified by asserting the URL flowed through the injected opener
+        // (no other observable side effect exists).
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute("https://example.com/");
+
+        Assert.Single(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsUri_CallsUrlOpenerWithUriString()
+    {
+        // #1204: XAML supplies CommandParameter as a Uri (via FirstNonNullConverter over
+        // WebUrl / SettingsUrl, both Uri?). Prior behavior cast it with `as string`, which
+        // yielded null and silently dropped every click.
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        var uri = new Uri("https://github.com/settings/billing/summary?user=octocat");
+        vm.OpenUrlCommand.Execute(uri);
+
+        Assert.Single(opener.Requests);
+        Assert.Equal(uri.ToString(), opener.Requests[0].Url);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsString_CallsUrlOpenerWithSameString()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute("https://github.com/settings/copilot");
+
+        Assert.Single(opener.Requests);
+        Assert.Equal("https://github.com/settings/copilot", opener.Requests[0].Url);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsNull_DoesNotCallUrlOpener()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute(null);
+
+        Assert.Empty(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenParameterIsEmptyString_DoesNotCallUrlOpener()
+    {
+        var metrics = new UsageMetrics();
+        var opener = new RecordingUrlOpener();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => opener);
+
+        vm.OpenUrlCommand.Execute(string.Empty);
+
+        Assert.Empty(opener.Requests);
+    }
+
+    [Fact]
+    public void OpenUrlCommand_WhenUrlOpenerProviderReturnsNull_DoesNotThrow()
+    {
+        var metrics = new UsageMetrics();
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null, persistSelectionAsync: null,
+            urlOpenerProvider: () => null);
+
+        var exception = Record.Exception(() => vm.OpenUrlCommand.Execute(new Uri("https://example.com/")));
+        Assert.Null(exception);
+    }
+
+    // #1179 — long, unabbreviated metric titles round-trip through the view model without
+    // any view-model-side truncation. Truncation only happens (or fails to happen) in XAML.
+    [Fact]
+    public void UsageTrackerViewModel_LongMetricTitle_IsExposedUntruncated()
+    {
+        const string longTitle = "Copilot AI Credits (Additional Usage)";
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "GitHub Copilot", UserName = "testuser" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = longTitle,
+            QuantityUsed = 1m,
+            QuantityTotal = 10m,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        Assert.Single(vm.Accounts);
+        Assert.Single(vm.Accounts[0].Metrics);
+        Assert.Equal(longTitle, vm.Accounts[0].Metrics[0].Title);
+    }
+
+    // #1160 — When no user pin is set, the ViewModel prefers a metric that the provider has
+    // marked as the default budget surface (IsSelectedAsShown = true) over the credit-quantity
+    // metric that would otherwise win by ordering. This is what makes the toolbar show real
+    // dollar spend rather than a credit counter saturated at the included allotment.
+    [Fact]
+    public void TopRightLabel_PrefersCostMetric_OverQuantityMetric_WhenNoUserPin()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 20000m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits (Additional Usage)",
+            QuantityUsed = 3754.58m,
+            QuantityTotal = 5000m,
+            QuantityPresentationFormatString = "{0:C2} / {1:C2}",
+            Unit = string.Empty,
+            IsSelectedAsShown = true,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics, logger: null, initialSelectedUsageMetricKey: null);
+
+        Assert.Equal("$3,754.58 / $5,000.00", vm.TopRightLabel);
+    }
+
+    // #1160 — A user pin still overrides the provider-supplied default budget metric, so the
+    // per-metric pinning from #1147 composes cleanly with the new default-selection behavior.
+    [Fact]
+    public void TopRightLabel_RespectsUserPin_OverBudgetDefault()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 20000m,
+            QuantityTotal = 0m,
+            QuantityPresentationFormatString = "{0:N0} {2}",
+            Unit = "AICredits",
+        });
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits (Additional Usage)",
+            QuantityUsed = 3754.58m,
+            QuantityTotal = 5000m,
+            QuantityPresentationFormatString = "{0:C2} / {1:C2}",
+            Unit = string.Empty,
+            IsSelectedAsShown = true,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(
+            metrics,
+            logger: null,
+            initialSelectedUsageMetricKey: UsageAccount.ComposeKey("github.com", "Copilot AI Credits"));
+
+        Assert.Equal("20,000 AICredits", vm.TopRightLabel);
+    }
+
+    // ---------- #1188 tests: current-period consumption ----------
+
+    [Fact]
+    public void UsageTrackerViewModel_UsageSpanningTwoPeriods_ShowsOnlyCurrentPeriodConsumption()
+    {
+        // Provider has already filtered items to the current period; the ViewModel must
+        // surface exactly those numbers (no re-aggregation, no cumulative leakage).
+        var periodStart = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var periodEnd = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero);
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 10769m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+            IsSelectedAsShown = true,
+            BillingPeriodStart = periodStart,
+            ResetsAt = periodEnd,
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        Assert.Equal("10,769 / 20,000 AICredits", vm.TopRightLabel);
+        var displayedAccount = Assert.Single(vm.Accounts);
+        var displayedMetric = Assert.Single(displayedAccount.Metrics);
+        Assert.Equal(10769m, displayedMetric.QuantityUsed);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_AfterMonthlyReset_ConsumedCreditsResetToCurrentPeriod()
+    {
+        // First poll: August, 15,000 AI credits used. Second poll (new period): the
+        // provider returns fresh September metrics with a new BillingPeriodStart. The
+        // ViewModel must reflect the new-period consumed value, not the prior total.
+        var augStart = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero);
+        var sepStart = new DateTimeOffset(2026, 9, 1, 0, 0, 0, TimeSpan.Zero);
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount { Product = "github.com", UserName = "alice" };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 15000m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+            IsSelectedAsShown = true,
+            BillingPeriodStart = augStart,
+        });
+        account.BillingPeriodStart = augStart;
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+        Assert.Equal("15,000 / 20,000 AICredits", vm.TopRightLabel);
+
+        // Simulate the service applying a new-period replacement.
+        account.Metrics.Clear();
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 250m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+            IsSelectedAsShown = true,
+            BillingPeriodStart = sepStart,
+        });
+        account.BillingPeriodStart = sepStart;
+
+        Assert.Equal("250 / 20,000 AICredits", vm.TopRightLabel);
+    }
+
+    [Fact]
+    public void UsageTrackerViewModel_ResetDate_IsSurfacedOnAccountCard()
+    {
+        var metrics = new UsageMetrics();
+        var account = new UsageAccount
+        {
+            Product = "github.com",
+            UserName = "alice",
+            ResetsAt = new DateTimeOffset(2026, 8, 31, 0, 0, 0, TimeSpan.Zero),
+        };
+        account.Metrics.Add(new UsageMetric
+        {
+            Title = "Copilot AI Credits",
+            QuantityUsed = 100m,
+            QuantityTotal = 20000m,
+            QuantityPresentationFormatString = "{0:N0} / {1:N0} {2}",
+            Unit = "AICredits",
+        });
+        metrics.Accounts.Add(account);
+
+        using var vm = new UsageTrackerViewModel(metrics);
+
+        var displayed = Assert.Single(vm.Accounts);
+        Assert.NotNull(displayed.ResetsAtDisplay);
+        Assert.Contains("Aug 31, 2026", displayed.ResetsAtDisplay);
+        Assert.StartsWith("Resets on", displayed.ResetsAtDisplay);
     }
 }

@@ -1,9 +1,17 @@
 {
   "entity-id": "c0d1e2f3-a4b5-4c6d-9e0f-1a2b3c4d5e6f",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "copilot-session-discovery"]
   ],
   "display-name": "Copilot Session Discovery",
-  "tool-type": "copilot-session-discovery"
+  "tool-type": "copilot-session-discovery",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Copilot Session Discovery\n\nDiscovers local GitHub Copilot CLI sessions on the host machine and surfaces each as an `agent-definition` entity (using the session's GUID directory name as the entity-id). Also reads the Copilot MCP configuration file and registers each installed MCP server as an `mcp-server` entity scoped under the current machine's `computer-user-profiles/\u2026/copilot/mcp-servers` name path so machine-specific MCP servers can be referenced by name from agent manifest tool resources.\n\n## Configuration\n\nRead from the tool entity's top-level properties:\n\n| Key | Type | Semantics |\n|---|---|---|\n| `session-state-root` | string | Overrides the Copilot session-state root directory. Defaults to `<user home>/.copilot/session-state` (user home is `USERPROFILE` when set, otherwise the OS user-profile folder). |\n| `mcp-config-path` | string | Overrides the Copilot MCP configuration file path. Defaults to `<user home>/.copilot/mcp-config.json`. |\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.schedule` \u2014 a `schedule` entity controlling scan cadence (a short interval is fine \u2014 the tool only touches the local filesystem and a config file).\n- `participants.target` \u2014 typically not needed; the tool derives the machine and user from the current execution context.\n\nSet `paused: true` on the relationship to disable it. Because entity-ids for MCP servers are deterministic per machine + server name, re-runs upsert rather than duplicate."
+      }
+    }
+  }
 }

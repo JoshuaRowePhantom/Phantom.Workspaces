@@ -1,0 +1,45 @@
+{
+  "entity-id": "15c1b11a-0a71-453f-ad45-0a84f80cf1ad",
+  "entity-types": [
+    "entity",
+    "agent-manifest"
+  ],
+  "names": [
+    [
+      "defaults",
+      "agent-manifests",
+      "sub-agent-dispatcher"
+    ]
+  ],
+  "display-name": {
+    "default": "Sub-Agent Dispatcher"
+  },
+  "agent-type": "sub-agent-dispatcher",
+  "tools": [
+    {
+      "kind": "agent-definition",
+      "name": "default",
+      "description": "A GitHub Copilot sub-agent.",
+      "manifest-reference": [
+        "defaults",
+        "agent-manifests",
+        "github-copilot"
+      ]
+    }
+  ],
+  "manifest": {
+    "name": "sub-agent-dispatcher",
+    "displayName": "Sub-Agent Dispatcher",
+    "description": "Dispatches messages to sub-agents created on demand from named agent definitions.",
+    "template": {
+      "kind": "prompt",
+      "name": "sub-agent-dispatcher",
+      "displayName": "Sub-Agent Dispatcher",
+      "description": "Dispatches messages to sub-agents created on demand from named agent definitions.",
+      "model": {
+        "id": "sub-agent-dispatcher",
+        "provider": "sub-agent-dispatcher"
+      }
+    }
+  }
+}

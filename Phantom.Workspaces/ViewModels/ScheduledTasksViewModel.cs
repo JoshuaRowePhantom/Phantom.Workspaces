@@ -8,6 +8,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ScheduledTools;
+using Phantom.Workspaces.Services.Logging;
+using Phantom.Workspaces.Install;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -111,6 +113,8 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
     private readonly ScheduledToolPauseStateService? pauseStateService;
     private readonly EntityId hostEntityId;
     private readonly Action<Action> dispatch;
+    private readonly ILogDirectoryProvider? logDirectoryProvider;
+    private readonly IProcessLauncher? processLauncher;
     private bool isLoading;
     private bool isToggleInProgress;
     private ScheduledTaskItemViewModel? selectedTask;
@@ -120,19 +124,27 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
         ScheduledToolPauseStateService? pauseStateService = null,
         EntityId hostEntityId = default,
         ScheduledToolHost? scheduledToolHost = null,
-        Action<Action>? dispatch = null)
+        Action<Action>? dispatch = null,
+        ILogDirectoryProvider? logDirectoryProvider = null,
+        IProcessLauncher? processLauncher = null,
+        TaskScheduler? foregroundScheduler = null)
     {
         this.entityBroker = entityBroker ?? throw new ArgumentNullException(nameof(entityBroker));
         this.entityReferenceSearch = new EntityReferenceSearch(entityBroker);
         this.ScheduledToolsRunning = scheduledToolHost is not null
-            ? new ScheduledToolsRunningViewModel(scheduledToolHost, entityBroker.EntityRepository.DataAccessLayer, dispatch)
+            ? new ScheduledToolsRunningViewModel(scheduledToolHost, entityBroker.EntityRepository.DataAccessLayer, dispatch, foregroundScheduler)
             : null;
         this.pauseStateService = pauseStateService;
         this.hostEntityId = hostEntityId;
         this.dispatch = dispatch ?? (action => action());
+        this.logDirectoryProvider = logDirectoryProvider;
+        this.processLauncher = processLauncher;
         this.TogglePauseCommand = new RelayCommand(
             _ => _ = this.TogglePauseAsync(),
             _ => this.CanTogglePause);
+        this.OpenLogsFolderCommand = new RelayCommand(
+            _ => this.OpenLogsFolder(),
+            _ => this.CanOpenLogsFolder);
 
         if (this.pauseStateService is not null)
         {
@@ -205,6 +217,28 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
     /// <summary>Toggles the persisted host-wide pause state (the "Stop all / Pause" action).</summary>
     public RelayCommand TogglePauseCommand { get; }
 
+    /// <summary>Opens the process's log directory (see #1155) in the OS file browser.</summary>
+    public RelayCommand OpenLogsFolderCommand { get; }
+
+    /// <summary>Whether the "Open logs folder" affordance should be shown.</summary>
+    public bool CanOpenLogsFolder =>
+        this.logDirectoryProvider is not null && this.processLauncher is not null;
+
+    private void OpenLogsFolder()
+    {
+        if (this.logDirectoryProvider is not { } provider || this.processLauncher is not { } launcher)
+        {
+            return;
+        }
+
+        var directory = provider.LogDirectory;
+        launcher.Start(new ProcessStartRequest
+        {
+            FileName = "explorer.exe",
+            Arguments = new[] { directory },
+        });
+    }
+
     /// <summary>Toggles the persisted host-wide pause state.</summary>
     public async Task TogglePauseAsync(CancellationToken cancellationToken = default)
     {
@@ -258,6 +292,9 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
             this.RaisePropertyChanged(nameof(this.HasScheduledTasks));
             if (this.ScheduledToolsRunning is not null)
             {
+                // #1203: RefreshHistoryAsync runs the query and JSON parsing off the UI thread
+                // and marshals the final merge via the injected foreground scheduler; awaiting
+                // it here yields the foreground scheduler while the load is in progress.
                 await this.ScheduledToolsRunning.RefreshHistoryAsync(cancellationToken).ConfigureAwait(true);
                 this.SyncStatusIndicators();
                 this.RaisePropertyChanged(nameof(this.SelectedToolRow));

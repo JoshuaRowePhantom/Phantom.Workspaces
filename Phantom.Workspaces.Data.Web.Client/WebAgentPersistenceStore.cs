@@ -130,6 +130,7 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
             ? null
             : JsonDocument.Parse(agent.AgentDefinitionJson.ToJson()).RootElement,
         CopilotSdkSessionId = agent.CopilotSdkSessionId,
+        LastUpdatedUtc = agent.LastUpdatedUtc,
     };
 
     private static PersistedAgent FromDto(PersistedAgentDto dto) => new()
@@ -142,5 +143,6 @@ public sealed class WebAgentPersistenceStore : IAgentPersistenceStore
             ? null
             : BsonDocument.Parse(dto.AgentDefinitionJson.Value.GetRawText()),
         CopilotSdkSessionId = dto.CopilotSdkSessionId,
+        LastUpdatedUtc = dto.LastUpdatedUtc,
     };
 }

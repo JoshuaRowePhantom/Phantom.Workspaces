@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.IO;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
@@ -8,7 +9,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class ConfigurationPersistenceServiceTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task LoadAsync_WhenFileMissing_ReturnsDefaults()
     {
         var path = CreateTempConfigPath();
@@ -22,7 +23,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal(DevTunnelAccessMode.Private, configuration.DevTunnel.AccessMode);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SaveThenLoad_RoundTripsConfiguration()
     {
         var path = CreateTempConfigPath();
@@ -62,7 +63,7 @@ public sealed class ConfigurationPersistenceServiceTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SaveAsync_DoesNotPersistRawSecrets()
     {
         var path = CreateTempConfigPath();
@@ -96,7 +97,7 @@ public sealed class ConfigurationPersistenceServiceTests
         }
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToRepositorySource_LocalMongoContainer_MapsContainerFields()
     {
         var configuration = new WorkspacesConfiguration
@@ -119,7 +120,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal(27017, mongo.HostPort);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToRepositorySource_Web_MapsEndpoint()
     {
         var configuration = new WorkspacesConfiguration
@@ -137,7 +138,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal("https://workspaces.example/", web.Endpoint);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToRepositorySource_Web_DoesNotUseGitHubAuthToken()
     {
         var configuration = new WorkspacesConfiguration
@@ -153,7 +154,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.False(web.UseGitHubAuthToken);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToRepositorySource_DevTunnelWeb_UsesGitHubAuthToken()
     {
         var configuration = new WorkspacesConfiguration
@@ -170,7 +171,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.True(web.UseGitHubAuthToken);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToRepositorySource_RemoteMongo_Throws()
     {
         var configuration = new WorkspacesConfiguration
@@ -185,7 +186,7 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToRepositorySource_WebWithoutEndpoint_Throws()
     {
         var configuration = new WorkspacesConfiguration
@@ -194,6 +195,84 @@ public sealed class ConfigurationPersistenceServiceTests
         };
 
         Assert.Throws<System.InvalidOperationException>(() => configuration.ToRepositorySource());
+    }
+
+    [AvaloniaFact]
+    public void ConfigurationPersistenceService_GetDefaultLogDirectoryPath_IsSiblingOfConfigFile()
+    {
+        var configPath = Path.Combine(Path.GetTempPath(), "phantom-config-dir", "config.json");
+
+        var logDirectory = ConfigurationPersistenceService.GetDefaultLogDirectoryPath(configPath);
+
+        Assert.Equal(
+            Path.Combine(Path.GetTempPath(), "phantom-config-dir", "logs"),
+            logDirectory);
+    }
+
+    [AvaloniaFact]
+    public async Task ConfigurationPersistenceService_RoundTripsLogDirectory_Setting()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            LogDirectory = Path.Combine(Path.GetTempPath(), "phantom-custom-logs"),
+        };
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Equal(configuration.LogDirectory, reloaded.LogDirectory);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SaveThenLoad_RoundTripsSelectedUsageMetric()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            SelectedUsageMetric = "github.com/Copilot AI Credits",
+        };
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Equal("github.com/Copilot AI Credits", reloaded.SelectedUsageMetric);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task LoadAsync_WhenSelectedUsageMetricMissing_DefaultsToNull()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration();
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Null(reloaded.SelectedUsageMetric);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
     }
 
     private static string CreateTempConfigPath()

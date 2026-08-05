@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 
 namespace Phantom.Workspaces.Gui.Shared.Tests.Utilities;
@@ -156,22 +157,67 @@ public sealed class AsyncDisposableCollectionTests
     }
 
     [Fact]
-    public async Task Add_ConcurrentWithDispose_ItemIsEventuallyDisposed()
+    public async Task RunDisposalAsync_DisposableThrows_ExceptionIsObservedAndSwallowed()
     {
-        // Run many iterations to catch races
-        for (var i = 0; i < 100; i++)
+        // Issue #1084: a faulting DisposeAsync must be observed (surfaced to the error callback) and
+        // swallowed, and the collection's DisposeAsync must still complete and drain the pending count.
+        Exception? observed = null;
+        var collection = new AsyncDisposableCollection(ex => observed = ex);
+        var good = new TrackingDisposable();
+
+        collection.Add(new ThrowingDisposable());
+        collection.Add(good);
+
+        // Must complete (pending fully drains) despite one item throwing.
+        await collection.DisposeAsync();
+
+        Assert.NotNull(observed);
+        Assert.IsType<InvalidOperationException>(observed);
+        Assert.Equal(1, good.DisposeCount);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_DisposableThrows_DoesNotProduceUnobservedTaskException()
+    {
+        // Issue #1084: the fire-and-forget disposal must not leave an unobserved Task exception that
+        // the GC finalizer would later rethrow as an AggregateException and crash the process.
+        var unobserved = new List<Exception>();
+        void Handler(object? _, UnobservedTaskExceptionEventArgs e)
+        {
+            lock (unobserved)
+            {
+                unobserved.Add(e.Exception);
+            }
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            await RunAndReleaseAsync();
+
+            // Force finalization so any unobserved faulted Task would surface here.
+            for (var i = 0; i < 5; i++)
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+            }
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+
+        lock (unobserved)
+        {
+            Assert.Empty(unobserved);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static async Task RunAndReleaseAsync()
         {
             var collection = new AsyncDisposableCollection();
-            var item = new TrackingDisposable();
-
-            var addTask = Task.Run(() => collection.Add(item), TestContext.Current.CancellationToken);
-            var disposeTask = Task.Run(() => collection.DisposeAsync().AsTask(), TestContext.Current.CancellationToken);
-
-            await Task.WhenAll(addTask, disposeTask);
-
-            await item.DisposedTask.WaitAsync(TestContext.Current.CancellationToken);
-
-            Assert.Equal(1, item.DisposeCount);
+            collection.Add(new ThrowingDisposable());
+            await collection.DisposeAsync();
         }
     }
 }

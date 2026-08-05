@@ -23,6 +23,14 @@ internal sealed record InternalCreateAgentChatRequest
 
     public string? DescriptionOverride { get; init; }
 
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (issue #1151). Independent of
+    /// <see cref="DisplayNameOverride"/> — the display-name is the agent-type label; the
+    /// name-override carries the invoker-chosen identity (e.g. <c>fix-crash1142</c>). Surfaced on
+    /// <c>AgentChat.Name</c>.
+    /// </summary>
+    public string? NameOverride { get; init; }
+
     public IReadOnlyList<IAsyncDisposable>? OwnedResources { get; init; }
 
     public CancellationToken CancellationToken { get; init; } = default;
@@ -38,6 +46,12 @@ internal sealed record InternalCreateAgentChatRequest
     public TaskScheduler? ForegroundScheduler { get; init; }
 
     /// <summary>
+    /// The time source used to stamp chat-history timestamps and drive time-based waits. Defaults
+    /// to <see cref="System.TimeProvider.System"/>; tests inject a fake provider for determinism.
+    /// </summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+
+    /// <summary>
     /// When set, overrides the <c>UseProvidedChatClientAsIs</c> value that would otherwise be
     /// resolved from <see cref="ClientOverride"/> and the client's
     /// <see cref="ISelfInvokingToolChatClient"/> status.  Used in tests to exercise the
@@ -45,4 +59,15 @@ internal sealed record InternalCreateAgentChatRequest
     /// deterministic <see cref="ClientOverride"/>.
     /// </summary>
     internal bool? OverrideUseProvidedChatClientAsIs { get; init; }
+
+    /// <summary>
+    /// Test-only seam that supplies an asynchronous chat-client creation path. When set (and
+    /// <see cref="ClientOverride"/> is null), <see cref="AgentChat"/> awaits the returned task with
+    /// <c>ConfigureAwait(false)</c> exactly like the real
+    /// <c>AgentFactory.CreateChatClientAsync</c> call, so tests can force the client-creation await
+    /// to genuinely suspend (mirroring the real Copilot SDK client) and have the post-await
+    /// continuation resume off the captured foreground context. Used by
+    /// <c>AgentChatForegroundContextTests</c> to reproduce issue #1098.
+    /// </summary>
+    internal Func<CancellationToken, Task<IChatClient>>? ChatClientFactoryOverride { get; init; }
 }

@@ -27,12 +27,26 @@
       "description": "Entity ID of the user-computer-profile hosting this agent session."
     },
     "agent-definition-reference": {
+      "$ref": "core.json#/$defs/entity-reference",
+      "x-entity-types": [
+        "agent-manifest",
+        "agent-definition"
+      ],
+      "description": "Reference to the agent-manifest or agent-definition this session runs, used to reconstruct the definition when the session is resumed. Accepts either an entity-name (array of strings) or an entity-id (uuid string)."
+    },
+    "parent-agent-session-ids": {
       "type": "array",
-      "minItems": 1,
+      "description": "Entity references to the parent agent sessions of this session. Set on sub-agent sessions to reference the dispatcher's own agent-session entity, so sub-agents are excluded from the top-level sessions view. When absent or empty, the session is a top-level session.",
       "items": {
-        "type": "string"
-      },
-      "description": "Entity-name reference to the agent-definition this session runs, used to reconstruct the definition when the session is resumed."
+        "$ref": "core.json#/$defs/entity-reference",
+        "x-entity-types": [
+          "agent-session"
+        ]
+      }
+    },
+    "sub-agent-description": {
+      "type": "string",
+      "description": "Human-readable description of a sub-agent session, persisted by the sub-agent dispatcher so the dispatcher can reconstruct its in-memory sub-agent list after a restart."
     },
     "parameter-values": {
       "type": "object",

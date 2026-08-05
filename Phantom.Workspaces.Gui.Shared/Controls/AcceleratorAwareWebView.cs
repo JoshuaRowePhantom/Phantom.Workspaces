@@ -1,5 +1,5 @@
 using System;
-using System.Reflection;
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using Avalonia.Controls;
 using Avalonia.Threading;
@@ -9,17 +9,25 @@ namespace Phantom.Workspaces.Gui.Shared.Controls;
 /// <summary>
 /// Abstract base class that sits between <see cref="NativeWebView"/> and concrete web-view
 /// controls. Subscribes to <see cref="NativeWebView.AdapterCreated"/> once the WebView2
-/// platform adapter is ready, wires up the COM-level <c>AcceleratorKeyPressed</c> hook, and
-/// exposes events that subclasses (and their owners) can subscribe to.
+/// platform adapter is ready, wires up the COM-level <c>AcceleratorKeyPressed</c> hook via the
+/// public <see cref="NativeWebView.TryGetPlatformHandle"/> path and the SDK-shipped raw
+/// <c>Microsoft.Web.WebView2.Core.Raw</c> interfaces (no reflection into Avalonia internals),
+/// and exposes events that subclasses (and their owners) can subscribe to. See #1208.
 /// </summary>
-public abstract class AcceleratorAwareWebView : NativeWebView
+public abstract class AcceleratorAwareWebView : NativeWebView, IBrowserAcceleratorSource
 {
-    // Kept alive to prevent GC while the COM callback is registered.
-    private AcceleratorKeyPressedHandler? acceleratorKeyHandler;
+    private IDisposable? acceleratorSubscription;
+    private const int VkMenu = 0x12;
+    private const int VkControl = 0x11;
+    private const int VkShift = 0x10;
+    private const int VkDigit0 = 0x30;
+    private const int VkDigit9 = 0x39;
+    private const int VkW = 0x57;
 
     protected AcceleratorAwareWebView()
     {
         this.AdapterCreated += this.OnAdapterCreated;
+        this.AdapterDestroyed += this.OnAdapterDestroyed;
     }
 
     /// <summary>Raised on the UI thread when Alt is pressed (true) or released (false) inside this WebView.</summary>
@@ -34,10 +42,23 @@ public abstract class AcceleratorAwareWebView : NativeWebView
     /// <summary>Raised on the UI thread when Ctrl+W is pressed inside this WebView.</summary>
     public event EventHandler? CloseTabRequested;
 
+    /// <inheritdoc/>
+    public event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
+
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs e)
     {
-        if (OperatingSystem.IsWindows())
-            this.SubscribeAcceleratorKeyPressed();
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        this.SubscribeAcceleratorKeyPressed();
+    }
+
+    private void OnAdapterDestroyed(object? sender, WebViewAdapterEventArgs e)
+    {
+        var existing = System.Threading.Interlocked.Exchange(ref this.acceleratorSubscription, null);
+        existing?.Dispose();
     }
 
     [SupportedOSPlatform("windows")]
@@ -45,25 +66,74 @@ public abstract class AcceleratorAwareWebView : NativeWebView
     {
         try
         {
-            // TryGetAdapter() is internal to Avalonia.Controls.WebView — call it via reflection.
-            var tryGetAdapterMethod = typeof(NativeWebView).GetMethod(
-                "TryGetAdapter",
-                BindingFlags.NonPublic | BindingFlags.Instance);
-            var adapter = tryGetAdapterMethod?.Invoke(this, null);
-
-            this.acceleratorKeyHandler = WebView2AcceleratorInterop.Subscribe(
-                adapter,
-                onAltKeyState: held => Dispatcher.UIThread.Post(
-                    () => this.AltKeyStateChanged?.Invoke(this, held)),
-                onGoToTab: idx => Dispatcher.UIThread.Post(
-                    () => this.GoToTabAtIndexRequested?.Invoke(this, idx)),
-                onCloseTab: () => Dispatcher.UIThread.Post(
-                    () => this.CloseTabRequested?.Invoke(this, EventArgs.Empty)),
-                onGoToWorkspacePane: idx => Dispatcher.UIThread.Post(
-                    () => this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, idx)));
+            var subscription = WebView2AcceleratorInterop.Subscribe(this, this.OnAcceleratorKeyPressed);
+            var previous = System.Threading.Interlocked.Exchange(ref this.acceleratorSubscription, subscription);
+            previous?.Dispose();
+            if (subscription is null)
+            {
+                Trace.TraceWarning(
+                    "AcceleratorAwareWebView.SubscribeAcceleratorKeyPressed: interop returned null; "
+                    + "accelerators inside the WebView will not be forwarded to Avalonia.");
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Trace.TraceWarning(
+                "AcceleratorAwareWebView.SubscribeAcceleratorKeyPressed: {0}", ex);
         }
     }
+
+    private void OnAcceleratorKeyPressed(AcceleratorKeyEventArgs args)
+    {
+        // The generic listener runs synchronously on the COM callback thread so listeners can set
+        // Handled before the interop's set_Handled(1) call returns to WebView2. Legacy typed
+        // subscribers (AltKeyStateChanged / GoToTab / CloseTab / GoToWorkspacePane) require the
+        // UI thread and are dispatched.
+        this.AcceleratorKeyPressed?.Invoke(this, args);
+        this.FanOutLegacyTypedEvents(args);
+    }
+
+    private void FanOutLegacyTypedEvents(AcceleratorKeyEventArgs args)
+    {
+        var vk = ToVirtualKey(args.Key);
+
+        if (vk == VkMenu)
+        {
+            if (args.KeyEventKind == CoreWebView2KeyEventKind.SystemKeyDown)
+                Dispatcher.UIThread.Post(() => this.AltKeyStateChanged?.Invoke(this, true));
+            else if (args.KeyEventKind == CoreWebView2KeyEventKind.SystemKeyUp)
+                Dispatcher.UIThread.Post(() => this.AltKeyStateChanged?.Invoke(this, false));
+            return;
+        }
+
+        if (args.KeyEventKind == CoreWebView2KeyEventKind.SystemKeyDown && vk >= VkDigit0 && vk <= VkDigit9)
+        {
+            int index = vk == VkDigit0 ? 9 : vk - (VkDigit0 + 1);
+            if (WebView2AcceleratorInterop.IsKeyDown(VkShift))
+            {
+                Dispatcher.UIThread.Post(() => this.GoToWorkspacePaneAtIndexRequested?.Invoke(this, index));
+            }
+            else
+            {
+                Dispatcher.UIThread.Post(() => this.GoToTabAtIndexRequested?.Invoke(this, index));
+            }
+            return;
+        }
+
+        if (args.KeyEventKind == CoreWebView2KeyEventKind.KeyDown && vk == VkW
+            && WebView2AcceleratorInterop.IsKeyDown(VkControl))
+        {
+            Dispatcher.UIThread.Post(() => this.CloseTabRequested?.Invoke(this, EventArgs.Empty));
+        }
+    }
+
+    /// <summary>Reverse of <see cref="VirtualKeyMap.ToKey"/> restricted to the subset used by the legacy typed fan-out.</summary>
+    private static int ToVirtualKey(Avalonia.Input.Key key) => key switch
+    {
+        Avalonia.Input.Key.LeftAlt or Avalonia.Input.Key.RightAlt => VkMenu,
+        Avalonia.Input.Key.W => VkW,
+        >= Avalonia.Input.Key.D0 and <= Avalonia.Input.Key.D9 => VkDigit0 + (int)(key - Avalonia.Input.Key.D0),
+        _ => 0,
+    };
 }
+

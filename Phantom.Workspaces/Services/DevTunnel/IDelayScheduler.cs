@@ -14,12 +14,21 @@ public interface IDelayScheduler
     Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default);
 }
 
-/// <summary>Production <see cref="IDelayScheduler"/> backed by <see cref="Task.Delay(TimeSpan, CancellationToken)"/>.</summary>
+/// <summary>Production <see cref="IDelayScheduler"/> backed by an injected <see cref="TimeProvider"/>.</summary>
 public sealed class RealDelayScheduler : IDelayScheduler
 {
-    /// <summary>A shared instance.</summary>
-    public static RealDelayScheduler Instance { get; } = new();
+    private readonly TimeProvider timeProvider;
+
+    /// <summary>Creates a scheduler that schedules delays on <paramref name="timeProvider"/>.</summary>
+    public RealDelayScheduler(TimeProvider timeProvider)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        this.timeProvider = timeProvider;
+    }
+
+    /// <summary>A shared instance backed by the wall-clock <see cref="TimeProvider.System"/>.</summary>
+    public static RealDelayScheduler Instance { get; } = new(TimeProvider.System);
 
     public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default)
-        => Task.Delay(delay, cancellationToken);
+        => Task.Delay(delay, this.timeProvider, cancellationToken);
 }

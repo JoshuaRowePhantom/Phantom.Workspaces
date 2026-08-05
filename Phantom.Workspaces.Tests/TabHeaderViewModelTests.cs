@@ -4,9 +4,10 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
-using Dock.Model.Controls;
-using Dock.Model.Core;
-using Dock.Model.Mvvm.Controls;
+using Avalonia.LogicalTree;
+using global::Dock.Model.Controls;
+using global::Dock.Model.Core;
+using global::Dock.Model.Mvvm.Controls;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
@@ -238,334 +239,9 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal("Updated", doc.EffectiveTabHeader.Title);
     }
 
-    // ── AltShortcutLabel ─────────────────────────────────────────────────────
-
-    [Fact]
-    public void TabHeaderViewModel_AltShortcutLabel_DefaultIsNull()
-    {
-        var vm = new TabHeaderViewModel { Title = "T" };
-        Assert.Null(vm.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void TabHeaderViewModel_AltShortcutLabel_SetValue_RaisesPropertyChanged()
-    {
-        var vm = new TabHeaderViewModel { Title = "T" };
-        var raised = false;
-        vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(vm.AltShortcutLabel))
-                raised = true;
-        };
-
-        vm.AltShortcutLabel = "1";
-
-        Assert.True(raised);
-    }
-
-    // ── IsShortcutBadgeVisible ───────────────────────────────────────────────
-
-    [Fact]
-    public void TabHeaderViewModel_IsShortcutBadgeVisible_DefaultFalse()
-    {
-        var vm = new TabHeaderViewModel { Title = "T" };
-        Assert.False(vm.IsShortcutBadgeVisible);
-    }
-
-    [Fact]
-    public void TabHeaderViewModel_IsShortcutBadgeVisible_RaisesPropertyChanged()
-    {
-        var vm = new TabHeaderViewModel { Title = "T" };
-        var raised = false;
-        vm.PropertyChanged += (_, e) =>
-        {
-            if (e.PropertyName == nameof(vm.IsShortcutBadgeVisible))
-                raised = true;
-        };
-
-        vm.IsShortcutBadgeVisible = true;
-
-        Assert.True(raised);
-    }
-
-    [Fact]
-    public void TabHeaderViewModel_DoesNotHaveIsAltHeldProperty()
-    {
-        var property = typeof(TabHeaderViewModel).GetProperty("IsAltHeld");
-        Assert.Null(property);
-    }
-
-    // ── RefreshTabAltShortcutLabels ──────────────────────────────────────────
-
-    private static (WorkspacePaneViewModel pane, System.Collections.Generic.Dictionary<string, WorkspaceDocument> docs)
-        CreatePaneWithDocs(int count)
-    {
-        using var jsonDoc = System.Text.Json.JsonDocument.Parse(
-            """{"entity-id":"aaaaaaaa-0000-4000-8000-aaaaaaaaaaaa","entity-types":["entity","workspace"],"display-name":{"default":"Test"}}""");
-        var entity = new SubscribedEntityViewModel(
-            new EntitySnapshot
-            {
-                EntityId = new EntityId("aaaaaaaa-0000-4000-8000-aaaaaaaaaaaa"),
-                ConcurrencyTag = new ConcurrencyTag("1"),
-                ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
-                Data = jsonDoc.RootElement.Clone(),
-                Relationships = System.Array.Empty<EntitySnapshot>(),
-            });
-
-        var pane = new WorkspacePaneViewModel(entity);
-        var docs = new System.Collections.Generic.Dictionary<string, WorkspaceDocument>(System.StringComparer.Ordinal);
-        for (var i = 0; i < count; i++)
-        {
-            var tab = new EntityWorkspaceTabViewModel { Id = $"tab-{i}", Title = $"Tab {i}" };
-            pane.Tabs.Add(tab);
-            docs[tab.Id] = new WorkspaceDocument(tab);
-        }
-        return (pane, docs);
-    }
-
-    [Fact]
-    public void RefreshTabAltShortcutLabels_FirstDoc_GetsLabel1()
-    {
-        var (pane, docs) = CreatePaneWithDocs(3);
-        MainWindowViewModel.RefreshTabAltShortcutLabels(pane, id => docs.TryGetValue(id, out var doc) ? doc : null);
-
-        Assert.Equal("1", docs["tab-0"].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void RefreshTabAltShortcutLabels_TenthDoc_GetsLabel0()
-    {
-        var (pane, docs) = CreatePaneWithDocs(10);
-        MainWindowViewModel.RefreshTabAltShortcutLabels(pane, id => docs.TryGetValue(id, out var doc) ? doc : null);
-
-        Assert.Equal("0", docs["tab-9"].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void RefreshTabAltShortcutLabels_EleventhDoc_GetsNullLabel()
-    {
-        var (pane, docs) = CreatePaneWithDocs(11);
-        MainWindowViewModel.RefreshTabAltShortcutLabels(pane, id => docs.TryGetValue(id, out var doc) ? doc : null);
-
-        Assert.Null(docs["tab-10"].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    // ── RefreshWorkspacePaneAltShortcutLabels ────────────────────────────────
-
-    private static (System.Collections.Generic.List<WorkspacePaneViewModel> panes,
-                    System.Collections.Generic.Dictionary<string, WorkspacePaneDocument> paneDocs)
-        CreatePanesWithPaneDocs(int count)
-    {
-        var panes = new System.Collections.Generic.List<WorkspacePaneViewModel>();
-        var paneDocs = new System.Collections.Generic.Dictionary<string, WorkspacePaneDocument>(System.StringComparer.Ordinal);
-        for (var i = 0; i < count; i++)
-        {
-            using var jsonDoc = System.Text.Json.JsonDocument.Parse(
-                $$$"""{"entity-id":"bbbb{{{i:D4}}}-0000-4000-8000-bbbbbbbbbbbb","entity-types":["entity","workspace"],"display-name":{"default":"Pane {{{i}}}"}}""");
-            var entity = new SubscribedEntityViewModel(
-                new EntitySnapshot
-                {
-                    EntityId = new EntityId($"bbbb{i:D4}-0000-4000-8000-bbbbbbbbbbbb"),
-                    ConcurrencyTag = new ConcurrencyTag("1"),
-                    ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
-                    Data = jsonDoc.RootElement.Clone(),
-                    Relationships = System.Array.Empty<EntitySnapshot>(),
-                });
-            var pane = new WorkspacePaneViewModel(entity);
-            panes.Add(pane);
-            paneDocs[pane.Id] = new WorkspacePaneDocument(pane);
-        }
-        return (panes, paneDocs);
-    }
-
-    [Fact]
-    public void RefreshWorkspacePaneAltShortcutLabels_ThreePanes_LabelsAre1_2_3()
-    {
-        var (panes, paneDocs) = CreatePanesWithPaneDocs(3);
-        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
-
-        Assert.Equal("1", paneDocs[panes[0].Id].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("2", paneDocs[panes[1].Id].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void RefreshWorkspacePaneAltShortcutLabels_TenPanes_TenthPaneLabelIs0()
-    {
-        var (panes, paneDocs) = CreatePanesWithPaneDocs(10);
-        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
-
-        Assert.Equal("0", paneDocs[panes[9].Id].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void RefreshWorkspacePaneAltShortcutLabels_EleventhPane_LabelIsNull()
-    {
-        var (panes, paneDocs) = CreatePanesWithPaneDocs(11);
-        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
-
-        Assert.Null(paneDocs[panes[10].Id].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void RefreshWorkspacePaneAltShortcutLabels_PaneDocumentNotFound_OtherPanesStillLabelled()
-    {
-        var (panes, paneDocs) = CreatePanesWithPaneDocs(3);
-        // Remove the middle pane doc to simulate missing registry entry
-        paneDocs.Remove(panes[1].Id);
-
-        MainWindowViewModel.RefreshWorkspacePaneAltShortcutLabels(panes, id => paneDocs.GetValueOrDefault(id));
-
-        Assert.Equal("1", paneDocs[panes[0].Id].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", paneDocs[panes[2].Id].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    // ── Global Alt-N ordering / resolution (issue #1011) ─────────────────────
-
-    private static (System.Collections.Generic.List<WorkspacePaneViewModel> panes,
-                    System.Func<string, WorkspaceDocument?> getDocumentForTab,
-                    System.Collections.Generic.Dictionary<string, WorkspaceDocument> docs)
-        CreateMultiplePanesWithTabs(params int[] tabCountsPerPane)
-    {
-        var panes = new System.Collections.Generic.List<WorkspacePaneViewModel>();
-        var docs = new System.Collections.Generic.Dictionary<string, WorkspaceDocument>(System.StringComparer.Ordinal);
-        for (var pi = 0; pi < tabCountsPerPane.Length; pi++)
-        {
-            using var jsonDoc = System.Text.Json.JsonDocument.Parse(
-                $$$"""{"entity-id":"cccc{{{pi:D4}}}-0000-4000-8000-cccccccccccc","entity-types":["entity","workspace"],"display-name":{"default":"Pane {{{pi}}}"}}""");
-            var entity = new SubscribedEntityViewModel(
-                new EntitySnapshot
-                {
-                    EntityId = new EntityId($"cccc{pi:D4}-0000-4000-8000-cccccccccccc"),
-                    ConcurrencyTag = new ConcurrencyTag("1"),
-                    ModifiedTime = new Timestamp(System.DateTimeOffset.UtcNow, "1"),
-                    Data = jsonDoc.RootElement.Clone(),
-                    Relationships = System.Array.Empty<EntitySnapshot>(),
-                });
-            var pane = new WorkspacePaneViewModel(entity, id: $"workspace-{pi}");
-            for (var ti = 0; ti < tabCountsPerPane[pi]; ti++)
-            {
-                var tab = new EntityWorkspaceTabViewModel { Id = $"p{pi}-tab-{ti}", Title = $"P{pi} Tab {ti}" };
-                pane.Tabs.Add(tab);
-                docs[tab.Id] = new WorkspaceDocument(tab);
-            }
-
-            panes.Add(pane);
-        }
-
-        System.Func<string, WorkspaceDocument?> getDocumentForTab = id => docs.TryGetValue(id, out var doc) ? doc : null;
-        return (panes, getDocumentForTab, docs);
-    }
-
-    [Theory]
-    [InlineData(0, "1")]
-    [InlineData(8, "9")]
-    [InlineData(9, "0")]
-    [InlineData(10, null)]
-    [InlineData(-1, null)]
-    public void AltShortcutLabelForIndex_MapsZeroBasedIndexToBadgeLabel(int index, string? expected)
-    {
-        Assert.Equal(expected, MainWindowViewModel.AltShortcutLabelForIndex(index));
-    }
-
-    [Fact]
-    public void ComputeGlobalTabOrder_MultiplePanes_EnumeratesPaneByPaneLeftToRight()
-    {
-        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(2, 2);
-
-        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
-
-        Assert.Equal(
-            new[] { "p0-tab-0", "p0-tab-1", "p1-tab-0", "p1-tab-1" },
-            order.Select(entry => entry.Document.Id).ToArray());
-    }
-
-    [Fact]
-    public void AssignGlobalAltShortcutLabels_MultiplePanes_AssignsSequentialGlobalIndexAcrossAllPanes()
-    {
-        var (panes, getDocumentForTab, docs) = CreateMultiplePanesWithTabs(2, 2);
-        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
-
-        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
-
-        Assert.Equal("1", docs["p0-tab-0"].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("2", docs["p0-tab-1"].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("3", docs["p1-tab-0"].EffectiveTabHeader.AltShortcutLabel);
-        Assert.Equal("4", docs["p1-tab-1"].EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void FindTabByAltShortcutIndex_MultiplePanes_ResolvesTabDisplayingMatchingBadgeInOtherPane()
-    {
-        // Pane 0: badges 1,2 ; Pane 1: badges 3,4. Alt-3 (index 2) must land on the tab
-        // that displays badge "3" — which lives in the second (non-selected) pane.
-        var (panes, getDocumentForTab, docs) = CreateMultiplePanesWithTabs(2, 2);
-        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
-        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
-
-        var match = MainWindowViewModel.FindTabByAltShortcutIndex(order, 2);
-
-        Assert.NotNull(match);
-        Assert.Same(docs["p1-tab-0"], match.Value.Document);
-        Assert.Same(panes[1], match.Value.Pane);
-        Assert.Equal("3", match.Value.Document.EffectiveTabHeader.AltShortcutLabel);
-    }
-
-    [Fact]
-    public void FindTabByAltShortcutIndex_IndexBeyondBadgedTabs_ReturnsNull()
-    {
-        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(2, 2);
-        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
-        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
-
-        // Only four tabs are badged (1–4); requesting index 4 (badge "5") matches nothing.
-        Assert.Null(MainWindowViewModel.FindTabByAltShortcutIndex(order, 4));
-    }
-
-    [Fact]
-    public void FindTabByAltShortcutIndex_OutOfRangeIndex_ReturnsNull()
-    {
-        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(2);
-        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
-        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
-
-        Assert.Null(MainWindowViewModel.FindTabByAltShortcutIndex(order, -1));
-        Assert.Null(MainWindowViewModel.FindTabByAltShortcutIndex(order, 10));
-    }
-
-    [Fact]
-    public void BadgeAssignmentAndAltNResolution_UseSameOrder_ForEveryBadgedIndex()
-    {
-        // Regression guard for the reported divergence: after badges are assigned, resolving
-        // Alt-N for each badged index must return exactly the document at that global position.
-        var (panes, getDocumentForTab, _) = CreateMultiplePanesWithTabs(3, 2, 4);
-        var order = MainWindowViewModel.ComputeGlobalTabOrder(panes, getDocumentForTab);
-        MainWindowViewModel.AssignGlobalAltShortcutLabels(order);
-
-        var badgedCount = System.Math.Min(order.Count, 10);
-        for (var index = 0; index < badgedCount; index++)
-        {
-            var match = MainWindowViewModel.FindTabByAltShortcutIndex(order, index);
-            Assert.NotNull(match);
-            Assert.Same(order[index].Document, match.Value.Document);
-            Assert.Same(order[index].Pane, match.Value.Pane);
-        }
-    }
-
     // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
-    {
-        var templates = new WorkspaceDataTemplates();
-        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
-
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        Assert.NotNull(matchingTemplate);
-    }
-
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
     {
         var templates = new WorkspaceDataTemplates();
@@ -576,69 +252,235 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(matchingTemplate);
     }
 
-    // ── DockDataTemplates — DataTemplate presence for Dock header scope (#775) ─
+    // ── #1196: The outer tab-header body is a single keyed resource ───────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void DockDataTemplates_HasDataTemplateFor_TabHeaderViewModel()
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplate_IsDefinedExactlyOnceInApplicationResources()
+    {
+        // #1196: the outer DocumentControl.HeaderTemplate references this keyed
+        // resource explicitly via ContentControl.ContentTemplate; there must be
+        // exactly one definition so no implicit vm:TabHeaderViewModel lookup is
+        // required from inside the Dock.Avalonia tab-strip item scope.
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "TabHeaderTemplate", null, out var resource);
+
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new TabHeaderViewModel { Title = "T" }));
+
+        // The keyed template body must not be duplicated as an implicit
+        // DataTemplate in either DockDataTemplates or WorkspaceDataTemplates.
+        Assert.DoesNotContain(
+            new DockDataTemplates().OfType<IDataTemplate>(),
+            t => t.Match(new TabHeaderViewModel { Title = "T" }));
+        Assert.DoesNotContain(
+            new WorkspaceDataTemplates().OfType<IDataTemplate>(),
+            t => t.Match(new TabHeaderViewModel { Title = "T" }));
+    }
+
+    private static IDataTemplate ResolveTabHeaderTemplate()
+    {
+        // #1196: the single-source header body lives in App.Resources as the
+        // keyed "TabHeaderTemplate" (TabHeaderItemTemplates.axaml).
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "TabHeaderTemplate", null, out var resource));
+        return Assert.IsAssignableFrom<IDataTemplate>(resource);
+    }
+
+    // ── #1181: TabHeader title TextBlock exposes full title via ToolTip.Tip ──
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderDataTemplate_TitleTextBlock_HasToolTipBoundToTitle()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "My Tab" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        Assert.Equal("My Tab", ToolTip.GetTip(titleTextBlock));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderDataTemplate_LongTitle_ToolTipExposesFullUntruncatedText()
+    {
+        const string longTitle = "Copilot SDK sub-agent design document";
+        var viewModel = new TabHeaderViewModel { Title = longTitle };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        Assert.Equal(longTitle, ToolTip.GetTip(titleTextBlock));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderDataTemplate_TitleChanged_ToolTipUpdatesLive()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "Original" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        viewModel.Title = "Renamed";
+
+        Assert.Equal("Renamed", ToolTip.GetTip(titleTextBlock));
+    }
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
+    {
+        var template = ResolveTabHeaderTemplate();
+        var control = template.Build(viewModel);
+        Assert.NotNull(control);
+        control!.DataContext = viewModel;
+
+        var host = new ContentControl { Content = control };
+        host.Measure(new Avalonia.Size(1000, 600));
+        host.Arrange(new Avalonia.Rect(0, 0, 1000, 600));
+
+        return control.GetLogicalDescendants()
+            .OfType<TextBlock>()
+            .First(tb => tb.Text == viewModel.Title);
+    }
+
+    // ── #1196: Indicator DataTemplates are keyed resources in App.Resources ────
+    //
+    // The previous DockDataTemplates / WorkspaceDataTemplates presence tests are
+    // superseded by the Application-resources tests below
+    // (AgentRunningIndicatorTabHeaderItemTemplate_IsDefinedExactlyOnceInApplicationResources,
+    // TabHeaderViewModelTemplate_WithRunningIndicatorItem_MaterialisesPulsatingBrainProgressBar,
+    // etc.). The templates now live in exactly one place — TabHeaderItemTemplates.axaml.
+
+    // ── #1119: DockDataTemplates must include a template for WorkspacesPaneDock ─────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void DockDataTemplates_HasDataTemplateFor_WorkspacesPaneDock()
     {
         var templates = new DockDataTemplates();
+        var viewModel = new WorkspacesPaneDock();
+
+        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+
+        Assert.NotNull(matchingTemplate);
+    }
+
+    // ── #1196: Application-resource-scoped indicator DataTemplates ────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AgentRunningIndicatorTabHeaderItemTemplate_IsDefinedExactlyOnceInApplicationResources()
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "AgentRunningIndicatorTabHeaderItemTemplate", null, out var resource);
+
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new AgentRunningIndicatorTabHeaderItemViewModel()));
+
+        AssertClassOccursInExactlyOneTemplateFile("pulsating-brain");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void NotificationIndicatorTabHeaderItemTemplate_IsDefinedExactlyOnceInApplicationResources()
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "NotificationIndicatorTabHeaderItemTemplate", null, out var resource);
+
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new NotificationIndicatorTabHeaderItemViewModel()));
+
+        AssertClassOccursInExactlyOneTemplateFile("exclamation-indicator");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModelTemplate_WithRunningIndicatorItem_MaterialisesPulsatingBrainProgressBar()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+        viewModel.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+
+        var control = InflateAndRenderTabHeader(viewModel);
+
+        var progressBar = control.GetLogicalDescendants()
+            .OfType<ProgressBar>()
+            .FirstOrDefault(pb => pb.Classes.Contains("pulsating-brain"));
+
+        Assert.NotNull(progressBar);
+        Assert.Contains("glyph-indicator", progressBar!.Classes);
+        Assert.True(progressBar.IsIndeterminate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModelTemplate_WithNotificationIndicatorItem_MaterialisesExclamationProgressBar()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "T" };
+        viewModel.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+
+        var control = InflateAndRenderTabHeader(viewModel);
+
+        var progressBar = control.GetLogicalDescendants()
+            .OfType<ProgressBar>()
+            .FirstOrDefault(pb => pb.Classes.Contains("exclamation-indicator"));
+
+        Assert.NotNull(progressBar);
+        Assert.Contains("glyph-indicator", progressBar!.Classes);
+        Assert.True(progressBar.IsIndeterminate);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModelTemplate_WithNeitherIndicator_ShowsNeitherBrainNorExclamation()
+    {
         var viewModel = new TabHeaderViewModel { Title = "T" };
 
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        var control = InflateAndRenderTabHeader(viewModel);
 
-        Assert.NotNull(matchingTemplate);
+        Assert.DoesNotContain(
+            control.GetLogicalDescendants().OfType<ProgressBar>(),
+            pb => pb.Classes.Contains("pulsating-brain") || pb.Classes.Contains("exclamation-indicator"));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void DockDataTemplates_HasDataTemplateFor_AgentRunningIndicatorTabHeaderItemViewModel()
+    private static Avalonia.Controls.Control InflateAndRenderTabHeader(TabHeaderViewModel viewModel)
     {
-        var templates = new DockDataTemplates();
-        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
+        var template = ResolveTabHeaderTemplate();
+        var control = template.Build(viewModel);
+        Assert.NotNull(control);
+        control!.DataContext = viewModel;
 
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        Assert.NotNull(matchingTemplate);
+        // Attach to a Window so the StaticResource lookups on
+        // ItemsControl.DataTemplates can walk the StylingParent chain up to
+        // Application.Current and resolve the keyed indicator DataTemplates
+        // in TabHeaderItemTemplates.axaml.
+        var window = new Window { Content = control };
+        window.Show();
+        // Force the layout pass so ItemsControl materialises and the
+        // {StaticResource} lookups resolve against Application.Current.
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        return control;
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void DockDataTemplates_HasDataTemplateFor_NotificationIndicatorTabHeaderItemViewModel()
+    private static void AssertClassOccursInExactlyOneTemplateFile(string cssClassOrText)
     {
-        var templates = new DockDataTemplates();
-        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
+        var repoRoot = FindRepositoryRoot();
+        var templatesDir = System.IO.Path.Combine(repoRoot.FullName, "Phantom.Workspaces", "Templates");
+        // Match ProgressBar-classes markup only, so passing mentions in XML comments
+        // do not count as a duplicate template definition.
+        var needle = $"Classes=\"glyph-indicator {cssClassOrText}\"";
+        var matches = System.IO.Directory
+            .EnumerateFiles(templatesDir, "*.axaml", System.IO.SearchOption.AllDirectories)
+            .Where(path => System.IO.File.ReadAllText(path).Contains(needle))
+            .ToList();
 
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        Assert.NotNull(matchingTemplate);
+        Assert.Single(matches);
     }
 
-    // ── AgentRunningIndicatorTabHeaderItemViewModel DataTemplate class ────────
-
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void AgentRunningIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
+    private static System.IO.DirectoryInfo FindRepositoryRoot()
     {
-        var viewModel = new AgentRunningIndicatorTabHeaderItemViewModel();
-        var templates = new WorkspaceDataTemplates();
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        var control = matchingTemplate.Build(viewModel);
-
-        var progressBar = Assert.IsType<ProgressBar>(control);
-        Assert.Contains("glyph-indicator", progressBar.Classes);
-        Assert.Contains("pulsating-brain", progressBar.Classes);
-    }
-
-    [PhantomAvaloniaFact(Timeout = 15_000)]
-    public void NotificationIndicatorDataTemplate_ProgressBar_UsesGlyphIndicatorClasses()
-    {
-        var viewModel = new NotificationIndicatorTabHeaderItemViewModel();
-        var templates = new WorkspaceDataTemplates();
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
-
-        var control = matchingTemplate.Build(viewModel);
-
-        var progressBar = Assert.IsType<ProgressBar>(control);
-        Assert.Contains("glyph-indicator", progressBar.Classes);
-        Assert.Contains("exclamation-indicator", progressBar.Classes);
+        var current = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (System.IO.File.Exists(System.IO.Path.Combine(current.FullName, "Phantom.Workspaces.slnx")))
+            {
+                return current;
+            }
+            current = current.Parent;
+        }
+        throw new System.IO.DirectoryNotFoundException(
+            "Could not locate repository root from test base directory.");
     }
 
     // ── AgentSessionWorkspaceTabViewModel – SetReady wires tab header indicators
@@ -650,7 +492,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -664,7 +506,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -679,7 +521,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -694,7 +536,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -710,7 +552,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
 
         tab.SetReady(agentViewModel, loggerFactory);
 
@@ -728,7 +570,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
         tab.SetReady(agentViewModel, loggerFactory);
 
         doc.HasUnreadNotification = true;
@@ -745,7 +587,7 @@ public sealed class TabHeaderViewModelTests
 
         await using var agentChat = await CreateMinimalEchoAgentChatAsync();
         var loggerFactory = new ObservableLoggerFactory();
-        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory);
+        await using var agentViewModel = new AgentViewModel(agentChat, "test", "", loggerFactory, TaskScheduler.Default);
         tab.SetReady(agentViewModel, loggerFactory);
 
         doc.HasUnreadNotification = true;
@@ -775,5 +617,73 @@ public sealed class TabHeaderViewModelTests
         {
             AgentDefinition = agentDefinition,
         });
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceDocument_EffectiveTabHeader_TitleIsNonEmpty_AfterRestore()
+    {
+        // Regression for #1190: after a full save-close-reopen cycle, every restored
+        // WorkspaceDocument's EffectiveTabHeader.Title (bound in DockDataTemplates.axaml:136
+        // via <TextBlock Text="{Binding Title}"/>) must be non-empty. Directly targets the
+        // symptom the user reported.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var entityId = new Phantom.Workspaces.Data.EntityId("11901190-2222-4000-8000-000000000001");
+        var entity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, entityId, """
+            {
+              "entity-id": "11901190-2222-4000-8000-000000000001",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "1190-header-tab"]],
+              "display-name": { "default": "" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "h" } }
+            }
+            """);
+
+        var workspaceId = new Phantom.Workspaces.Data.EntityId("11901190-2222-4000-8000-0000000000f1");
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Header Cycle WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), System.StringComparison.Ordinal));
+        Assert.NotNull(pane);
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(pane!);
+
+        var tab = new EntityWorkspaceTabViewModel
+        {
+            Id = "1190-header-tab",
+            Title = "before",
+            Entity = entity,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var contentDock = MainWindowIntegrationTests.FindDocumentDockIn(pane!.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "1190-header-tab");
+
+        tab.Title = "After Modify";
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.FirstOrDefault(
+            p => string.Equals(p.Id, workspaceId.ToString(), System.StringComparison.Ordinal));
+        Assert.NotNull(restoredPane);
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(restoredPane!);
+
+        var restoredDoc = MainWindowViewModel.EnumerateAllDocuments(restoredPane!.ContentLayout!)
+            .First(d => d.Id == "1190-header-tab");
+        Assert.False(string.IsNullOrEmpty(restoredDoc.EffectiveTabHeader.Title),
+            $"EffectiveTabHeader.Title must be non-empty after restore (was '{restoredDoc.EffectiveTabHeader.Title}').");
+        Assert.Equal("After Modify", restoredDoc.EffectiveTabHeader.Title);
     }
 }

@@ -128,6 +128,61 @@ public sealed class SubAgentTests
         Assert.Empty(((IRunningSubAgent)subAgent).SubAgents);
     }
 
+    [Fact]
+    public async Task SubAgent_AcquireLeaseAsync_DoesNotRegisterChildInRunningSessions()
+    {
+        // Issue #1205: SubAgent.AcquireLeaseAsync funnels through IRunningAgentChatFactory.GetAsync
+        // on the lazy path. That call must opt out of registration so the child does not appear in
+        // the top-right "Running agents" popup as a "No Open Tab" row after restart.
+        var sessionId = new AgentSessionId("lazy-1205");
+        var factory = new RecordingFactory();
+        var subAgent = new SubAgent(sessionId, (IRunningAgentChatFactory?)factory);
+
+        await using var lease = await subAgent.AcquireLeaseAsync();
+
+        Assert.Equal(1, factory.GetAsyncCallCount);
+        Assert.False(factory.LastRegisterAsRunningAgent);
+        Assert.Empty(factory.RunningSessions);
+    }
+
+    private sealed class RecordingFactory : IRunningAgentChatFactory
+    {
+        public int GetAsyncCallCount { get; private set; }
+        public bool LastRegisterAsRunningAgent { get; private set; } = true;
+
+        public ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
+
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
+        {
+            GetAsyncCallCount++;
+            LastRegisterAsRunningAgent = registerAsRunningAgent;
+            if (registerAsRunningAgent)
+            {
+                RunningSessions.Add(new RunningAgentChat(sessionId, this));
+            }
+            var lease = new RunningAgentChatLease(sessionId, null!, () => ValueTask.CompletedTask);
+            return Task.FromResult(lease);
+        }
+
+        public Task<RunningAgentChatLease> CreateAsync(
+            AgentDefinition definition,
+            AgentSessionId sessionId,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            string? nameOverride = null, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
+            => GetAsync(sessionId, registerAsRunningAgent, ct);
+    }
+
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         public int GetAsyncCallCount { get; private set; }
@@ -135,7 +190,7 @@ public sealed class SubAgentTests
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             GetAsyncCallCount++;
             LastRequestedSessionId = sessionId;
@@ -147,7 +202,9 @@ public sealed class SubAgentTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
-            CancellationToken ct = default)
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            string? nameOverride = null, CancellationToken ct = default)
             => throw new NotImplementedException();
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(
@@ -156,7 +213,7 @@ public sealed class SubAgentTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
-            => GetAsync(sessionId, ct);
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
+            => GetAsync(sessionId, ct: ct);
     }
 }

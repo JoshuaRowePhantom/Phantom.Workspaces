@@ -29,6 +29,15 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     private readonly ITrustedExecutorSelector trustedExecutorSelector;
     private readonly IRunningAgentChatTable runningAgentChatTable;
 
+    /// <summary>
+    /// The running-agent-chat table used by this handler. Exposed so co-located view models that
+    /// share the launchpad → session flow (see <c>AgentManifestLaunchpadViewModel</c>) can acquire
+    /// chats through the same factory-mediated path required by #1109 / #1180 rather than the
+    /// static <see cref="AgentFactory.CreateAgentChatAsync"/> helper, which bypasses
+    /// <see cref="AgentChatFactory"/>'s <c>WithSelfAsFactory</c> self-injection.
+    /// </summary>
+    internal IRunningAgentChatTable RunningAgentChatTable => this.runningAgentChatTable;
+
     public OpenAgentSessionShortcutHandler(
         AgentSessionShortcutContext agentSessionShortcutContext,
         ITrustedExecutorSelector trustedExecutorSelector,
@@ -164,6 +173,24 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
     }
 
     /// <summary>
+    /// #1129: Restore-aware factory override that routes the workspace-open/restore path
+    /// through the shortcut pipeline. Delegates to
+    /// <see cref="TryCreateAgentSessionTabForRestoreAsync"/> so agent-session entities keep
+    /// producing an <see cref="AgentSessionWorkspaceTabViewModel"/> (not the generic entity
+    /// card) while preserving the saved tab metadata.
+    /// </summary>
+    public override async Task<WorkspaceTabViewModel?> TryCreateTabForRestoreAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel,
+        string? tabId,
+        string? title,
+        string? dockRegion)
+    {
+        return await this.TryCreateAgentSessionTabForRestoreAsync(
+            mainWindowViewModel, entityViewModel, tabId, title, dockRegion);
+    }
+
+    /// <summary>
     /// Creates an agent chat for the given session in the <see cref="IRunningAgentChatTable"/>,
     /// enqueues <paramref name="resumePrompt"/> as the first user message, and returns the
     /// acquired lease. Returns <see langword="null"/> when the entity data is missing required fields.
@@ -201,6 +228,9 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 AgentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel),
                 EntityName = agentSessionEntity.DisplayName,
                 EntityId = agentSessionEntity.EntityId.ToString(),
+                // #1135: For auto-resume, the session's owning workspace is the currently-selected
+                // pane at auto-resume time (the pane the tab will be restored into).
+                WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
             });
 
         lease.AgentChat.EnqueueUserMessage(resumePrompt);
@@ -212,8 +242,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         SubscribedEntityViewModel agentSessionEntity,
         AgentChat agentChat)
     {
+        // #1122: Capture the UI-thread scheduler synchronously before any awaits so it truly
+        // reflects the calling thread's SynchronizationContext, then thread it through to
+        // AgentViewModel so its sub-agent restore continuation mutates UI-bound state on the
+        // UI thread.
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
         var loggerFactory = new ObservableLoggerFactory();
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString());
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, agentSessionEntity.EntityId.ToString(), foregroundScheduler);
         var tab = new AgentSessionWorkspaceTabViewModel
         {
             Id = agentSessionEntity.EntityId.ToString(),
@@ -269,10 +304,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var owningProfileEntityId = ReadOwningProfileEntityId(agentSessionEntityData);
-        var targetClientInstance = owningProfileEntityId != default
-            && owningProfileEntityId != localProfileEntityId
-            ? owningProfileEntityId.ToString()
+        var hostProfileEntityId = ReadHostProfileEntityId(agentSessionEntityData);
+        var targetClientInstance = hostProfileEntityId != default
+            && hostProfileEntityId != localProfileEntityId
+            ? hostProfileEntityId.ToString()
             : TrustProfile.LocalClientInstance;
         var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
 
@@ -312,11 +347,14 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                     EntityId = agentSessionEntity.EntityId.ToString(),
                     EntityDisplayName = entityDisplayName,
                     EntityDescription = entityDescription,
+                    // #1135: Stamp the pane the session was started/opened in so cross-workspace
+                    // status-button clicks (running-agent brain) can switch to it before focusing.
+                    WorkspaceId = tab.WorkspacePaneId,
                 });
             agentChat = lease.AgentChat;
         }
 
-        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id);
+        var agent = BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, agentSessionEntity.DisplayName, tab.Id, foregroundScheduler);
 
         var trustedExecutorIdentifier = targetClientInstance;
 
@@ -410,13 +448,18 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         });
     }
 
-    private static EntityId ReadOwningProfileEntityId(JsonElement entityData)
+    private static EntityId ReadHostProfileEntityId(JsonElement entityData)
     {
-        if (entityData.TryGetProperty("owning-profile-entity-id", out var element)
-            && element.ValueKind == JsonValueKind.String
-            && Guid.TryParse(element.GetString(), out var guid))
+        // Prefer the schema-canonical field; fall back to the legacy alias so sessions persisted
+        // before the field name was unified still route to the correct hosting profile.
+        foreach (var propertyName in new[] { "host-profile-entity-id", "owning-profile-entity-id" })
         {
-            return new EntityId(guid);
+            if (entityData.TryGetProperty(propertyName, out var element)
+                && element.ValueKind == JsonValueKind.String
+                && Guid.TryParse(element.GetString(), out var guid))
+            {
+                return new EntityId(guid);
+            }
         }
 
         return default;
@@ -430,9 +473,10 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
         string title,
-        string agentSessionTabId)
+        string agentSessionTabId,
+        TaskScheduler foregroundScheduler)
     {
-        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title, agentSessionTabId);
+        return BuildAgentViewModel(mainWindowViewModel, loggerFactory, agentChat, title, agentSessionTabId, foregroundScheduler);
     }
 
     private static AgentViewModel BuildAgentViewModel(
@@ -440,9 +484,13 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         ObservableLoggerFactory loggerFactory,
         AgentChat agentChat,
         string title,
-        string agentSessionTabId)
+        string agentSessionTabId,
+        TaskScheduler foregroundScheduler)
     {
-        return new AgentViewModel(agentChat, title, agentChat.Description, loggerFactory)
+        // #1122: foregroundScheduler is a required constructor parameter on AgentViewModel so
+        // sub-agent restore continuations run on the UI thread. Callers capture the scheduler
+        // on the UI thread and thread it through.
+        return new AgentViewModel(agentChat, title, agentChat.Description, loggerFactory, foregroundScheduler)
         {
             OpenUrlHandler = url => _ = mainWindowViewModel.OpenTabAsync(
                 new WebViewModel(url, mainWindowViewModel)

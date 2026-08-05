@@ -7,6 +7,15 @@
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Controls.WebView" />
     <PackageReference Include="Dock.Avalonia" />
+    <!-- PrivateAssets=compile keeps the Markdown.Avalonia root 'Markdown' namespace from leaking at
+         compile time into consumers (e.g. Agent.Gui uses Markdig's Markdown.Parse) while still
+         flowing the runtime assemblies so the application ships the free renderer. -->
+    <PackageReference Include="Markdown.Avalonia.Tight">
+      <PrivateAssets>compile</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="Markdown.Avalonia.SyntaxHigh">
+      <PrivateAssets>compile</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="VtNetCore" />
   </ItemGroup>
   <ItemGroup>

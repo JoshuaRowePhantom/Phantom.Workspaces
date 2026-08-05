@@ -133,6 +133,24 @@ public static class AgentFactory
     }
 
     /// <summary>
+    /// Extracts the agent's tools and tags each one with the <see cref="Core.Transport.ExecutorTarget"/>
+    /// execution class it must run in, based on the tool's <see cref="Tool.Kind"/>. Tagging happens at
+    /// construction time (from the static tool kind), not at call time: <c>mcp</c>/<c>function</c> tools
+    /// are tagged <see cref="Core.Transport.ExecutorTarget.AgentExecutor"/>, <c>workspace-gui</c>/
+    /// <c>workspace-entity</c> tools <see cref="Core.Transport.ExecutorTarget.GuiLocal"/>, and
+    /// <c>agent-session</c>/<c>workspace-agent-session</c> tools
+    /// <see cref="Core.Transport.ExecutorTarget.HostingInstance"/>.
+    /// </summary>
+    /// <param name="agent">The agent definition to extract and tag tools from.</param>
+    /// <returns>The agent's tools paired with their resolved execution class.</returns>
+    public static IReadOnlyList<(Tool Tool, Core.Transport.ExecutorTarget Target)> ExtractToolExecutorTargets(
+        AgentDefinition agent)
+    {
+        var tools = ExtractTools(agent) ?? [];
+        return [.. tools.Select(tool => (tool, Core.Transport.ExecutorTargetResolver.ForTool(tool)))];
+    }
+
+    /// <summary>
     /// Gets the system instructions from a PromptAgent.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract instructions from.</param>
@@ -187,9 +205,22 @@ public static class AgentFactory
         AgentServices? services,
         AgentInputQueueManager? queueManager = null,
         IApiKeyResolver? apiKeyResolver = null,
-        ISubAgentChatRegistry? subAgentChatRegistry = null)
+        ISubAgentChatRegistry? subAgentChatRegistry = null,
+        SubAgentDispatcherDependencies? dispatcherDependencies = null)
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
+
+        // #1186: A restored hosted Copilot sub-agent stub can carry a persisted
+        // AgentDefinition with no Model (either the definition is missing entirely,
+        // or the persisted PromptAgent's Model round-tripped as null because the
+        // child was hosted by the Copilot CLI and never had its own model). Falling
+        // through to the null-model throw hangs startup (see #1186). Route those
+        // stubs through the same fast-path that CopilotSubAgentRouter uses so
+        // constructing a chat client for a restored sub-agent stub never faults.
+        if (agent is null || (agent as PromptAgent)?.Model is null)
+        {
+            return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
+        }
 
         var model = (agent as PromptAgent)?.Model;
         if (model is null)
@@ -226,8 +257,9 @@ public static class AgentFactory
             "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
             "openai" or "azure-openai" => CreateGitHubCopilotByokResult(provider, model, services, queueManager, resolver, subAgentChatRegistry),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
+            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(services, dispatcherDependencies),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure-openai"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, sub-agent-dispatcher, ollama, openai, azure-openai"),
         };
     }
 
@@ -251,9 +283,18 @@ public static class AgentFactory
         AgentInputQueueManager? queueManager = null,
         IApiKeyResolver? apiKeyResolver = null,
         ISubAgentChatRegistry? subAgentChatRegistry = null,
+        SubAgentDispatcherDependencies? dispatcherDependencies = null,
         CancellationToken cancellationToken = default)
     {
         var resolver = apiKeyResolver ?? EnvironmentApiKeyResolver.Instance;
+
+        // #1186: See CreateChatClient for rationale — restored hosted sub-agent
+        // stubs with empty AgentDefinitions must reach the sub-agent fast-path
+        // rather than throwing the null-model guard on startup.
+        if (agent is null || (agent as PromptAgent)?.Model is null)
+        {
+            return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
+        }
 
         var model = (agent as PromptAgent)?.Model;
         if (model is null)
@@ -285,9 +326,54 @@ public static class AgentFactory
             "github-copilot" => await CreateGitHubCopilotResultAsync(model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "openai" or "azure-openai" => await CreateGitHubCopilotByokResultAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
+            "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(services, dispatcherDependencies),
             _ => throw new InvalidOperationException(
-                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, ollama, openai, azure-openai"),
+                $"Unknown or unsupported provider: {provider}. Supported: echo, test, github-models, github-copilot, github-copilot-subagent, sub-agent-dispatcher, ollama, openai, azure-openai"),
         };
+    }
+
+    // Constructs the SubAgentDispatcherChatClient for the "sub-agent-dispatcher" provider from the
+    // supplied dependencies. The dispatcher entity name, resolved AgentDefinitionTool list and
+    // embeddings/data-access services are threaded in via SubAgentDispatcherDependencies because
+    // AgentServices (in Llm.Interfaces) cannot reference the Data.Core types these require. The
+    // running-agent-chat factory falls back to AgentServices.RunningAgentChatFactory when it is not
+    // supplied explicitly.
+    private static ChatClientResult CreateSubAgentDispatcherResult(
+        AgentServices? services,
+        SubAgentDispatcherDependencies? dependencies)
+    {
+        if (dependencies is null)
+        {
+            throw new InvalidOperationException(
+                "The 'sub-agent-dispatcher' provider requires SubAgentDispatcherDependencies to construct "
+                + "its SubAgentDispatcherChatClient. Supply them via the dispatcherDependencies parameter.");
+        }
+
+        var factory = dependencies.RunningAgentChatFactory
+            ?? services?.RunningAgentChatFactory as IRunningAgentChatFactory
+            ?? throw new InvalidOperationException(
+                "The 'sub-agent-dispatcher' provider requires an IRunningAgentChatFactory, supplied either in "
+                + "SubAgentDispatcherDependencies or via AgentServices.RunningAgentChatFactory.");
+
+        var dataAccessLayer = dependencies.DataAccessLayer
+            ?? throw new InvalidOperationException(
+                "The 'sub-agent-dispatcher' provider requires an IDataAccessLayer in SubAgentDispatcherDependencies.");
+
+        var options = new SubAgentDispatcherOptions
+        {
+            AgentDefinitionTools = dependencies.AgentDefinitionTools,
+        };
+
+        var client = new SubAgentDispatcherChatClient(
+            factory,
+            dependencies.EmbeddingsProvider,
+            dataAccessLayer,
+            dependencies.DispatcherEntityName,
+            options,
+            subAgentServices: services,
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+
+        return new ChatClientResult(client, "Sub-agent dispatcher");
     }
 
     // Wraps the inner client with ToolResultSteeringMiddleware when a queue manager is provided.
@@ -508,6 +594,7 @@ public static class AgentFactory
                 ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
                 ForegroundScheduler = createAgentChatRequest.ForegroundScheduler,
+                TimeProvider = createAgentChatRequest.TimeProvider ?? TimeProvider.System,
             });
 
         // Complete the late-bound reference so AgentSessionToolset tools can access the parent chat.
@@ -685,11 +772,11 @@ public static class AgentFactory
 
         if (model.Connection is ApiKeyConnection connWithEndpoint && !string.IsNullOrWhiteSpace(connWithEndpoint.Endpoint))
         {
-            // Custom endpoints are BYOK; they are selected by the provider string, not by an
-            // endpoint-presence heuristic on the built-in provider (issue #896).
-            throw new InvalidOperationException(
-                "The github-copilot provider is for built-in Copilot models and does not accept a connection endpoint. "
-                + "Use provider 'openai' or 'azure-openai' for a custom (BYOK) endpoint.");
+            // github-copilot + explicit endpoint == Copilot SDK BYOK against an OpenAI-compatible
+            // endpoint (e.g. local Ollama). The wire provider defaults to "openai" (matching the
+            // schema's providerType default) so there is no ambiguous endpoint-presence heuristic
+            // (cf. issue #896). Delegating here keeps the schema and runtime in agreement (#1106).
+            return CreateGitHubCopilotByokClient("openai", model, services, queueManager, resolver, subAgentChatRegistry);
         }
 
         // Authenticate as a Copilot user, optionally with an explicit GitHub token. When no token
@@ -783,9 +870,11 @@ public static class AgentFactory
 
         if (model.Connection is ApiKeyConnection connWithEndpoint && !string.IsNullOrWhiteSpace(connWithEndpoint.Endpoint))
         {
-            throw new InvalidOperationException(
-                "The github-copilot provider is for built-in Copilot models and does not accept a connection endpoint. "
-                + "Use provider 'openai' or 'azure-openai' for a custom (BYOK) endpoint.");
+            // github-copilot + explicit endpoint == Copilot SDK BYOK against an OpenAI-compatible
+            // endpoint (e.g. local Ollama). Route through the BYOK client with the "openai" wire
+            // provider (schema default); see #1106.
+            return await CreateGitHubCopilotByokClientAsync(
+                "openai", model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false);
         }
 
         var gitHubToken = model.Connection switch

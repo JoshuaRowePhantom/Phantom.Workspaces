@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Testing;
+
 namespace Phantom.Workspaces.Data.Offline.Tests;
 
 internal static class TestPathFactory
@@ -13,4 +15,16 @@ internal static class TestPathFactory
         Directory.CreateDirectory(path);
         return path;
     }
+
+    public static TempDirectory CreateIsolatedTempDirectory(
+        string name)
+    {
+        var parent = Path.Combine(
+            Path.GetTempPath(),
+            "Phantom.Workspaces.Test",
+            name);
+        Directory.CreateDirectory(parent);
+        return TempDirectory.CreateInside(parent, prefix: string.Empty);
+    }
 }
+

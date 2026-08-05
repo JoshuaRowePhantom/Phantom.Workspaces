@@ -58,30 +58,51 @@ public sealed class ReverseHttpForwardingTransportFactory : ITransportFactory
         {
             var completed = await Task.WhenAny(pending).ConfigureAwait(false);
             pending.Remove(completed);
+
+            HubConnectionAttempt winner;
             try
             {
-                var winner = await completed.ConfigureAwait(false);
-                await raceCancellation.CancelAsync().ConfigureAwait(false);
-                _ = DisposeLosingAttemptsAsync(pending);
-                try
-                {
-                    using var relayRequest = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
-                    {
-                        ["type"] = "reverse-http",
-                        ["entity-id"] = entityId,
-                    }));
-                    var relayChannel = await winner.Transport.ConnectToMessageChannelAsync(relayRequest.RootElement, ct).ConfigureAwait(false);
-                    return new ReverseHttpTransport(relayChannel);
-                }
-                catch
-                {
-                    await winner.Transport.DisposeAsync().ConfigureAwait(false);
-                    throw;
-                }
+                winner = await completed.ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 failures.Add(ex);
+                continue;
+            }
+
+            // A hub connection won the race. From here a relay failure is terminal (the target machine
+            // exists but rejected the relay, e.g. not-registered) and must propagate to the caller rather
+            // than being retried against another hub.
+            await raceCancellation.CancelAsync().ConfigureAwait(false);
+            _ = DisposeLosingAttemptsAsync(pending);
+            try
+            {
+                using var relayRequest = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string>
+                {
+                    ["type"] = "reverse-http",
+                    ["entity-id"] = entityId,
+                }));
+                var relayChannel = await winner.Transport.ConnectToMessageChannelAsync(relayRequest.RootElement, ct).ConfigureAwait(false);
+                var transport = new ReverseHttpTransport(relayChannel);
+                try
+                {
+                    // Surface hub-side relay rejections (e.g. channel-open-error {"error-code":"not-registered"})
+                    // as a TransportException before returning, rather than handing back a transport whose
+                    // round-trips would silently hang.
+                    await transport.WaitForRelayEstablishedAsync(ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    await transport.DisposeAsync().ConfigureAwait(false);
+                    throw;
+                }
+
+                return transport;
+            }
+            catch
+            {
+                await winner.Transport.DisposeAsync().ConfigureAwait(false);
+                throw;
             }
         }
 

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Linq;
-using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -29,13 +29,13 @@ public sealed class InboundConnectionViewModel
 /// <summary>
 /// Surfaces network connectivity for the connection-status window (opened from the top-right network
 /// icon). The inbound list ("who is connected to us") is projected live from the
-/// <see cref="ReverseExecutionRegistry"/>; the outbound list ("where we are connected to") is fed by
-/// the connecting-side worker/clients as they are wired in. See
+/// <see cref="ReverseConnectionStatusRegistry"/>; the outbound list ("where we are connected to") is
+/// fed by the connecting-side worker/clients as they are wired in. See
 /// <c>docs/design/reverse-tunnel-trust-execution.md</c>.
 /// </summary>
 public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
 {
-    private readonly ReverseExecutionRegistry registry;
+    private readonly ReverseConnectionStatusRegistry registry;
     private readonly Action<Action> dispatch;
     private string? accessPoint;
     private string? localAccessPoint;
@@ -43,12 +43,12 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
     private DevTunnelHostState? devTunnelState;
     private string? devTunnelError;
 
-    /// <param name="registry">The reverse-execution registry providing the inbound connections.</param>
+    /// <param name="registry">The transport-layer connection-status registry providing the inbound connections.</param>
     /// <param name="dispatch">
     /// Marshals a refresh onto the UI thread. Defaults to running synchronously (tests); the GUI
     /// passes a dispatcher post.
     /// </param>
-    public ConnectionStatusViewModel(ReverseExecutionRegistry registry, Action<Action>? dispatch = null)
+    public ConnectionStatusViewModel(ReverseConnectionStatusRegistry registry, Action<Action>? dispatch = null)
     {
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.dispatch = dispatch ?? (action => action());

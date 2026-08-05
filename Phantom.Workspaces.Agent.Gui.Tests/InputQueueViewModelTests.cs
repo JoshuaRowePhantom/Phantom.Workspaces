@@ -63,13 +63,15 @@ public sealed class InputQueueViewModelTests
         viewModel.InputText = "queued";
 
         viewModel.SubmitToNewQueue();
-        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "new queue submission to complete");
 
+        // Ctrl+Shift+Q stages the message in a new Held queue that does not dispatch (issue #1070).
         Assert.Equal(2, chat.InputQueues.Count);
-        Assert.Equal(2, chat.History.Count);
-        Assert.Equal("queued", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
         Assert.Equal(2, viewModel.Queues.Count);
-        Assert.Equal("queued", viewModel.Queues[1].SelectedImmediacyOption.Label);
+        Assert.True(viewModel.Queues[1].IsHeld);
+        Assert.Equal("held", viewModel.Queues[1].SelectedImmediacyOption.Label);
+        var item = Assert.Single(viewModel.Queues[1].Items);
+        Assert.Equal("queued", item.Text);
+        Assert.Empty(chat.History);
     }
 
     [Fact]
@@ -119,11 +121,12 @@ public sealed class InputQueueViewModelTests
         viewModel.SubmitToNewQueue();
 
         var queueVm = viewModel.Queues[1];
-        Assert.Equal("queued", queueVm.Composer.SelectedImmediacyOption.Label);
-
-        queueVm.SetImmediacy(QueueImmediacyOption.All.First(option => option.Value == AgentInputQueueImmediacy.Held));
-
+        // Ctrl+Shift+Q creates the queue Held (issue #1070); the composer status option tracks it.
         Assert.Equal("held", queueVm.Composer.SelectedImmediacyOption.Label);
+
+        queueVm.SetImmediacy(QueueImmediacyOption.All.First(option => option.Value == AgentInputQueueImmediacy.Queue));
+
+        Assert.Equal("queued", queueVm.Composer.SelectedImmediacyOption.Label);
     }
 
     [Fact]
@@ -187,6 +190,81 @@ public sealed class InputQueueViewModelTests
         Assert.Single(queue.Items);
         Assert.Equal("held queue", queue.Items[0].Text);
         Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public async Task SubmitToNewQueue_WhenNoQueuesHeld_CreatesHeldQueue()
+    {
+        // Issue #1070: Ctrl+Shift+Q must create the queue Held even when the default queue is active.
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        Assert.False(chat.DefaultInputQueue.IsHeld);
+
+        viewModel.InputText = "stage me";
+        viewModel.SubmitToNewQueue();
+
+        Assert.Equal(2, chat.InputQueues.Count);
+        Assert.True(chat.InputQueues[1].IsHeld);
+        Assert.True(viewModel.Queues[1].IsHeld);
+    }
+
+    [Fact]
+    public async Task SubmitToNewQueue_CreatesHeldQueue_DoesNotBeginProcessing()
+    {
+        // Issue #1070: the staged message must not dispatch until the queue is released.
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "do not run yet";
+
+        viewModel.SubmitToNewQueue();
+
+        var queue = viewModel.Queues[1];
+        Assert.Single(queue.Items);
+        Assert.Equal("do not run yet", queue.Items[0].Text);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public async Task SubmitToNewQueue_AfterUnhold_QueueProcessesEnqueuedItem()
+    {
+        // Issue #1070: releasing the Held queue dispatches the previously staged message.
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        viewModel.InputText = "run after release";
+        viewModel.SubmitToNewQueue();
+
+        var queue = chat.InputQueues[1];
+        Assert.True(queue.IsHeld);
+        Assert.Empty(chat.History);
+
+        chat.QueueManager.SetQueueHeld(queue, held: false);
+
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "released queue to process staged item");
+
+        Assert.False(queue.IsHeld);
+        Assert.Equal("run after release", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+    }
+
+    [Fact]
+    public async Task SubmitToDefaultQueue_RetainsActiveImmediacy()
+    {
+        // Issue #1070 regression: the Held behaviour is scoped to Ctrl+Shift+Q; the default queue path
+        // stays active and dispatches immediately.
+        await using var chat = await CreateChatAsync();
+
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        Assert.False(chat.DefaultInputQueue.IsHeld);
+
+        viewModel.InputText = "default active";
+        viewModel.SubmitToDefaultQueue();
+
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "default queue submission to process");
+
+        Assert.False(chat.DefaultInputQueue.IsHeld);
+        Assert.Equal("default active", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
     }
 
     [Fact]
@@ -424,12 +502,13 @@ public sealed class InputQueueViewModelTests
         viewModel.SubmitToNewQueue();
 
         var queueVm = viewModel.Queues[1];
-        Assert.Equal("queued", queueVm.SelectedImmediacyOption.Label);
-
-        queueVm.SetImmediacyCommand.Execute(queueVm.HeldImmediacyOption);
-
+        // Ctrl+Shift+Q creates the queue Held (issue #1070).
         Assert.Equal("held", queueVm.SelectedImmediacyOption.Label);
-        Assert.True(queueVm.IsHeld);
+
+        queueVm.SetImmediacyCommand.Execute(queueVm.QueuedImmediacyOption);
+
+        Assert.Equal("queued", queueVm.SelectedImmediacyOption.Label);
+        Assert.False(queueVm.IsHeld);
     }
 
     [Fact]

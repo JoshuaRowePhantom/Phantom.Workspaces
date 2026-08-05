@@ -12,12 +12,14 @@ public sealed class MongoDbConnectionBroker
     private readonly MongoDbContainerDefinitionGenerator _containerDefinitionGenerator;
     private readonly int _connectVerificationAttempts;
     private readonly TimeSpan _connectRetryDelay;
+    private readonly TimeProvider _timeProvider;
 
     public MongoDbConnectionBroker(
         ContainerEngine? containerEngine = null,
         MongoDbContainerDefinitionGenerator? containerDefinitionGenerator = null,
         int connectVerificationAttempts = 20,
-        TimeSpan? connectRetryDelay = null)
+        TimeSpan? connectRetryDelay = null,
+        TimeProvider? timeProvider = null)
     {
         if (connectVerificationAttempts <= 0)
         {
@@ -31,6 +33,7 @@ public sealed class MongoDbConnectionBroker
         // readiness ping already waits for the server to become selectable on a cold start. A small
         // number of additional retries covers transient heartbeat drops while mongod stabilizes.
         _connectRetryDelay = connectRetryDelay ?? TimeSpan.FromSeconds(1);
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask<IMongoClient> GetClientAsync(
@@ -180,7 +183,7 @@ public sealed class MongoDbConnectionBroker
                     break;
                 }
 
-                await Task.Delay(_connectRetryDelay, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(_connectRetryDelay, _timeProvider, cancellationToken).ConfigureAwait(false);
             }
         }
 

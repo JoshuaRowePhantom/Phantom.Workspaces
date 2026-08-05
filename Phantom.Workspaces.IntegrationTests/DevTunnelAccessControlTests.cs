@@ -89,8 +89,11 @@ public sealed class DevTunnelAccessControlTests : IClassFixture<InProcessDevTunn
 
     [IntegrationFact(Timeout = 60_000)]
     [Trait("Category", "Integration")]
-    public async Task EndpointResolver_PrivateMode_ConnectTokenIsNotNull()
+    public async Task EndpointResolver_PrivateMode_ConnectTokenIsNull_IdentityDerived()
     {
+        // Issue #1082 / design #19: the tunnel-name Private client path is identity-derived. The
+        // Management API's list path never mints a per-tunnel Connect token, so the resolver returns
+        // a null TunnelAuthToken and the client authorizes with its GitHub identity instead.
         var githubToken = Environment.GetEnvironmentVariable("PHANTOM_INTEGRATION_GITHUB_TOKEN")!;
         var factory = new DevTunnelServiceFactory(new StaticTokenProvider(githubToken));
         var resolver = factory.CreateEndpointResolver();
@@ -100,8 +103,7 @@ public sealed class DevTunnelAccessControlTests : IClassFixture<InProcessDevTunn
             DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
 
-        Assert.NotNull(resolution.TunnelAuthToken);
-        Assert.NotEmpty(resolution.TunnelAuthToken!);
+        Assert.Null(resolution.TunnelAuthToken);
     }
 
     [IntegrationFact(Timeout = 60_000)]
@@ -128,26 +130,29 @@ public sealed class DevTunnelAccessControlTests : IClassFixture<InProcessDevTunn
     [Trait("Category", "Integration")]
     public async Task EndpointResolver_PrivateMode_DoesNotRequireEnvVarConfiguration()
     {
-        // The connect token must be fetched automatically from the Management API;
-        // no GITHUB_TUNNEL_TOKEN or similar env var should be required.
-        // We verify this by checking that resolution succeeds using only the GitHub identity token.
+        // Resolution must succeed using only the GitHub identity token — no GITHUB_TUNNEL_TOKEN or
+        // similar env var. Private connect is identity-derived (design #19), so the resolver yields a
+        // null TunnelAuthToken without throwing.
         var githubToken = Environment.GetEnvironmentVariable("PHANTOM_INTEGRATION_GITHUB_TOKEN")!;
         var factory = new DevTunnelServiceFactory(new StaticTokenProvider(githubToken));
         var resolver = factory.CreateEndpointResolver();
 
-        // Should not throw — connect token comes from the Management API automatically.
+        // Should not throw — the owner does not need a Connect-scope token in Private mode.
         var resolution = await resolver.ResolveAsync(
             this.fixture.TunnelName!,
             DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
 
-        Assert.NotNull(resolution.TunnelAuthToken);
+        Assert.NotNull(resolution);
+        Assert.Null(resolution.TunnelAuthToken);
     }
 
     [IntegrationFact(Timeout = 60_000)]
     [Trait("Category", "Integration")]
-    public async Task EndpointResolver_PrivateMode_ConnectToken_DiffersFromGitHubAuthToken()
+    public async Task EndpointResolver_PrivateMode_YieldsIdentityDerivedNullToken()
     {
+        // The client resolver reads tokens off a ListTunnelsAsync result that never carries minted
+        // per-tunnel tokens; per design #19 that null is expected and the client uses its identity.
         var githubToken = Environment.GetEnvironmentVariable("PHANTOM_INTEGRATION_GITHUB_TOKEN")!;
         var factory = new DevTunnelServiceFactory(new StaticTokenProvider(githubToken));
         var resolver = factory.CreateEndpointResolver();
@@ -157,8 +162,7 @@ public sealed class DevTunnelAccessControlTests : IClassFixture<InProcessDevTunn
             DevTunnelAccessMode.Private,
             TestContext.Current.CancellationToken);
 
-        // The connect token is a tunnel-scoped API-issued token, not the raw GitHub OAuth token.
-        Assert.NotEqual(githubToken, resolution.TunnelAuthToken);
+        Assert.Null(resolution.TunnelAuthToken);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

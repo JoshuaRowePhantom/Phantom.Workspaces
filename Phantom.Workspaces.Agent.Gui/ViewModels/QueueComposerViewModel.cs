@@ -294,6 +294,8 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public void CommitToHistory(string text)
     {
+        this.ResetHistoryNavigation();
+
         if (string.IsNullOrEmpty(text))
         {
             return;
@@ -306,7 +308,13 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         }
 
         this.inputHistory.Add(text);
+    }
+
+    private void ResetHistoryNavigation()
+    {
         this.historyIndex = -1;
+        this.savedDraft = string.Empty;
+        this.savedDraftCaretIndex = 0;
     }
 
     public void Submit()
@@ -329,6 +337,7 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             && this.attachments.Count == 0
             && this.SlashCommandInterceptorAsync is { } interceptor)
         {
+            this.ResetHistoryNavigation();
             this.InputText = string.Empty;
             _ = interceptor(text);
             return true;

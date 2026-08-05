@@ -46,6 +46,15 @@ public readonly record struct PersistedAgent
     /// history) after a restart instead of starting fresh (issue #3).
     /// </summary>
     public string? CopilotSdkSessionId { get; init; }
+
+    /// <summary>
+    /// The persisted last-activity/last-updated UTC timestamp for this agent session, or
+    /// <see langword="null"/> when the store does not track a timestamp (e.g. the null store).
+    /// Consumed by <see cref="Phantom.Workspaces.Llm.AgentChat"/> on restore to seed its in-memory
+    /// <c>lastUpdatedAt</c> with the original "last activity" time rather than the reload time
+    /// (issue #1140). A missing value falls back to construction time.
+    /// </summary>
+    public DateTime? LastUpdatedUtc { get; init; }
 }
 
 public readonly record struct StoreRequestAgent

@@ -1,0 +1,32 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ctxt="clr-namespace:ColorTextBlock.Avalonia;assembly=ColorTextBlock.Avalonia">
+    <!--
+        WorkspaceMarkdownView code styling overrides (issue #1173). Attached directly to the
+        hosted MarkdownScrollViewer.Styles so they beat the internal Markdown.Avalonia Fluent
+        theme (which Markdown.Avalonia applies to the same local Styles collection). The
+        upstream theme paints inline `code` and fenced code blocks as purple-on-gray in an
+        unspecified sans-serif font; these overrides restore the app foreground on the tool
+        body background using "Cascadia Code, Consolas, Courier New, monospace", matching
+        chat-output-shell.html (chat-font-family / chat-foreground / chat-tool-body-background).
+        The referenced Markdown.CodeFontFamily / Markdown.CodeForeground / Markdown.CodeBlockBackground
+        resources are declared in SharedStyles.axaml and resolved via the visual tree.
+    -->
+    <Style Selector=".Markdown_Avalonia_MarkdownViewer ctxt|CCode">
+        <Setter Property="Foreground" Value="{DynamicResource Markdown.CodeForeground}" />
+        <Setter Property="Background" Value="Transparent" />
+        <!-- CCode binds FontFamily to MonospaceFontFamily in its constructor, so a plain
+             FontFamily setter is overridden — set MonospaceFontFamily to switch the display font. -->
+        <Setter Property="ctxt:CCode.MonospaceFontFamily" Value="{DynamicResource Markdown.CodeFontFamily}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Markdown.CodeFontFamily}" />
+    </Style>
+    <Style Selector=".Markdown_Avalonia_MarkdownViewer Border.CodeBlock">
+        <Setter Property="Background" Value="{DynamicResource Markdown.CodeBlockBackground}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Padding" Value="8,6" />
+    </Style>
+    <Style Selector=".Markdown_Avalonia_MarkdownViewer TextBlock.CodeBlock">
+        <Setter Property="Foreground" Value="{DynamicResource Markdown.CodeForeground}" />
+        <Setter Property="FontFamily" Value="{DynamicResource Markdown.CodeFontFamily}" />
+    </Style>
+</Styles>

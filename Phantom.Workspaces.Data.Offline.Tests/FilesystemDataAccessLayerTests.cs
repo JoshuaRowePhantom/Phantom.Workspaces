@@ -2,12 +2,15 @@ using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Offline;
 using Phantom.Workspaces.Data.Tests;
+using Phantom.Workspaces.Testing;
 
 namespace Phantom.Workspaces.Data.Offline.Tests;
 
 public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWithoutHistoryTests, IDisposable
 {
-    private readonly string repositoryPath = TestPathFactory.CreateIsolatedDirectory("filesystem");
+    private readonly TempDirectory repository = TestPathFactory.CreateIsolatedTempDirectory("filesystem");
+
+    private string repositoryPath => this.repository.Path;
 
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
@@ -298,10 +301,7 @@ public sealed class FilesystemDataAccessLayerTests : DataAccessLayerNonQueryWith
 
     public void Dispose()
     {
-        if (Directory.Exists(this.repositoryPath))
-        {
-            Directory.Delete(this.repositoryPath, true);
-        }
+        this.repository.Dispose();
     }
 
     private static UpdateRequest CreateUpdateRequest(

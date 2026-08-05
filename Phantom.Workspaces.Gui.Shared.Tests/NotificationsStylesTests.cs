@@ -10,7 +10,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class NotificationsStylesTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ExclamationIndicatorStyle_WithoutIsIndeterminate_HasCorrectSize()
     {
         var sharedStyles = LoadSharedStyles();
@@ -34,7 +34,7 @@ public sealed class NotificationsStylesTests
         Assert.Equal(0.0, progressBar.MinHeight);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ExclamationIndicatorStyle_WithoutIsIndeterminate_HasOpacityZero()
     {
         var sharedStyles = LoadSharedStyles();
@@ -57,7 +57,7 @@ public sealed class NotificationsStylesTests
         Assert.Equal(0.0, glyph.Opacity);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ExclamationIndicatorStyle_WithIsIndeterminate_HasOpacityOne()
     {
         var sharedStyles = LoadSharedStyles();
@@ -80,7 +80,7 @@ public sealed class NotificationsStylesTests
         Assert.Equal(1.0, glyph.Opacity);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ExclamationIndicatorStyle_WithIsIndeterminate_DisplaysExclamationMark()
     {
         var sharedStyles = LoadSharedStyles();

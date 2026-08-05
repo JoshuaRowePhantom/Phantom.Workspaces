@@ -44,6 +44,42 @@ public sealed class OpenExternalEntityShortcutHandler : ShortcutHandler
         return true;
     }
 
+    /// <summary>
+    /// #1129: Restore-aware factory used by the workspace-open/restore path so external
+    /// entities open in an embedded browser (mirrors the old ad-hoc branch in
+    /// <c>MainWindowViewModel.CreateTabFromEntityAsync</c>) instead of the generic entity
+    /// card, while preserving the saved tab-id / title / dock region.
+    /// </summary>
+    public override Task<WorkspaceTabViewModel?> TryCreateTabForRestoreAsync(
+        MainWindowViewModel mainWindowViewModel,
+        SubscribedEntityViewModel entityViewModel,
+        string? tabId,
+        string? title,
+        string? dockRegion)
+    {
+        var urls = ParseUrls(entityViewModel);
+        if (urls.Count == 0)
+        {
+            return Task.FromResult<WorkspaceTabViewModel?>(null);
+        }
+
+        var urlKey = urls.ContainsKey("default") ? "default" : urls.Keys.First();
+        var entityUrl = urls[urlKey];
+        var isDefault = string.Equals(urlKey, "default", StringComparison.OrdinalIgnoreCase);
+        var explicitTitle = title;
+
+        WorkspaceTabViewModel tab = new WebViewModel(
+            entityUrl,
+            mainWindowViewModel,
+            titleFixed: explicitTitle is not null || !isDefault)
+        {
+            Id = tabId ?? $"web-{entityViewModel.EntityId}",
+            Title = explicitTitle ?? (isDefault ? entityViewModel.DisplayName : urlKey),
+            DockRegion = dockRegion ?? "full",
+        };
+        return Task.FromResult<WorkspaceTabViewModel?>(tab);
+    }
+
     private static WebViewModel CreateWebTab(
         IWorkspaceTabService tabService,
         SubscribedEntityViewModel entity,

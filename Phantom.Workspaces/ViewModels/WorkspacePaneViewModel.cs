@@ -58,6 +58,13 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
     public AsyncRelayCommand SaveCommand { get; }
 
+    /// <summary>
+    /// True when a save handler is wired (i.e. this pane represents a real workspace that can be
+    /// persisted, not a placeholder / no-workspace-selected pane). Bound by the top-right save
+    /// button's IsVisible so a permanently-disabled affordance is not shown on placeholder panes.
+    /// </summary>
+    public bool CanSaveWorkspace => this.saveAsync is not null;
+
     public bool IsReadOnly { get; }
 
     public bool IsSaving
@@ -140,6 +147,21 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         object? sender,
         NotifyCollectionChangedEventArgs e)
     {
+        // #1135: When agent-session tabs are added (via OpenTabAsync or workspace restore),
+        // stamp the tab's WorkspacePaneId with THIS pane's Id so TabDescriptor.WorkspaceId
+        // and status-button navigation reflect the pane the tab actually lives in — not the
+        // pane that happened to be SelectedWorkspacePane when the tab was constructed.
+        if (e.NewItems is not null)
+        {
+            foreach (var newItem in e.NewItems)
+            {
+                if (newItem is AgentSessionWorkspaceTabViewModel agentTab)
+                {
+                    agentTab.WorkspacePaneId = this.Id;
+                }
+            }
+        }
+
         this.ResubscribeToTabs();
         this.RecomputeAnyTabIsRunning();
     }
@@ -208,6 +230,30 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         {
             this.populatedTcs.TrySetResult();
         }
+    }
+
+    /// <summary>
+    /// Recursively disposes every tab in <see cref="Tabs"/> so that the pane-close path
+    /// releases per-tab resources (notably the <c>RunningAgentChatLease</c> owned by
+    /// <see cref="AgentSessionWorkspaceTabViewModel"/>). See #1198.
+    /// </summary>
+    public override async ValueTask DisposeAsync()
+    {
+        var snapshot = this.Tabs.ToArray();
+        this.Tabs.Clear();
+        foreach (var tab in snapshot)
+        {
+            try
+            {
+                await tab.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                // Continue disposing siblings; a single tab disposal failure must not
+                // strand the remaining tabs (or their leases).
+            }
+        }
+        await base.DisposeAsync().ConfigureAwait(false);
     }
 
     private async Task SaveAsync()

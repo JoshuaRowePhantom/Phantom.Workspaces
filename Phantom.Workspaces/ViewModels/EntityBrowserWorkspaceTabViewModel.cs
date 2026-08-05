@@ -19,21 +19,34 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     private readonly ISchemaAccessor schemaAccessor;
     private readonly FieldTypeResolver fieldTypeResolver;
     private readonly EntityReferenceSearch entityReferenceSearch;
+    private readonly FieldEditorFactory? fieldEditorFactory;
     private readonly SubscribedGet rootSubscribedGet;
     private readonly EntityListViewModel entityList = new();
     private readonly Dictionary<string, SubscribedGet> subscribedGetsByPath = new(StringComparer.Ordinal);
     private readonly HashSet<string> pendingSubscriptions = new(StringComparer.Ordinal);
+    // #1232: folders the user has expanded at least once. Their already-loaded child node view models
+    // are preserved when the folder is later collapsed so that re-expanding is instant (no re-subscribe
+    // or rebuild-from-scratch). Never-expanded folders are absent here and stay unmaterialized.
+    private readonly HashSet<string> expandedFolderPaths = new(StringComparer.Ordinal);
+    private readonly TaskScheduler foregroundScheduler;
     private bool isRebuilding;
     private bool isRebuildPending;
 
     public EntityBrowserWorkspaceTabViewModel(
         EntityBroker entityBroker,
-        SubscribedGet subscribedGet)
+        SubscribedGet subscribedGet,
+        FieldEditorFactory? fieldEditorFactory = null,
+        TaskScheduler? foregroundScheduler = null)
     {
         this.entityBroker = entityBroker;
         this.schemaAccessor = new SchemaAccessor(this.entityBroker.EntityRepository.DataAccessLayer);
         this.fieldTypeResolver = new FieldTypeResolver(this.schemaAccessor);
         this.entityReferenceSearch = new EntityReferenceSearch(this.entityBroker);
+        this.fieldEditorFactory = fieldEditorFactory;
+        // #1232: UI-collection mutations (SetItems) marshal back onto the foreground scheduler while
+        // the heavy JSON parsing runs on the thread pool. Defaults to the current synchronization
+        // context (the UI thread at construction time), matching the rest of the app's convention.
+        this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.FromCurrentSynchronizationContext();
         this.rootSubscribedGet = subscribedGet;
         this.rootSubscribedGet.Results.CollectionChanged += this.OnSubscribedResultsChanged;
         this.entityList.Items.CollectionChanged += this.OnEntityListItemsCollectionChanged;
@@ -41,6 +54,17 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
     }
 
     public EntityListViewModel EntityList => this.entityList;
+
+    /// <summary>
+    /// Find (Ctrl-F) session over this tab's <see cref="EntityList"/>. Bound by the view code-behind
+    /// to a <c>bringIntoView</c> callback that calls <c>TreeViewItem.BringIntoView()</c>.
+    /// </summary>
+    public FindViewModel Find
+    {
+        get => this.find ??= new FindViewModel(this.entityList);
+        internal set => this.SetProperty(ref this.find, value);
+    }
+    private FindViewModel? find;
 
     public override async ValueTask DisposeAsync()
     {
@@ -110,6 +134,14 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.isRebuildPending = false;
                 ct.ThrowIfCancellationRequested();
 
+                // Issue #1177: yield to the dispatcher between rebuild iterations so async
+                // subscription completions (fire-and-forget from EnsureChildSubscription) can be
+                // observed. Previously the per-entity await BuildFieldEditorsAsync provided this
+                // scheduling gap implicitly; now that field-editor construction is deferred, we
+                // must yield explicitly or the rebuild loop can starve the dispatcher.
+                await Task.Yield();
+                ct.ThrowIfCancellationRequested();
+
                 var expansionStateByPath = new Dictionary<string, bool>(StringComparer.Ordinal);
                 foreach (var item in this.entityList.Items)
                 {
@@ -119,7 +151,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 var rootChildren = await this.BuildChildrenAsync(Array.Empty<string>(), this.rootSubscribedGet.Results, expansionStateByPath, ct);
                 ct.ThrowIfCancellationRequested();
                 var items = this.BuildItems(this.rootSubscribedGet.Results, rootChildren, expansionStateByPath);
-                this.entityList.SetItems(items);
+                // #1232: publish the collection mutation on the foreground scheduler.
+                await Task.Factory.StartNew(
+                    () => this.entityList.SetItems(items),
+                    ct,
+                    TaskCreationOptions.None,
+                    this.foregroundScheduler);
             }
             while (this.isRebuildPending);
         }
@@ -140,100 +177,93 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         IReadOnlyDictionary<string, bool> expansionStateByPath,
         CancellationToken ct)
     {
-        var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
-        foreach (var entity in entities)
+        // #1232: parse the (potentially large) subscription snapshot into immediate-child descriptors
+        // on the thread pool. This is the heavy per-entity work (Snapshot.Data access, name parsing,
+        // JsonSerializer.Serialize) that previously ran synchronously on the UI thread and froze the
+        // GUI on open. Only the bounded node construction and subscription bookkeeping below run on
+        // the UI thread. The live subscription collection is snapshotted here on the UI thread before
+        // handing an immutable array to the thread pool, so the parse never enumerates a collection
+        // that the UI thread may be mutating concurrently.
+        var parentPathArray = parentPath.ToArray();
+        var entitiesSnapshot = entities.ToArray();
+        var descriptors = await Task.Run(
+            () => ExtractImmediateChildDescriptors(parentPathArray, entitiesSnapshot),
+            ct);
+
+        var nodes = new List<EntityListNodeViewModel>(descriptors.Count);
+        foreach (var descriptor in descriptors)
         {
-            if (entity.Snapshot.Data is not JsonElement entityData
-                || !entityData.TryGetProperty("names", out var namesElement)
-                || namesElement.ValueKind != JsonValueKind.Array)
-            {
-                continue;
-            }
+            ct.ThrowIfCancellationRequested();
 
-            foreach (var nameElement in namesElement.EnumerateArray())
-            {
-                var parsedName = nameElement.TryReadEntityName();
-                if (parsedName is null)
-                {
-                    continue;
-                }
-
-                var nameComponents = parsedName.Value.Components;
-                if (nameComponents.Length != parentPath.Count + 1
-                    || !nameComponents.Take(parentPath.Count).SequenceEqual(parentPath, StringComparer.Ordinal))
-                {
-                    continue;
-                }
-
-                var sortKey = JsonSerializer.Serialize(nameComponents);
-                if (children.ContainsKey(sortKey))
-                {
-                    continue;
-                }
-
-                var node = new EntityListNodeViewModel(
-                    entity,
-                    nameComponents,
-                    sortKey,
-                    await this.BuildFieldEditorsAsync(entity, ct),
-                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
-                children.Add(sortKey, node);
-            }
-        }
-
-        foreach (var pair in children)
-        {
-            var pathKey = pair.Key;
-            var node = pair.Value;
-            
-            // Set the expansion callback so we can manage subscriptions during user interaction
+            var capturedEntity = descriptor.Entity;
+            var node = new EntityListNodeViewModel(
+                capturedEntity,
+                descriptor.NameComponents,
+                descriptor.SortKey,
+                cardViewName: this.entityCardViewResolver.ResolveViewName(capturedEntity, EntityCardViewResolver.RawViewName),
+                fieldEditorFactory: this.fieldEditorFactory);
+            node.Card.SetLazyFieldEditorBuilder(lazyCt => this.BuildFieldEditorsAsync(capturedEntity, lazyCt));
             node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
-            
-            // Always subscribe to this node's children so we can determine HasChildren
-            this.EnsureChildSubscription(node.NameComponents, pathKey);
-            
-            // If subscription results are available, populate children based on expansion state
-            if (this.subscribedGetsByPath.TryGetValue(pathKey, out var childGet))
+
+            // Subscribe to this child's children so we can (a) show the expand chevron via HasChildren
+            // and (b) populate them when the user expands. Grandchildren of a collapsed folder are
+            // neither materialized nor recursed into — the subscription only tells us HasChildren.
+            this.EnsureChildSubscription(descriptor.NameComponents, descriptor.SortKey);
+
+            if (this.subscribedGetsByPath.TryGetValue(descriptor.SortKey, out var childGet))
             {
-                // Check if this node should be expanded
-                var isExpanded = expansionStateByPath.TryGetValue(pathKey, out var expanded)
-                    ? expanded
-                    : node.NameComponents.Count == 0; // Root is expanded by default
-                
+                var immediateChildKeys = ExtractImmediateChildKeys(descriptor.NameComponents, childGet.Results);
+                var hasChildren = immediateChildKeys.Count > 0;
+                node.SetImmediateChildKeys(immediateChildKeys);
+                node.SetHasChildren(hasChildren);
+
+                var isExpanded = expansionStateByPath.TryGetValue(descriptor.SortKey, out var expanded) && expanded;
                 if (isExpanded)
                 {
-                    // Node is expanded, recursively build all descendants
-                    node.SetChildren(await this.BuildChildrenAsync(node.NameComponents, childGet.Results, expansionStateByPath, ct));
+                    // #1232: record that this folder has been expanded at least once so its loaded
+                    // children survive a later collapse.
+                    this.expandedFolderPaths.Add(descriptor.SortKey);
+                }
+
+                // Materialize immediate children when the folder is currently expanded OR was expanded
+                // before and then collapsed (loaded). This keeps re-expansion instant. Folders that have
+                // never been expanded stay unmaterialized, preserving the lazy-load / no-freeze guarantee.
+                var materializeChildren = hasChildren
+                    && (isExpanded || this.expandedFolderPaths.Contains(descriptor.SortKey));
+                if (materializeChildren)
+                {
+                    // Recurse only into this folder's own expanded/loaded descendants; a collapsed-but-
+                    // loaded folder retains its child node view models but does not force its descendants
+                    // open.
+                    node.SetChildren(await this.BuildChildrenAsync(descriptor.NameComponents, childGet.Results, expansionStateByPath, ct));
                 }
                 else
                 {
-                    // Node is collapsed, build immediate children as simple leaf nodes (no recursion)
-                    node.SetChildren(this.BuildChildrenNonRecursive(node.NameComponents, childGet.Results));
+                    node.SetChildren(Array.Empty<EntityListNodeViewModel>());
                 }
             }
-            // If subscription isn't ready yet, leave children empty
-            // The subscription's Results.CollectionChanged event will trigger a rebuild when ready
             else
             {
+                // Subscription not ready yet; its Results.CollectionChanged will trigger a rebuild.
                 node.SetChildren(Array.Empty<EntityListNodeViewModel>());
             }
+
+            nodes.Add(node);
         }
 
-        return children
-            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
-            .Select(static pair => pair.Value)
-            .ToArray();
+        return nodes;
     }
 
-    private IReadOnlyCollection<EntityListNodeViewModel> BuildChildrenNonRecursive(
-        IReadOnlyCollection<string> parentPath,
+    /// <summary>
+    /// Pure, thread-pool-safe extraction of the immediate children of <paramref name="parentPath"/>
+    /// from a subscription's entities. Returns one descriptor per distinct immediate-child path,
+    /// ordered by sort key. Performs no view-model construction or shared-state mutation.
+    /// </summary>
+    private static IReadOnlyList<ChildNodeDescriptor> ExtractImmediateChildDescriptors(
+        IReadOnlyList<string> parentPath,
         IReadOnlyCollection<SubscribedEntityViewModel> entities)
     {
-        // Build immediate children as leaf nodes without any recursion or field-editor resolution.
-        // Field editors are intentionally omitted: these children are inside a collapsed folder and
-        // are not visible, so resolving their field types (which hits the thread pool and schema DAL)
-        // would be wasted work. Field editors are built in BuildChildrenAsync when the node is expanded.
-        var children = new Dictionary<string, EntityListNodeViewModel>(StringComparer.Ordinal);
+        var descriptors = new Dictionary<string, ChildNodeDescriptor>(StringComparer.Ordinal);
         foreach (var entity in entities)
         {
             if (entity.Snapshot.Data is not JsonElement entityData
@@ -259,30 +289,65 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
                 }
 
                 var sortKey = JsonSerializer.Serialize(nameComponents);
-                if (children.ContainsKey(sortKey))
+                if (descriptors.ContainsKey(sortKey))
                 {
                     continue;
                 }
 
-                var node = new EntityListNodeViewModel(
-                    entity,
-                    nameComponents,
-                    sortKey,
-                    cardViewName: this.entityCardViewResolver.ResolveViewName(entity, EntityCardViewResolver.RawViewName));
-                
-                node.SetExpansionChangedCallback(this.OnNodeExpansionChanged);
-                this.EnsureChildSubscription(nameComponents, sortKey);
-                node.SetChildren(Array.Empty<EntityListNodeViewModel>());
-                
-                children.Add(sortKey, node);
+                descriptors.Add(sortKey, new ChildNodeDescriptor(entity, nameComponents, sortKey));
             }
         }
 
-        return children
+        return descriptors
             .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
             .Select(static pair => pair.Value)
             .ToArray();
     }
+
+    /// <summary>
+    /// The item keys of the immediate children of <paramref name="parentPath"/> present in
+    /// <paramref name="entities"/>, ordered by key. Returns keys only — it constructs no node view
+    /// models — so a collapsed folder can expose child metadata and its expand chevron without
+    /// materializing its descendants (issue #1232).
+    /// </summary>
+    private static IReadOnlyList<string> ExtractImmediateChildKeys(
+        IReadOnlyList<string> parentPath,
+        IReadOnlyCollection<SubscribedEntityViewModel> entities)
+    {
+        var keys = new SortedSet<string>(StringComparer.Ordinal);
+        foreach (var entity in entities)
+        {
+            if (entity.Snapshot.Data is not JsonElement entityData
+                || !entityData.TryGetProperty("names", out var namesElement)
+                || namesElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var nameElement in namesElement.EnumerateArray())
+            {
+                var parsedName = nameElement.TryReadEntityName();
+                if (parsedName is null)
+                {
+                    continue;
+                }
+
+                var nameComponents = parsedName.Value.Components;
+                if (nameComponents.Length == parentPath.Count + 1
+                    && nameComponents.Take(parentPath.Count).SequenceEqual(parentPath, StringComparer.Ordinal))
+                {
+                    keys.Add(JsonSerializer.Serialize(nameComponents));
+                }
+            }
+        }
+
+        return keys.ToArray();
+    }
+
+    private readonly record struct ChildNodeDescriptor(
+        SubscribedEntityViewModel Entity,
+        IReadOnlyList<string> NameComponents,
+        string SortKey);
 
     private IReadOnlyCollection<EntityListItemViewModel> BuildItems(
         IReadOnlyCollection<SubscribedEntityViewModel> rootEntities,
@@ -336,10 +401,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
         ref int order)
     {
         var itemKey = JsonSerializer.Serialize(node.NameComponents);
-        var childItemKeys = node.Children
-            .OrderBy(static child => child.SortKey, StringComparer.Ordinal)
-            .Select(static child => JsonSerializer.Serialize(child.NameComponents))
-            .ToArray();
+        var childItemKeys = node.Children.Count > 0
+            ? node.Children
+                .OrderBy(static child => child.SortKey, StringComparer.Ordinal)
+                .Select(static child => JsonSerializer.Serialize(child.NameComponents))
+                .ToArray()
+            : node.ImmediateChildKeys.ToArray();
         var isExpanded = expansionStateByPath.TryGetValue(itemKey, out var expanded)
             ? expanded
             : node.NameComponents.Count == 0;
@@ -447,38 +514,12 @@ public sealed class EntityBrowserWorkspaceTabViewModel : WorkspaceTabViewModel
             this.isRebuildPending = true;
             return;
         }
-        
-        if (!isExpanded)
-        {
-            // Node collapsed: dispose subscriptions for all descendants to save resources
-            this.DisposeDescendantSubscriptions(node);
-        }
-        
-        // Expansion state changed - rebuild tree to reflect new state
+
+        // #1232: collapsing a folder must NOT dispose its descendants' subscriptions or drop their
+        // already-loaded child node view models — doing so forces a re-subscribe + rebuild on
+        // re-expand. Preserving them (see BuildChildrenAsync / expandedFolderPaths) keeps re-expansion
+        // instant. Subscriptions are released together in DisposeAsync when the tab closes.
         _ = this.RebuildTreeAsync();
-    }
-
-    private void DisposeDescendantSubscriptions(EntityListNodeViewModel node)
-    {
-        // Recursively dispose subscriptions for all descendants
-        foreach (var child in node.Children)
-        {
-            var childKey = JsonSerializer.Serialize(child.NameComponents);
-            this.DisposeChildSubscription(childKey);
-            this.DisposeDescendantSubscriptions(child);
-        }
-    }
-
-    private void DisposeChildSubscription(string pathKey)
-    {
-        if (!this.subscribedGetsByPath.TryGetValue(pathKey, out var subscribedGet))
-        {
-            return;
-        }
-
-        subscribedGet.Results.CollectionChanged -= this.OnSubscribedResultsChanged;
-        this.subscribedGetsByPath.Remove(pathKey);
-        // The SubscribedGet will be garbage collected and EntityBroker will clean up the WeakReference
     }
 
     private bool TryFindEntityForPath(

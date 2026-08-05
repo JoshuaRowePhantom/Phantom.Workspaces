@@ -28,24 +28,28 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
     private readonly HttpClient httpClient;
     private readonly Func<string?> tokenResolver;
     private readonly ILogger<GitHubActionsUsageProvider> logger;
+    private readonly TimeProvider timeProvider;
 
     public Uri ProviderUri { get; } = new Uri("https://github.com");
 
     public GitHubActionsUsageProvider(
         HttpClient httpClient,
-        ILogger<GitHubActionsUsageProvider>? logger = null)
-        : this(httpClient, () => GitHubAuthTokenResolver.Resolve(), logger)
+        ILogger<GitHubActionsUsageProvider>? logger = null,
+        TimeProvider? timeProvider = null)
+        : this(httpClient, () => GitHubAuthTokenResolver.Resolve(), logger, timeProvider)
     {
     }
 
     internal GitHubActionsUsageProvider(
         HttpClient httpClient,
         Func<string?> tokenResolver,
-        ILogger<GitHubActionsUsageProvider>? logger = null)
+        ILogger<GitHubActionsUsageProvider>? logger = null,
+        TimeProvider? timeProvider = null)
     {
         this.httpClient = httpClient;
         this.tokenResolver = tokenResolver;
         this.logger = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubActionsUsageProvider>.Instance;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<IReadOnlyList<UsageMetric>> GetMetricsAsync(
@@ -71,13 +75,25 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
 
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
+            this.logger.LogWarning(
+                "GitHub Actions usage provider returned {StatusCode} for {Endpoint}; returning empty metrics.",
+                (int)response.StatusCode,
+                $"https://api.github.com/users/{account.UserName}/settings/billing/actions");
             return [];
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            this.logger.LogError(
+                "GitHub Actions usage provider returned non-success {StatusCode} for {Endpoint}.",
+                (int)response.StatusCode,
+                $"https://api.github.com/users/{account.UserName}/settings/billing/actions");
         }
 
         response.EnsureSuccessStatusCode();
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        return ParseMetrics(json);
+        return ParseMetrics(json, this.timeProvider.GetUtcNow().UtcDateTime);
     }
 
     private Task<HttpResponseMessage> SendRequestAsync(
@@ -99,12 +115,10 @@ public sealed class GitHubActionsUsageProvider : IUsageProvider
         return this.httpClient.SendAsync(request, cancellationToken);
     }
 
-    private static IReadOnlyList<UsageMetric> ParseMetrics(string json)
+    private static IReadOnlyList<UsageMetric> ParseMetrics(string json, DateTime now)
     {
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-
-        var now = DateTime.UtcNow;
 
         var totalMinutesUsed = root.TryGetProperty("total_minutes_used", out var tmu)
             && tmu.ValueKind == JsonValueKind.Number

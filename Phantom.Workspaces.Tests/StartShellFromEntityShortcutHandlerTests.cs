@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Linq;
@@ -6,8 +7,8 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
-using Dock.Model.Controls;
-using Dock.Model.Core;
+using global::Dock.Model.Controls;
+using global::Dock.Model.Core;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.ViewModels;
@@ -20,7 +21,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
 {
     // ---- ShouldApplyTo -----------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithPathField_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -33,7 +34,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithHomeDirectoryField_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -46,7 +47,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.StartShell, entityViewModel));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithoutPathOrHomeDirectory_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -61,7 +62,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
 
     // ---- Handle: working directory -----------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithPathField_OpensShellTabViewModel()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -80,7 +81,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.NotNull(shellTab);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithPathField_PassesPathAsWorkingDirectory()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -102,7 +103,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal("/test/repo", receivedWorkingDirectory);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithHomeDirectoryField_PassesHomeDirectoryAsWorkingDirectory()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -124,7 +125,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(@"C:\Users\tester", receivedWorkingDirectory);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnEntityWithBothPathAndHomeDirectory_PrefersPathAsWorkingDirectory()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -148,7 +149,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
 
     // ---- Handle: client instance routing -----------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnLocalUserComputerProfileEntity_UsesLocalClientInstance()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -172,7 +173,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(".", receivedClientInstance);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnGitWorktreeEntityBelongingToLocalProfile_UsesLocalClientInstance()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -231,7 +232,7 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         Assert.Equal(".", receivedClientInstance);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OnGitWorktreeEntityWithNoProfileName_FallsBackToLocalClientInstance()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -253,6 +254,26 @@ public sealed class StartShellFromEntityShortcutHandlerTests
         await handler.Handle(viewModel, Shortcut.StartShell, entityViewModel);
 
         Assert.Equal(".", receivedClientInstance);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_ExecutorSelectionThrows_NotifiesAndReturnsFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot(
+            """{"entity-types":["entity","git-worktree","filesystem-path"],"display-name":{"default":"failing-repo"},"path":"/failing/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        // Use a session opener that throws to simulate executor failure
+        var handler = new StartShellFromEntityShortcutHandler(
+            (_, _, _) => throw new InvalidOperationException("Test: executor unavailable"));
+
+        var handled = await handler.Handle(viewModel, Shortcut.StartShell, entityViewModel);
+
+        Assert.False(handled);
+        Assert.NotEmpty(viewModel.NotificationService.Notifications);
     }
 
     // ---- Helpers -----------------------------------------------------------------------------

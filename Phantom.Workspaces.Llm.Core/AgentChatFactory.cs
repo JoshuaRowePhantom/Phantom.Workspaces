@@ -49,6 +49,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         AgentServices? services = null,
         string? displayNameOverride = null,
         string? descriptionOverride = null,
+        bool registerAsRunningAgent = true,
         CancellationToken ct = default)
     {
         while (true)
@@ -120,12 +121,18 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             if (existingLease is not null)
                 return existingLease;
 
-            await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            if (registerAsRunningAgent)
+            {
+                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            }
             return MakeLease(sessionId, newChat!);
         }
     }
 
-    public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+    public async Task<RunningAgentChatLease> GetAsync(
+        AgentSessionId sessionId,
+        bool registerAsRunningAgent = true,
+        CancellationToken ct = default)
     {
         while (true)
         {
@@ -180,7 +187,10 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
             if (existingLease is not null)
                 return existingLease;
 
-            await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            if (registerAsRunningAgent)
+            {
+                await PostToForegroundAsync(() => _runningSessions.Add(new RunningAgentChat(sessionId, this)));
+            }
             return MakeLease(sessionId, newChat!);
         }
     }
@@ -189,6 +199,9 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
         AgentDefinition definition,
         AgentSessionId sessionId,
         AgentServices? services = null,
+        string? displayNameOverride = null,
+        string? descriptionOverride = null,
+        string? nameOverride = null,
         CancellationToken ct = default)
     {
         await _gate.WaitAsync(ct);
@@ -218,6 +231,9 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 AgentServices = effectiveServices,
                 ConfiguredStore = _store,
                 ClientOverride = effectiveServices.ChatClientOverride,
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
+                NameOverride = nameOverride,
                 ForegroundScheduler = _foregroundScheduler,
                 CancellationToken = ct,
             }, ct);
@@ -236,14 +252,14 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     private RunningAgentChatLease MakeLease(AgentSessionId sessionId, AgentChat agentChat)
         => new RunningAgentChatLease(sessionId, agentChat, () => ReleaseAsync(sessionId));
 
-    // Every chat this factory creates must be able to reach back to the factory so restore
+    // Fix #1109: every chat this factory creates MUST reach back to the factory so restore
     // (AgentChat.RestoreSubAgentsAsync) and live sub-agent creation work. The factory *is* the
-    // IRunningAgentChatFactory, so it injects itself into the forwarded services. An
-    // intentionally-supplied factory is preserved. See issue #1036.
+    // IRunningAgentChatFactory. Always inject unconditionally — the old
+    // "preserve intentional override" branch is gone because a null override was the same silent
+    // misroute (issue #1110) as no factory at all, and an intentional non-null override that
+    // wasn't the outer factory would be wired past our sub-agent lifecycle bookkeeping.
     private AgentServices WithSelfAsFactory(AgentServices baseServices)
-        => baseServices.RunningAgentChatFactory is null
-            ? baseServices with { RunningAgentChatFactory = this }
-            : baseServices;
+        => baseServices with { RunningAgentChatFactory = this };
 
     private async ValueTask ReleaseAsync(AgentSessionId sessionId)
     {

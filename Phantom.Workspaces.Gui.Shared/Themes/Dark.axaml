@@ -68,6 +68,9 @@
     <SolidColorBrush x:Key="Theme.Status.Palette.4">#FF8F00</SolidColorBrush>
     <SolidColorBrush x:Key="Theme.Status.Palette.5">#455A64</SolidColorBrush>
 
+    <!-- Issue #1120: white glyph brush for the shared pane-collapser (>>/<<) ToggleButton. -->
+    <SolidColorBrush x:Key="Theme.Collapser.Glyph.Foreground">#FFFFFF</SolidColorBrush>
+
     <!-- Terminal palette -->
     <SolidColorBrush x:Key="Terminal.Background">#0D1117</SolidColorBrush>
     <SolidColorBrush x:Key="Terminal.Foreground">#C9D1D9</SolidColorBrush>

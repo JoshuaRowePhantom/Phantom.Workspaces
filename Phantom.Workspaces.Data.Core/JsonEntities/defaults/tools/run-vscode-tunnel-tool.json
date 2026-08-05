@@ -1,9 +1,17 @@
 {
   "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
-  "entity-types": ["entity", "tool"],
+  "entity-types": ["entity", "tool", "note"],
   "names": [
     ["tools", "run-vscode-tunnel"]
   ],
   "display-name": { "default": "Run VS Code Tunnel" },
-  "tool-type": "run-vscode-tunnel"
+  "tool-type": "run-vscode-tunnel",
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "content": {
+        "text": "# Run VS Code Tunnel\n\nKeeps a VS Code dev tunnel alive on the target machine by spawning `code tunnel --accept-server-license-terms --name <name>` directly as a long-lived child process and blocking for the entire lifetime of the tunnel. \"Up\" is defined as a conjunction: the spawned child process is still alive AND `code tunnel status` continues to report the tunnel as running. The tool never invokes the Windows-service `tunnel service install/uninstall/status` sub-commands.\n\n## Lifecycle\n\nEach scheduled tick:\n\n1. Performs a **best-effort** GitHub pre-login: if a token is available (`GitHubAuthTokenResolver.Resolve` — checks `GITHUB_TOKEN`, falls back to `gh auth token`), invokes `code tunnel user login --provider github` with the token passed via the `VSCODE_CLI_ACCESS_TOKEN` environment variable (fully non-interactive). If no token is available, login is **skipped** (not a failure) and the CLI relies on its cached credentials. A non-zero login exit is logged as a warning and the run proceeds.\n2. Spawns `code tunnel --accept-server-license-terms --name <tunnel-name>` and polls `code tunnel status` on a fixed interval. `ExecuteAsync` does not return while both liveness and status-reports-running hold.\n3. Returns when either (a) the child process exits — failure result with captured stderr, or (b) `code tunnel status` stops reporting the tunnel as running (non-zero exit or output no longer contains `running`) — success result; the next scheduled tick re-spawns.\n\n## Configuration\n\nRead from the tool entity's top-level properties:\n\n| Key | Type | Semantics |\n|---|---|---|\n| `cli-path` | string | Overrides the VS Code CLI executable path. Defaults to the value resolved by `VsCodeCliLocator.ResolveDefaultCliPath()`. |\n| `tunnel-name` | string | Overrides the tunnel name (`--name` passed to `code tunnel`). Defaults to the current machine's short hostname. |\n\n## Usage\n\nWire the tool via a `tool-relationship`:\n\n- `participants.tool` \u2014 the entity-id of this tool entity.\n- `participants.schedule` \u2014 a `schedule` entity. Because `ExecuteAsync` blocks for the tunnel's entire lifetime, this only governs how quickly a *dead* tunnel is re-spawned. The default cadence materialised for `run-vscode-tunnel` is **one minute** (`PT1M`).\n- `participants.target` \u2014 typically not needed; the tool operates on the local machine derived from the current execution context.\n\nSet `paused: true` on the relationship to disable it. The login and status sub-invocations use a 5-minute timeout."
+      }
+    }
+  }
 }

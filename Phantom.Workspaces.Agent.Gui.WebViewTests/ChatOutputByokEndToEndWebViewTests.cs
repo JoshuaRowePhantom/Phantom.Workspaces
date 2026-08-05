@@ -195,7 +195,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             try
             {
                 var chat = lease.AgentChat;
-                await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory);
+                await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory, TaskScheduler.Default);
 
                 var parentControl = new AgentChatOutputControl { DataContext = viewModel };
                 var parentBrowser = GetBrowser(parentControl);
@@ -432,7 +432,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             try
             {
                 var chat = lease.AgentChat;
-                await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory);
+                await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory, TaskScheduler.Default);
 
                 var parentControl = new AgentChatOutputControl { DataContext = viewModel };
                 var parentBrowser = GetBrowser(parentControl);

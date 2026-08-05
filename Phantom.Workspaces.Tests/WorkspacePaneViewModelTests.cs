@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.ComponentModel;
 using System.Linq;
@@ -32,7 +33,7 @@ public sealed class WorkspacePaneViewModelTests
         Assert.Single(pane.Tabs);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityWorkspaceTabViewModel_UsesEntityCardNodeWithDeleteCommand()
     {
         var deleteInvocations = 0;
@@ -210,6 +211,61 @@ public sealed class WorkspacePaneViewModelTests
         Assert.True(indicator.HasUnread);
     }
 
+    // ── #1119: aggregate glyph visibility on the workspace-level tab header ──────
+
+    [Fact]
+    public void WorkspacePaneDocument_WhenAllTabsIdleAndNoNotification_ShowsNeitherGlyph()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Idle;
+        pane.Tabs.Add(new TestRunningTab("idle-tab", tabStatus));
+
+        var running = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        var notification = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+
+        Assert.False(running.IsRunning);
+        Assert.False(notification.HasUnread);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_WhenTabRunningAndUnread_ShowsBothGlyphs()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        pane.Tabs.Add(new TestRunningTab("running-tab", tabStatus));
+        pane.AnyTabHasUnreadNotification = true;
+
+        var running = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        var notification = doc.EffectiveTabHeader.Items.OfType<NotificationIndicatorTabHeaderItemViewModel>().Single();
+
+        Assert.True(running.IsRunning);
+        Assert.True(notification.HasUnread);
+    }
+
+    [Fact]
+    public void WorkspacePaneDocument_RunningIndicator_ClearsWhenTabTransitionsToIdle()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var doc = new WorkspacePaneDocument(pane);
+
+        var tabStatus = new StatusItem();
+        tabStatus.RunningStatus = RunningStatus.Running;
+        pane.Tabs.Add(new TestRunningTab("running-tab", tabStatus));
+
+        var running = doc.EffectiveTabHeader.Items.OfType<AgentRunningIndicatorTabHeaderItemViewModel>().Single();
+        Assert.True(running.IsRunning);
+
+        tabStatus.RunningStatus = RunningStatus.Idle;
+
+        Assert.False(running.IsRunning);
+    }
+
     [Fact]
     public void WorkspacePaneDocument_EffectiveTabHeader_Title_MatchesPaneTitle()
     {
@@ -246,6 +302,71 @@ public sealed class WorkspacePaneViewModelTests
             isReadOnly: true);
 
         Assert.False(pane.SaveCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task WorkspacePaneViewModel_SaveCommand_CanExecute_IsFalseWhileSaving()
+    {
+        // Regression for #1169: the save button must be disabled while an in-flight save is
+        // running so the user cannot double-invoke the same save.
+        var gate = new TaskCompletionSource();
+        var pane = new WorkspacePaneViewModel(
+            CreateWorkspaceEntity(),
+            saveAsync: async _ => await gate.Task);
+
+        Assert.True(pane.SaveCommand.CanExecute(null));
+
+        pane.SaveCommand.Execute(null);
+
+        // Save is in-flight and awaiting the gate; CanExecute must be false so the button disables.
+        Assert.False(pane.SaveCommand.CanExecute(null));
+        Assert.True(pane.IsSaving);
+
+        gate.SetResult();
+        await pane.SaveCommand.LastExecutionTask!;
+
+        Assert.False(pane.IsSaving);
+        Assert.True(pane.SaveCommand.CanExecute(null));
+    }
+
+    // ── #1198: recursive DisposeAsync cascades to child tabs ────────────────
+
+    [Fact]
+    public async Task WorkspacePaneViewModel_WhenDisposed_RecursivelyDisposesTabs()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var tabA = new DisposeSpyTab("tab-a");
+        var tabB = new DisposeSpyTab("tab-b");
+        pane.Tabs.Add(tabA);
+        pane.Tabs.Add(tabB);
+
+        await pane.DisposeAsync();
+
+        Assert.Equal(1, tabA.DisposeCount);
+        Assert.Equal(1, tabB.DisposeCount);
+        Assert.Empty(pane.Tabs);
+    }
+
+    [Fact]
+    public async Task WorkspacePaneViewModel_WhenDisposed_DisposesAgentSessionTabLease()
+    {
+        var pane = new WorkspacePaneViewModel(CreateWorkspaceEntity());
+        var leaseDisposed = 0;
+        var agentTab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "agent-tab",
+            Title = "Agent",
+        };
+        var lease = new Phantom.Workspaces.Llm.RunningAgentChatLease(
+            new Phantom.Workspaces.Llm.Interfaces.AgentSessionId("session-1198"),
+            null!,
+            () => { System.Threading.Interlocked.Increment(ref leaseDisposed); return ValueTask.CompletedTask; });
+        agentTab.SetLease(lease);
+        pane.Tabs.Add(agentTab);
+
+        await pane.DisposeAsync();
+
+        Assert.Equal(1, leaseDisposed);
     }
 
     private static SubscribedEntityViewModel CreateWorkspaceEntity(
@@ -286,5 +407,24 @@ public sealed class WorkspacePaneViewModelTests
         }
 
         public override IStatusItem? TabStatus => this.statusItem;
+    }
+
+    private sealed class DisposeSpyTab : WorkspaceTabViewModel
+    {
+        public int DisposeCount { get; private set; }
+
+        [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
+        public DisposeSpyTab(string id)
+        {
+            this.Id = id;
+            this.Title = id;
+            this.DockRegion = "full";
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            await base.DisposeAsync();
+        }
     }
 }

@@ -159,4 +159,16 @@ public sealed class SlashCompletionsViewModelTests
         vm.SelectPrevious();
         Assert.Equal("alpha", vm.SelectedItem!.CompletionText);
     }
+
+    [Fact]
+    public void SelectNext_CalledOncePerKeyPress_AdvancesByOne()
+    {
+        var vm = new SlashCompletionsViewModel();
+        vm.SetItems(MakeItems("alpha", "beta", "gamma"));
+        vm.SelectedIndex = 0;
+
+        vm.SelectNext();
+
+        Assert.Equal(1, vm.SelectedIndex);
+    }
 }

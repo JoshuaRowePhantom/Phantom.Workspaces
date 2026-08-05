@@ -11,10 +11,7 @@ namespace Phantom.Workspaces.ViewModels;
 
 public sealed class ViewEntityViewModel : ViewModelBase
 {
-    private readonly ObservableCollection<EntityDisplayItemViewModel> displayItems = [];
     private readonly EntityListNodeViewModel entityCardNode;
-    private readonly MainWindowViewModel mainWindowViewModel;
-    private readonly ShortcutManager shortcutManager;
     private bool hasTraversedChildren;
     private bool isExpanded = true;
     private IBrush? childRailBrush;
@@ -30,8 +27,6 @@ public sealed class ViewEntityViewModel : ViewModelBase
         FieldEditorFactory? fieldEditorFactory = null)
     {
         this.Entity = entity;
-        this.mainWindowViewModel = mainWindowViewModel;
-        this.shortcutManager = shortcutManager;
         this.Badges = new BadgesViewModel(entity.Badges);
         this.StatusBadges = new StatusBadgesViewModel(entity.StatusBadges);
         this.IndentLevel = indentLevel;
@@ -46,21 +41,18 @@ public sealed class ViewEntityViewModel : ViewModelBase
         mainWindowViewModel.RegisterCardNode(entity, this.entityCardNode);
         this.entityCardNode.Card.SetBadges(this.Badges);
         this.entityCardNode.Card.SetStatusBadges(this.StatusBadges);
+        this.entityCardNode.Card.SetShortcutContext(mainWindowViewModel, shortcutManager);
         this.Entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.ToggleExpandCommand = new RelayCommand(
             execute: _ => this.IsExpanded = !this.IsExpanded,
             canExecute: _ => this.HasTraversedChildren);
-        this.RefreshCollections();
     }
 
     public async Task InitializeAsync()
     {
-        await EntityShortcutViewModel.PopulateShortcutsAsync(
-            this.Shortcuts,
-            this.mainWindowViewModel,
-            this.Entity,
-            this.shortcutManager);
-        this.entityCardNode.Card.SetShortcuts(this.Shortcuts, this.mainWindowViewModel.ActivateShortcutCommand);
+        // The card owns shortcut resolution; awaiting it here gives callers a deterministic point at
+        // which the tree node's card shortcuts are populated.
+        await this.entityCardNode.Card.ResolveShortcutsAsync();
         this.RaisePropertyChanged(nameof(this.HasShortcuts));
     }
 
@@ -114,15 +106,13 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public StatusBadgesViewModel StatusBadges { get; }
 
-    public ObservableCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
-
-    public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
+    public IReadOnlyList<EntityShortcutViewModel> Shortcuts => this.entityCardNode.Card.Shortcuts;
 
     public ObservableCollection<ViewEntityViewModel> Children { get; } = [];
 
     public EntityListNodeViewModel EntityCardNode => this.entityCardNode;
 
-    public bool HasShortcuts => this.Shortcuts.Count > 0;
+    public bool HasShortcuts => this.entityCardNode.Card.HasShortcuts;
 
     public IBrush? ParentColorBrush
     {
@@ -167,25 +157,8 @@ public sealed class ViewEntityViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
-            this.RefreshCollections();
+            this.RaisePropertyChanged(nameof(this.HasShortcuts));
         }
-    }
-
-    private void RefreshCollections()
-    {
-        this.displayItems.Clear();
-
-        if (this.Entity.Snapshot.Data is not JsonElement)
-        {
-            return;
-        }
-
-        foreach (var displayItem in this.Entity.DisplayItems)
-        {
-            this.displayItems.Add(displayItem);
-        }
-
-        this.RaisePropertyChanged(nameof(this.HasShortcuts));
     }
 
     private static IReadOnlyList<string> ResolveNameComponents(

@@ -75,13 +75,42 @@
     },
     {
       "disposition": "expanded",
-      "get-entity": [
-        {
-          "entity-type-names": [
-            "agent-session"
-          ]
-        }
-      ]
+      "query": {
+        "clauses": [
+          {
+            "clause-identifier": {
+              "value": "top-level-agent-sessions"
+            },
+            "clause": {
+              "clause-type": "and",
+              "clauses": [
+                {
+                  "clause-type": "entity-type",
+                  "entity-type-names": {
+                    "values": [
+                      "agent-session"
+                    ]
+                  }
+                },
+                {
+                  "clause-type": "not",
+                  "clause": {
+                    "clause-type": "entity-field",
+                    "field-path": {
+                      "components": [
+                        "parent-agent-session-ids",
+                        "0"
+                      ]
+                    },
+                    "comparison-operator": "regular-expression-match",
+                    "value": ".*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
     }
   ]
 }

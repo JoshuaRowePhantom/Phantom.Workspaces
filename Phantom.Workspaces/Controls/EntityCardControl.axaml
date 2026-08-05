@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:converters="using:Phantom.Workspaces.Converters"
+             xmlns:sharedControls="using:Phantom.Workspaces.Gui.Shared.Controls"
              x:CompileBindings="False"
              x:Class="Phantom.Workspaces.Controls.EntityCardControl">
     <UserControl.Resources>
@@ -11,21 +12,27 @@
                 IsEnabled="{Binding IsInteractive}"
                 ClipToBounds="True"
                 Tapped="OnEntityCardTapped">
-                <Grid ColumnDefinitions="Auto,*,Auto">
-                    <Border Width="4"
+                <DockPanel LastChildFill="True">
+                    <Border DockPanel.Dock="Left"
+                            Width="4"
                             Classes="entity-card-tree-type-bar"
                             Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}"
                             VerticalAlignment="Stretch" />
-                    <StackPanel Grid.Column="1"
-                                Classes="workspace-entity-header-row"
-                                MinWidth="67"
+                    <WrapPanel Classes="workspace-entity-header-wrap"
+                               Orientation="Horizontal">
+                    <StackPanel Classes="workspace-entity-header-row"
+                                MinWidth="100"
                                 Margin="0,0,12,0">
-                        <TextBlock Text="{Binding DisplayName}" Classes="workspace-entity-title" />
-                        <TextBlock Text="{Binding EntityType}" Classes="muted" />
+                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title">
+                            <Run Text="{Binding DisplayNameBefore}" />
+                            <Run Text="{Binding DisplayNameMatch}" Background="#FFF59D" />
+                            <Run Text="{Binding DisplayNameAfter}" />
+                        </sharedControls:SafeSelectableTextBlock>
+                        <sharedControls:SafeSelectableTextBlock Classes="muted"
+                                   Text="{Binding EntityTypeLabels}" />
                     </StackPanel>
-                    <WrapPanel Grid.Column="2"
-                               Classes="workspace-entity-actions-row"
-                               MinWidth="67">
+                    <WrapPanel Classes="workspace-entity-actions-row"
+                               MinWidth="100">
                         <ItemsControl IsVisible="{Binding HasBadges}"
                                       IsEnabled="{Binding AreBadgesEnabled}"
                                       ItemsSource="{Binding Badges.Badges}">
@@ -107,7 +114,8 @@
                                 Command="{Binding DiscardEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                     </WrapPanel>
-                </Grid>
+                    </WrapPanel>
+                </DockPanel>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list"
                               IsVisible="{Binding ExternalCard, Converter={x:Static ObjectConverters.IsNull}}" />

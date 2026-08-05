@@ -1,4 +1,4 @@
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -46,6 +46,14 @@ public static class CopilotSdkStreamAdapter
 
     /// <summary>Lifecycle-start argument: the sub-agent's display name.</summary>
     public const string DisplayNameArgumentName = "display-name";
+
+    /// <summary>
+    /// Lifecycle-start argument: the caller-supplied sub-agent name/id (issue #1151), which
+    /// maps to <c>SubagentStartedData.AgentName</c>. Distinct from <see cref="DisplayNameArgumentName"/>
+    /// (which carries the type-level display name); used to surface the caller-chosen identity
+    /// (e.g. <c>fix-crash1142</c>) in the UI without overwriting the type display.
+    /// </summary>
+    public const string AgentNameArgumentName = "agent-name";
 
     /// <summary>Lifecycle-start argument: the sub-agent's description.</summary>
     public const string DescriptionArgumentName = "description";
@@ -111,19 +119,28 @@ public static class CopilotSdkStreamAdapter
                     };
                     break;
 
-                case SubagentStartedEvent started when TryGetSubAgentId(started.AgentId, started.Data?.ToolCallId, out var startedId):
+                // Fix #1139: the lifecycle CallId is the ROUTING KEY, which must always be the
+                // child AgentId used to tag content — never the spawning tool-call id. When the
+                // started signal omits AgentId (root-parent spawn case), emit an empty CallId and
+                // rely on the spawning tool-call id (still surfaced only via the
+                // ParentToolCallIdArgumentName argument) for start-time correlation in the router.
+                // The event is dropped only when BOTH AgentId and ToolCallId are missing, since
+                // there is nothing left to correlate against.
+                case SubagentStartedEvent started when !string.IsNullOrEmpty(started.AgentId)
+                                                       || !string.IsNullOrEmpty(started.Data?.ToolCallId):
                     yield return new ChatResponseUpdate
                     {
                         Contents =
                         [
                             TagLifecycle(new FunctionCallContent(
-                                startedId,
+                                started.AgentId ?? string.Empty,
                                 SubAgentStartLifecycleName,
                                 new Dictionary<string, object?>
                                 {
                                     [ParentToolCallIdArgumentName] = started.Data?.ToolCallId,
                                     [DisplayNameArgumentName] = started.Data?.AgentDisplayName,
                                     [DescriptionArgumentName] = started.Data?.AgentDescription,
+                                    [AgentNameArgumentName] = started.Data?.AgentName,
                                 })),
                         ],
                     };
@@ -182,6 +199,15 @@ public static class CopilotSdkStreamAdapter
                         $"GitHub Copilot session error: {error.Data?.Message}");
 
                 case SessionIdleEvent:
+                    // Emit a terminal update carrying FinishReason so downstream middleware
+                    // (StreamingPersistenceMiddleware) treats the response as final and persists
+                    // the last message of the turn. Without this the last message of every
+                    // Copilot turn is treated as unstable and never persisted (issue #1103).
+                    yield return new ChatResponseUpdate
+                    {
+                        Role = ChatRole.Assistant,
+                        FinishReason = ChatFinishReason.Stop,
+                    };
                     yield break;
             }
         }

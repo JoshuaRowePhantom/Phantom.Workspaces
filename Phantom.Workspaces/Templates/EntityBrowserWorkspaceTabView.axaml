@@ -4,13 +4,39 @@
              xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
              x:Class="Phantom.Workspaces.Templates.EntityBrowserWorkspaceTabView"
              x:DataType="vm:EntityBrowserWorkspaceTabViewModel">
-    <ScrollViewer x:Name="BrowserScrollViewer"
-                  AllowAutoHide="False"
-                  HorizontalScrollBarVisibility="Disabled"
-                  VerticalScrollBarVisibility="Auto"
-                  controls:StickyScroll.IsEnabled="True">
-        <TreeView x:Name="BrowserTreeView"
-                  Classes="entity-card-tree entity-card-tree-entity"
+    <Grid RowDefinitions="Auto,*">
+        <Border Grid.Row="0"
+                Classes="entity-find-bar"
+                HorizontalAlignment="Left"
+                IsVisible="{Binding Find.IsOpen}">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <TextBox Classes="entity-find-input"
+                         Text="{Binding Find.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         Watermark="Find entities…">
+                    <TextBox.KeyBindings>
+                        <KeyBinding Gesture="Enter"        Command="{Binding Find.NextCommand}" />
+                        <KeyBinding Gesture="Shift+Enter"  Command="{Binding Find.PreviousCommand}" />
+                        <KeyBinding Gesture="Ctrl+F"       Command="{Binding Find.NextCommand}" />
+                        <KeyBinding Gesture="Ctrl+Shift+F" Command="{Binding Find.PreviousCommand}" />
+                        <KeyBinding Gesture="Escape"       Command="{Binding Find.CloseCommand}" />
+                    </TextBox.KeyBindings>
+                </TextBox>
+                <TextBlock Classes="muted"
+                           VerticalAlignment="Center"
+                           Text="{Binding Find.MatchStatusText}" />
+                <CheckBox Content="_Hide unmatched"
+                          IsChecked="{Binding Find.HideUnmatched, Mode=TwoWay}" />
+            </StackPanel>
+        </Border>
+        <!-- Issue #1064: no surrounding ScrollViewer; the entity-card-tree two-regime wrapper makes
+             the tree's own inner scroller the single scroller (vertical scroll plus below-minimum
+             horizontal scroll) and wraps content to the viewport. The entity-card-tree-sticky class
+             re-enables StickyScroll on that inner scroller via the shared selector
+             (SharedStyles.axaml: TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer). -->
+        <TreeView Grid.Row="1"
+                  x:Name="BrowserTreeView"
+                  Classes="entity-card-tree entity-card-tree-entity entity-card-tree-sticky"
                   ItemsSource="{Binding EntityList.Items}" />
-    </ScrollViewer>
+    </Grid>
 </UserControl>
+

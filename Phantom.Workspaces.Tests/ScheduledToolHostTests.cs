@@ -74,6 +74,22 @@ public sealed class ScheduledToolHostTests
             Task.FromResult(WorkspaceToolExecutionResult.Failure("something went wrong"));
     }
 
+    private sealed class ThrowingTool : IWorkspaceTool
+    {
+        public string ToolType => "stub";
+
+        public Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context) =>
+            throw new InvalidOperationException("boom");
+    }
+
+    private sealed class SuccessfulTool : IWorkspaceTool
+    {
+        public string ToolType => "stub";
+
+        public Task<WorkspaceToolExecutionResult> ExecuteAsync(WorkspaceToolExecutionContext context) =>
+            Task.FromResult(WorkspaceToolExecutionResult.Success() with { ResultContent = "did the thing" });
+    }
+
     private static readonly string[] HostName = ["computer", "this-machine"];
 
     private static async Task AddEntityAsync(IDataAccessLayer dataAccessLayer, Guid id, string json)
@@ -398,6 +414,39 @@ public sealed class ScheduledToolHostTests
     }
 
     [Fact]
+    public async Task RunToolAsync_WhenNoRegisteredToolMatchesToolType_CompletesResultHandleWithFailure()
+    {
+        // Regression for #1161: a seeded tool entity whose tool-type has no registered tool must
+        // complete its tool-execution-result handle as failed (with a message identifying the missing
+        // tool-type). It must not leave a phantom "running" result entity behind.
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        // Registry has no tools registered — the seeded "stub" tool-type will not resolve.
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]), timeProvider: new FixedTimeProvider());
+
+        var ranCount = await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, ranCount);
+
+        // A tool-execution-result must have been recorded and completed (not left "running").
+        var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
+        var resultEntity = Assert.Single(results);
+        Assert.Equal("failed", resultEntity.GetProperty("status").GetString());
+        var content = resultEntity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString();
+        Assert.NotNull(content);
+        Assert.Contains("stub", content!, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RunDueTools_ToolReturnsFailure_RecordsFailedResult()
     {
         var dataAccessLayer = new InMemoryDataAccessLayer();
@@ -437,6 +486,98 @@ public sealed class ScheduledToolHostTests
             ],
         });
         return result.Batches.SelectMany(batch => batch.Entities).Select(entity => entity.Data!.Value).ToArray();
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_WhenToolRunBegins_LogsStartEntry()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var logger = new TestLogger<ScheduledToolHost>();
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([new SuccessfulTool()]),
+            timeProvider: new FixedTimeProvider(),
+            logger: logger);
+
+        await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+            && e.Message.Contains("stub", StringComparison.Ordinal)
+            && e.Message.Contains("starting", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_WhenToolRunCompletes_LogsCompletionWithSummaryAndDuration()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var logger = new TestLogger<ScheduledToolHost>();
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([new SuccessfulTool()]),
+            timeProvider: new FixedTimeProvider(),
+            logger: logger);
+
+        await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+            && e.Message.Contains("completed", StringComparison.OrdinalIgnoreCase)
+            && e.Message.Contains("did the thing", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_WhenToolThrows_LogsErrorAndMarksRunFailed()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var logger = new TestLogger<ScheduledToolHost>();
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([new ThrowingTool()]),
+            timeProvider: new FixedTimeProvider(),
+            logger: logger);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken));
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && e.Exception is InvalidOperationException
+            && e.Message.Contains("threw", StringComparison.OrdinalIgnoreCase));
+
+        var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
+        var resultEntity = Assert.Single(results);
+        Assert.Equal("failed", resultEntity.GetProperty("status").GetString());
     }
 
     private sealed class CapturingExecutor : ITrustedExecutor
@@ -493,5 +634,167 @@ public sealed class ScheduledToolHostTests
         Assert.Equal(0, tool.RunCount);
         Assert.NotNull(executor.ReceivedRequest);
         Assert.Equal("stub", executor.ReceivedRequest!.ToolTypeName);
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_WhenRunCompletes_WritesLastCompletedAndLastStatusOnRelationship()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([new SuccessfulTool()]),
+            timeProvider: new FixedTimeProvider());
+
+        await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        var relationship = Assert.Single(await QueryByTypeAsync(dataAccessLayer, "tool-relationship"));
+        Assert.True(relationship.TryGetProperty("last-completed", out var lastCompleted));
+        Assert.Equal(JsonValueKind.String, lastCompleted.ValueKind);
+        Assert.True(DateTimeOffset.TryParse(lastCompleted.GetString(), out _));
+        Assert.Equal("succeeded", relationship.GetProperty("last-status").GetString());
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_WhenRunFaults_WritesLastCompletedAndLastFailedStatusOnRelationship()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([new FailingTool()]),
+            timeProvider: new FixedTimeProvider());
+
+        await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        var relationship = Assert.Single(await QueryByTypeAsync(dataAccessLayer, "tool-relationship"));
+        Assert.True(relationship.TryGetProperty("last-completed", out var lastCompleted));
+        Assert.Equal(JsonValueKind.String, lastCompleted.ValueKind);
+        Assert.Equal("failed", relationship.GetProperty("last-status").GetString());
+    }
+
+    private sealed class ThrowingResultWriter : ToolExecutionResultWriter
+    {
+        public bool ThrowOnComplete { get; set; } = true;
+
+        public ThrowingResultWriter(IDataAccessLayer dataAccessLayer, TimeProvider timeProvider)
+            : base(dataAccessLayer, timeProvider)
+        {
+        }
+
+        public override Task CompleteAsync(
+            ToolExecutionResultHandle handle,
+            bool success,
+            string? content = null,
+            CancellationToken cancellationToken = default)
+        {
+            if (this.ThrowOnComplete)
+            {
+                throw new InvalidOperationException("DAL boom");
+            }
+
+            return base.CompleteAsync(handle, success, content, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_WhenCompleteAsyncThrows_LogsErrorWithoutMaskingRunOutcome()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var computerId = Guid.NewGuid();
+        var toolId = Guid.NewGuid();
+        var scheduleId = Guid.NewGuid();
+        var relationshipId = Guid.NewGuid();
+
+        await SeedScenarioAsync(dataAccessLayer, hostId, userId, computerId, toolId, scheduleId, relationshipId,
+            """{ "frequency": "00:00:01Z", "days-of-week": [], "start-at": [] }""");
+
+        var logger = new TestLogger<ScheduledToolHost>();
+        var throwingWriter = new ThrowingResultWriter(dataAccessLayer, new FixedTimeProvider());
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([new SuccessfulTool()]),
+            resultWriter: throwingWriter,
+            timeProvider: new FixedTimeProvider(),
+            logger: logger);
+
+        // The tool ran successfully. CompleteAsync throwing must not mask that: the run outcome
+        // (the tool's success log line) is still emitted, and the failure is logged as its own
+        // Error entry — the outer catch is not re-entered.
+        await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+            && e.Message.Contains("completed", StringComparison.OrdinalIgnoreCase)
+            && e.Message.Contains("did the thing", StringComparison.Ordinal));
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && e.Exception is InvalidOperationException
+            && e.Message.Contains("Failed to record completion", StringComparison.OrdinalIgnoreCase));
+
+        // The outer catch's "threw after" log must not fire — the completion-write failure was
+        // isolated from the tool's success outcome.
+        Assert.DoesNotContain(logger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && e.Message.Contains("threw after", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ScheduledToolHost_OnStartup_ReconcilesOrphanRunningResultsAsFailed()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        // Seed a per-run tool-execution-result entity in "running" state (as a prior process would
+        // have left it): no end-time, status: "running", name path under the host.
+        var startTime = new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
+        var orphanId = Guid.NewGuid();
+        await AddEntityAsync(dataAccessLayer, orphanId,
+            $$"""
+            {
+              "entity-id": "{{orphanId}}",
+              "entity-types": ["entity", "tool-execution-result"],
+              "names": [["computer","this-machine","tool-executions","stub","20260617T093000000Z"]],
+              "tool-name": "stub",
+              "start-time": "{{startTime:O}}",
+              "status": "running"
+            }
+            """);
+
+        var host = new ScheduledToolHost(
+            dataAccessLayer,
+            new ScheduledToolRegistry([]),
+            timeProvider: new FixedTimeProvider());
+
+        var reconciled = await host.ReconcileOrphanRunningResultsAsync(HostName, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, reconciled);
+        var results = await QueryByTypeAsync(dataAccessLayer, "tool-execution-result");
+        var entity = Assert.Single(results);
+        Assert.Equal("failed", entity.GetProperty("status").GetString());
+        Assert.True(entity.TryGetProperty("end-time", out _));
+        var message = entity.GetProperty("content").GetProperty("default").GetProperty("content").GetProperty("text").GetString();
+        Assert.NotNull(message);
+        Assert.Contains("reconciled", message, StringComparison.OrdinalIgnoreCase);
     }
 }

@@ -3,7 +3,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using AgentSchema;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 
@@ -57,8 +57,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
-    private IRunningAgentChatFactory? runningAgentChatFactory;
-    private ISubAgentTable? subAgentTable;
+    private IRunningAgentChatFactory runningAgentChatFactory = default!;
+    private ISubAgentTable subAgentTable = default!;
 
     private CopilotClient? copilotClient;
     private CopilotSession? copilotSession;
@@ -66,6 +66,25 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private string? pendingResumeSessionId;
     private int disposeStarted;
     private volatile string? workingDirectoryOverride;
+
+    /// <summary>
+    /// Gate used by the live-turn's <c>OnQueueChanged</c> handler. Set to <see langword="true"/>
+    /// at the start of <see cref="AbortAndInvalidateSessionAsync"/> (before the session is
+    /// invalidated) so a user message enqueued during teardown is neither steered to the dying
+    /// CLI session nor dequeued-and-dropped. Reset per turn in <c>BeginTurnAsync</c>. See
+    /// GitHub issue #1142.
+    /// </summary>
+    private volatile bool steeringSuspended;
+
+    /// <summary>
+    /// Test hook: exposes <see cref="steeringSuspended"/> so tests can assert teardown ordering
+    /// and simulate the teardown gate without spinning up a real Copilot CLI session.
+    /// </summary>
+    internal bool SteeringSuspendedForTest
+    {
+        get => this.steeringSuspended;
+        set => this.steeringSuspended = value;
+    }
 
     /// <summary>
     /// Raised when a steering message is forwarded to the live Copilot session so the owning
@@ -277,7 +296,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.WorkingDirectory = workingDirectory;
         }
 
-        var tools = options?.Tools?.OfType<AIFunction>().ToList();
+        var tools = options?.Tools?.OfType<AIFunctionDeclaration>().ToList();
         if (tools is { Count: > 0 })
         {
             sessionConfig.Tools = tools;
@@ -331,7 +350,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             resumeConfig.WorkingDirectory = workingDirectory;
         }
 
-        var tools = options?.Tools?.OfType<AIFunction>().ToList();
+        var tools = options?.Tools?.OfType<AIFunctionDeclaration>().ToList();
         if (tools is { Count: > 0 })
         {
             resumeConfig.Tools = tools;
@@ -385,7 +404,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Ensures the <see cref="CopilotClient"/> is started before calling
     /// <see cref="CopilotClient.ListModelsAsync"/>.
     /// </summary>
-    public async Task<IReadOnlyList<GitHub.Copilot.SDK.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
     {
         await this.EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
         var models = await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
@@ -414,8 +433,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 GitHubToken = this.gitHubToken,
                 Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                CliPath = this.cliPath,
             };
+
+            if (!string.IsNullOrWhiteSpace(this.cliPath))
+            {
+                clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
+            }
 
             var client = new CopilotClient(clientOptions);
             await client.StartAsync(cancellationToken).ConfigureAwait(false);
@@ -431,14 +454,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
     /// <see cref="CopilotSubAgentRouter"/> uses to create and register sub-agent
     /// <see cref="AgentChat"/> instances when a <c>SubagentStartedEvent</c> arrives.
-    /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created,
-    /// in the same block that subscribes to <see cref="SteeringMessageForwarded"/> and
-    /// <see cref="SessionEstablished"/>.
+    /// Called from <see cref="AgentChat.InitializeAsync"/> after the client has been created.
+    /// Fix #1109/#1110: both dependencies are now mandatory — the router no longer has a
+    /// registry-only fallback, and passing null would silently misroute sub-agent output into
+    /// the parent transcript at construction time.
     /// </summary>
-    internal void SetSubAgentDependencies(IRunningAgentChatFactory? factory, ISubAgentTable? table)
+    internal void SetSubAgentDependencies(IRunningAgentChatFactory factory, ISubAgentTable table)
     {
-        this.runningAgentChatFactory = factory;
-        this.subAgentTable = table;
+        this.runningAgentChatFactory = factory ?? throw new ArgumentNullException(nameof(factory));
+        this.subAgentTable = table ?? throw new ArgumentNullException(nameof(table));
     }
 
     /// <inheritdoc />
@@ -459,7 +483,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var toolCalls = new List<FunctionCallContent>();
             var toolResults = new List<FunctionResultContent>();
 
-            using var subscription = session.On(sessionEvent =>
+            using var subscription = session.On<SessionEvent>(sessionEvent =>
             {
                 switch (sessionEvent)
                 {
@@ -531,7 +555,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
             var router = new CopilotSubAgentRouter(
                 channel.Writer,
-                this.subAgentChatRegistry,
                 this.runningAgentChatFactory,
                 this.subAgentTable,
                 this.loggerFactory?.CreateLogger<CopilotSubAgentRouter>());
@@ -542,7 +565,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var eventChannel = Channel.CreateUnbounded<SessionEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-            var eventSubscription = session.On(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
+            var eventSubscription = session.On<SessionEvent>(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
 
             var dispatchLoop = Task.Run(async () =>
             {
@@ -579,32 +602,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
             }, turnCancellationToken);
 
+            // Reset the teardown gate for this turn: a previous turn's cancellation may have
+            // left steeringSuspended=true (issue #1142). The new turn must start unsuspended so
+            // its OnQueueChanged forwards Immediate items to the live session.
+            this.steeringSuspended = false;
+
             // While a turn is running, forward any Immediate-immediacy queue items as steering
             // input. SendAsync with Mode="immediate" is safe to call concurrently with a live turn.
             void OnQueueChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
-            {
-                if (e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
-                {
-                    return;
-                }
-
-                while (this.queueManager!.TryDequeueNextImmediate(out var item))
-                {
-                    foreach (var message in item.Messages ?? [])
-                    {
-                        var immediateOptions = BuildImmediateMessageOptions(message);
-                        if (immediateOptions is not null)
-                        {
-                            // Record the forwarded steering message in history before sending it.
-                            this.SteeringMessageForwarded?.Invoke(message);
-
-                            // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and
-                            // returns promptly. Errors are non-fatal for steering.
-                            _ = session.SendAsync(immediateOptions, CancellationToken.None);
-                        }
-                    }
-                }
-            }
+                => this.ForwardPendingImmediateMessages(
+                    (options, ct) => session.SendAsync(options, ct),
+                    e);
 
             if (this.queueManager is not null)
             {
@@ -630,7 +638,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 sendCancellationToken => session.SendAsync(
                     messageOptions,
                     sendCancellationToken),
-                () => this.AbortAndInvalidateSessionAsync(session),
+                () => this.AbortAndInvalidateSessionAsync(session, router),
                 () => { this.InvalidateBrokenSession(session); return Task.CompletedTask; });
         }
     }
@@ -719,8 +727,16 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Actually stops the in-flight Copilot CLI turn. Cancelling the read loop alone leaves the CLI
     // generating and lets a stale SessionIdleEvent from the abandoned turn complete the next turn's
     // channel (a silent empty response), so the session is also invalidated and recreated next turn.
-    private async Task AbortAndInvalidateSessionAsync(CopilotSession session)
+    private async Task AbortAndInvalidateSessionAsync(CopilotSession session, CopilotSubAgentRouter? router = null)
     {
+        // Suspend steering BEFORE aborting/invalidating the session (GitHub issue #1142). Once
+        // this flag is set, OnQueueChanged early-returns without calling TryDequeueNextImmediate,
+        // so a user message enqueued while teardown runs is neither routed to the dying session
+        // (which would produce a "Session not found" fault whose unobserved Task crashed the
+        // finalizer thread) nor dequeued-and-dropped. Leaving the Immediate item in place lets
+        // AgentChat's processing loop promote it to a fresh turn on the recovered session.
+        this.steeringSuspended = true;
+
         try
         {
             await session.AbortAsync(CancellationToken.None).ConfigureAwait(false);
@@ -733,6 +749,92 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         this.InvalidateCopilotSession(session);
+
+        // Fix #1193: force any sub-agents whose SubagentCompleted/SubagentFailed events the
+        // aborted session will never deliver into a terminal (Failed) state. Idempotent with any
+        // late real events via SetCompletionState's equality guard and the router's dictionary
+        // clear. Router may be null when a legacy caller stubs OnCancelledAsync directly.
+        if (router is not null)
+        {
+            try
+            {
+                await router.TerminalizeRemainingChildrenAsync(
+                        new OperationCanceledException("Parent Copilot chat was interrupted."))
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                this.loggerFactory?.CreateLogger<CopilotSdkChatClient>()
+                    .LogDebug(exception, "Terminalizing running sub-agents on parent interrupt failed.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Body of the per-turn <c>OnQueueChanged</c> subscription. Split out so tests can exercise
+    /// the gating and fault-observation behaviour without a real Copilot CLI session.
+    /// GitHub issue #1142.
+    /// </summary>
+    internal void ForwardPendingImmediateMessages(
+        Func<MessageOptions, CancellationToken, Task> sendAsync,
+        AgentInputQueueManager.QueueStateChangedEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(sendAsync);
+        ArgumentNullException.ThrowIfNull(e);
+
+        // Do NOT dequeue during teardown (steeringSuspended) — the Immediate item must remain in
+        // the queue so AgentChat's processing loop can promote it to a fresh turn on the
+        // recovered session (issue #1142). Also ignore non-additions.
+        if (this.steeringSuspended || e.ChangeKind != AgentInputQueueManager.QueueStateChangeKind.ItemAdded)
+        {
+            return;
+        }
+
+        while (this.queueManager!.TryDequeueNextImmediate(out var item))
+        {
+            foreach (var message in item.Messages ?? [])
+            {
+                var immediateOptions = BuildImmediateMessageOptions(message);
+                if (immediateOptions is null)
+                {
+                    continue;
+                }
+
+                // Record the forwarded steering message in history before sending it.
+                this.SteeringMessageForwarded?.Invoke(message);
+
+                // Fire-and-forget: Mode="immediate" writes to the CLI's stdin pipe and returns
+                // promptly. Errors are non-fatal for steering, but the returned Task's exception
+                // MUST be observed — otherwise a "Session not found" fault (issue #1142) is
+                // rethrown by the finalizer thread and crashes the process.
+                _ = ForwardSteeringAsync(
+                    ct => sendAsync(immediateOptions, ct),
+                    this.loggerFactory?.CreateLogger<CopilotSdkChatClient>());
+            }
+        }
+    }
+
+    /// <summary>
+    /// Awaits a fire-and-forget steering <see cref="CopilotSession.SendAsync"/> call and swallows
+    /// any exception (logging it at Debug). This observes the returned Task so an unobserved
+    /// fault cannot be rethrown by the finalizer thread. GitHub issue #1142.
+    /// </summary>
+    internal static async Task ForwardSteeringAsync(
+        Func<CancellationToken, Task> sendAsync,
+        ILogger? logger)
+    {
+        ArgumentNullException.ThrowIfNull(sendAsync);
+
+        try
+        {
+            await sendAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            // Steering is best-effort: the session may have been aborted/invalidated (e.g. after
+            // Ctrl-Break). Observe the fault so it cannot crash the finalizer thread.
+            logger?.LogDebug(exception, "Forwarding steering message to the Copilot session failed.");
+        }
     }
 
     // Drops the cached session (disposing it in the background) so the next turn creates a fresh one.
@@ -844,10 +946,19 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     }
 
     /// <summary>
-    /// Builds a <see cref="MessageOptions"/> from the message history by collecting all consecutive
-    /// trailing user messages (the current batch) and combining their text content and data attachments
-    /// into a single prompt. When multiple messages are queued in one turn their texts are joined with
+    /// Builds a <see cref="MessageOptions"/> from the message history by collecting the current
+    /// turn's user-message batch (the trailing run of user messages that follows a non-user
+    /// separator) and combining their text content and data attachments into a single prompt.
+    /// When multiple messages are queued in one turn their texts are joined with
     /// <c>\n\n---\n\n</c> so every queued message is visible to the model.
+    /// <para>
+    /// Defense-in-depth against issue #1104: if the history degenerates into a run of consecutive
+    /// user messages with no non-user separator (e.g. an errored/cancelled/restored turn whose
+    /// assistant reply was never persisted), the backward walk cannot distinguish the current
+    /// turn's batch from earlier turns. In that case the merge is bounded to the last user
+    /// message only, so a degenerate user-only history cannot collapse into one giant prompt
+    /// that re-answers stale user turns.
+    /// </para>
     /// </summary>
     internal static MessageOptions BuildMessageOptions(IEnumerable<ChatMessage> messages)
     {
@@ -856,11 +967,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         // Collect consecutive trailing user messages — these are the batched messages for this turn.
         // Stop as soon as a non-user message is encountered so earlier historical turns are not included.
         var batchMessages = new List<ChatMessage>();
+        var foundSeparator = false;
         for (var index = materialized.Count - 1; index >= 0; index--)
         {
             var message = materialized[index];
             if (message.Role != ChatRole.User)
             {
+                foundSeparator = true;
                 break;
             }
 
@@ -868,6 +981,18 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         batchMessages.Reverse();
+
+        // Defense-in-depth (issue #1104): when the trailing user run spans the entire history
+        // with no non-user separator, we cannot reliably identify the current turn's batch and
+        // must not concatenate historical user turns into one prompt. Keep only the last user
+        // message — that is the caller's most recent input and is safe to send. Genuinely
+        // batched user messages within one turn are still merged when a preceding non-user
+        // (assistant/system/tool) message is present, matching the stateful-session model
+        // documented in docs/design/github-copilot-provider-support.md.
+        if (!foundSeparator && batchMessages.Count > 1)
+        {
+            batchMessages = new List<ChatMessage> { batchMessages[^1] };
+        }
 
         var batchWithContent = batchMessages
             .Where(m => !string.IsNullOrEmpty(m.Text) || m.Contents.OfType<DataContent>().Any())
@@ -920,7 +1045,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         }
 
         options.Attachments = dataItems
-            .Select(static d => (UserMessageAttachment)new UserMessageAttachmentBlob
+            .Select(static d => (Attachment)new AttachmentBlob
             {
                 Data = Convert.ToBase64String(d.Data.ToArray()),
                 MimeType = d.MediaType ?? string.Empty,
@@ -990,13 +1115,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     GitHubToken = this.gitHubToken,
                     Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                    CliPath = this.cliPath,
                 };
+
+                if (!string.IsNullOrWhiteSpace(this.cliPath))
+                {
+                    clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
+                }
 
                 var workingDirectory = GetWorkingDirectory(options);
                 if (!string.IsNullOrWhiteSpace(workingDirectory))
                 {
-                    clientOptions.Cwd = workingDirectory;
+                    clientOptions.WorkingDirectory = workingDirectory;
                 }
 
                 var client = new CopilotClient(clientOptions);

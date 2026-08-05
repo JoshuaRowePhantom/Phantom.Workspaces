@@ -2,6 +2,7 @@ using Avalonia;
 using System;
 using System.CommandLine;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Services.Logging;
 
 namespace Phantom.Workspaces.Agent.Gui;
 
@@ -13,6 +14,11 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // #1093: register global uncaught/unobserved exception logging for the Agent GUI, backed by a
+        // config-less file logger factory (#1095), before Avalonia starts.
+        GlobalExceptionLogging.Register(
+            HostFileLoggerFactory.Create(HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory)));
+
         if (!TryParseArguments(args, out var parsed))
         {
             // ParseError is set — start Avalonia to show the error window.

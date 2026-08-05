@@ -12,7 +12,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.False(root.IsExpanded);
@@ -24,7 +24,7 @@ public sealed class AgentViewModelNavigationTests
         // Issue #819: Diagnostics node was removed.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         var root = Assert.Single(viewModel.EditorItems);
         Assert.DoesNotContain(root.Children, c => string.Equals(c.Id, "chat-diagnostics", StringComparison.Ordinal));
@@ -37,7 +37,7 @@ public sealed class AgentViewModelNavigationTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var chat = await CreateChatWithMcpAsync(server.BoundUrl);
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await WaitForMcpToolsLoadedAsync(chat);
 
@@ -53,7 +53,7 @@ public sealed class AgentViewModelNavigationTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var chat = await CreateChatWithMcpAsync(server.BoundUrl);
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
         await WaitForMcpToolsLoadedAsync(chat);
 
@@ -155,56 +155,59 @@ public sealed class AgentViewModelNavigationTests
     // ── Sub-agent navigation tests ─────────────────────────────────────────────
 
     [Fact]
-    public async Task SelectSubAgentNavItem_TwoSubAgents_ShowsCorrectSlot()
+    public async Task SelectSubAgentNavItem_TwoSubAgents_ActivatesCorrectSubAgentDocument()
     {
+        // Fix #1112: selecting a sub-agent nav item activates that sub-agent's OWN cached
+        // AgentDetailDocumentItem (its own ConversationDetail). Switching selection activates a
+        // DIFFERENT document — never the shared SubAgentsContainer.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "agent-1", "Agent One");
         await AddSubAgentAsync(chat, "agent-2", "Agent Two");
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsGroup = root.Children.Single(c => c.Id == "chat-sub-agents");
+        var childVm1 = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "agent-1").SubAgentViewModel;
+        var childVm2 = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "agent-2").SubAgentViewModel;
 
-        // Select the second sub-agent nav item.
-        var secondSubAgentNavItem = subAgentsGroup.Children.Single(c => c.Id == "sub-agent-agent-2");
-        viewModel.SelectedEditorItem = secondSubAgentNavItem;
+        var second = subAgentsGroup.Children.Single(c => c.Id == "sub-agent-agent-2");
+        viewModel.SelectedEditorItem = second;
 
-        // The container should show agent-2, not agent-1.
-        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
-        var selectedSlot = viewModel.SubAgentsContainer.Slots.Single(s => s.IsSelected);
-        Assert.Equal("agent-2", selectedSlot.AgentId);
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(childVm2.ConversationDetail, viewModel.SelectedDetailDocument!.DetailContent);
 
-        // Now select the first sub-agent.
-        var firstSubAgentNavItem = subAgentsGroup.Children.Single(c => c.Id == "sub-agent-agent-1");
-        viewModel.SelectedEditorItem = firstSubAgentNavItem;
+        var first = subAgentsGroup.Children.Single(c => c.Id == "sub-agent-agent-1");
+        viewModel.SelectedEditorItem = first;
 
-        // The container should now show agent-1.
-        selectedSlot = viewModel.SubAgentsContainer.Slots.Single(s => s.IsSelected);
-        Assert.Equal("agent-1", selectedSlot.AgentId);
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(childVm1.ConversationDetail, viewModel.SelectedDetailDocument!.DetailContent);
     }
 
     [Fact]
-    public async Task SelectSubAgentNavItem_DetailContentSlot_IsVisible()
+    public async Task SelectSubAgentNavItem_ActivatesOwnConversationDocument()
     {
+        // Fix #1112: the DetailContent for a sub-agent nav item is that sub-agent's OWN
+        // ConversationDetail, and its cached AgentDetailDocumentItem is what becomes the active
+        // Document — never the shared SubAgentsContainer.
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         await AddSubAgentAsync(chat, "agent-1", "Agent One");
 
         var root = Assert.Single(viewModel.EditorItems);
         var subAgentsGroup = root.Children.Single(c => c.Id == "chat-sub-agents");
         var subAgentNavItem = subAgentsGroup.Children.Single(c => c.Id == "sub-agent-agent-1");
+        var childVm = viewModel.SubAgentsContainer.Slots.Single(s => s.AgentId == "agent-1").SubAgentViewModel;
 
-        // Select the sub-agent nav item.
         viewModel.SelectedEditorItem = subAgentNavItem;
 
-        // The detail content should be the sub-agents container.
-        Assert.Same(viewModel.SubAgentsContainer, viewModel.SelectedEditorDetailContent);
-        // The container should not be showing the browser.
-        Assert.False(viewModel.SubAgentsContainer.IsShowingBrowser);
+        Assert.Same(childVm.ConversationDetail, viewModel.SelectedEditorDetailContent);
+        Assert.NotNull(viewModel.SelectedDetailDocument);
+        Assert.Same(childVm.ConversationDetail, viewModel.SelectedDetailDocument!.DetailContent);
+        Assert.Same(viewModel.SelectedDetailDocument, viewModel.DetailDockFactory.ActiveDocument);
     }
 
     [Fact]
@@ -212,7 +215,7 @@ public sealed class AgentViewModelNavigationTests
     {
         var chat = await CreateChatAsync();
         using var loggerFactory = new ObservableLoggerFactory();
-        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory);
+        await using var viewModel = new AgentViewModel(chat, "parent", "", loggerFactory, TaskScheduler.Default);
 
         // Add a real sub-agent first to ensure the mechanism works.
         await AddSubAgentAsync(chat, "agent-1", "Agent One");

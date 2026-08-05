@@ -224,4 +224,124 @@ public sealed class RunningSubAgentDisplayTests
 
         Assert.Equal("This is a test description", display.Description);
     }
+
+    [Fact]
+    public async Task RunningSubAgentDisplay_FromAgentChat_ExposesProvidedDisplayName()
+    {
+        // #1132: RunningSubAgentDisplay must surface the sub-agent's provided display name
+        // (from AgentChat.DisplayName) so the [Running sub-agents] panel data source
+        // carries the correct per-sub-agent label rather than a hard-coded generic label.
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "fix-reload1",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal(chat.DisplayName, display.DisplayName);
+        Assert.DoesNotContain("GitHub Copilot Sub-Agent", display.DisplayName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SubAgentDisplayName_WhenProvidedNameFlowedThroughFactory_SurfacesProvidedName()
+    {
+        // Fix #1133 (view side, over the fixed model): when the sub-agent AgentChat is
+        // constructed with a caller-provided display name (as the Copilot SDK router now does
+        // by mapping the "display-name" lifecycle argument to DisplayNameOverride), the
+        // RunningSubAgentDisplay data source must surface the provided name — never the
+        // freshly-generated session GUID that used to appear on the card header, and never
+        // the fallback definition name.
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "generic-sub-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        const string providedName = "fix-reload1";
+        var chat = await Phantom.Workspaces.Llm.AgentChat.CreateAsync(
+            new Phantom.Workspaces.Llm.InternalCreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                ConfiguredStore = new Phantom.Workspaces.Llm.InMemoryAgentPersistenceStore(),
+                ClientOverride = new Phantom.Workspaces.Llm.DeterministicTestChatClient(),
+                DisplayNameOverride = providedName,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal(providedName, display.DisplayName);
+        // The bug's fingerprint was a 32-hex GUID from Guid.NewGuid().ToString("n").
+        Assert.DoesNotMatch("^[0-9a-f]{32}$", display.DisplayName);
+        // And it must not fall back to the definition name either.
+        Assert.NotEqual("generic-sub-agent", display.DisplayName);
+    }
+
+    [Fact]
+    public async Task SubAgentName_WhenCallerNameSet_SurfacesCallerNameNotGuid()
+    {
+        // Fix #1151: when the sub-agent AgentChat carries a caller-supplied name (e.g.
+        // "fix-crash1142" from SubagentStartedData.AgentName, threaded through
+        // InternalCreateAgentChatRequest.NameOverride), the RunningSubAgentDisplay must expose
+        // that name via IRunningSubAgentDisplay.Name — distinct from the type-level DisplayName —
+        // instead of leaving it empty and forcing the operator to correlate GUIDs.
+        var definition = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "generic-sub-agent",
+              "model": {
+                "id": "test",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """);
+
+        const string callerName = "fix-crash1142";
+        var chat = await Phantom.Workspaces.Llm.AgentChat.CreateAsync(
+            new Phantom.Workspaces.Llm.InternalCreateAgentChatRequest
+            {
+                AgentDefinition = definition,
+                ConfiguredStore = new Phantom.Workspaces.Llm.InMemoryAgentPersistenceStore(),
+                ClientOverride = new Phantom.Workspaces.Llm.DeterministicTestChatClient(),
+                DisplayNameOverride = "General purpose",
+                NameOverride = callerName,
+            });
+
+        await using var _ = chat;
+        var display = new RunningSubAgentDisplay(chat);
+
+        Assert.Equal(callerName, display.Name);
+        // The bug's fingerprint was a 32-hex GUID surface. The caller-supplied name must not be it.
+        Assert.DoesNotMatch("^[0-9a-f]{32}$", display.Name);
+        // And it must remain independent of the type-level display name.
+        Assert.Equal("General purpose", display.DisplayName);
+        Assert.NotEqual(display.DisplayName, display.Name);
+    }
 }

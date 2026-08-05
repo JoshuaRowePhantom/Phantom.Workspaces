@@ -13,12 +13,15 @@ public sealed class NotificationRowViewModel : ViewModelBase
     private string description;
     private DateTime when;
     private readonly StatusItem status = new();
+    private readonly TimeProvider timeProvider;
 
     public NotificationRowViewModel(
         NotificationEntry entry,
         ICommand navigateCommand,
-        ICommand snoozeCommand)
+        ICommand snoozeCommand,
+        TimeProvider? timeProvider = null)
     {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.TabKey = entry.TabKey;
         this.TabTitle = entry.TabDescriptor.TabTitle ?? entry.TabDescriptor.TabId;
         this.heading = entry.Heading;
@@ -113,7 +116,7 @@ public sealed class NotificationRowViewModel : ViewModelBase
     {
         get
         {
-            var elapsed = DateTime.UtcNow - this.When;
+            var elapsed = this.timeProvider.GetUtcNow().UtcDateTime - this.When;
             if (elapsed.TotalSeconds < 60) return "just now";
             if (elapsed.TotalMinutes < 60) return $"{(int)elapsed.TotalMinutes} min ago";
             if (elapsed.TotalHours < 24) return $"{(int)elapsed.TotalHours}h ago";

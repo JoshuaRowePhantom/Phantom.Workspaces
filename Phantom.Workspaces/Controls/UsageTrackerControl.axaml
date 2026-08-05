@@ -7,13 +7,26 @@
              x:CompileBindings="False"
              Focusable="False">
     <Border Classes="notifications-panel"
-            Width="420"
+            Width="520"
             MaxHeight="520">
         <Grid RowDefinitions="Auto,*">
             <Border Grid.Row="0"
                     Padding="12,8">
-                <TextBlock Text="AI Usage"
-                           FontWeight="SemiBold" />
+                <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Grid.Column="0"
+                               Text="AI Usage"
+                               FontWeight="SemiBold" />
+                    <!-- Tracker-level deep-link (#1159 Fix C): view/manage Copilot metrics on GitHub. -->
+                    <!-- #1172: routed through IUrlOpener via OpenUrlCommand — do NOT set NavigateUri
+                         (Avalonia would still launch it externally, bypassing embedded routing). -->
+                    <HyperlinkButton Grid.Column="1"
+                                     Name="ManageOnGitHubHyperlink"
+                                     Command="{Binding OpenUrlCommand}"
+                                     CommandParameter="https://github.com/settings/copilot/features"
+                                     Padding="0"
+                                     FontSize="11"
+                                     Content="Manage on GitHub" />
+                </Grid>
             </Border>
 
             <ScrollViewer Grid.Row="1"
@@ -26,8 +39,10 @@
                                     BorderThickness="0,0,0,1"
                                     BorderBrush="{DynamicResource Theme.Surface.Popup.Border}">
                                 <StackPanel Spacing="6">
-                                    <!-- Account title as hyperlink -->
-                                    <HyperlinkButton NavigateUri="{Binding SettingsUrl}"
+                                    <!-- Account title as hyperlink (#1172: OpenUrlCommand via ItemsControl root VM). -->
+                                    <HyperlinkButton Name="AccountHeaderHyperlink"
+                                                     Command="{Binding $parent[UserControl].DataContext.OpenUrlCommand}"
+                                                     CommandParameter="{Binding SettingsUrl}"
                                                      Padding="0"
                                                      FontWeight="SemiBold">
                                         <TextBlock>
@@ -37,42 +52,102 @@
                                         </TextBlock>
                                     </HyperlinkButton>
 
+                                    <!-- #1188: Current billing period reset date (e.g. "Resets on Aug 31, 2026"). -->
+                                    <TextBlock Name="ResetsOnText"
+                                               Text="{Binding ResetsAtDisplay}"
+                                               IsVisible="{Binding ResetsAtDisplay, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                               Classes="muted"
+                                               FontSize="10" />
+
                                     <!-- Metrics list -->
                                     <ItemsControl ItemsSource="{Binding Metrics}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate x:DataType="models:UsageMetric">
-                                                <Grid ColumnDefinitions="120,*,120"
-                                                      Margin="0,2">
+                                                <StackPanel Margin="0,2"
+                                                            Spacing="1">
+                                                    <Grid ColumnDefinitions="Auto,*">
+                                                    <!-- Selection radio: OUTSIDE the hyperlink so clicking the radio selects, not navigates -->
+                                                    <RadioButton Grid.Column="0"
+                                                                 Name="ShownUsageRadio"
+                                                                 GroupName="ShownUsageMetric"
+                                                                 VerticalAlignment="Center"
+                                                                 Margin="0,0,4,0"
+                                                                 IsChecked="{Binding IsSelectedAsShown, Mode=TwoWay}" />
+
+                                                    <!-- Hyperlink wraps title/quantity/bar so the row navigates to the web data source.
+                                                         #1172: bind CommandParameter (not NavigateUri) so opens route through IUrlOpener. -->
+                                                    <HyperlinkButton Grid.Column="1"
+                                                                     Padding="0"
+                                                                     HorizontalAlignment="Stretch"
+                                                                     HorizontalContentAlignment="Stretch"
+                                                                     Name="MetricRowHyperlink"
+                                                                     Command="{Binding $parent[UserControl].DataContext.OpenUrlCommand}">
+                                                        <HyperlinkButton.CommandParameter>
+                                                            <MultiBinding Converter="{x:Static converters:FirstNonNullConverter.Instance}">
+                                                                <Binding Path="WebUrl" />
+                                                                <Binding Path="$parent[ItemsControl].DataContext.SettingsUrl" />
+                                                            </MultiBinding>
+                                                        </HyperlinkButton.CommandParameter>
+                                                        <!-- #1179: name column is star-sized so long metric names
+                                                             (e.g. "Copilot Premium Requests") are not clipped; the
+                                                             progress bar column has a MinWidth floor so it can
+                                                             shrink before the name is starved. -->
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*" />
+                                                                <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="80" MinWidth="60" />
+                                                            </Grid.ColumnDefinitions>
                                                     <!-- Metric title -->
                                                     <TextBlock Grid.Column="0"
                                                                Text="{Binding Title}"
                                                                Classes="muted"
                                                                VerticalAlignment="Center"
-                                                               FontSize="11" />
+                                                               FontSize="11"
+                                                               TextWrapping="NoWrap" />
 
                                                     <!-- Quantity presentation -->
                                                     <TextBlock Grid.Column="1"
                                                                Text="{Binding QuantityPresentation}"
                                                                VerticalAlignment="Center"
                                                                FontSize="11"
-                                                               Margin="4,0" />
+                                                               Margin="8,0" />
 
                                                     <!-- Progress bar: yellow used / light green remaining / black text overlay -->
                                                     <Panel Grid.Column="2"
+                                                           MinWidth="60"
                                                            Height="14">
-                                                        <!-- Remaining (light green background) -->
+                                                        <!-- Unknown-limit indicator (#1159 Fix B): shown when FractionUsed is null so the
+                                                             row does not read as "100% full green". #1172: routed via OpenUrlCommand. -->
+                                                        <HyperlinkButton Name="UnknownLimitLink"
+                                                                         Command="{Binding $parent[UserControl].DataContext.OpenUrlCommand}"
+                                                                         CommandParameter="https://github.com/settings/copilot/features"
+                                                                         Padding="0"
+                                                                         HorizontalAlignment="Stretch"
+                                                                         HorizontalContentAlignment="Stretch"
+                                                                         IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Inverse}}">
+                                                            <Border Name="UnknownLimitBar"
+                                                                    Background="#40808080"
+                                                                    BorderBrush="#808080"
+                                                                    BorderThickness="1"
+                                                                    CornerRadius="3"
+                                                                    HorizontalAlignment="Stretch" />
+                                                        </HyperlinkButton>
+                                                        <!-- Remaining (light green background) — hidden when the limit is unknown. -->
                                                         <Border Name="RemainingBar"
                                                                 Background="#90EE90"
                                                                 CornerRadius="3"
-                                                                HorizontalAlignment="Stretch" />
+                                                                HorizontalAlignment="Stretch"
+                                                                IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Instance}}" />
                                                         <!-- Used (yellow fill, left-aligned, width proportional) -->
                                                         <Border Name="UsedBar"
                                                                 Background="#FFDD00"
                                                                 CornerRadius="3"
                                                                 HorizontalAlignment="Left"
+                                                                IsVisible="{Binding FractionUsed, Converter={x:Static converters:FractionKnownConverter.Instance}}"
                                                                 Width="{Binding FractionUsed,
                                                                     Converter={x:Static converters:FractionToWidthConverter.Instance},
-                                                                    ConverterParameter=120}" />
+                                                                    ConverterParameter=80}" />
                                                         <!-- Percentage text overlay -->
                                                         <TextBlock HorizontalAlignment="Center"
                                                                    VerticalAlignment="Center"
@@ -82,7 +157,18 @@
                                                                    Text="{Binding FractionUsed,
                                                                        Converter={x:Static converters:FractionToPercentageConverter.Instance}}" />
                                                     </Panel>
-                                                </Grid>
+                                                        </Grid>
+                                                    </HyperlinkButton>
+                                                    </Grid>
+
+                                                    <!-- Optional additional information (e.g. "Resets in 2 days") -->
+                                                    <TextBlock Name="AdditionalInformationText"
+                                                               Text="{Binding AdditionalInformation}"
+                                                               IsVisible="{Binding AdditionalInformation, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                                               Classes="muted"
+                                                               FontSize="10"
+                                                               Margin="124,0,0,0" />
+                                                </StackPanel>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
                                     </ItemsControl>

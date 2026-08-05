@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -9,7 +10,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityReferenceSearchTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ResolveAsync_ReturnsDisplayNameAndNames_ForReferencedEntity()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -36,7 +37,7 @@ public sealed class EntityReferenceSearchTests
         Assert.Contains("jrowe-daemon", candidate.Names, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ResolveAsync_ReturnsNull_ForUnknownOrInvalidId()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -48,7 +49,7 @@ public sealed class EntityReferenceSearchTests
         Assert.Null(await search.ResolveAsync(new EntityId("00000000-0000-0000-0000-000000000099").ToString()));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SearchAsync_FindsCandidatesByTypeAndName_CaseInsensitively()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -71,7 +72,7 @@ public sealed class EntityReferenceSearchTests
         Assert.Contains(results, candidate => candidate.DisplayName == "Every day at 09:00");
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void OpenCommand_InvokesNavigationCallbackWithReferencedId()
     {
         string? opened = null;
@@ -89,7 +90,7 @@ public sealed class EntityReferenceSearchTests
         Assert.Equal("bc863e27-a199-f259-4001-cd1dd5b2bdb4", opened);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void OpenCommand_CannotExecute_WithoutNavigationCallback()
     {
         var editor = new EntityReferenceFieldEditorViewModel(

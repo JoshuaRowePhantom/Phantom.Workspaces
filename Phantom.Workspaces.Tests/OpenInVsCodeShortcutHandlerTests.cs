@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Text.Json;
@@ -14,7 +15,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
 {
     // ---- ShouldApplyTo -----------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_LocalEntityWithPath_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -31,7 +32,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCode, entityViewModel));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_RemoteEntityWithTunnel_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -107,7 +108,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         Assert.True(result);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_CodeNotFound_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -133,7 +134,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             && notification.Description.Contains("PATH", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_EntityWithoutPath_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -152,7 +153,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
 
     // ---- Handle ------------------------------------------------------------------------------
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_RunsCodeWithPath()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -162,14 +163,14 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         var entityViewModel = new SubscribedEntityViewModel(snapshot);
 
         string? receivedCommand = null;
-        string[]? receivedArguments = null;
+        System.Collections.Generic.IReadOnlyList<string>? receivedArguments = null;
 
         var handler = new OpenInVsCodeShortcutHandler(
             cliLocator: () => "code",
-            processRunner: (cmd, args, ct) =>
+            processRunner: (parameters, ct) =>
             {
-                receivedCommand = cmd;
-                receivedArguments = args;
+                receivedCommand = parameters.Command;
+                receivedArguments = parameters.Arguments;
                 return Task.FromResult(new ProcessResult(0, "", "", ""));
             },
             urlLauncher: null);
@@ -182,7 +183,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         Assert.Contains("/test/repo", receivedArguments);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_LocalEntity_CodeNotFound_ShowsNotification()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -204,7 +205,7 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             && notification.Description.Contains("code", StringComparison.Ordinal));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ShouldApplyTo_RemoteEntityWithoutTunnel_ReturnsFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -239,6 +240,122 @@ public sealed class OpenInVsCodeShortcutHandlerTests
     // entity name lookups, so the remote functionality will work in production.
 
     // ---- Helpers -----------------------------------------------------------------------------
+
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public sealed record Entry(Microsoft.Extensions.Logging.LogLevel Level, System.Exception? Exception, string Message);
+        public System.Collections.Generic.List<Entry> Entries { get; } = new();
+        public System.IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            System.Exception? exception,
+            System.Func<TState, System.Exception?, string> formatter)
+        {
+            this.Entries.Add(new Entry(logLevel, exception, formatter(state, exception)));
+        }
+    }
+
+    // ---- #1206: logging + reporting -----------------------------------------------------------
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_CodeInvocation_LogsStdoutAndExitCode()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/local/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var recordingLogger = new RecordingLogger();
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: (parameters, ct) => Task.FromResult(new ProcessResult(0, "stdout-content", "", "stdout-content")),
+            urlLauncher: null,
+            logger: recordingLogger);
+
+        var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.True(handled);
+        Assert.Contains(recordingLogger.Entries, e => e.Message.Contains("stdout-content", System.StringComparison.Ordinal));
+        Assert.Contains(recordingLogger.Entries, e => e.Message.Contains("0", System.StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_CodeNonZeroExit_ShowsNotificationWithCliOutput()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/local/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: (parameters, ct) =>
+                Task.FromResult(new ProcessResult(4, "bad-stdout-payload", "bad-stderr-payload", "bad-stdout-payload\nbad-stderr-payload")),
+            urlLauncher: null);
+
+        await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+            notification.Description.Contains("bad-stdout-payload", System.StringComparison.Ordinal)
+            || notification.Description.Contains("bad-stderr-payload", System.StringComparison.Ordinal));
+        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+            notification.Heading.Contains("failed", System.StringComparison.OrdinalIgnoreCase)
+            || notification.Heading.Contains("4", System.StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_RemoteEntity_UriLaunchFails_LogsAndNotifies()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/remote/repo-lf"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var recordingLogger = new RecordingLogger();
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: null,
+            urlLauncher: _ => throw new System.InvalidOperationException("launch-failed-marker"),
+            logger: recordingLogger,
+            remoteTunnelNameResolver: (_, _) => Task.FromResult<string?>("remote-host"));
+
+        var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+
+        Assert.False(handled);
+        Assert.Contains(recordingLogger.Entries, e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Error
+            && e.Message.Contains("VS Code remote URI", System.StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(viewModel.NotificationService.Notifications, n =>
+            n.Description.Contains("launch-failed-marker", System.StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Handle_LocalEntity_CodeInvocation_DoesNotBlockUiThread()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var snapshot = MakeSnapshot("""{"entity-types":["entity","git-worktree","filesystem-path"],"path":"/local/repo"}""");
+        var entityViewModel = new SubscribedEntityViewModel(snapshot);
+
+        var tcs = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new OpenInVsCodeShortcutHandler(
+            cliLocator: () => "code",
+            processRunner: (parameters, ct) => tcs.Task,
+            urlLauncher: null);
+
+        var handleTask = handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
+        Assert.False(handleTask.IsCompleted);
+        tcs.SetResult(new ProcessResult(0, "", "", ""));
+        var handled = await handleTask;
+        Assert.True(handled);
+    }
 
     private static EntitySnapshot MakeSnapshot(string json) =>
         new()

@@ -78,6 +78,127 @@ public sealed class AgentChatSubAgentRegistryTests
         Assert.Null(result);
     }
 
+    // #1128: SetCompletionState must be idempotent — invoking it with the currently active
+    // override must not re-raise CompletionStateChanged, avoiding duplicate UI updates when
+    // restore and a stray terminal event both flip the state.
+    [Fact]
+    public async Task SetCompletionState_SameState_DoesNotRaiseCompletionStateChanged()
+    {
+        await using var parent = CreateParentChat();
+
+        // Perform the initial transition and wait for its event to fire so the counter
+        // starts clean against the second (same-state) call.
+        var firstRaised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFirst(object? _, EventArgs __) => firstRaised.TrySetResult();
+        parent.CompletionStateChanged += OnFirst;
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+        await firstRaised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        parent.CompletionStateChanged -= OnFirst;
+
+        var raised = 0;
+        parent.CompletionStateChanged += (_, _) => Interlocked.Increment(ref raised);
+
+        // Same-state call — must NOT schedule an event.
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        // Round-trip a foreground work item to prove no event was queued behind us. If the
+        // idempotency guard were missing, the raise would already be scheduled on the same
+        // scheduler and would drain before this probe completes.
+        var probe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Factory.StartNew(
+            () => probe.TrySetResult(),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            parent.ForegroundSchedulerForTesting);
+        await probe.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(0, Volatile.Read(ref raised));
+    }
+
+    // #1128: SetCompletionState with a NEW state must raise CompletionStateChanged so
+    // consumers (running-item markers, pulsating brain) observe the terminal transition.
+    [Fact]
+    public async Task SetCompletionState_NewState_RaisesCompletionStateChanged()
+    {
+        await using var parent = CreateParentChat();
+
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.CompletionStateChanged += (_, _) => raised.TrySetResult();
+
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(AgentChatCompletionState.Succeeded, parent.CompletionState);
+    }
+
+    // #1140: SetCompletionState(state, preserveLastUpdatedAt: true) must leave LastUpdatedAt
+    // untouched so the restore-time forced-terminal transition on already-completed
+    // sub-agents does not overwrite the seeded persisted timestamp with the reload time.
+    // The event still fires (UI running markers still clear per #1128).
+    [Fact]
+    public async Task SetCompletionState_PreserveLastUpdatedAt_LeavesTimestampUnchanged()
+    {
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero));
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent-chat",
+            TimeProvider = timeProvider,
+        });
+
+        var beforeStamp = parent.LastUpdatedAt;
+
+        // Advance the clock so a bump would be visible if it happened.
+        timeProvider.Advance(TimeSpan.FromHours(3));
+
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.CompletionStateChanged += (_, _) => raised.TrySetResult();
+
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded, preserveLastUpdatedAt: true);
+
+        // Event must still fire so UI clears (issue #1128 requirement).
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(AgentChatCompletionState.Succeeded, parent.CompletionState);
+        // Timestamp must NOT have been bumped to the advanced clock (issue #1140).
+        Assert.Equal(beforeStamp, parent.LastUpdatedAt);
+    }
+
+    // #1140: The default SetCompletionState(state) call (no preserve flag) is genuine
+    // activity and must still advance LastUpdatedAt. This proves the fix did not break the
+    // default bump path — only the explicit preserve-timestamp overload skips the stamp.
+    [Fact]
+    public async Task SetCompletionState_DefaultCall_AdvancesLastUpdatedAt()
+    {
+        var timeProvider = new Microsoft.Extensions.Time.Testing.FakeTimeProvider();
+        timeProvider.SetUtcNow(new DateTimeOffset(2024, 1, 2, 3, 4, 5, TimeSpan.Zero));
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent-chat",
+            TimeProvider = timeProvider,
+        });
+
+        var beforeStamp = parent.LastUpdatedAt;
+        timeProvider.Advance(TimeSpan.FromHours(2));
+        var expectedAfter = timeProvider.GetUtcNow().UtcDateTime;
+
+        var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        parent.CompletionStateChanged += (_, _) => raised.TrySetResult();
+
+        parent.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(expectedAfter, parent.LastUpdatedAt);
+        Assert.True(parent.LastUpdatedAt > beforeStamp);
+    }
+
     [Fact]
     public async Task TryGet_KnownAgentId_ReturnsSink()
     {
@@ -363,5 +484,90 @@ public sealed class AgentChatSubAgentRegistryTests
         var childIds = await store.ReadSubAgentChildIdsAsync(parentChat.AgentSessionId);
         var childId = Assert.Single(childIds);
         Assert.Equal(childChat.AgentSessionId, childId.Value);
+    }
+
+    [Fact]
+    public async Task SubAgentTable_Add_SeedsAgentIdFromSessionIdWhenUnset()
+    {
+        // Fix #1152: ISubAgentTable.Add is the manual registration path used by hosted sub-agents
+        // and the sub-agent HTML panel. Previously the child AgentChat.agentId stayed empty in
+        // that flow, so the UI couldn't route to it and NavigateToSubAgent("") was a no-op.
+        // Adding a child via this path must seed agentId from AgentSessionId when unset so
+        // AgentId is a stable non-empty navigation key.
+        var store = new InMemoryAgentPersistenceStore();
+        var parentChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "parent",
+        });
+        var childChat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = CreateSubAgentDefinition(),
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "child",
+        });
+
+        await using var parentDispose = parentChat;
+        await using var childDispose = childChat;
+
+        // Before Add, the child has never been registered under a parent; AgentId falls back to
+        // the always-non-empty AgentSessionId (per #1152 getter fallback).
+        Assert.Equal(childChat.AgentSessionId, childChat.AgentId);
+
+        await ((ISubAgentTable)parentChat).Add(childChat);
+
+        Assert.False(string.IsNullOrEmpty(childChat.AgentId));
+        Assert.Equal(childChat.AgentSessionId, childChat.AgentId);
+    }
+
+    // Issue #1186: A restored SubAgent stub carries its terminal completion state as an
+    // override that is applied lazily inside AcquireLeaseAsync. This test drives that
+    // exact contract: mark the stub Succeeded (as RestoreSubAgentsAsync now does) and
+    // then acquire a lease and verify the child chat reports Succeeded. Critically, this
+    // must work even though the stub itself never triggered chat-client construction
+    // during restore (the whole reason #1186's regression exists).
+    [Fact]
+    public async Task AgentChat_RestoredSubAgentStub_LeaseSeesSucceededCompletionState()
+    {
+        var childSessionId = "child-1186-lazy-state";
+        var store = new InMemoryAgentPersistenceStore();
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(
+                    AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson).ToJson()),
+            }
+        });
+
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        // Simulate what RestoreSubAgentsAsync now does: create a lazy stub and stamp
+        // the restored terminal state on it (no materialisation).
+        var stub = new SubAgent(new AgentSessionId(childSessionId), factory);
+        Assert.Null(stub.AgentChat);
+        stub.SetRestoredCompletionState(AgentChatCompletionState.Succeeded);
+
+        // Immediate surface: the IRunningSubAgent contract must reflect the restored
+        // state even before AcquireLeaseAsync runs (the UI reads this to clear
+        // running markers on reload).
+        Assert.Equal(
+            AgentChatCompletionState.Succeeded,
+            ((IRunningSubAgent)stub).CompletionState);
+
+        // Deferred materialisation: when the UI eventually acquires the lease (e.g.
+        // AddSubAgentSlotLazy) the child chat is created and the terminal state is
+        // applied to it. Any later lease sees the same Succeeded state.
+        await using (var lease = await stub.AcquireLeaseAsync())
+        {
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        }
     }
 }

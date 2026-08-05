@@ -277,7 +277,44 @@ public class StreamingPersistenceMiddlewareTests
         Assert.Equal(expected, message.CreatedAt);
     }
 
-    // ---- helpers ----
+    [Fact]
+    public async Task NoToolTurn_FinalAssistantMessage_IsRetainedInPersistedHistory()
+    {
+        // Issue #1103: End-to-end for a plain no-tool turn — the CopilotSdkStreamAdapter now
+        // emits a terminal ChatResponseUpdate carrying FinishReason on SessionIdleEvent, so the
+        // single assistant message of the turn is treated as stable and persisted. Previously
+        // the final message was dropped from persisted history (Count == 1 → stableCount == 0).
+        var channel = System.Threading.Channels.Channel.CreateUnbounded<GitHub.Copilot.SessionEvent>();
+        channel.Writer.TryWrite(new GitHub.Copilot.AssistantMessageDeltaEvent
+        {
+            AgentId = string.Empty,
+            Data = new GitHub.Copilot.AssistantMessageDeltaData
+            {
+                DeltaContent = "final reply",
+                MessageId = "msg-1",
+            },
+        });
+        channel.Writer.TryWrite(new GitHub.Copilot.SessionIdleEvent
+        {
+            Data = new GitHub.Copilot.SessionIdleData { Aborted = false },
+        });
+        channel.Writer.Complete();
+
+        var adapterUpdates = new List<ChatResponseUpdate>();
+        await foreach (var update in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(channel.Reader, CancellationToken.None))
+        {
+            adapterUpdates.Add(update);
+        }
+
+        var spyStore = new SpyAgentPersistenceStore();
+        var (middleware, session) = CreateMiddleware(spyStore, adapterUpdates.ToArray());
+
+        await ConsumeAsync(middleware, session);
+
+        var stored = Assert.Single(spyStore.StoredMessages);
+        Assert.Equal(ChatRole.Assistant, stored.Role);
+        Assert.Equal("final reply", GetText(stored));
+    }
 
     private static (StreamingPersistenceMiddleware Middleware, AgentSession Session) CreateMiddleware(
         IAgentPersistenceStore store,

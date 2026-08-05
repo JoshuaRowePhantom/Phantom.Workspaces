@@ -1,0 +1,66 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="using:Phantom.Workspaces.ViewModels"
+        mc:Ignorable="d"
+        x:Class="Phantom.Workspaces.ShellSettingsDialogWindow"
+        x:DataType="vm:ShellSettingsDialogViewModel"
+        SizeToContent="Height"
+        Width="560"
+        MinHeight="360"
+        CanResize="True"
+        WindowStartupLocation="CenterOwner"
+        Title="Shell settings">
+    <Grid RowDefinitions="*,Auto" Margin="20">
+        <StackPanel Grid.Row="0" Spacing="10">
+            <TextBlock Text="Command line" />
+            <TextBox Text="{Binding CommandLine, Mode=TwoWay}" />
+
+            <TextBlock Text="Working directory" />
+            <TextBox Text="{Binding WorkingDirectory, Mode=TwoWay}" />
+
+            <TextBlock Text="Arguments" />
+            <TextBox Text="{Binding Arguments, Mode=TwoWay}" />
+
+            <TextBlock Text="Environment variables" Margin="0,8,0,0" />
+            <ItemsControl ItemsSource="{Binding EnvironmentVariables}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="vm:ShellEnvVarRowViewModel">
+                        <Grid ColumnDefinitions="*,*,Auto" Margin="0,0,0,4">
+                            <TextBox Grid.Column="0"
+                                     Text="{Binding Name, Mode=TwoWay}"
+                                     Watermark="name" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding Value, Mode=TwoWay}"
+                                     Watermark="value"
+                                     Margin="6,0,0,0" />
+                            <Button Grid.Column="2"
+                                    Content="✕"
+                                    ToolTip.Tip="Remove"
+                                    Command="{Binding RemoveCommand}"
+                                    Margin="6,0,0,0" />
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Content="＋"
+                        ToolTip.Tip="Add environment variable"
+                        Command="{Binding AddEnvVarCommand}" />
+                <Button Content="−"
+                        ToolTip.Tip="Remove last environment variable"
+                        Command="{Binding RemoveEnvVarCommand}" />
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    Spacing="8"
+                    Margin="0,16,0,0">
+            <Button Content="Cancel" Click="OnCancelClicked" />
+            <Button Content="Save" Click="OnSaveClicked" />
+        </StackPanel>
+    </Grid>
+</Window>

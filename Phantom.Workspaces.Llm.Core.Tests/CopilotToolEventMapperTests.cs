@@ -1,6 +1,6 @@
 using System.Linq;
 using System.Text.Json;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Xunit;
@@ -40,7 +40,7 @@ public sealed class CopilotToolEventMapperTests
             {
                 ToolCallId = "call-2",
                 ToolName = "do_thing",
-                Arguments = """{ "name": "value" }""",
+                Arguments = JsonDocument.Parse("""{ "name": "value" }""").RootElement.Clone(),
             },
         };
 
@@ -58,13 +58,13 @@ public sealed class CopilotToolEventMapperTests
             {
                 ToolCallId = "call-3",
                 ToolName = "do_thing",
-                Arguments = "not json at all",
+                Arguments = JsonDocument.Parse("\"not json at all\"").RootElement.Clone(),
             },
         };
 
         var call = CopilotToolEventMapper.MapToolStart(startEvent);
 
-        Assert.Equal("not json at all", call.Arguments!["arguments"]);
+        Assert.Equal("not json at all", ((JsonElement)call.Arguments!["arguments"]!).GetString());
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public sealed class CopilotToolEventMapperTests
                 Result = new ToolExecutionCompleteResult
                 {
                     Content = string.Empty,
-                    Contents = [new ToolExecutionCompleteContentTerminal { Type = "terminal", ExitCode = 0, Text = "done" }],
+                    Contents = [new ToolExecutionCompleteContentShellExit { Type = "shell_exit", ShellId = "shell-1", ExitCode = 0, OutputPreview = "done" }],
                 },
             },
         };

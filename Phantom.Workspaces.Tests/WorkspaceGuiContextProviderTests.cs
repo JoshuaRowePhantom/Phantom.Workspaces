@@ -1,13 +1,15 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
-using Dock.Model.Controls;
-using Dock.Model.Core;
+using global::Dock.Model.Controls;
+using global::Dock.Model.Core;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Data;
@@ -22,7 +24,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class WorkspaceGuiContextProviderTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceList_ReturnsAllWorkspacePanes_WithCorrectIsSelectedFlag()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -72,7 +74,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(paneB.GetProperty("is_selected").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithNoWorkspaceEntityId_ReturnsTabsForSelectedPane()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -95,7 +97,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains("tablist-tab-b", tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithNoWorkspaceEntityId_MarksActiveTabCorrectly()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -122,7 +124,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(listedTabA.GetProperty("is_active").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithWorkspaceEntityId_ReturnsTabsForThatPane()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -165,7 +167,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains("specific-pane-tab", tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabList_WithUnknownWorkspaceEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -183,7 +185,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── workspace_close tests ─────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_ExistingPane_RemovesPaneAndReturnsClosed()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -217,7 +219,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal(initialCount - 1, viewModel.WorkspacePanes.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_UnknownPaneId_NoOpReturnsClosed()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -235,7 +237,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal(initialCount, viewModel.WorkspacePanes.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_DefaultPlaceholderPane_NoOpReturnsClosed()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -273,7 +275,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal(initialCount, viewModel.WorkspacePanes.Count);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspaceClose_MissingWorkspaceEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -290,7 +292,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── tab_close tests ───────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabClose_ExistingTab_ClosesTabAndReturnsClosedTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -317,7 +319,7 @@ public sealed class WorkspaceGuiContextProviderTests
             d => d.Id == "close-tab-existing");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabClose_UnknownTabId_ReturnsClosedFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -333,7 +335,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.GetProperty("closed").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TabClose_MissingTabId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -350,7 +352,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── entity_invoke_shortcut tests ──────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_EntityFound_ValidShortcut_ReturnsHandled()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -383,7 +385,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_EntityNotFound_ReturnsHandledFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -404,7 +406,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.GetProperty("handled").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_UnknownShortcut_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -426,7 +428,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains("Review", errorElement.GetString(), StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_MissingEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -442,7 +444,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_Review_OnGitWorktreeEntity_ReturnsHandledTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -474,7 +476,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.GetProperty("handled").GetBoolean());
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task EntityInvokeShortcut_Review_OnNonGitWorktreeEntity_ReturnsHandledFalse()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -506,9 +508,344 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.False(resultJson.GetProperty("handled").GetBoolean());
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_CopyEntityId_IsRecognizedShortcut()
+    {
+        // Issue #1215: the CopyEntityId shortcut must be wired into the MCP tool (enum +
+        // ResolveShortcut + registered handler). In the headless test harness there is no
+        // MainWindow, so the default clipboard accessor yields null and the handler declines
+        // (handled:false with a reason) — but the shortcut is still RECOGNIZED, i.e. the tool
+        // does not return an "Unknown shortcut" error.
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("ff440003-ff44-4ff4-ff44-ff4400000003");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tests", "tasks", "copy-id-shortcut-1"]],
+              "display-name": { "default": "Copy Id Shortcut Test Task" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"CopyEntityId\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        // Recognized: the response carries a "handled" property rather than an "Unknown shortcut" error.
+        Assert.True(resultJson.TryGetProperty("handled", out _));
+        Assert.False(resultJson.TryGetProperty("error", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_ReviewOnGitWorktree_OpensReviewTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550001-aa55-4aa5-aa55-aa5500000001");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "review-tab-1"]],
+              "display-name": { "default": "Review Tab Test Worktree" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"Review\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var reviewTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<GitWorktreeReviewWorkspaceTabViewModel>()
+            .FirstOrDefault();
+        Assert.NotNull(reviewTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_VsCodeWebOnGitWorktree_OpensWebViewTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        // Seed a vscode-tunnel for the local profile
+        var localProfileId = viewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var localProfiles = await entityBroker.GetEntitiesAsync([localProfileId], TestContext.Current.CancellationToken);
+        var profile = localProfiles.Single();
+
+        if (profile.Data is not JsonElement profileData)
+        {
+            Assert.Fail("Profile data is null");
+            return;
+        }
+
+        var namesArray = profileData.GetProperty("names");
+        var primaryName = namesArray[0];
+        var nameParts = primaryName.EnumerateArray()
+            .Where(e => e.ValueKind == JsonValueKind.String)
+            .Select(e => e.GetString()!)
+            .ToArray();
+
+        string? userSegment = null;
+        for (int i = 0; i < nameParts.Length - 1; i++)
+        {
+            if (nameParts[i] == "username")
+            {
+                userSegment = nameParts[i + 1];
+                break;
+            }
+        }
+        Assert.NotNull(userSegment);
+
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new JsonArray(new JsonArray(userSegment, "vscode-tunnel")),
+            ["display-name"] = new JsonObject { ["default"] = "invoke-shortcut-tunnel" },
+            ["tunnel-name"] = "invoke-shortcut-tunnel",
+            ["tunnel-url"] = "https://vscode.dev/tunnel/invoke-shortcut-tunnel",
+            ["active"] = true,
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Insert test tunnel for VsCodeWeb." } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        // Seed the git-worktree entity (names don't resolve to a profile, so handler uses local profile)
+        var entityId = new EntityId("aa550002-aa55-4aa5-aa55-aa5500000002");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "vscode-web-tab-1"]],
+              "display-name": { "default": "VsCodeWeb Tab Test Worktree" },
+              "path": "/test/vscode-web-repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"VsCodeWeb\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var webViewTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<WebViewModel>()
+            .FirstOrDefault(t => t.Title?.StartsWith("VS Code Web", StringComparison.Ordinal) == true);
+        Assert.NotNull(webViewTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_StartAgentSessionOnGitWorktree_OpensStartAgentSessionTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550003-aa55-4aa5-aa55-aa5500000003");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "agent-session-1"]],
+              "display-name": { "default": "Agent Session Test Worktree" },
+              "path": "/test/repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"StartAgentSession\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var agentSessionTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<StartAgentSessionOnProfileViewModel>()
+            .FirstOrDefault();
+        Assert.NotNull(agentSessionTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_StartShellOnGitWorktree_OpensShellTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Replace production handler with a fake to avoid spawning a real PTY
+        viewModel.ShortcutManager.ReplaceShortcutHandlerForTesting<StartShellFromEntityShortcutHandler>(
+            new StartShellFromEntityShortcutHandler(
+                (_, _, _) => Task.FromResult<ITerminalSession>(new FakeTerminalSession())));
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550004-aa55-4aa5-aa55-aa5500000004");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "shell-tab-1"]],
+              "display-name": { "default": "Shell Tab Test Worktree" },
+              "path": "/test/repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"StartShell\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+
+        var documentDock = GetDocumentDock(viewModel);
+        var shellTab = documentDock?.VisibleDockables?
+            .OfType<WorkspaceDocument>()
+            .Select(d => d.TabViewModel)
+            .OfType<ShellTabViewModel>()
+            .FirstOrDefault();
+        Assert.NotNull(shellTab);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_VsCodeOnGitWorktree_RemainsWorking()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        // Replace production handler with a fake to avoid running the VS Code CLI
+        viewModel.ShortcutManager.ReplaceShortcutHandlerForTesting<OpenInVsCodeShortcutHandler>(
+            new OpenInVsCodeShortcutHandler(
+                cliLocator: () => "code",
+                processRunner: (_, _) => Task.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty)),
+                urlLauncher: null));
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550005-aa55-4aa5-aa55-aa5500000005");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "git-worktree", "filesystem-path"],
+              "names": [["tests", "worktrees", "vscode-1"]],
+              "display-name": { "default": "VsCode Test Worktree" },
+              "path": "/test/repo"
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        var shortcutArg = JsonDocument.Parse("\"VsCode\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.True(resultJson.GetProperty("handled").GetBoolean());
+        Assert.False(resultJson.TryGetProperty("reason", out _));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task EntityInvokeShortcut_NoHandlerApplies_ReturnsReason()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("aa550006-aa55-4aa5-aa55-aa5500000006");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$$"""
+            {
+              "entity-id": "{{{entityId}}}",
+              "entity-types": ["entity", "task"],
+              "names": [["tests", "tasks", "no-handler-1"]],
+              "display-name": { "default": "No Handler Task" }
+            }
+            """);
+
+        var tool = await GetToolWithViewModelShortcutManagerAsync(viewModel, "entity_invoke_shortcut");
+        var idArg = JsonDocument.Parse($"\"{entityId}\"").RootElement.Clone();
+        // Review shortcut applies only to git-worktree entities; this entity is a plain "task"
+        var shortcutArg = JsonDocument.Parse("\"Review\"").RootElement.Clone();
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["entity_id"] = idArg,
+                ["shortcut"] = shortcutArg,
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        Assert.False(resultJson.GetProperty("handled").GetBoolean());
+        Assert.True(resultJson.TryGetProperty("reason", out var reasonEl));
+        var reason = reasonEl.GetString()!;
+        Assert.NotEmpty(reason);
+        Assert.Contains("Review", reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("task", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ── ProvideAIContextAsync instructions tests ──────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ProvideAIContextAsync_InstructionsEntityPresent_LoadsInstructions()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -542,7 +879,7 @@ public sealed class WorkspaceGuiContextProviderTests
 
     // ── open_tab tests ────────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_OpensEntityTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -579,7 +916,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.IsType<EntityWorkspaceTabViewModel>(entityDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_DuplicateActivatesExisting()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -616,7 +953,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Single(entityTabs);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_InvalidGuid_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -633,7 +970,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Entity_MissingEntityId_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -649,7 +986,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Url_OpensWebViewTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -675,7 +1012,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.IsType<WebViewModel>(webDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Url_WithTitle_SetsTitle()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -704,7 +1041,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal("My Custom Title", webDoc.TabViewModel!.Title);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Url_FocusFalse_TabAddedNotFocused()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -736,7 +1073,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Contains(newTabId, tabIds);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_OpensShellTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -769,7 +1106,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.IsType<ShellTabViewModel>(shellDoc!.TabViewModel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_WithArguments_PassedToSession()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -812,7 +1149,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal("/home/user", capturedWorkingDirectory);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_WithTitle_SetsTitle()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -848,7 +1185,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.Equal("My Shell Tab", shellDoc.TabViewModel!.Title);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_UnknownTarget_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -864,7 +1201,7 @@ public sealed class WorkspaceGuiContextProviderTests
         Assert.True(resultJson.TryGetProperty("error", out _));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_MissingTarget_ReturnsError()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

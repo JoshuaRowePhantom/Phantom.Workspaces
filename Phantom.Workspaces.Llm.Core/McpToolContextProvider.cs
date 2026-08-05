@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using AgentSchema;
+using Phantom.Workspaces.Llm.Core.Transport;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -19,12 +20,22 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     private readonly SemaphoreSlim initializeLock = new(1, 1);
     private McpClient? client;
 
-    public McpToolContextProvider(McpTool tool, ILoggerFactory? loggerFactory)
+    public McpToolContextProvider(
+        McpTool tool,
+        ILoggerFactory? loggerFactory,
+        ExecutorTarget executorTarget = ExecutorTarget.AgentExecutor)
         : base(null, null, null)
     {
         this.tool = tool;
         this.loggerFactory = loggerFactory;
+        this.ExecutorTarget = executorTarget;
     }
+
+    /// <summary>
+    /// The execution class this MCP server connection is routed to. MCP servers default to
+    /// <see cref="ExecutorTarget.AgentExecutor"/> (they run on the executor instance E).
+    /// </summary>
+    public ExecutorTarget ExecutorTarget { get; }
 
     public override IReadOnlyList<string> StateKeys => [this.stateKey];
 

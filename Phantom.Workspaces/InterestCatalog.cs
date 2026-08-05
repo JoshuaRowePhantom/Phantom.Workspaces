@@ -12,7 +12,9 @@ namespace Phantom.Workspaces;
 /// <summary>
 /// The presentation metadata for one interest type (for example <c>actionable</c>): the glyphs and
 /// descriptions shown when the interest is or is not applied to an entity. Read from the interest-type
-/// definition entity's <c>applied</c>/<c>notApplied</c> properties.
+/// definition entity's <c>applied</c>/<c>notApplied</c> properties, plus the data-driven participant
+/// mapping (<see cref="TargetParticipant"/>, <see cref="AppliesTo"/>) that lets the generic projector
+/// and toggle serve every interest without per-name branching.
 /// </summary>
 public sealed record InterestTypeDefinition(
     string Name,
@@ -22,7 +24,29 @@ public sealed record InterestTypeDefinition(
     string NotAppliedDescription,
     string AppliedActionText,
     string NotAppliedActionText,
-    IReadOnlySet<string>? DisplayEntityTypes);
+    IReadOnlySet<string>? DisplayEntityTypes,
+    string TargetParticipant,
+    IReadOnlyList<InterestAppliesTo> AppliesTo);
+
+/// <summary>
+/// One scope-participant descriptor on an interest-type definition: a participant on the interest
+/// relationship whose value must equal the current session's identity (<see cref="SessionValue"/>)
+/// for the interest to be considered applied to the current session.
+/// </summary>
+public sealed record InterestAppliesTo(
+    string ParticipantPropertyName,
+    IReadOnlySet<string>? EntityTypes,
+    InterestSessionValue SessionValue);
+
+/// <summary>
+/// The set of session identities an interest scope participant may be bound to. Corresponds to
+/// <c>WorkspaceEntitySession.UserEntityId</c> and <c>UserComputerProfileEntityId</c>.
+/// </summary>
+public enum InterestSessionValue
+{
+    UserEntityId,
+    UserComputerProfileEntityId,
+}
 
 /// <summary>
 /// The set of interest types known to the workspace (actionable, blocked, assigned-to,
@@ -121,6 +145,12 @@ public sealed class InterestCatalog : IDisposable
             return false;
         }
 
+        if (!TryReadTargetParticipant(data, out var targetParticipant)
+            || !TryReadAppliesTo(data, out var appliesTo))
+        {
+            return false;
+        }
+
         ReadIndicator(data, "applied", out var appliedGlyph, out var appliedDescription, out var appliedActionText);
         ReadIndicator(data, "notApplied", out var notAppliedGlyph, out var notAppliedDescription, out var notAppliedActionText);
         var displayEntityTypes = ReadEntityTypeIds(data, "display-entity-types");
@@ -133,7 +163,65 @@ public sealed class InterestCatalog : IDisposable
             notAppliedDescription,
             appliedActionText,
             notAppliedActionText,
-            displayEntityTypes);
+            displayEntityTypes,
+            targetParticipant,
+            appliesTo);
+        return true;
+    }
+
+    private static bool TryReadTargetParticipant(JsonElement data, out string targetParticipant)
+    {
+        targetParticipant = string.Empty;
+        if (!data.TryGetProperty("target-participant", out var element)
+            || element.ValueKind != JsonValueKind.String
+            || element.GetString() is not { Length: > 0 } value)
+        {
+            return false;
+        }
+
+        targetParticipant = value;
+        return true;
+    }
+
+    private static bool TryReadAppliesTo(JsonElement data, out IReadOnlyList<InterestAppliesTo> appliesTo)
+    {
+        appliesTo = [];
+        if (!data.TryGetProperty("applies-to", out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var result = new List<InterestAppliesTo>();
+        foreach (var entry in array.EnumerateArray())
+        {
+            if (entry.ValueKind != JsonValueKind.Object
+                || !entry.TryGetProperty("participant-property-name", out var participantElement)
+                || participantElement.ValueKind != JsonValueKind.String
+                || participantElement.GetString() is not { Length: > 0 } participant
+                || !entry.TryGetProperty("session-value", out var sessionElement)
+                || sessionElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            InterestSessionValue sessionValue;
+            switch (sessionElement.GetString())
+            {
+                case "user-entity-id":
+                    sessionValue = InterestSessionValue.UserEntityId;
+                    break;
+                case "user-computer-profile-entity-id":
+                    sessionValue = InterestSessionValue.UserComputerProfileEntityId;
+                    break;
+                default:
+                    return false;
+            }
+
+            var entityTypes = ReadEntityTypeIds(entry, "entity-types");
+            result.Add(new InterestAppliesTo(participant, entityTypes, sessionValue));
+        }
+
+        appliesTo = result;
         return true;
     }
 

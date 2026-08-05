@@ -5,13 +5,14 @@ using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public class WorkspaceDocument : Document
+public class WorkspaceDocument : Document, IAsyncDisposable
 {
     private bool hasUnreadNotification;
     private string baseTitle = string.Empty;
     private readonly StatusTabHeaderItemViewModel statusIndicator;
     private readonly TabHeaderViewModel cachedTabHeader;
     private IStatusItem? subscribedTabStatus;
+    private int disposed;
 
     /// <summary>
     /// Parameterless constructor for JSON deserialization. <see cref="TabViewModel"/> is
@@ -92,6 +93,21 @@ public class WorkspaceDocument : Document
             this.baseTitle = ComputeBaseTitle(tabVm);
             this.RebuildTabHeaderItems();
             this.UpdateTitle();
+
+            // #1190: keep the persisted descriptor in sync with the live tab title so
+            // subsequent WriteBackWorkspaceTabs round-trips the current Title rather
+            // than the stale value captured at InitializeCore time. Without this,
+            // any Title change after Initialize (async DisplayName load, user rename,
+            // entity update, split-and-add) is lost on save/close/reopen and the
+            // restored tab header renders blank.
+            if (e.PropertyName is nameof(WorkspaceTabViewModel.Title))
+            {
+                var refreshed = BuildDescriptor(tabVm);
+                if (refreshed is not null)
+                {
+                    this.Descriptor = refreshed;
+                }
+            }
         }
         else if (e.PropertyName is nameof(WorkspaceTabViewModel.TabStatus))
         {
@@ -177,17 +193,47 @@ public class WorkspaceDocument : Document
     /// </summary>
     internal static DockTabDescriptor? BuildDescriptor(WorkspaceTabViewModel tab)
     {
+        var title = string.IsNullOrEmpty(tab.Title) ? null : tab.Title;
+
         if (tab.Entity is { } entity)
         {
             if (tab is AgentSessionWorkspaceTabViewModel)
-                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString());
+                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString()) { Title = title };
 
-            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open");
+            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open") { Title = title };
         }
 
         if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
-            return new BrowserDockTabDescriptor(webVm.AddressBarUrl);
+            return new BrowserDockTabDescriptor(webVm.AddressBarUrl) { Title = title };
 
         return null;
+    }
+
+    /// <summary>
+    /// Unsubscribes from the wrapped <see cref="WorkspaceTabViewModel"/> (and its
+    /// <see cref="IStatusItem"/>) and cascades disposal into it. This is the recursive
+    /// "document disposes its sub-document" step that guarantees per-tab resources
+    /// (e.g. an <c>AgentSessionWorkspaceTabViewModel</c>'s <c>RunningAgentChatLease</c>)
+    /// are always released, regardless of which close path is used. See #1198.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (System.Threading.Interlocked.Exchange(ref this.disposed, 1) != 0)
+            return;
+
+        var tabVm = this.TabViewModel;
+        if (tabVm is not null)
+        {
+            tabVm.PropertyChanged -= this.OnTabViewModelPropertyChanged;
+        }
+        if (this.subscribedTabStatus is not null)
+        {
+            this.subscribedTabStatus.PropertyChanged -= this.OnTabStatusPropertyChanged;
+            this.subscribedTabStatus = null;
+        }
+        if (tabVm is not null)
+        {
+            await tabVm.DisposeAsync().ConfigureAwait(false);
+        }
     }
 }

@@ -1,4 +1,6 @@
+using Avalonia.Headless.XUnit;
 using Avalonia;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -7,7 +9,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListViewModelTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_OrdersByOrderAndPreservesHierarchyLevel()
     {
         var list = new EntityListViewModel();
@@ -37,7 +39,7 @@ public sealed class EntityListViewModelTests
         Assert.True(list.Items[0].IsExpanded);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void TreeNode_CornerRadiusAndVisibility_TrackChildExpansionState()
     {
         var parent = new EntityListNodeViewModel(
@@ -63,7 +65,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▴", parent.ExpandArrow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_ToggleExpandCommand_TogglesExpansionState()
     {
         var parent = new EntityListNodeViewModel(
@@ -98,7 +100,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("▾", parent.ExpandArrow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_ToggleExpandCommand_DisabledWhenNoChildren()
     {
         var node = new EntityListNodeViewModel(
@@ -111,7 +113,7 @@ public sealed class EntityListViewModelTests
         Assert.False(node.ToggleExpandCommand.CanExecute(null));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_SetChildren_EnablesToggleExpandCommand()
     {
         var parent = new EntityListNodeViewModel(
@@ -137,7 +139,7 @@ public sealed class EntityListViewModelTests
         Assert.True(parent.ToggleExpandCommand.CanExecute(null));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_PreservesIsExpandedState_WhenKeyUnchanged()
     {
         var list = new EntityListViewModel();
@@ -177,7 +179,7 @@ public sealed class EntityListViewModelTests
         Assert.True(list.Items[0].IsExpanded);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_AddsNewItem_WithoutAffectingExisting()
     {
         var list = new EntityListViewModel();
@@ -216,7 +218,7 @@ public sealed class EntityListViewModelTests
         Assert.Equal("[\"b\"]", list.Items[1].ItemKey);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_RemovesItem_LeavingOthersUntouched()
     {
         var list = new EntityListViewModel();
@@ -254,7 +256,7 @@ public sealed class EntityListViewModelTests
         Assert.Same(instanceA, list.Items[0]);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SetItems_MovesItemToCorrectPosition_WhenOrderChanges()
     {
         var list = new EntityListViewModel();
@@ -300,4 +302,147 @@ public sealed class EntityListViewModelTests
         Assert.Same(instanceA, list.Items[1]);
     }
 
+    // Issue #1177: rebuilding the browser tree with many entities must not eagerly build field
+    // editors — cards are constructed with empty field-editor collections and rely on
+    // EntityCardControl.OnAttachedToVisualTree to lazily invoke EnsureFieldEditorsBuilt.
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task EntityBrowserWorkspaceTabViewModel_BuildChildren_DoesNotBuildFieldEditorsForNonRealizedEntities()
+    {
+        var broker = await Phantom.Workspaces.EntityBroker.CreateInitializedAsync(
+            new Phantom.Workspaces.UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        for (var i = 1; i <= 4; i++)
+        {
+            var id = new EntityId($"{i:D8}-{i:D4}-{i:D4}-{i:D4}-{i:D12}");
+            var json = $$"""
+                {
+                  "entity-id": "{{id}}",
+                  "entity-types": ["entity", "folder"],
+                  "names": [["folder-{{i}}"]],
+                  "display-name": { "default": "Folder {{i}}" }
+                }
+                """;
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var modified = new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-i), i.ToString());
+            var snapshot = new EntitySnapshot
+            {
+                EntityId = id,
+                ConcurrencyTag = new ConcurrencyTag(modified.ChangeId),
+                ModifiedTime = modified,
+                Data = doc.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            };
+            await broker.EntityRepository.DataAccessLayer.UpdateAsync(
+                new UpdateRequest
+                {
+                    UpdateMetadata = new UpdateMetadata
+                    {
+                        Comment = new Markdown { Text = "seed" },
+                    },
+                    Changes =
+                    [
+                        new EntityChange
+                        {
+                            EntityId = id,
+                            EntityChangeMode = EntityChangeMode.Replace,
+                            Data = snapshot.Data?.Clone(),
+                        },
+                    ],
+                },
+                TestContext.Current.CancellationToken);
+        }
+
+        var rootSubscription = await broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-non-realized",
+            Title = "Non-realized",
+        };
+        try
+        {
+            var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void OnChanged(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs __)
+            {
+                if (viewModel.EntityList.Items.Any(item =>
+                        item.ItemKey.StartsWith("[\"folder-", StringComparison.Ordinal)))
+                {
+                    signal.TrySetResult();
+                }
+            }
+
+            viewModel.EntityList.Items.CollectionChanged += OnChanged;
+            try
+            {
+                if (!viewModel.EntityList.Items.Any(item =>
+                        item.ItemKey.StartsWith("[\"folder-", StringComparison.Ordinal)))
+                {
+                    await signal.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+                }
+            }
+            finally
+            {
+                viewModel.EntityList.Items.CollectionChanged -= OnChanged;
+            }
+
+            var builtCount = viewModel.EntityList.Items.Count(item => item.Node.Card.FieldEditors.Count > 0);
+            Assert.Equal(0, builtCount);
+        }
+        finally
+        {
+            await viewModel.DisposeAsync();
+        }
+    }
+
+    // Issue #1177: binding an entity-card TreeView to a thousand items in a bounded viewport
+    // realizes only a small, viewport-proportional number of TreeViewItem containers.
+    [AvaloniaFact(Timeout = 30_000)]
+    public void EntityCardTreeView_WhenBoundToThousandsOfItems_RealizesBoundedNumberOfContainers()
+    {
+        var items = new string[1000];
+        for (var i = 0; i < items.Length; i++)
+        {
+            items[i] = $"item-{i:D4}";
+        }
+
+        var tree = new Avalonia.Controls.TreeView();
+        tree.Classes.Add("entity-card-tree");
+        tree.ItemsSource = items;
+        var window = new Avalonia.Controls.Window { Content = tree, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            var panel = tree.ItemsPanelRoot;
+            Assert.NotNull(panel);
+            Assert.IsType<Avalonia.Controls.VirtualizingStackPanel>(panel);
+
+            var realizedCount = panel!.Children.Count;
+            Assert.True(realizedCount > 0, "At least one item must be realized.");
+            Assert.True(realizedCount < items.Length / 2, $"Realized container count was {realizedCount} of {items.Length}; expected a viewport-bounded fraction.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
 }

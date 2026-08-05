@@ -484,7 +484,12 @@ the primary strategy — the fakes above are.
     **same** `IDevTunnelAuthTokenProvider` instance/flow; a single fake sign-in satisfies both.
 19. **Private connect needs no token:** in Private mode `IDevTunnelEndpointResolver` returns a null
     `tunnelAuthToken` (identity-derived) and the client connects without any `AccessTokenSource`; the
-    token-source UI is hidden for Private and shown only for Token mode.
+    token-source UI is hidden for Private and shown only for Token mode. The resolver must **not** treat
+    a null Connect token as fatal in Private mode — the Management API's tunnel-name (list) path never
+    mints a per-tunnel Connect token, so the owner connects using their GitHub identity. When the
+    resolver yields no token, the tunnel-name web data-access layer authorizes with the GitHub identity
+    token plus a 401-refresh resolver (mirroring the explicit-access-point `UseGitHubAuthToken` path)
+    rather than sending no `X-Tunnel-Authorization` header.
 20. **Token mode uses `AccessTokenSource`:** in Token mode the resolver/web DAL sends the pre-shared
     `X-Tunnel-Authorization` token resolved from `AccessTokenSource` (never a raw token persisted).
 

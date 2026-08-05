@@ -18,7 +18,10 @@ public sealed class ReviewWorktreeShortcutHandler : ShortcutHandler
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
-        var tab = new GitWorktreeReviewWorkspaceTabViewModel(entityViewModel)
+        // #1210: capture the UI-thread scheduler from the shortcut invocation (Handle runs on the
+        // Avalonia UI thread) so the review VM can marshal ObservableCollection updates back to it.
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        var tab = new GitWorktreeReviewWorkspaceTabViewModel(entityViewModel, foregroundScheduler)
         {
             Id = $"git-review-{entityViewModel.EntityId}",
             Title = $"Review — {entityViewModel.DisplayName}",

@@ -13,12 +13,12 @@
         </ResourceDictionary>
     </UserControl.Resources>
 
+    <!-- Issue #1064: no inline ScrollViewer.* setters; inherit the two-regime entity-card-tree
+         wrapper (H=Auto + items-region MinWidth/viewport cap) so content wraps and a horizontal
+         scrollbar appears only below the minimum width instead of clipping. -->
     <TreeView ItemsSource="{Binding DisplayedRootItems}"
               ItemTemplate="{StaticResource AgentNavigationTreeDetailItemTemplate}"
-              Classes="entity-card-tree entity-card-tree-sticky"
-              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-              ScrollViewer.VerticalScrollBarVisibility="Auto"
-              ScrollViewer.AllowAutoHide="False">
+              Classes="entity-card-tree entity-card-tree-sticky">
         <TreeView.Styles>
             <Style Selector="TreeViewItem">
                 <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />

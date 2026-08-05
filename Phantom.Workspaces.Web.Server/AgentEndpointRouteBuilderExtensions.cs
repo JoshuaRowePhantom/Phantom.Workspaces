@@ -37,10 +37,8 @@ public static class AgentEndpointRouteBuilderExtensions
                 return Results.BadRequest("Empty remote agent request.");
             }
 
-            var reverseExecutionRegistry = httpContext.RequestServices.GetService(typeof(ReverseExecutionRegistry))
-                as ReverseExecutionRegistry;
             var response = await AgentRespondHandler
-                .RespondAsync(request, reverseExecutionRegistry, cancellationToken)
+                .RespondAsync(request, cancellationToken)
                 .ConfigureAwait(false);
             return Results.Json(response, SerializerOptions);
         });

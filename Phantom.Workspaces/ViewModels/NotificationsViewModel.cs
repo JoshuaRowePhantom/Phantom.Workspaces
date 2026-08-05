@@ -11,12 +11,17 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
 {
     private readonly NotificationService notificationService;
     private readonly Action<string> navigateToTab;
+    private readonly TimeProvider timeProvider;
     private int lastKnownUnreadCount;
 
-    public NotificationsViewModel(NotificationService notificationService, Action<string> navigateToTab)
+    public NotificationsViewModel(
+        NotificationService notificationService,
+        Action<string> navigateToTab,
+        TimeProvider? timeProvider = null)
     {
         this.notificationService = notificationService ?? throw new ArgumentNullException(nameof(notificationService));
         this.navigateToTab = navigateToTab ?? throw new ArgumentNullException(nameof(navigateToTab));
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
         this.Rows = new ObservableCollection<NotificationRowViewModel>();
@@ -165,7 +170,7 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
                 this.notificationService.SnoozeTab(tabKey);
             }
         });
-        return new NotificationRowViewModel(entry, navigateCmd, snoozeCmd);
+        return new NotificationRowViewModel(entry, navigateCmd, snoozeCmd, this.timeProvider);
     }
 
     public void Dispose()

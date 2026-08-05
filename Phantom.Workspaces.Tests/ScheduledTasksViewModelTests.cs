@@ -1,3 +1,6 @@
+using Avalonia.Headless.XUnit;
+using System.Collections.Concurrent;
+using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
@@ -21,7 +24,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.DoesNotContain("StringFormat='{}{0:HH:mm:ss}'", viewText, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task RefreshAsync_LoadsScheduledTasks_WithResolvedParticipantNames()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -67,7 +70,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(viewModel.HasScheduledTasks);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task TogglePause_PersistsHostPauseState_AndUpdatesButtonText()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -109,7 +112,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(await restarted.RefreshAsync(hostId, TestContext.Current.CancellationToken));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task HasPauseControl_IsFalse_WhenNoPauseServiceSupplied()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -122,7 +125,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.False(viewModel.IsPaused);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ScheduledToolsRunning_IsNull_WhenNoHostProvided()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -134,7 +137,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Null(viewModel.ScheduledToolsRunning);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ScheduledToolsRunning_IsNotNull_WhenHostProvided()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -150,7 +153,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.NotNull(viewModel.ScheduledToolsRunning);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SelectedTask_WhenSet_SelectedToolRowReturnsMatchingToolRow()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -203,7 +206,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Equal("stub", viewModel.SelectedToolRow.ToolType);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SelectedTask_WhenClearedToNull_SelectedToolRowIsNull()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -219,7 +222,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Null(viewModel.SelectedToolRow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task ScheduledTaskItemViewModel_HasFailure_SyncedFromRunningViewModelOnRefresh()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -265,7 +268,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.False(task.IsRunning);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SelectedTask_WhenTaskHasNoToolRow_SelectedToolRowIsNull()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -311,7 +314,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.Null(viewModel.SelectedToolRow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SelectedTask_WhenTaskHasNoToolRow_HasNoRunsForSelectedTask_IsTrue()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -358,7 +361,7 @@ public sealed class ScheduledTasksViewModelTests
         Assert.True(viewModel.HasNoRunsForSelectedTask);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SelectedTask_WhenClearedAfterSelection_HasNoRunsForSelectedTask_IsFalse()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -403,6 +406,151 @@ public sealed class ScheduledTasksViewModelTests
         viewModel.SelectedTask = null;
 
         Assert.False(viewModel.HasNoRunsForSelectedTask);
+    }
+
+    [AvaloniaFact]
+    public async Task SelectedTask_WhenSet_LoadsRecentRunsOnCapturedContext_DoesNotThrow()
+    {
+        var uiThreadId = Environment.CurrentManagedThreadId;
+
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        var toolId = new EntityId("27a8b9c0-d1e2-4f5a-6b7c-8d9e0f1a2b3c");
+        var scheduleId = new EntityId("2b784371-6ba2-4e43-812f-b1ef2bef239c");
+        var targetId = new EntityId("21b2c3d4-1111-2222-3333-444455556666");
+        var relationshipId = new EntityId("2638fe05-9dd5-49f8-a0b8-c767de434b6f");
+
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{toolId}}", "entity-types": ["entity", "tool"], "names": [["tools","stub"]], "display-name": { "default": "Stub Tool" }, "tool-type": "stub" }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{scheduleId}}", "entity-types": ["entity", "schedule"], "names": [["schedule","every-minute"]], "display-name": { "default": "Every minute" }, "repeat": { "frequency": "00:01:00Z", "days-of-week": [], "start-at": [] } }
+            """);
+        await SeedAsync(broker, $$"""
+            { "entity-id": "{{targetId}}", "entity-types": ["entity", "folder"], "names": [["profiles","test-host"]], "display-name": { "default": "Test Host" } }
+            """);
+        await SeedAsync(broker, $$"""
+            {
+              "entity-id": "{{relationshipId}}",
+              "entity-types": ["entity", "tool-relationship", "relationship"],
+              "names": [["tool-relationships","{{relationshipId}}"]],
+              "participants": { "tool": "{{toolId}}", "schedule": ["{{scheduleId}}"], "target": ["{{targetId}}"] }
+            }
+            """);
+
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var writer = new ToolExecutionResultWriter(dataAccessLayer);
+        var handle = await writer.StartAsync(["host", "machine"], "stub", TestContext.Current.CancellationToken);
+        await writer.CompleteAsync(handle, success: true, cancellationToken: TestContext.Current.CancellationToken);
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+
+        using var viewModel = new ScheduledTasksViewModel(broker, scheduledToolHost: host);
+        await viewModel.RefreshAsync(TestContext.Current.CancellationToken);
+        await viewModel.ScheduledToolsRunning!.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var task = Assert.Single(viewModel.ScheduledTasks);
+        var row = Assert.Single(viewModel.ScheduledToolsRunning.Tools);
+
+        var populated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observedThreadIds = new ConcurrentBag<int>();
+        Exception? mutationException = null;
+        row.RecentRuns.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+            try
+            {
+                foreach (var _ in row.RecentRuns) { }
+            }
+            catch (InvalidOperationException ex)
+            {
+                mutationException = ex;
+            }
+
+            if (args.Action == NotifyCollectionChangedAction.Add)
+            {
+                populated.TrySetResult();
+            }
+        };
+
+        // Setter fires _ = row.LoadRecentRunsAsync() fire-and-forget.
+        viewModel.SelectedTask = task;
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+        await populated.Task.WaitAsync(timeoutCts.Token);
+
+        Assert.NotNull(viewModel.SelectedToolRow);
+        Assert.Same(row, viewModel.SelectedToolRow);
+        Assert.NotEmpty(row.RecentRuns);
+        Assert.Null(mutationException);
+        Assert.All(observedThreadIds, id => Assert.Equal(uiThreadId, id));
+    }
+
+    [AvaloniaFact]
+    public async Task RefreshAsync_DoesNotBlockForegroundScheduler_WhileHistoryLoads()
+    {
+        // #1203: RefreshAsync should hand off history population to a background thread and
+        // yield the foreground scheduler while the query and JSON parsing run, so the UI
+        // thread can continue processing other posted work.
+
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+
+        // Seed a moderate amount of history so the off-thread work is meaningful.
+        var dataAccessLayer = broker.EntityRepository.DataAccessLayer;
+        var writer = new ToolExecutionResultWriter(dataAccessLayer);
+        for (var i = 0; i < 50; i++)
+        {
+            var handle = await writer.StartAsync(new[] { "host", $"machine-{i % 5}" }, $"tool-{i % 10}", TestContext.Current.CancellationToken);
+            await writer.CompleteAsync(handle, success: i % 2 == 0, cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        // Capture the foreground scheduler on the pump thread.
+        var schedulerTcs = new TaskCompletionSource<TaskScheduler>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => schedulerTcs.SetResult(TaskScheduler.FromCurrentSynchronizationContext()), null);
+        var foregroundScheduler = await schedulerTcs.Task;
+
+        // Also build the view model on the pump thread so any construction-time captures use it.
+        var viewModelTcs = new TaskCompletionSource<ScheduledTasksViewModel>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => viewModelTcs.SetResult(new ScheduledTasksViewModel(
+            broker,
+            scheduledToolHost: host,
+            foregroundScheduler: foregroundScheduler)), null);
+        using var viewModel = await viewModelTcs.Task;
+
+        // Kick off RefreshAsync from the pump thread; capture the returned Task.
+        var refreshTaskTcs = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(
+            _ => refreshTaskTcs.SetResult(viewModel.RefreshAsync(TestContext.Current.CancellationToken)),
+            null);
+        var refreshTask = await refreshTaskTcs.Task;
+
+        // Now that RefreshAsync has yielded control back to the pump (because it hits Task.Run
+        // inside RefreshHistoryAsync), we should be able to interleave another posted item.
+        var interleavedRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => interleavedRan.SetResult(), null);
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+
+        var winner = await Task.WhenAny(interleavedRan.Task, refreshTask).WaitAsync(timeoutCts.Token);
+
+        // The interleaved item must complete before (or at the same tick as) RefreshAsync,
+        // proving the foreground scheduler was not held while history loaded off-thread.
+        Assert.Same(interleavedRan.Task, winner);
+
+        await refreshTask.WaitAsync(timeoutCts.Token);
+
+        Assert.NotNull(viewModel.ScheduledToolsRunning);
+        Assert.NotEmpty(viewModel.ScheduledToolsRunning!.Tools);
     }
 
     private static async Task SeedAsync(

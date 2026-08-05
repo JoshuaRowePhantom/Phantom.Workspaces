@@ -1,6 +1,13 @@
+using Avalonia.Controls;
+using Avalonia.Controls.Templates;
+using Avalonia.Headless.XUnit;
+using Avalonia.LogicalTree;
+using Avalonia.Threading;
 using System.Linq;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Controls;
+using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -9,7 +16,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityCardFieldBuildingTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_BuildsMarkdownEditorForNoteContent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -44,7 +51,51 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Contains("Body text here.", markdownEditor.TextContent, StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
+    public async Task MarkdownMimeAttachment_ReadMode_RendersMarkdownNotRawSource()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "c0d1e2f3-7a8b-4c9d-9e0f-6a7b8c9d0e1f",
+              "entity-types": ["entity", "note"],
+              "names": [["views", "sessions", "notes", "agent-manifests"]],
+              "display-name": { "default": "Agent Manifests" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Agent Manifests\n\nBody text here." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "note");
+        var contentEditor = fieldEditors.Single(editor => editor.FieldName == "content");
+        var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentEditor);
+        var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
+
+        var templates = new WorkspaceDataTemplates();
+        var template = templates.Cast<IDataTemplate>().First(t => t.Match(markdownEditor));
+        var control = template.Build(markdownEditor);
+        control!.DataContext = markdownEditor;
+        Dispatcher.UIThread.RunJobs();
+
+        var views = control.GetSelfAndLogicalDescendants()
+            .OfType<WorkspaceMarkdownView>()
+            .ToList();
+
+        Assert.NotEmpty(views);
+        Assert.All(views, view => Assert.Equal(markdownEditor.TextContent, view.Markdown));
+    }
+
+    [AvaloniaFact]
     public async Task FieldEditorFactory_RendersNoteContentInline()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -89,7 +140,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.True(markdownEditor.ShowChrome);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_RendersNoFields_WhenEntityTypeViewHasEmptyFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -115,7 +166,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Empty(fieldEditors);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_RendersAllFields_WhenEntityTypeViewOmitsFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -141,7 +192,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.NotEmpty(fieldEditors);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_RendersNoFields_WhenNoEntityTypeViewRegistered()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -167,7 +218,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Empty(fieldEditors);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_BuildsEntityListEditorForEntityIdListFields()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -208,7 +259,7 @@ public sealed class EntityCardFieldBuildingTests
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_ResolvesEntityIdListIndependentOfEntityTypeOrder()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -248,7 +299,7 @@ public sealed class EntityCardFieldBuildingTests
             fieldEditors.Single(editor => editor.FieldName == "tool"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_BuildsBooleanToggleEditorForPausedField()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -283,7 +334,7 @@ public sealed class EntityCardFieldBuildingTests
         Assert.Contains(fieldEditors, editor => editor.FieldName == "last-started");
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_BuildsBooleanToggleEditor_DefaultsFalse_WhenPausedAbsent()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -311,5 +362,507 @@ public sealed class EntityCardFieldBuildingTests
         var pausedEditor = Assert.IsType<BooleanToggleFieldEditorViewModel>(
             fieldEditors.Single(editor => editor.FieldName == "paused"));
         Assert.False(pausedEditor.Value);
+    }
+
+    // ---- Issue #1164: multi-typed entity card composition ------------------------------------
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_ToolAndNoteEntityTypes_ComposesFieldsFromAllTypeViews()
+    {
+        // A tool+note entity (e.g. seeded "Run VS Code Tunnel") declares content.default markdown.
+        // The tool entity-type has no registered view, but the note view surfaces the `content`
+        // field. Composing across both types must still emit the note-contributed `content` editor.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(
+            [new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") })]);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Run VS Code Tunnel\n\nUsage." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "tool", "note" });
+
+        Assert.Contains(fieldEditors, editor => editor.FieldName == "content");
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_MultipleEntityTypes_DeduplicatesFieldPaths()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(new[]
+        {
+            new EntityTypeViewDefinition(
+                "tool",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, null) }),
+            new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") }),
+        });
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Body" }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "tool", "note" });
+
+        Assert.Single(fieldEditors, editor => editor.FieldName == "content");
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_MultipleEntityTypes_OrdersFieldsByContributingTypeEntityDisplayOrder()
+    {
+        // The tool entity-type has entity-display-order: 260 while note has none (defaults last),
+        // so a tool-contributed field must render before a note-contributed field.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(new[]
+        {
+            new EntityTypeViewDefinition(
+                "tool",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "display-name" }, null) }),
+            new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") }),
+        });
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Body" }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = (await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "tool", "note" })).ToArray();
+
+        var displayNameIndex = System.Array.FindIndex(fieldEditors, e => e.FieldName == "display-name");
+        var contentIndex = System.Array.FindIndex(fieldEditors, e => e.FieldName == "content");
+        Assert.True(displayNameIndex >= 0);
+        Assert.True(contentIndex >= 0);
+        Assert.True(displayNameIndex < contentIndex,
+            $"tool-contributed display-name (index {displayNameIndex}) must render before note-contributed content (index {contentIndex}).");
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_MultipleEntityTypes_PreservesEntityTypeViewFieldsArrayOrderWithinAType()
+    {
+        // A single entity-type-view.fields array [A, B, C] with no explicit x-*-entity-display-order
+        // keeps its declaration order across the composed output.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(new[]
+        {
+            new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[]
+                {
+                    new EntityFieldViewDefinition(new[] { "display-name" }, null),
+                    new EntityFieldViewDefinition(new[] { "title" }, null),
+                    new EntityFieldViewDefinition(new[] { "content" }, "inline"),
+                }),
+        });
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "aaaaaaaa-1111-2222-3333-444444444444",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "ordered"]],
+              "display-name": { "default": "Ordered" },
+              "title": { "default": "T" },
+              "content": {
+                "default": { "mime-type": "text/markdown", "content": { "text": "# Body" } }
+              }
+            }
+            """);
+
+        var fieldEditors = (await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "note" })).ToArray();
+
+        var names = fieldEditors.Select(e => e.FieldName).ToArray();
+        Assert.Equal(new[] { "display-name", "title", "content" }, names);
+    }
+
+    [AvaloniaFact]
+    public void FieldEditorFactory_MultipleEntityTypes_AbsoluteEntityDisplayOrderStillWinsAcrossTypes()
+    {
+        // Preserve the existing FieldOrderingKey group-0 behavior in the multi-type case: a field
+        // whose schema declares x-absolute-entity-display-order sorts strictly by that value into
+        // group 0, ahead of every type-grouped field, regardless of which contributing entity type
+        // owns it. This is what allows note.content to render above tool-grouped fields when the
+        // note schema tags it absolute-ordered.
+        var noteContributedAbsolute = FieldOrdering.ComputeKey(
+            fieldName: "content",
+            absoluteOrder: 5,
+            relativeOrder: 0,
+            entityTypeName: "note",
+            entityTypeDisplayOrder: null);
+        var toolContributedGrouped = FieldOrdering.ComputeKey(
+            fieldName: "display-name",
+            absoluteOrder: null,
+            relativeOrder: 0,
+            entityTypeName: "tool",
+            entityTypeDisplayOrder: 260);
+        var noteContributedGrouped = FieldOrdering.ComputeKey(
+            fieldName: "title",
+            absoluteOrder: null,
+            relativeOrder: 0,
+            entityTypeName: "note",
+            entityTypeDisplayOrder: null);
+
+        Assert.True(noteContributedAbsolute.CompareTo(toolContributedGrouped) < 0);
+        Assert.True(noteContributedAbsolute.CompareTo(noteContributedGrouped) < 0);
+        // Sanity check the group-1 tool-vs-note tool-before-note ordering used elsewhere.
+        Assert.True(toolContributedGrouped.CompareTo(noteContributedGrouped) < 0);
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_NoEntityTypeViewsForAnyType_ReturnsEmpty()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog([]);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "cccccccc-3333-4444-5555-666666666666",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "nothing"]],
+              "display-name": { "default": "Nothing" }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "tool", "note" });
+
+        Assert.Empty(fieldEditors);
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_NoteEntity_ContentFieldRendersMarkdownInline()
+    {
+        // Fix #1171 — the surviving FieldEditors channel still renders note content inline
+        // (regression guard for the FieldEditorFactory_RendersNoteContentInline behavior).
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "c0d1e2f3-7a8b-4c9d-9e0f-6a7b8c9d0e1f",
+              "entity-types": ["entity", "note"],
+              "names": [["views", "sessions", "notes", "agent-manifests"]],
+              "display-name": { "default": "Agent Manifests" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Agent Manifests\n\nBody text here." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(document.RootElement.Clone(), "note");
+
+        var contentEditor = fieldEditors.Single(editor => editor.FieldName == "content");
+        var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentEditor);
+        var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
+        Assert.True(markdownEditor.IsInline);
+        Assert.True(markdownEditor.ShowInlineMarkdownReadMode);
+    }
+
+    [AvaloniaFact]
+    public async Task FieldEditorFactory_ToolAndNoteEntityTypes_ContentContributedOnceByNoteView()
+    {
+        // Fix #1171 — multi-type composition yields a single content contribution, attributed to the
+        // note view (first-contributing type wins in BuildMultiTypeContributions). Guards against
+        // reintroducing a duplicate render channel.
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = new EntityTypeViewCatalog(
+            [new EntityTypeViewDefinition(
+                "note",
+                null,
+                new[] { new EntityFieldViewDefinition(new[] { "content" }, "inline") })]);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        using var document = JsonDocument.Parse(
+            """
+            {
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Run VS Code Tunnel\n\nUsage." }
+                }
+              }
+            }
+            """);
+
+        var fieldEditors = await factory.BuildFieldEditorsAsync(
+            document.RootElement.Clone(),
+            new[] { "tool", "note" });
+
+        Assert.Single(fieldEditors, editor => editor.FieldName == "content");
+    }
+
+    // Issue #1177: constructor must NOT eagerly kick off BuildFieldEditorsAsync; realization drives
+    // the build via EnsureFieldEditorsBuilt / EntityCardControl.OnAttachedToVisualTree.
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_Constructor_DoesNotEagerlyBuildFieldEditors()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+        var card = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+
+        // Give any spurious background continuation a chance to run.
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Empty(card.FieldEditors);
+    }
+
+    [AvaloniaFact]
+    public async Task EntityCardViewModel_EnsureFieldEditorsBuilt_BuildsFieldEditorsOnce()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+        var card = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+
+        card.EnsureFieldEditorsBuilt();
+        await WaitForFieldEditorsAsync(card);
+        var firstBuildCount = card.FieldEditors.Count;
+        Assert.NotEqual(0, firstBuildCount);
+        var firstBuild = card.FieldEditors;
+
+        card.EnsureFieldEditorsBuilt();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        Assert.Same(firstBuild, card.FieldEditors);
+    }
+
+    // Issue #1177: even when a child card is added to a ViewEntityViewModel via AddChild, the child
+    // card's field editors are built lazily; construction alone must not trigger the schema work.
+    [AvaloniaFact]
+    public async Task ViewEntityViewModel_AddChild_DoesNotEagerlyBuildFieldEditorsForChildCard()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+        var mainWindow = new MainWindowViewModel(new UnknownRepositorySource());
+        try
+        {
+            var parentEntity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+            var childEntity = new SubscribedEntityViewModel(BuildToolNoteSnapshot());
+            var parentView = new ViewEntityViewModel(
+                parentEntity,
+                mainWindow,
+                mainWindow.ShortcutManager,
+                indentLevel: 0,
+                fieldEditorFactory: factory);
+            var childView = new ViewEntityViewModel(
+                childEntity,
+                mainWindow,
+                mainWindow.ShortcutManager,
+                indentLevel: 1,
+                fieldEditorFactory: factory);
+
+            parentView.AddChild(childView);
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            await Task.Yield();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            Assert.Empty(childView.EntityCardNode.Card.FieldEditors);
+        }
+        finally
+        {
+            await mainWindow.DisposeAsync();
+        }
+    }
+
+    // Issue #1177: laying out a tree bound to thousands of items only realizes a viewport-sized
+    // batch of cards, so field editors are built only for that small set.
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task EntityCardTreeView_WhenBoundToThousandsOfItems_DoesNotBuildFieldEditorsForOffScreenCards()
+    {
+        var broker = await EntityBroker.CreateInitializedAsync(
+            new UnknownRepositorySource(),
+            TestContext.Current.CancellationToken);
+        var entityTypeViewCatalog = await EntityTypeViewCatalog.CreateAsync(broker);
+        var factory = new FieldEditorFactory(broker, entityTypeViewCatalog);
+
+        const int total = 1000;
+        var cards = new EntityCardViewModel[total];
+        for (var i = 0; i < total; i++)
+        {
+            var entity = new SubscribedEntityViewModel(BuildToolNoteSnapshot(new Guid(i, 0, 0, new byte[8])));
+            cards[i] = new EntityCardViewModel(entity, fieldEditorFactory: factory);
+        }
+
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        await Task.Yield();
+        Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+        // No card was realized, so no card should have built field editors.
+        var builtCount = 0;
+        foreach (var card in cards)
+        {
+            if (card.FieldEditors.Count > 0)
+            {
+                builtCount++;
+            }
+        }
+
+        Assert.Equal(0, builtCount);
+    }
+
+    private static async Task WaitForFieldEditorsAsync(EntityCardViewModel card)
+    {
+        var tcs = new TaskCompletionSource();
+        void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(EntityCardViewModel.FieldEditors) && card.FieldEditors.Count > 0)
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        card.PropertyChanged += OnChanged;
+        try
+        {
+            if (card.FieldEditors.Count > 0)
+            {
+                return;
+            }
+
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+            await Task.Yield();
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+
+            if (card.FieldEditors.Count > 0)
+            {
+                return;
+            }
+
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await Task.WhenAny(tcs.Task, Task.Delay(System.Threading.Timeout.Infinite, cts.Token));
+            Avalonia.Threading.Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            card.PropertyChanged -= OnChanged;
+        }
+    }
+
+    private static EntitySnapshot BuildToolNoteSnapshot(Guid? id = null)
+    {
+        var entityId = id ?? Guid.NewGuid();
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "t-{{entityId:N}}"]],
+              "display-name": { "default": "Tool Note" },
+              "content": {
+                "default": {
+                  "mime-type": "text/markdown",
+                  "content": { "text": "# Body" }
+                }
+              }
+            }
+            """);
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
     }
 }

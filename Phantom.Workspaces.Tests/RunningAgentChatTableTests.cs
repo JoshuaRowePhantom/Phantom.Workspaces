@@ -26,7 +26,7 @@ public sealed class RunningAgentChatTableTests
             _foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
         }
 
-        public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public async Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             bool isNew;
             lock (_sessions)
@@ -61,8 +61,10 @@ public sealed class RunningAgentChatTableTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
-            CancellationToken ct = default)
-            => GetAsync(sessionId, ct);
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            string? nameOverride = null, CancellationToken ct = default)
+            => GetAsync(sessionId, ct: ct);
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(
             AgentSessionId sessionId,
@@ -70,10 +72,10 @@ public sealed class RunningAgentChatTableTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             LastDefinition = definition;
-            return GetAsync(sessionId, ct);
+            return GetAsync(sessionId, ct: ct);
         }
 
         private async ValueTask RemoveRefAsync(AgentSessionId sessionId)

@@ -3,8 +3,12 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Models;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -20,7 +24,12 @@ namespace Phantom.Workspaces.ViewModels;
 internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposable
 {
     private readonly UsageMetrics usageMetrics;
+    private readonly ILogger<UsageTrackerViewModel> logger;
+    private readonly Func<string?, Task>? persistSelectionAsync;
+    private readonly Func<IUrlOpener?>? urlOpenerProvider;
     private string? topRightLabel;
+    private string? selectedUsageMetricKey;
+    private bool suppressSelectionSync;
     private bool isOpen;
     private IReadOnlyList<UsageAccount> accounts;
     private bool disposed;
@@ -32,11 +41,21 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    public UsageTrackerViewModel(UsageMetrics usageMetrics)
+    public UsageTrackerViewModel(
+        UsageMetrics usageMetrics,
+        ILogger<UsageTrackerViewModel>? logger = null,
+        string? initialSelectedUsageMetricKey = null,
+        Func<string?, Task>? persistSelectionAsync = null,
+        Func<IUrlOpener?>? urlOpenerProvider = null)
     {
         this.usageMetrics = usageMetrics;
+        this.logger = logger ?? NullLogger<UsageTrackerViewModel>.Instance;
+        this.selectedUsageMetricKey = initialSelectedUsageMetricKey;
+        this.persistSelectionAsync = persistSelectionAsync;
+        this.urlOpenerProvider = urlOpenerProvider;
         this.accounts = [.. usageMetrics.Accounts];
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
+        this.OpenUrlCommand = new RelayCommand(parameter => _ = this.OpenUrlAsync(CoerceUrl(parameter)));
 
         usageMetrics.Accounts.CollectionChanged += this.OnAccountsChanged;
 
@@ -47,6 +66,12 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
         this.RecomputeTopRightLabel();
     }
+
+    /// <summary>
+    /// The underlying <see cref="UsageMetrics"/> model. Exposed for tests that need to
+    /// mutate accounts on the same instance that drives this view model.
+    /// </summary>
+    internal UsageMetrics Metrics => this.usageMetrics;
 
     /// <summary>
     /// The QuantityPresentation of the most recently updated metric from the most recently charged account.
@@ -89,6 +114,104 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
     public ICommand ToggleOpenCommand { get; }
 
+    /// <summary>
+    /// #1172: XAML-bound command wired to every <c>HyperlinkButton</c> in
+    /// <see cref="Phantom.Workspaces.Controls.UsageTrackerControl"/>. The <c>CommandParameter</c>
+    /// carries the URL to open. Routes through <see cref="IUrlOpener"/> (Auto preference →
+    /// http(s) opens embedded with same-URL dedup; other schemes go external). The view model
+    /// deliberately never touches <c>Launcher</c> / <c>Process.Start</c> directly.
+    /// </summary>
+    public ICommand OpenUrlCommand { get; }
+
+    private async Task OpenUrlAsync(string? url)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            return;
+        }
+
+        var opener = this.urlOpenerProvider?.Invoke();
+        if (opener is null)
+        {
+            return;
+        }
+
+        await opener.OpenAsync(new OpenUrlRequest(url));
+    }
+
+    // #1204: XAML binds CommandParameter to a Uri (via FirstNonNullConverter over
+    // UsageMetric.WebUrl / UsageAccount.SettingsUrl, both typed Uri?). Accept both
+    // Uri and string so the command works from XAML and from tests / code that
+    // pass raw strings. Any other type is treated as "no link".
+    private static string? CoerceUrl(object? parameter) => parameter switch
+    {
+        string s when !string.IsNullOrEmpty(s) => s,
+        Uri u => u.ToString(),
+        _ => null,
+    };
+
+    /// <summary>
+    /// The stable key (see <see cref="UsageAccount.ComposeKey"/>) of the metric the
+    /// user has pinned as the top-right indicator. Setting this raises PropertyChanged,
+    /// re-runs <see cref="RecomputeTopRightLabel"/>, and (when provided) persists the
+    /// value via the configured save callback. Null means auto (most-recently-updated).
+    /// </summary>
+    public string? SelectedUsageMetricKey
+    {
+        get => this.selectedUsageMetricKey;
+        set
+        {
+            if (string.Equals(this.selectedUsageMetricKey, value, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            this.selectedUsageMetricKey = value;
+            this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(this.SelectedUsageMetricKey)));
+            this.SyncSelectionFlagsFromKey();
+            this.RecomputeTopRightLabel();
+
+            if (this.persistSelectionAsync is { } persist)
+            {
+                _ = persist(value);
+            }
+        }
+    }
+
+    private void SyncSelectionFlagsFromKey()
+    {
+        if (this.suppressSelectionSync) return;
+
+        // #1160: When there is no user pin, respect provider-supplied IsSelectedAsShown
+        // defaults (e.g. the net-dollar cost metric is marked as the default budget
+        // surface). Clobbering all flags to false here would erase those defaults and
+        // let a saturated credit-quantity metric win the toolbar slot.
+        if (string.IsNullOrEmpty(this.selectedUsageMetricKey)) return;
+
+        this.suppressSelectionSync = true;
+        try
+        {
+            foreach (var account in this.usageMetrics.Accounts)
+            {
+                foreach (var metric in account.Metrics)
+                {
+                    var isMatch = string.Equals(
+                        UsageAccount.ComposeKey(account.Product, metric.Title),
+                        this.selectedUsageMetricKey,
+                        StringComparison.Ordinal);
+                    if (metric.IsSelectedAsShown != isMatch)
+                    {
+                        metric.IsSelectedAsShown = isMatch;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            this.suppressSelectionSync = false;
+        }
+    }
+
     private void ToggleOpen() => this.IsOpen = !this.IsOpen;
 
     private void OnAccountsChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -123,7 +246,7 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
         foreach (var metric in account.Metrics)
         {
-            this.SubscribeMetric(metric, metricSubscriptions);
+            this.SubscribeMetric(account, metric, metricSubscriptions);
         }
 
         NotifyCollectionChangedEventHandler metricsHandler = (_, me) =>
@@ -144,18 +267,23 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
                 foreach (var item in me.NewItems)
                 {
                     if (item is UsageMetric m)
-                        this.SubscribeMetric(m, metricSubscriptions);
+                        this.SubscribeMetric(account, m, metricSubscriptions);
                 }
             }
 
+            this.SyncSelectionFlagsFromKey();
             this.RecomputeTopRightLabel();
         };
 
         account.Metrics.CollectionChanged += metricsHandler;
         this.accountSubscriptions.Add((account, metricsHandler, metricSubscriptions));
+
+        // Apply any pinned selection to the freshly-subscribed metrics.
+        this.SyncSelectionFlagsFromKey();
     }
 
     private void SubscribeMetric(
+        UsageAccount account,
         UsageMetric metric,
         List<(UsageMetric, PropertyChangedEventHandler)> subscriptions)
     {
@@ -166,6 +294,14 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
                 || string.Equals(pe.PropertyName, nameof(UsageMetric.LastUpdatedAt), StringComparison.Ordinal))
             {
                 this.RecomputeTopRightLabel();
+            }
+            else if (string.Equals(pe.PropertyName, nameof(UsageMetric.IsSelectedAsShown), StringComparison.Ordinal))
+            {
+                if (this.suppressSelectionSync) return;
+                if (metric.IsSelectedAsShown)
+                {
+                    this.SelectedUsageMetricKey = UsageAccount.ComposeKey(account.Product, metric.Title);
+                }
             }
         };
 
@@ -213,8 +349,50 @@ internal sealed class UsageTrackerViewModel : INotifyPropertyChanged, IDisposabl
 
         if (allAccounts.Count == 0)
         {
+            this.logger.LogDebug("Usage panel hidden: no accounts.");
             this.TopRightLabel = null;
             return;
+        }
+
+        this.logger.LogInformation(
+            "Usage panel shown for {AccountCount} account(s).",
+            allAccounts.Count);
+
+        // Explicit user pin: if a saved key matches an existing account+metric, use it.
+        if (!string.IsNullOrEmpty(this.selectedUsageMetricKey))
+        {
+            foreach (var account in allAccounts)
+            {
+                foreach (var metric in account.Metrics)
+                {
+                    if (string.Equals(
+                        UsageAccount.ComposeKey(account.Product, metric.Title),
+                        this.selectedUsageMetricKey,
+                        StringComparison.Ordinal))
+                    {
+                        this.TopRightLabel = metric.QuantityPresentation;
+                        return;
+                    }
+                }
+            }
+            // Fall through: saved key does not match any current metric. Leave the
+            // stored key intact so the pin re-applies if the metric reappears.
+        }
+
+        // #1160: When there is no user pin, prefer any metric the provider has marked as
+        // the default budget surface (IsSelectedAsShown = true). This makes the net-dollar
+        // cost metric win over the credit-quantity metric so the toolbar shows real
+        // budget consumption rather than a saturated included-allotment counter.
+        foreach (var account in allAccounts)
+        {
+            foreach (var metric in account.Metrics)
+            {
+                if (metric.IsSelectedAsShown)
+                {
+                    this.TopRightLabel = metric.QuantityPresentation;
+                    return;
+                }
+            }
         }
 
         // Find the metric with the most recent non-null LastUpdatedAt across all accounts

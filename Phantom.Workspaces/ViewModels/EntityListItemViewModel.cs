@@ -47,7 +47,7 @@ public sealed class EntityListItemViewModel : ViewModelBase
 
     public IReadOnlyCollection<string> ChildItemKeys { get; private set; }
 
-    public bool HasChildren => this.ChildItemKeys.Count > 0;
+    public bool HasChildren => this.ChildItemKeys.Count > 0 || this.Node.HasChildren;
 
     public int? StickyRow => this.HasChildren ? this.Level : null;
 
@@ -58,8 +58,6 @@ public sealed class EntityListItemViewModel : ViewModelBase
     public string DisplayName => this.Card.DisplayName;
 
     public string EntityType => this.Card.EntityType;
-
-    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.Card.DisplayItems;
 
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.Card.FieldEditors;
 
@@ -173,6 +171,16 @@ public sealed class EntityListItemViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.EntityType));
         }
+        else if (string.Equals(e.PropertyName, nameof(EntityListNodeViewModel.HasChildren), StringComparison.Ordinal))
+        {
+            // #1232: a collapsed folder reports HasChildren via the node's lazy override before its
+            // children are materialized. Propagate that so the expand affordance appears.
+            this.RaisePropertyChanged(nameof(this.HasChildren));
+            this.RaisePropertyChanged(nameof(this.StickyRow));
+            this.RaisePropertyChanged(nameof(this.ContentCornerRadius));
+            this.RaisePropertyChanged(nameof(this.ExpandSectionCornerRadius));
+            this.ToggleExpandCommand.RaiseCanExecuteChanged();
+        }
     }
 
     private void OnCardPropertyChanged(
@@ -182,11 +190,6 @@ public sealed class EntityListItemViewModel : ViewModelBase
         if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.FieldEditors), StringComparison.Ordinal))
         {
             this.RaisePropertyChanged(nameof(this.FieldEditors));
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
-        }
-        else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.DisplayItems), StringComparison.Ordinal))
-        {
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
         }
         else if (string.Equals(e.PropertyName, nameof(EntityCardViewModel.DisplayName), StringComparison.Ordinal))
         {

@@ -21,4 +21,11 @@ public sealed class AcquireAgentChatRequest
     public string? EntityId { get; init; }
     public string? EntityDisplayName { get; init; }
     public string? EntityDescription { get; init; }
+
+    /// <summary>
+    /// Owning workspace-pane id (the pane the session is being started/opened in).
+    /// Threaded into <see cref="RunningAgentChatWithEntityInfo.WorkspaceId"/> so cross-workspace
+    /// status-button navigation (#1135) can switch to the owning workspace before focusing the agent.
+    /// </summary>
+    public string? WorkspaceId { get; init; }
 }

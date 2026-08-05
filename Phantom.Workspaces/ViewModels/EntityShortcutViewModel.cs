@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -25,16 +25,20 @@ public sealed class EntityShortcutViewModel : ViewModelBase
         return this.ShortcutManager.HandleShortcutAsync(mainWindowViewModel, this.Shortcut, this.Entity);
     }
 
-    public static async Task PopulateShortcutsAsync(
-        ObservableCollection<EntityShortcutViewModel> shortcuts,
+    /// <summary>
+    /// Builds a fresh, deduped list of shortcuts applicable to <paramref name="entity"/> and
+    /// returns it. Fix #1144 — no in-place mutation of a shared collection: each invocation
+    /// yields its own list, so overlapping concurrent invocations cannot corrupt each other.
+    /// </summary>
+    public static async Task<IReadOnlyList<EntityShortcutViewModel>> PopulateShortcutsAsync(
         MainWindowViewModel mainWindowViewModel,
         SubscribedEntityViewModel entity,
         ShortcutManager shortcutManager)
     {
-        shortcuts.Clear();
+        var result = new List<EntityShortcutViewModel>();
         await foreach (var shortcut in shortcutManager.GetShortcutsForAsync(mainWindowViewModel, entity))
         {
-            shortcuts.Add(
+            result.Add(
                 new EntityShortcutViewModel
                 {
                     Shortcut = shortcut,
@@ -42,5 +46,7 @@ public sealed class EntityShortcutViewModel : ViewModelBase
                     ShortcutManager = shortcutManager,
                 });
         }
+
+        return result;
     }
 }

@@ -31,12 +31,44 @@
         "$ref": "core.json#/$defs/entity-type-id"
       },
       "description": "The entity types that this interest type is visible on globally. If absent, it is visible on every entity type. If empty, it is visible only on entity types that list this interest in their interest-types."
+    },
+    "target-participant": {
+      "$ref": "core.json#/$defs/local-string",
+      "description": "The name of the participant property on the interest relationship that references the badged entity."
+    },
+    "applies-to": {
+      "type": "array",
+      "description": "Scope-participant descriptors that bind participants of the interest relationship to the current session's identities. Each entry names a participant on the relationship and the session value the participant must equal for the interest to apply.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "participant-property-name": {
+            "$ref": "core.json#/$defs/local-string",
+            "description": "The name of the participant property on the interest relationship whose value must match the session identity."
+          },
+          "entity-types": {
+            "type": "array",
+            "items": {
+              "$ref": "core.json#/$defs/entity-type-id"
+            },
+            "description": "Optional constraint on the entity types allowed for this scope participant."
+          },
+          "session-value": {
+            "enum": ["user-entity-id", "user-computer-profile-entity-id"],
+            "description": "Which session identity this scope participant must equal for the interest to be considered applied to the current session."
+          }
+        },
+        "required": ["participant-property-name", "session-value"],
+        "unevaluatedProperties": false
+      }
     }
   },
   "required": [
     "entity-types",
     "applied",
-    "notApplied"
+    "notApplied",
+    "target-participant",
+    "applies-to"
   ],
   "$defs": {
     "interest-state-content": {

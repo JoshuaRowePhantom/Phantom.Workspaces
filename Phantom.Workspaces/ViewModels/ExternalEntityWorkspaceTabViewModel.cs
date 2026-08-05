@@ -1,6 +1,7 @@
 using System;
 using System.Windows.Input;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -16,15 +17,19 @@ public class ExternalEntityWorkspaceTabViewModel : WorkspaceTabViewModel
     public ExternalEntityWorkspaceTabViewModel(
         SubscribedEntityViewModel entity,
         string urlKey,
-        string url)
+        string url,
+        IUrlOpener? urlOpener = null)
     {
         this.UrlKey = urlKey;
         this.Url = url;
         this.CurrentUrl = url;
+        this.urlOpener = urlOpener;
 
         this.OpenInExternalBrowserCommand = new RelayCommand(
             _ => this.OpenInExternalBrowser());
     }
+
+    private readonly IUrlOpener? urlOpener;
 
     public string UrlKey { get; }
     
@@ -60,6 +65,16 @@ public class ExternalEntityWorkspaceTabViewModel : WorkspaceTabViewModel
 
     private void OpenInExternalBrowser()
     {
+        // #1172: route through IUrlOpener when available.
+        if (this.urlOpener is not null)
+        {
+            _ = this.urlOpener.OpenAsync(new OpenUrlRequest(this.Url)
+            {
+                Preference = UrlOpenPreference.External,
+            });
+            return;
+        }
+
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo

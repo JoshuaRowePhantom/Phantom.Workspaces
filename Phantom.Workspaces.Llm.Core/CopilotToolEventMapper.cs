@@ -1,5 +1,5 @@
 using System.Text.Json;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 
 namespace Phantom.Workspaces.Llm;
@@ -150,8 +150,13 @@ public static class CopilotToolEventMapper
                     case ToolExecutionCompleteContentText text when !string.IsNullOrEmpty(text.Text):
                         return text.Text;
 
+                    case ToolExecutionCompleteContentShellExit shellExit:
+                        return new TerminalToolResult(shellExit.ExitCode, shellExit.OutputPreview ?? string.Empty);
+
+#pragma warning disable GHCP001 // Terminal content is deprecated but may still be emitted by older runtimes.
                     case ToolExecutionCompleteContentTerminal terminal:
                         return new TerminalToolResult(terminal.ExitCode, terminal.Text ?? string.Empty);
+#pragma warning restore GHCP001
 
                     case ToolExecutionCompleteContentImage image:
                         return new ImageToolResult(image.MimeType ?? string.Empty);

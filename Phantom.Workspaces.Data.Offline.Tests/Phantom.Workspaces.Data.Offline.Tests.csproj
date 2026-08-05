@@ -8,6 +8,7 @@
   <ItemGroup>
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="LibGit2Sharp" />
+    <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" />
@@ -18,5 +19,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Workspaces.Data.Offline\Phantom.Workspaces.Data.Offline.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Data.Core.Tests\Phantom.Workspaces.Data.Core.Tests.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Testing\Phantom.Workspaces.Testing.csproj" />
   </ItemGroup>
 </Project>

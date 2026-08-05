@@ -314,7 +314,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 },
                 "shortcut": {
                   "type": "string",
-                  "enum": ["Open", "OpenWorkspace", "Json", "Delete", "Review", "VsCode", "VsCodeWeb", "StartAgentSession", "StartShell"],
+                  "enum": ["Open", "OpenWorkspace", "Json", "Delete", "Review", "VsCode", "VsCodeWeb", "StartAgentSession", "StartShell", "CopyEntityId"],
                   "description": "The shortcut to invoke. 'Open' opens the entity as a workspace pane, tab, or agent chat session — use this for all open/navigate operations. 'OpenWorkspace' opens an associated workspace."
                 }
               },
@@ -342,6 +342,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             + "'VsCodeWeb' opens the entity in VS Code Web via tunnel, "
             + "'StartAgentSession' starts an agent session on the entity's profile, "
             + "'StartShell' starts a shell on the entity's profile. "
+            + "'CopyEntityId' copies the fragment \"entityid\":\"<guid>\" to the clipboard. "
             + "Opening anything navigates to it and pushes a navigation history entry so the user can Ctrl+\u2212 back.";
 
         public override JsonElement JsonSchema => InputSchema;
@@ -371,12 +372,12 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             {
                 return Serialize(new
                 {
-                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, OpenWorkspace, Json, Delete, Review, VsCode, VsCodeWeb, StartAgentSession, StartShell.",
+                    error = $"Unknown shortcut '{shortcutName}'. Valid values: Open, OpenWorkspace, Json, Delete, Review, VsCode, VsCodeWeb, StartAgentSession, StartShell, CopyEntityId.",
                 });
             }
 
             var entityId = new EntityId(entityIdValue);
-            var handled = await Dispatcher.UIThread.InvokeAsync(async () =>
+            var invokeResult = await Dispatcher.UIThread.InvokeAsync<(bool Handled, string? Reason)>(async () =>
             {
                 var entities = await this.context.MainWindowViewModel.EntityBroker.GetEntitiesAsync(
                     [new GetEntityRequest
@@ -390,16 +391,24 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
                 var entity = entities.FirstOrDefault();
                 if (entity is null)
                 {
-                    return false;
+                    return (false, (string?)$"entity {entityId} not found");
                 }
 
-                return await this.context.ShortcutManager.HandleShortcutAsync(
+                return await this.context.ShortcutManager.TryHandleShortcutAsync(
                     this.context.MainWindowViewModel,
                     shortcut,
                     entity);
             });
 
-            return Serialize(new { handled });
+            var handled = invokeResult.Handled;
+            var reason = invokeResult.Reason;
+
+            if (!handled)
+            {
+                return Serialize(new { handled = false, reason });
+            }
+
+            return Serialize(new { handled = true });
         }
 
         // When adding a case here, also update:
@@ -417,6 +426,7 @@ public sealed class WorkspaceGuiContextProvider : AIContextProvider
             "VsCodeWeb" => Shortcut.VsCodeWeb,
             "StartAgentSession" => Shortcut.StartAgentSession,
             "StartShell" => Shortcut.StartShell,
+            "CopyEntityId" => Shortcut.CopyEntityId,
             _ => null,
         };
     }

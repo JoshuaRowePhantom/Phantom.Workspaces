@@ -242,4 +242,40 @@ public sealed class GitWorkspaceEntityDataTests
 
         Assert.False(result.ContainsKey("owning-repository"));
     }
+
+    [Fact]
+    public void Build_WithProfileId_IncludesComputerUserProfileIdField()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "profile-scoped-repo");
+        var profileNames = new[] { new EntityName("user-computer-profile", "TEST-MACHINE") };
+        var metadata = new GitMetadata { BranchName = "main" };
+        var profileId = new EntityId(Guid.Parse("33333333-3333-3333-3333-333333333333"));
+
+        var result = GitWorkspaceEntityData.Build(
+            path,
+            profileNames,
+            metadata,
+            owningRepository: null,
+            computerUserProfileId: profileId);
+
+        Assert.True(result.ContainsKey("computer-user-profile-id"));
+        Assert.Equal(profileId.ToString(), result["computer-user-profile-id"]?.GetValue<string>());
+    }
+
+    [Fact]
+    public void Build_WithoutProfileId_OmitsComputerUserProfileIdField()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "unscoped-repo");
+        var profileNames = new[] { new EntityName("user-computer-profile", "TEST-MACHINE") };
+        var metadata = new GitMetadata { BranchName = "main" };
+
+        var result = GitWorkspaceEntityData.Build(
+            path,
+            profileNames,
+            metadata,
+            owningRepository: null,
+            computerUserProfileId: null);
+
+        Assert.False(result.ContainsKey("computer-user-profile-id"));
+    }
 }

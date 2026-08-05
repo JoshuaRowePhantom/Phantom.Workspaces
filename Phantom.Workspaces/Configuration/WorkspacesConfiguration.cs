@@ -174,6 +174,14 @@ public sealed record WorkspacesConfiguration
     public UpdateSettings Update { get; init; } = new();
 
     /// <summary>
+    /// Absolute path to the directory that receives rolling file logs. When null/empty the
+    /// default computed by <see cref="ConfigurationPersistenceService.GetDefaultLogDirectoryPath"/>
+    /// (a <c>logs</c> folder next to the configuration file) is used. This is the ONLY place the
+    /// log directory is configured.
+    /// </summary>
+    public string? LogDirectory { get; init; }
+
+    /// <summary>
     /// Testing only: overrides the computer identity used when composing this instance's
     /// user-computer-profile entity name, so multiple instances can run on one machine with distinct
     /// profiles (and therefore distinct dev tunnels, MCP-server namespaces, and session areas).
@@ -187,6 +195,13 @@ public sealed record WorkspacesConfiguration
     /// in tests that inspect tab or workspace state. Not for production use.
     /// </summary>
     public bool SkipStartupWorkspace { get; init; }
+
+    /// <summary>
+    /// The stable key of the AI-usage metric the user has pinned to appear as the
+    /// top-right indicator label. Null (default) means auto: fall back to the most
+    /// recently updated metric. Composed via <see cref="UsageAccount.ComposeKey"/>.
+    /// </summary>
+    public string? SelectedUsageMetric { get; init; }
 
     /// <summary>
     /// Projects the configured data-access profile into a <see cref="RepositorySource"/>

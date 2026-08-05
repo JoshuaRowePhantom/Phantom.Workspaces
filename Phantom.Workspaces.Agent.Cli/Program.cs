@@ -2,9 +2,15 @@ using Phantom.Workspaces.Llm;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Services.Logging;
 using System.CommandLine;
 
 var definitionParser = new AgentDefinitionCommandLineParser();
+
+// #1093: register global uncaught/unobserved exception logging at CLI startup, backed by a
+// config-less file logger factory (#1095), so faults leave a diagnosable record on disk.
+GlobalExceptionLogging.Register(
+    HostFileLoggerFactory.Create(HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory)));
 
 var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
 {};
@@ -143,6 +149,11 @@ public sealed class AgentCliApp : IDisposable
 
     private ILoggerFactory CreateConsoleLoggerFactory(Action<string> onLogLine)
     {
+        // #1095: this console app is outside the main WorkspacesConfiguration path, so it resolves
+        // its own log directory (executable base dir / PHANTOM_WORKSPACES_LOG_DIRECTORY override) and
+        // adds the shared #1086 rolling file provider alongside the interactive console provider, so
+        // a retained on-disk log exists whenever chat/http logging is requested.
+        var logDirectory = HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory);
         return LoggerFactory.Create(builder =>
         {
             builder.SetMinimumLevel(LogLevel.Trace);
@@ -150,6 +161,7 @@ public sealed class AgentCliApp : IDisposable
             builder.AddFilter("Phantom.Workspaces.Llm", LogLevel.Trace);
             builder.ClearProviders();
             builder.AddProvider(new InteractiveConsoleLoggerProvider(onLogLine));
+            builder.AddProvider(new RollingFileLoggerProvider(logDirectory, HostFileLoggerFactory.DefaultRetention));
         });
     }
 

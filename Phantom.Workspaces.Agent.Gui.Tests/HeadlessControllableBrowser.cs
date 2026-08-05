@@ -12,7 +12,7 @@ namespace Phantom.Workspaces.Agent.Gui.Tests;
 /// so headless tests can construct the agent window. Real browser behaviour is covered by the
 /// dedicated Win32 WebView integration test project.
 /// </summary>
-internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrowser
+internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrowser, IBrowserAcceleratorSource
 {
     private string? htmlShell;
     private bool isBatchActive;
@@ -75,7 +75,14 @@ internal sealed class HeadlessControllableBrowser : Decorator, IControllableBrow
 
     public event EventHandler<string>? JavaScriptMessageReceived;
 
+    /// <inheritdoc/>
+    public event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
+
     public void FireMessage(string message) => JavaScriptMessageReceived?.Invoke(this, message);
+
+    /// <summary>Fires <see cref="AcceleratorKeyPressed"/> with the given args, simulating a WebView accelerator event.</summary>
+    public void FireAcceleratorKeyPressed(AcceleratorKeyEventArgs args)
+        => this.AcceleratorKeyPressed?.Invoke(this, args);
 
     /// <summary>Fires <see cref="Ready"/> directly, simulating a spontaneous WebView reload in tests.</summary>
     public void FireReady() => this.Ready?.Invoke(this, EventArgs.Empty);

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Dock.Avalonia.Controls;
 using Dock.Model;
 using Dock.Model.Controls;
@@ -145,6 +146,8 @@ public class WorkspaceDockFactory : Factory
         base.OnDockableClosed(dockable);
         if (dockable is WorkspaceDocument { TabViewModel: { } tabVm })
             mainWindowViewModel.OnDockableTabClosed(tabVm);
+        else if (dockable is WorkspacePaneDocument paneDoc)
+            mainWindowViewModel.OnWorkspacePaneDockableClosed(paneDoc);
     }
 
     public override void InitLayout(IDockable layout)
@@ -157,7 +160,18 @@ public class WorkspaceDockFactory : Factory
 
         HostWindowLocator ??= new Dictionary<string, Func<IHostWindow?>>
         {
-            [nameof(IDockWindow)] = () => new PhantomHostWindow(),
+            [nameof(IDockWindow)] = () =>
+            {
+                // #1196: The main window's TopLevelDockControl is the first DockControl
+                // that self-registers with this factory (MainWindow.axaml.cs populates
+                // its DataTemplates with the shared instances). See
+                // IFactory.DockControls (Dock.Model/Core/IFactory.cs) and DockControl
+                // self-registration (Dock.Avalonia/Controls/DockControl.axaml.cs). Share
+                // those same IDataTemplate instances with the floating host so no
+                // duplicate `new DockDataTemplates()` collection is created per window.
+                var sourceDockControl = this.DockControls.OfType<DockControl>().FirstOrDefault();
+                return new PhantomHostWindow(sourceDockControl);
+            },
         };
 
         base.InitLayout(layout);

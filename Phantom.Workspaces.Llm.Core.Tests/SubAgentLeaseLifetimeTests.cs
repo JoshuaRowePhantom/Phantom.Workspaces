@@ -95,6 +95,25 @@ public sealed class SubAgentLeaseLifetimeTests
         Assert.NotNull(lease2.AgentChat);
     }
 
+    [Fact]
+    public async Task AgentSessionToolset_InvokeSubAgentTool_DoesNotRegisterChildInRunningSessions()
+    {
+        // Issue #1205: AgentSessionToolset acquires sub-agent leases via SubAgent.AcquireLeaseAsync
+        // (both the tool-registration path at line 106 and the invoke path at line 928). Those
+        // acquisitions must NOT register the child in RunningSessions — the SubAgent code path
+        // opts out via registerAsRunningAgent:false so children never leak into the flyout.
+        var sessionId = new AgentSessionId("toolset-invoke-1205");
+        await using var chat = CreateMinimalChat();
+        var factory = new FakeRunningAgentChatFactory();
+        factory.RegisterChat(sessionId, chat);
+
+        var subAgent = new SubAgent(sessionId, chat, factory);
+        await using var lease = await subAgent.AcquireLeaseAsync();
+
+        Assert.False(factory.LastRegisterAsRunningAgent);
+        Assert.Empty(factory.RunningSessions);
+    }
+
     private sealed class FakeRunningAgentChatFactory : IRunningAgentChatFactory
     {
         private readonly Dictionary<AgentSessionId, AgentChat> _registeredChats = new();
@@ -106,8 +125,13 @@ public sealed class SubAgentLeaseLifetimeTests
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = [];
 
-        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
+            LastRegisterAsRunningAgent = registerAsRunningAgent;
+            if (registerAsRunningAgent)
+            {
+                RunningSessions.Add(new RunningAgentChat(sessionId, this));
+            }
             if (_registeredChats.TryGetValue(sessionId, out var chat))
             {
                 var lease = new RunningAgentChatLease(sessionId, chat, () => ValueTask.CompletedTask);
@@ -116,11 +140,15 @@ public sealed class SubAgentLeaseLifetimeTests
             throw new InvalidOperationException($"No chat registered for session {sessionId}");
         }
 
+        public bool LastRegisterAsRunningAgent { get; private set; } = true;
+
         public Task<RunningAgentChatLease> CreateAsync(
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services = null,
-            CancellationToken ct = default)
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            string? nameOverride = null, CancellationToken ct = default)
             => throw new NotImplementedException();
 
         public Task<RunningAgentChatLease> GetOrCreateAsync(
@@ -129,7 +157,7 @@ public sealed class SubAgentLeaseLifetimeTests
             AgentServices? services = null,
             string? displayNameOverride = null,
             string? descriptionOverride = null,
-            CancellationToken ct = default)
-            => GetAsync(sessionId, ct);
+            bool registerAsRunningAgent = true, CancellationToken ct = default)
+            => GetAsync(sessionId, ct: ct);
     }
 }

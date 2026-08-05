@@ -1,14 +1,13 @@
+using Avalonia.Headless.XUnit;
 using System.Text.Json;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
-
-using Phantom.Workspaces.Testing.Gui;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityPresentationTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void IsEntityType_ReturnsTrue_WhenMatchingTypeIsPresent()
     {
         var snapshot = CreateSnapshot(
@@ -25,7 +24,7 @@ public sealed class EntityPresentationTests
         Assert.False(EntityPresentation.IsEntityType(snapshot, "agent-session"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void SubscribedEntityViewModel_IsEntityType_UsesTypeMembershipCheck()
     {
         var snapshot = CreateSnapshot(
@@ -44,46 +43,80 @@ public sealed class EntityPresentationTests
         Assert.False(entity.IsEntityType("agent-session"));
     }
 
-    [PhantomAvaloniaFact]
-    public void GetDisplayItems_ReturnsInlineMarkdownBody_ForNoteContent()
+    [AvaloniaFact]
+    public void EntityPresentation_MultipleNonAbstractTypes_ReturnsAllOrdered()
     {
+        // Issue #1164: composition depends on iterating every non-abstract type in declaration
+        // order, so a card can contribute per-type presentations for tool THEN note.
         var snapshot = CreateSnapshot(
             """
             {
-              "entity-id": "56565656-5656-5656-5656-565656565656",
-              "entity-types": ["entity", "note"],
-              "names": [["documentation", "agent-manifests"]],
-              "title": { "default": "Agent Manifests" },
-              "content": {
-                "default": {
-                  "mime-type": "text/markdown",
-                  "content": { "text": "# Agent Manifests\n\nThis is the body." }
-                }
-              }
+              "entity-id": "e4f5a6b7-c8d9-4e0f-b1c2-d3e4f5a6b7c8",
+              "entity-types": ["entity", "tool", "note"],
+              "names": [["tools", "run-vs-code-tunnel"]],
+              "display-name": { "default": "Run VS Code Tunnel" }
             }
             """);
 
-        var items = EntityPresentation.GetDisplayItems(snapshot);
-
-        var item = Assert.Single(items);
-        Assert.Contains("# Agent Manifests", item.Text, StringComparison.Ordinal);
-        Assert.Contains("This is the body.", item.Text, StringComparison.Ordinal);
+        Assert.Equal(new[] { "tool", "note" }, EntityPresentation.GetNonAbstractEntityTypeNames(snapshot));
     }
 
-    [PhantomAvaloniaFact]
-    public void GetDisplayItems_ReturnsEmpty_WhenNoteHasNoContent()
+    // -------------------- #1200: names[0]-empty display name fallback --------------------
+
+    [AvaloniaFact]
+    public void ReadPrimaryName_NamesFirstArrayHasNoStringParts_ReturnsNull()
     {
-        var snapshot = CreateSnapshot(
+        // With no display-name and no title, the fallback goes through ReadPrimaryName. If
+        // names[0] is an array whose entries yield no non-whitespace strings, ReadPrimaryName
+        // must return null (not "") so GetDisplayName's null-coalescing chain reaches EntityId.
+        var emptyArray = CreateSnapshot(
             """
             {
-              "entity-id": "67676767-6767-6767-6767-676767676767",
-              "entity-types": ["entity", "note"],
-              "names": [["documentation", "empty"]],
-              "title": { "default": "Empty" }
+              "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+              "entity-types": ["entity"],
+              "names": [[]]
+            }
+            """);
+        var nullEntry = CreateSnapshot(
+            """
+            {
+              "entity-id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+              "entity-types": ["entity"],
+              "names": [[null]]
+            }
+            """);
+        var whitespaceEntry = CreateSnapshot(
+            """
+            {
+              "entity-id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+              "entity-types": ["entity"],
+              "names": [[""]]
             }
             """);
 
-        Assert.Empty(EntityPresentation.GetDisplayItems(snapshot));
+        Assert.Equal(emptyArray.EntityId.ToString(), EntityPresentation.GetDisplayName(emptyArray));
+        Assert.Equal(nullEntry.EntityId.ToString(), EntityPresentation.GetDisplayName(nullEntry));
+        Assert.Equal(whitespaceEntry.EntityId.ToString(), EntityPresentation.GetDisplayName(whitespaceEntry));
+    }
+
+    [AvaloniaFact]
+    public void GetDisplayName_NamesArrayEmpty_FallsBackToEntityId()
+    {
+        // End-to-end: an entity with no display-name, no title, and empty names[0] must return
+        // its EntityId (not "") from GetDisplayName.
+        var snapshot = CreateSnapshot(
+            """
+            {
+              "entity-id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+              "entity-types": ["entity"],
+              "names": [[]]
+            }
+            """);
+
+        var displayName = EntityPresentation.GetDisplayName(snapshot);
+
+        Assert.False(string.IsNullOrEmpty(displayName));
+        Assert.Equal(snapshot.EntityId.ToString(), displayName);
     }
 
     private static EntitySnapshot CreateSnapshot(

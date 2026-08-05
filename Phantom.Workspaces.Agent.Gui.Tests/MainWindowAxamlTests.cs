@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
@@ -42,10 +43,6 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "MinWidth=\"0\"",
-            editorControlContent,
-            StringComparison.Ordinal);
-        Assert.Contains(
             "MaxWidth=\"480\"",
             editorControlContent,
             StringComparison.Ordinal);
@@ -86,7 +83,7 @@ public sealed class MainWindowAxamlTests
             editorControlContent,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ItemsSource=\"{Binding DetailContentSlots}\"",
+            "Layout=\"{Binding DetailLayout}\"",
             editorControlContent,
             StringComparison.Ordinal);
 
@@ -144,7 +141,9 @@ public sealed class MainWindowAxamlTests
             "ItemTemplate=\"{StaticResource AgentNavigationTreeDetailItemTemplate}\"",
             toolsControlContent,
             StringComparison.Ordinal);
-        Assert.Contains(
+        // Issue #1064: the tools-detail tree no longer sets inline ScrollViewer.* setters; it
+        // inherits the two-regime entity-card-tree wrapper (H=Auto + items-region cap).
+        Assert.DoesNotContain(
             "ScrollViewer.AllowAutoHide=\"False\"",
             toolsControlContent,
             StringComparison.Ordinal);
@@ -239,7 +238,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_NavigationPane_StartsCollapsed()
     {
         // Issue #24: the editor navigation pane should start collapsed when an agent chat view
@@ -253,7 +252,6 @@ public sealed class MainWindowAxamlTests
 
         Assert.False(navigationTree.IsVisible);
         Assert.False(splitterHost.IsVisible);
-        Assert.Equal("▶", collapseToggle.Content);
         Assert.True(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
@@ -302,16 +300,21 @@ public sealed class MainWindowAxamlTests
             typeBarStyle,
             StringComparison.Ordinal);
 
-        // Type bar must live inside EntityCardControl's header grid, not in a sibling
+        // Type bar must live inside EntityCardControl's header, not in a sibling
         // overlay that stretches down the whole card.
         var dataTemplatesContent = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
         Assert.DoesNotContain("entity-card-tree-type-bar", dataTemplatesContent, StringComparison.Ordinal);
 
+        // #1213 replaced the fixed three-column header Grid with a wrapping
+        // DockPanel + WrapPanel so the header reflows to a second line when the
+        // card is narrow. The type bar is docked to the left of that header
+        // DockPanel (so it stays constrained to the header, not the whole card),
+        // and the actions live in the wrapping actions row.
         var entityCardContent = ReadMainAppFile(Path.Combine("Controls", "EntityCardControl.axaml"));
-        Assert.Contains("ColumnDefinitions=\"Auto,*,Auto\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Classes=\"entity-card-tree-type-bar\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("Grid.Column=\"1\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("Grid.Column=\"2\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("DockPanel.Dock=\"Left\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("Classes=\"workspace-entity-header-wrap\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("Classes=\"workspace-entity-actions-row\"", entityCardContent, StringComparison.Ordinal);
         Assert.DoesNotContain("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
 
@@ -323,6 +326,139 @@ public sealed class MainWindowAxamlTests
             "<Setter Property=\"MaxWidth\" Value=\"760\" />",
             sharedStylesContent,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MainWindowView_EntityPaneTree_HasNoSurroundingScrollViewer()
+    {
+        // Issue #1064: the entity-pane TreeView carries the two-regime entity-card-tree wrapper,
+        // so the legacy surrounding ScrollViewer (H=Disabled) is removed and the tree's own inner
+        // scroller is the single scroller.
+        var mainWindowContent = ReadMainAppFile("MainWindow.axaml");
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-entity\"",
+            mainWindowContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<ScrollViewer Grid.Row=\"1\"",
+            mainWindowContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "HorizontalScrollBarVisibility=\"Disabled\"",
+            mainWindowContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentChatToolsDetail_Tree_InheritsScrollWrapperInsteadOfDisablingHScroll()
+    {
+        // Issue #1064: the tools-detail tree no longer sets inline ScrollViewer.* setters; it
+        // inherits the two-regime entity-card-tree wrapper (gaining the below-minimum scrollbar).
+        var toolsDetailContent = ReadAxaml("AgentChatToolsDetailControl.axaml");
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-sticky\"",
+            toolsDetailContent,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "ScrollViewer.HorizontalScrollBarVisibility=\"Disabled\"",
+            toolsDetailContent,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityBrowserView_BrowserTree_HasNoSurroundingScrollViewer_AndIsSticky()
+    {
+        // Issue #1064: the entity-browser tree carries the entity-card-tree class and inherits the
+        // two-regime wrapper, so the surrounding ScrollViewer is removed and the tree's own inner
+        // scroller is the single scroller. StickyScroll is preserved on that inner scroller via the
+        // entity-card-tree-sticky class (SharedStyles selector
+        // TreeView.entity-card-tree.entity-card-tree-sticky ScrollViewer sets StickyScroll.IsEnabled).
+        var browserContent = ReadMainAppFile(Path.Combine("Templates", "EntityBrowserWorkspaceTabView.axaml"));
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-entity entity-card-tree-sticky\"",
+            browserContent,
+            StringComparison.Ordinal);
+        // The surrounding ScrollViewer (with its inline StickyScroll/H=Disabled) is gone.
+        Assert.DoesNotContain("BrowserScrollViewer", browserContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("HorizontalScrollBarVisibility=\"Disabled\"", browserContent, StringComparison.Ordinal);
+        Assert.DoesNotContain("controls:StickyScroll.IsEnabled", browserContent, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_ContentControl_UsesEntityCardShellClass()
+    {
+        // Issue #1066: the single-entity host reuses the entity-card-shell chrome.
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains(
+            "Classes=\"entity-card-shell entity-card-single-host\"",
+            template,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_IsHorizontallyCentered()
+    {
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("HorizontalAlignment=\"Center\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_HasTopMargin()
+    {
+        // Issue #1066: a non-zero top margin separates the card from the tab strip.
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("Margin=\"0,12,0,0\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_MaxWidthCapsToAboutOneThird()
+    {
+        // Issue #1066: MaxWidth binds to ~1/3 of the pane width (via the shared converter), not
+        // unbounded.
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("<ContentControl.MaxWidth>", template, StringComparison.Ordinal);
+        Assert.Contains("SingleEntityMaxWidthConverter", template, StringComparison.Ordinal);
+        Assert.Contains("$parent[ScrollViewer].Bounds.Width", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_Host_HasMinWidthOneSixty()
+    {
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("MinWidth=\"160\"", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_ScrollViewer_HorizontalIsAutoAndCapsToViewport()
+    {
+        // Issue #1066: the host ScrollViewer uses H=Auto and the host MaxWidth binds to the
+        // ScrollViewer viewport width (two-regime cap shared with #1064).
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("HorizontalScrollBarVisibility=\"Auto\"", template, StringComparison.Ordinal);
+        Assert.Contains("$parent[ScrollViewer].Viewport.Width", template, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SingleEntityView_ScrollViewer_VerticalIsAutoAndDoesNotAutoHide()
+    {
+        var template = ExtractSingleEntityTemplate();
+        Assert.Contains("VerticalScrollBarVisibility=\"Auto\"", template, StringComparison.Ordinal);
+        Assert.Contains("AllowAutoHide=\"False\"", template, StringComparison.Ordinal);
+    }
+
+    private static string ExtractSingleEntityTemplate()
+    {
+        var dataTemplates = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
+        var start = dataTemplates.IndexOf(
+            "<DataTemplate DataType=\"vm:EntityWorkspaceTabViewModel\">",
+            StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected the EntityWorkspaceTabViewModel DataTemplate to exist.");
+        var end = dataTemplates.IndexOf("</DataTemplate>", start, StringComparison.Ordinal);
+        Assert.True(end > start, "Expected the EntityWorkspaceTabViewModel DataTemplate to be closed.");
+        return dataTemplates[start..(end + "</DataTemplate>".Length)];
     }
 
     [Fact]
@@ -365,7 +501,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void AgentChatEditorControl_CanCollapseAndUncollapseNavigationPane()
     {
         var control = new AgentChatEditorControl();
@@ -384,7 +520,7 @@ public sealed class MainWindowAxamlTests
         Assert.False(navigationTree.IsVisible);
         Assert.False(splitterHost.IsVisible);
         Assert.False(treeSplitter.IsVisible);
-        Assert.Equal("▶", collapseToggle.Content);
+        Assert.True(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(0), editorGrid.ColumnDefinitions[1].Width);
 
@@ -393,7 +529,7 @@ public sealed class MainWindowAxamlTests
         Assert.True(navigationTree.IsVisible);
         Assert.True(splitterHost.IsVisible);
         Assert.True(treeSplitter.IsVisible);
-        Assert.Equal("◀", collapseToggle.Content);
+        Assert.False(collapseToggle.IsChecked);
         Assert.Equal(new GridLength(318), editorGrid.ColumnDefinitions[0].Width);
         Assert.Equal(new GridLength(24), editorGrid.ColumnDefinitions[1].Width);
     }
@@ -479,7 +615,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EditorControl_InterruptGesture_MatchesCtrlBreak_NotPlainCancel()
     {
         // Issue #21: Windows delivers the Pause/Break key as Key.Cancel (VK_CANCEL) whenever Ctrl is
@@ -499,7 +635,7 @@ public sealed class MainWindowAxamlTests
         Assert.False(new KeyGesture(Key.Cancel).Matches(ctrlBreak));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void EditorControl_UnholdGesture_MatchesCtrlShiftBreak()
     {
         // Issue #21: Ctrl+Shift+Break likewise arrives as Key.Cancel + Control + Shift, so the unhold
@@ -723,7 +859,7 @@ public sealed class MainWindowAxamlTests
             StringComparison.Ordinal);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void Application_RequestedThemeVariantChanged_ActualThemeVariantChangedEventFires()
     {
         var app = Application.Current ?? throw new InvalidOperationException("Application.Current is null");
@@ -737,7 +873,7 @@ public sealed class MainWindowAxamlTests
         Assert.Equal(1, eventCount);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void App_DefaultRequestedThemeVariant_FollowsOperatingSystemTheme()
     {
         var appContent = ReadAgentGuiFile("App.axaml");

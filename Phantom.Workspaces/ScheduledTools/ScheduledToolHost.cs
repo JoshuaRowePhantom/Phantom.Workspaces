@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Tools;
@@ -25,6 +28,7 @@ public sealed class ScheduledToolHost
     private readonly ToolExecutionResultWriter resultWriter;
     private readonly TimeProvider timeProvider;
     private readonly IReadOnlyList<ITrustedExecutor> executors;
+    private readonly ILogger<ScheduledToolHost> logger;
     private readonly HashSet<EntityId> runningRelationships = new();
     private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
     private readonly Dictionary<EntityId, CancellationTokenSource> runningCancellations = new();
@@ -35,13 +39,15 @@ public sealed class ScheduledToolHost
         ScheduledToolRegistry registry,
         ToolExecutionResultWriter? resultWriter = null,
         TimeProvider? timeProvider = null,
-        IReadOnlyList<ITrustedExecutor>? executors = null)
+        IReadOnlyList<ITrustedExecutor>? executors = null,
+        ILogger<ScheduledToolHost>? logger = null)
     {
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.resultWriter = resultWriter ?? new ToolExecutionResultWriter(dataAccessLayer, this.timeProvider);
         this.executors = executors ?? [];
+        this.logger = logger ?? NullLogger<ScheduledToolHost>.Instance;
     }
 
     /// <summary>Raised whenever the set of currently-running scheduled tools changes.</summary>
@@ -265,6 +271,9 @@ public sealed class ScheduledToolHost
         var executionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var handle = await this.resultWriter.StartAsync(hostNameComponents, toolType, cancellationToken).ConfigureAwait(false);
         this.AddRunningExecution(relationship.RelationshipId, toolType, hostNameComponents, executionCancellation);
+        var hostLabel = string.Join(" / ", hostNameComponents);
+        this.logger.LogInformation("Scheduled tool {Tool} starting on host {Host}.", toolType, hostLabel);
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             // Route via a registered executor when one can handle the target client instance (e.g.
@@ -283,10 +292,13 @@ public sealed class ScheduledToolHost
                         },
                         executionCancellation.Token).ConfigureAwait(false);
 
-                    // Use CancellationToken.None so that recording the outcome always succeeds even when
-                    // the outer token is cancelled (e.g. during shutdown). A result entity left in the
-                    // "running" state would otherwise appear as a phantom in-progress entry on next startup.
-                    await this.resultWriter.CompleteAsync(handle, success: true, content: null, CancellationToken.None).ConfigureAwait(false);
+                    stopwatch.Stop();
+                    this.logger.LogInformation(
+                        "Scheduled tool {Tool} completed in {Elapsed}. {Summary}",
+                        toolType, stopwatch.Elapsed, "routed via remote executor");
+
+                    await this.TryCompleteAsync(handle, success: true, content: null, toolType).ConfigureAwait(false);
+                    await this.TryUpdateLastCompletedAsync(relationship.RelationshipId, "succeeded", cancellationToken).ConfigureAwait(false);
                     return true;
                 }
             }
@@ -294,27 +306,55 @@ public sealed class ScheduledToolHost
             // No executor matched — run the tool locally.
             if (!this.registry.TryGetTool(toolType, out var tool))
             {
-                executionCancellation.Dispose();
+                stopwatch.Stop();
+                var registryMissMessage = $"tool-type '{toolType}' is not registered on this host";
+                this.logger.LogError(
+                    "Scheduled tool {Tool} could not run: {Reason}",
+                    toolType, registryMissMessage);
+                await this.TryCompleteAsync(handle, success: false, content: registryMissMessage, toolType).ConfigureAwait(false);
+                await this.TryUpdateLastCompletedAsync(relationship.RelationshipId, "failed", cancellationToken).ConfigureAwait(false);
                 return false;
             }
 
             var executionContext = await this.CreateExecutionContextAsync(relationship, hostEntityId, executionCancellation.Token).ConfigureAwait(false);
             if (executionContext is null)
             {
-                executionCancellation.Dispose();
+                stopwatch.Stop();
+                var contextMissMessage = $"tool {toolType}: could not build execution context (missing profile, tool, schedule, or relationship entity)";
+                this.logger.LogError(
+                    "Scheduled tool {Tool} could not run: {Reason}",
+                    toolType, contextMissMessage);
+                await this.TryCompleteAsync(handle, success: false, content: contextMissMessage, toolType).ConfigureAwait(false);
+                await this.TryUpdateLastCompletedAsync(relationship.RelationshipId, "failed", cancellationToken).ConfigureAwait(false);
                 return false;
             }
 
             var result = await tool!.ExecuteAsync(executionContext).ConfigureAwait(false);
-            // Use CancellationToken.None so that recording the outcome always succeeds even when
-            // the outer token is cancelled (e.g. during shutdown). A result entity left in the
-            // "running" state would otherwise appear as a phantom in-progress entry on next startup.
-            await this.resultWriter.CompleteAsync(handle, success: result.IsSuccess, content: result.ResultContent ?? result.ErrorMessage, CancellationToken.None).ConfigureAwait(false);
+            stopwatch.Stop();
+            if (result.IsSuccess)
+            {
+                this.logger.LogInformation(
+                    "Scheduled tool {Tool} completed in {Elapsed}. {Summary}",
+                    toolType, stopwatch.Elapsed, result.ResultContent);
+            }
+            else
+            {
+                this.logger.LogError(
+                    "Scheduled tool {Tool} failed in {Elapsed}: {Error}",
+                    toolType, stopwatch.Elapsed, result.ErrorMessage);
+            }
+
+            await this.TryCompleteAsync(handle, success: result.IsSuccess, content: result.ResultContent ?? result.ErrorMessage, toolType).ConfigureAwait(false);
+            await this.TryUpdateLastCompletedAsync(relationship.RelationshipId, result.IsSuccess ? "succeeded" : "failed", cancellationToken).ConfigureAwait(false);
             return true;
         }
         catch (Exception exception)
         {
-            await this.resultWriter.CompleteAsync(handle, success: false, content: exception.Message, CancellationToken.None).ConfigureAwait(false);
+            stopwatch.Stop();
+            this.logger.LogError(exception,
+                "Scheduled tool {Tool} threw after {Elapsed}.", toolType, stopwatch.Elapsed);
+            await this.TryCompleteAsync(handle, success: false, content: exception.Message, toolType).ConfigureAwait(false);
+            await this.TryUpdateLastCompletedAsync(relationship.RelationshipId, "failed", cancellationToken).ConfigureAwait(false);
             throw;
         }
         finally
@@ -322,6 +362,281 @@ public sealed class ScheduledToolHost
             this.RemoveRunningExecution(relationship.RelationshipId);
         }
     }
+
+    // Exception-safe completion write. A DAL failure here is logged but does not re-enter the outer
+    // catch (which would double-write CompleteAsync and mask the original run outcome). See #1155.
+    private async Task TryCompleteAsync(
+        ToolExecutionResultHandle handle,
+        bool success,
+        string? content,
+        string toolType)
+    {
+        try
+        {
+            // Use CancellationToken.None so that recording the outcome always succeeds even when
+            // the outer token is cancelled (e.g. during shutdown). A result entity left in the
+            // "running" state would otherwise appear as a phantom in-progress entry on next startup.
+            await this.resultWriter.CompleteAsync(handle, success, content, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception completionException)
+        {
+            this.logger.LogError(
+                completionException,
+                "Failed to record completion for {Tool} run {Handle}.",
+                toolType, handle.EntityId);
+        }
+    }
+
+    // Mirror the completion status onto the tool-relationship entity so a stuck run is detectable
+    // even if the per-run result entity is orphaned. See #1155.
+    private async Task TryUpdateLastCompletedAsync(
+        EntityId relationshipId,
+        string status,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await this.UpdateLastCompletedAsync(relationshipId, this.timeProvider.GetUtcNow(), status, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            this.logger.LogError(
+                exception,
+                "Failed to record last-completed on tool-relationship {Relationship}.",
+                relationshipId);
+        }
+    }
+
+    private async Task UpdateLastCompletedAsync(
+        EntityId relationshipId,
+        DateTimeOffset now,
+        string status,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = await this.ReadEntitySnapshotAsync(relationshipId, cancellationToken).ConfigureAwait(false);
+        if (snapshot?.Data is not { } data)
+        {
+            return;
+        }
+
+        var node = JsonNode.Parse(data.GetRawText())!.AsObject();
+        node["last-completed"] = now.ToString("o", CultureInfo.InvariantCulture);
+        node["last-status"] = status;
+        var updated = JsonSerializer.SerializeToElement(node);
+
+        await this.dataAccessLayer.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "scheduled-tools: mark last-completed" } },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = relationshipId,
+                        ConcurrencyTag = snapshot.ConcurrencyTag,
+                        Data = updated,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                    },
+                ],
+            },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reconciles orphaned per-run <c>tool-execution-result</c> entities left in <c>status: "running"</c>
+    /// with no <c>end-time</c> — the residue of a prior process being terminated (or a completion-write
+    /// having failed) between <see cref="ToolExecutionResultWriter.StartAsync"/> and
+    /// <see cref="ToolExecutionResultWriter.CompleteAsync"/>. Each such entity is marked
+    /// <c>status: "failed"</c> with an explanatory reconciliation message. Filters to results under the
+    /// given host name components. See #1155.
+    /// </summary>
+    public async Task<int> ReconcileOrphanRunningResultsAsync(
+        IReadOnlyList<string> hostNameComponents,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(hostNameComponents);
+
+        var queryResult = await this.dataAccessLayer.QueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("orphan-running-results"),
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                        },
+                    },
+                ],
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        var reconciled = 0;
+        foreach (var snapshot in queryResult.Batches.SelectMany(batch => batch.Entities))
+        {
+            if (snapshot.Data is not { } data)
+            {
+                continue;
+            }
+
+            if (!IsTopLevelRunningResultForHost(data, hostNameComponents))
+            {
+                continue;
+            }
+
+            if (await this.TryReconcileOrphanAsync(snapshot, data, cancellationToken).ConfigureAwait(false))
+            {
+                reconciled++;
+            }
+        }
+
+        if (reconciled > 0)
+        {
+            this.logger.LogInformation(
+                "Reconciled {Count} orphan running tool-execution-result entities as failed.", reconciled);
+        }
+
+        return reconciled;
+    }
+
+    private async Task<bool> TryReconcileOrphanAsync(
+        EntitySnapshot snapshot,
+        JsonElement data,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var node = JsonNode.Parse(data.GetRawText())!.AsObject();
+            node["status"] = "failed";
+            node["end-time"] = this.timeProvider.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
+
+            const string reconciliationMessage = "run did not complete (process terminated or completion write failed); reconciled on startup";
+
+            var contentObject = new JsonObject
+            {
+                ["default"] = new JsonObject
+                {
+                    ["mime-type"] = "text/plain",
+                    ["content"] = new JsonObject
+                    {
+                        ["text"] = reconciliationMessage,
+                    },
+                },
+            };
+            node["content"] = contentObject;
+
+            // The tool-execution-result becomes a note when it has content — mirror ToolExecutionResultWriter.
+            if (node["entity-types"] is JsonArray entityTypes
+                && !entityTypes.Any(t => (string?)t == "note"))
+            {
+                entityTypes.Add("note");
+            }
+
+            var updated = JsonSerializer.SerializeToElement(node);
+
+            var updateResult = await this.dataAccessLayer.UpdateAsync(
+                new UpdateRequest
+                {
+                    UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "scheduled-tools: reconcile orphan running result" } },
+                    Changes =
+                    [
+                        new EntityChange
+                        {
+                            EntityId = snapshot.EntityId,
+                            ConcurrencyTag = snapshot.ConcurrencyTag,
+                            Data = updated,
+                            EntityChangeMode = EntityChangeMode.Replace,
+                        },
+                    ],
+                },
+                cancellationToken).ConfigureAwait(false);
+
+            return !updateResult.EntityResults.Any(r => r.UpdateState == UpdateState.Failed);
+        }
+        catch (Exception exception)
+        {
+            this.logger.LogError(
+                exception,
+                "Failed to reconcile orphan running tool-execution-result {Entity}.",
+                snapshot.EntityId);
+            return false;
+        }
+    }
+
+    private static bool IsTopLevelRunningResultForHost(
+        JsonElement data,
+        IReadOnlyList<string> hostNameComponents)
+    {
+        // Only reconcile results whose status is "running" and which have no end-time recorded.
+        if (!data.TryGetProperty("status", out var statusEl)
+            || statusEl.ValueKind != JsonValueKind.String
+            || !string.Equals(statusEl.GetString(), "running", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (data.TryGetProperty("end-time", out var endEl) && endEl.ValueKind == JsonValueKind.String)
+        {
+            return false;
+        }
+
+        if (!data.TryGetProperty("names", out var namesEl) || namesEl.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var nameEl in namesEl.EnumerateArray())
+        {
+            if (nameEl.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            var components = nameEl.EnumerateArray()
+                .Where(c => c.ValueKind == JsonValueKind.String)
+                .Select(c => c.GetString()!)
+                .ToArray();
+
+            // Top-level runs live at [host..., "tool-executions", tool-name, start-timestamp].
+            if (components.Length < hostNameComponents.Count + 3)
+            {
+                continue;
+            }
+
+            var executionsIndex = Array.IndexOf(components, ToolExecutionResultWriter.ToolExecutionsSegment);
+            if (executionsIndex != hostNameComponents.Count)
+            {
+                continue;
+            }
+
+            // Match the host prefix exactly (case-sensitive; entity name components are stable strings).
+            var matches = true;
+            for (var i = 0; i < hostNameComponents.Count; i++)
+            {
+                if (!string.Equals(components[i], hostNameComponents[i], StringComparison.Ordinal))
+                {
+                    matches = false;
+                    break;
+                }
+            }
+
+            if (!matches)
+            {
+                continue;
+            }
+
+            // Only top-level runs (not child sub-tasks) have exactly [toolName, startTimestamp] after the segment.
+            if (components.Length - (executionsIndex + 1) == 2)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 
     private void AddRunningExecution(
         EntityId relationshipId,

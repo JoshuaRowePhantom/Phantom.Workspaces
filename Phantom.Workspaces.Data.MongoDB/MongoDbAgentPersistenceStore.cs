@@ -14,10 +14,12 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
     private readonly IMongoCollection<MongoDbPersistedDefinitionDocument> definitionsCollection;
     private readonly IMongoCollection<MongoDbPersistedMessageDocument> messagesCollection;
     private readonly IMongoCollection<MongoDbSubAgentManifestDocument> subAgentManifestCollection;
+    private readonly TimeProvider timeProvider;
 
     public MongoDbAgentPersistenceStore(
         IMongoDatabase database,
-        string collectionName)
+        string collectionName,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(database);
         if (string.IsNullOrWhiteSpace(collectionName))
@@ -29,6 +31,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
         this.definitionsCollection = database.GetCollection<MongoDbPersistedDefinitionDocument>($"{collectionName}-definitions");
         this.messagesCollection = database.GetCollection<MongoDbPersistedMessageDocument>($"{collectionName}-messages");
         this.subAgentManifestCollection = database.GetCollection<MongoDbSubAgentManifestDocument>($"{collectionName}-sub-agent-manifests");
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
@@ -54,7 +57,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentSessionJson = request.Agent.AgentSessionJson,
                 CopilotSdkSessionId = copilotSdkSessionId,
-                UpdatedUtc = DateTime.UtcNow,
+                UpdatedUtc = this.timeProvider.GetUtcNow().UtcDateTime,
             };
 
             await this.sessionsCollection.ReplaceOneAsync(
@@ -71,7 +74,7 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             {
                 AgentSessionId = request.Agent.AgentSessionId,
                 AgentDefinitionJson = request.Agent.AgentDefinitionJson,
-                UpdatedUtc = DateTime.UtcNow,
+                UpdatedUtc = this.timeProvider.GetUtcNow().UtcDateTime,
             };
 
             await this.definitionsCollection.ReplaceOneAsync(
@@ -124,12 +127,38 @@ public sealed class MongoDbAgentPersistenceStore : IAgentPersistenceStore
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        var agentDefinitionJson = definitionDocument?.AgentDefinitionJson;
+        if (agentDefinitionJson is null)
+        {
+            // Fix #1187: legacy hosted Copilot sub-agents were persisted before the router
+            // wrote a full per-sub-agent AgentDefinition (or wrote only the two-field
+            // synthetic {"kind":"prompt","model":{"provider":"github-copilot-subagent"}})
+            // which round-tripped as null through PromptAgent. When we can prove this
+            // session is a sub-agent (there is a manifest link pointing at it), substitute
+            // the canonical full hosted-Copilot sub-agent definition so restore never
+            // returns a null AgentDefinitionJson for hosted sub-agents.
+            var subAgentManifestExists = await this.subAgentManifestCollection
+                .Find(Builders<MongoDbSubAgentManifestDocument>.Filter.Eq(
+                    static x => x.ChildSessionId,
+                    request.AgentSessionId))
+                .AnyAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (subAgentManifestExists)
+            {
+                agentDefinitionJson = CopilotSubAgentDefinitionDefaults.BuildBsonJson(
+                    request.AgentSessionId);
+            }
+        }
+
         return new PersistedAgent
         {
             AgentSessionId = sessionDocument.AgentSessionId,
             AgentSessionJson = sessionDocument.AgentSessionJson,
-            AgentDefinitionJson = definitionDocument?.AgentDefinitionJson,
+            AgentDefinitionJson = agentDefinitionJson,
             CopilotSdkSessionId = sessionDocument.CopilotSdkSessionId,
+            LastUpdatedUtc = sessionDocument.UpdatedUtc == default
+                ? null
+                : sessionDocument.UpdatedUtc,
         };
     }
 

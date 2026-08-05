@@ -3,41 +3,20 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using LibGit2Sharp;
+using Phantom.Workspaces.Testing;
+using Phantom.Workspaces.Testing.Gui;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeFileListViewModelTests : IDisposable
 {
-    private readonly string repoDir;
-
-    public GitWorktreeFileListViewModelTests()
-    {
-        this.repoDir = Path.Combine(Path.GetTempPath(), "pw-file-list-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(this.repoDir);
-    }
+    private readonly TempDirectory temp = new("pw-file-list-");
+    private string repoDir => this.temp.Path;
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(this.repoDir))
-            {
-                ForceDeleteDirectory(this.repoDir);
-            }
-        }
-        catch (IOException)
-        {
-        }
-    }
-
-    private static void ForceDeleteDirectory(string path)
-    {
-        foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-        {
-            File.SetAttributes(file, FileAttributes.Normal);
-        }
-        Directory.Delete(path, recursive: true);
+        this.temp.Dispose();
     }
 
     private Repository InitRepo(out Signature sig)
@@ -73,7 +52,7 @@ public sealed class GitWorktreeFileListViewModelTests : IDisposable
         }
 
         var vm = new GitWorktreeFileListViewModel();
-        await vm.RefreshAsync(this.repoDir, [commit1, commit2], TestContext.Current.CancellationToken);
+        await vm.RefreshAsync(this.repoDir, [commit1, commit2], TaskScheduler.Default, TestContext.Current.CancellationToken);
 
         var paths = vm.Files.Select(f => f.RelativePath).ToHashSet();
         Assert.Contains("alpha.txt", paths);
@@ -94,7 +73,7 @@ public sealed class GitWorktreeFileListViewModelTests : IDisposable
 
         var vm = new GitWorktreeFileListViewModel();
         // Pass only the second commit; only beta.txt should appear.
-        await vm.RefreshAsync(this.repoDir, [commit2], TestContext.Current.CancellationToken);
+        await vm.RefreshAsync(this.repoDir, [commit2], TaskScheduler.Default, TestContext.Current.CancellationToken);
 
         var paths = vm.Files.Select(f => f.RelativePath).ToHashSet();
         Assert.DoesNotContain("alpha.txt", paths);
@@ -114,7 +93,7 @@ public sealed class GitWorktreeFileListViewModelTests : IDisposable
         }
 
         var vm = new GitWorktreeFileListViewModel();
-        await vm.RefreshAsync(this.repoDir, [modifyCommit], TestContext.Current.CancellationToken);
+        await vm.RefreshAsync(this.repoDir, [modifyCommit], TaskScheduler.Default, TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(vm.Files);
         Assert.Equal("counter.txt", entry.RelativePath);
@@ -132,7 +111,7 @@ public sealed class GitWorktreeFileListViewModelTests : IDisposable
         }
 
         var vm = new GitWorktreeFileListViewModel();
-        await vm.RefreshAsync(this.repoDir, [GitCommitModel.CreateUnstaged()], TestContext.Current.CancellationToken);
+        await vm.RefreshAsync(this.repoDir, [GitCommitModel.CreateUnstaged()], TaskScheduler.Default, TestContext.Current.CancellationToken);
 
         var paths = vm.Files.Select(f => f.RelativePath).ToHashSet();
         Assert.Contains("file.txt", paths);
@@ -151,9 +130,77 @@ public sealed class GitWorktreeFileListViewModelTests : IDisposable
         }
 
         var vm = new GitWorktreeFileListViewModel();
-        await vm.RefreshAsync(this.repoDir, [GitCommitModel.CreateStaged()], TestContext.Current.CancellationToken);
+        await vm.RefreshAsync(this.repoDir, [GitCommitModel.CreateStaged()], TaskScheduler.Default, TestContext.Current.CancellationToken);
 
         var paths = vm.Files.Select(f => f.RelativePath).ToHashSet();
         Assert.Contains("staged-new.txt", paths);
     }
+
+    // ---------------------------------------------------------------------
+    // #1210: threading tests
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task RefreshAsync_RunsDiffCompareOffForegroundScheduler()
+    {
+        var commits = new System.Collections.Generic.List<GitCommitModel>();
+        using (var repo = this.InitRepo(out var sig))
+        {
+            MakeCommit(repo, sig, "base.txt", "base", "Base");
+            for (var i = 0; i < 5; i++)
+            {
+                commits.Add(ToModel(MakeCommit(repo, sig, $"f{i}.txt", $"v{i}", $"Commit {i}")));
+            }
+        }
+
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+        var vm = new GitWorktreeFileListViewModel();
+
+        var refreshTaskTcs = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => refreshTaskTcs.SetResult(
+            vm.RefreshAsync(this.repoDir, commits, foregroundScheduler, TestContext.Current.CancellationToken)), null);
+        var refreshTask = await refreshTaskTcs.Task;
+
+        var pingRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => pingRan.SetResult(), null);
+
+        var winner = await Task.WhenAny(pingRan.Task, refreshTask).WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        Assert.Same(pingRan.Task, winner);
+
+        await refreshTask;
+        Assert.NotEmpty(vm.Files);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_MergesEntriesAndAppliesFilesMutationsOnForegroundScheduler()
+    {
+        GitCommitModel commit;
+        using (var repo = this.InitRepo(out var sig))
+        {
+            MakeCommit(repo, sig, "base.txt", "base", "Base");
+            commit = ToModel(MakeCommit(repo, sig, "alpha.txt", "a", "Alpha"));
+        }
+
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var pumpThreadId = pump.ThreadId;
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+        var vm = new GitWorktreeFileListViewModel();
+
+        var observedThreadIds = new System.Collections.Concurrent.ConcurrentBag<int>();
+        vm.Files.CollectionChanged += (_, _) => observedThreadIds.Add(Environment.CurrentManagedThreadId);
+        vm.SelectedFiles.CollectionChanged += (_, _) => observedThreadIds.Add(Environment.CurrentManagedThreadId);
+
+        var refreshTaskTcs = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+        pump.Context.Post(_ => refreshTaskTcs.SetResult(
+            vm.RefreshAsync(this.repoDir, [commit], foregroundScheduler, TestContext.Current.CancellationToken)), null);
+        await (await refreshTaskTcs.Task);
+
+        Assert.NotEmpty(observedThreadIds);
+        Assert.All(observedThreadIds, id => Assert.Equal(pumpThreadId, id));
+    }
 }
+
+

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using Avalonia.Threading;
 using LibGit2Sharp;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -15,35 +17,12 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 {
-    private readonly string repoDir;
-
-    public GitWorktreeReviewWorkspaceTabViewModelTests()
-    {
-        this.repoDir = Path.Combine(Path.GetTempPath(), "pw-review-tab-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(this.repoDir);
-    }
+    private readonly TempDirectory temp = new("pw-review-tab-");
+    private string repoDir => this.temp.Path;
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(this.repoDir))
-            {
-                ForceDeleteDirectory(this.repoDir);
-            }
-        }
-        catch (IOException)
-        {
-        }
-    }
-
-    private static void ForceDeleteDirectory(string path)
-    {
-        foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-        {
-            File.SetAttributes(file, FileAttributes.Normal);
-        }
-        Directory.Delete(path, recursive: true);
+        this.temp.Dispose();
     }
 
     private void InitRepoWithBranch(string branchName)
@@ -76,7 +55,9 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Relationships = Array.Empty<EntitySnapshot>(),
         });
 
-        return new GitWorktreeReviewWorkspaceTabViewModel(entity)
+        // #1210: [AvaloniaFact] tests run on the Avalonia UI thread; capture its scheduler here.
+        var foregroundScheduler = TaskScheduler.FromCurrentSynchronizationContext();
+        return new GitWorktreeReviewWorkspaceTabViewModel(entity, foregroundScheduler)
         {
             Id = "test-id",
             Title = "Test",
@@ -84,7 +65,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         };
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectRepositoryPathField()
     {
         var vm = CreateViewModel("""
@@ -103,7 +84,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ReadsCorrectTargetBranchField()
     {
         var vm = CreateViewModel("""
@@ -122,7 +103,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_WhenPathMissing_DoesNotThrow()
     {
         var vm = CreateViewModel("""
@@ -140,7 +121,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMainWhenBranchExists()
     {
         this.InitRepoWithBranch("main");
@@ -162,7 +143,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchDefaultsToMasterWhenMainAbsent()
     {
         this.InitRepoWithBranch("master");
@@ -180,11 +161,14 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
 
         await using (vm)
         {
+            // #1210: the main/master probe now runs in InitializeAsync's Task.Run instead of the
+            // constructor, so we must await CurrentRefresh before observing the resolved default.
+            await vm.CurrentRefresh!;
             Assert.Equal("master", vm.TargetBranch);
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task TargetBranchReadFromEntityDataWhenPresent()
     {
         var vm = CreateViewModel("""
@@ -203,7 +187,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 60_000)]
+    [AvaloniaFact(Timeout = 60_000)]
     public async Task TargetBranch_Set_TriggersCommitListRefreshAndClearsPreviousCommits()
     {
         // Use no valid repo path so RefreshAsync completes quickly.
@@ -243,7 +227,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task DisposeAsyncStopsWatcher()
     {
         this.InitRepoWithBranch("main");
@@ -279,7 +263,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         _ = refreshCountBeforeDispose;
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileList_SelectFile_DiffViewUpdatesToSelectedFile()
     {
         this.InitRepoWithBranch("main");
@@ -324,7 +308,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileList_SelectSecondFile_DiffViewChanges()
     {
         this.InitRepoWithBranch("main");
@@ -380,7 +364,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileList_NoFileSelected_DiffViewShowsAllFiles()
     {
         this.InitRepoWithBranch("main");
@@ -430,7 +414,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_SelectCommit_FileListUpdates()
     {
         this.InitRepoWithBranch("main");
@@ -483,7 +467,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_SelectMultipleCommits_FileListShowsUnion()
     {
         this.InitRepoWithBranch("main");
@@ -535,7 +519,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_DeselectAll_FileListShowsAllCommits()
     {
         this.InitRepoWithBranch("main");
@@ -591,7 +575,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_SelectionChange_DiffViewUpdates()
     {
         this.InitRepoWithBranch("main");
@@ -642,7 +626,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_ShowsDate_FormattedCorrectly()
     {
         this.InitRepoWithBranch("main");
@@ -681,7 +665,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_ShortSha_DisplayedInColumn()
     {
         this.InitRepoWithBranch("main");
@@ -723,7 +707,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitList_AuthorColumn_Displayed()
     {
         this.InitRepoWithBranch("main");
@@ -796,7 +780,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         Assert.Equal(authorDate, commit.AuthorDate);
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task RebuildFileDiffsAsync_DeletedFile_DoesNotThrow()
     {
         this.InitRepoWithBranch("main");
@@ -848,7 +832,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task RebuildFileDiffsAsync_AddedFile_DoesNotThrow()
     {
         this.InitRepoWithBranch("main");
@@ -899,7 +883,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task RebuildFileDiffsAsync_UnmatchedPath_ProcessesOtherFiles()
     {
         this.InitRepoWithBranch("main");
@@ -955,7 +939,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitListHeader_ShowsBranchName()
     {
         this.InitRepoWithBranch("main");
@@ -979,7 +963,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task CommitListHeader_UpdatesWhenBranchChanges()
     {
         this.InitRepoWithBranch("main");
@@ -1007,7 +991,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileListHeader_SingleCommit_ShowsSha()
     {
         this.InitRepoWithBranch("main");
@@ -1052,7 +1036,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileListHeader_MultipleCommits_ShowsGenericLabel()
     {
         this.InitRepoWithBranch("main");
@@ -1101,7 +1085,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task FileListHeader_NoSelection_ShowsPlaceholder()
     {
         this.InitRepoWithBranch("main");
@@ -1127,7 +1111,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task BranchDropdown_PopulatedWithRepoBranches_LoadsAllBranches()
     {
         this.InitRepoWithBranch("main");
@@ -1162,7 +1146,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task BranchDropdown_SelectBranch_UpdatesTargetBranchAndCommitList()
     {
         var vm = CreateViewModel("""
@@ -1199,7 +1183,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_FullFileToggle_TriggersRebuild()
     {
         this.InitRepoWithBranch("main");
@@ -1249,7 +1233,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_FullFileTrue_UsesLargeContextLines()
     {
         this.InitRepoWithBranch("main");
@@ -1306,7 +1290,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_FullFileFalse_UsesConfiguredContextLines()
     {
         this.InitRepoWithBranch("main");
@@ -1361,7 +1345,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_TriggersRebuild()
     {
         this.InitRepoWithBranch("main");
@@ -1418,7 +1402,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_Zero_ShowsOnlyChangedLines()
     {
         this.InitRepoWithBranch("main");
@@ -1474,7 +1458,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_ContextLines_LargeValue_ShowsExtendedContext()
     {
         this.InitRepoWithBranch("main");
@@ -1535,7 +1519,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task SideBySide_WhenToggled_TriggersRebuildFileDiffs()
     {
         this.InitRepoWithBranch("main");
@@ -1587,7 +1571,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
         }
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task SideBySide_WhenToggled_PreservesExistingFileDiffContent()
     {
         this.InitRepoWithBranch("main");
@@ -1649,5 +1633,284 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             Assert.True(rebuiltDiff.SideBySide);
         }
     }
+
+    // ---------------------------------------------------------------------
+    // #1210: threading tests. Verify that git I/O runs on the thread pool and
+    // that only the final ObservableCollection updates marshal back to the
+    // injected foreground scheduler.
+    // ---------------------------------------------------------------------
+
+    private GitWorktreeReviewWorkspaceTabViewModel CreateViewModelWithScheduler(
+        string entityJson,
+        TaskScheduler foregroundScheduler)
+    {
+        using var document = JsonDocument.Parse(entityJson);
+        var entity = new SubscribedEntityViewModel(new EntitySnapshot
+        {
+            EntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+            Data = document.RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        });
+
+        return new GitWorktreeReviewWorkspaceTabViewModel(entity, foregroundScheduler)
+        {
+            Id = "test-id",
+            Title = "Test",
+            Entity = entity,
+        };
+    }
+
+    [Fact]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_Constructor_DoesNotOpenRepositorySynchronously()
+    {
+        // A "master"-only repo forces the probe to return "master". If the constructor were
+        // opening LibGit2Sharp synchronously, TargetBranch would be "master" before we await
+        // anything. With the fix, TargetBranch is the seeded default ("main") until the
+        // background probe in InitializeAsync completes.
+        this.InitRepoWithBranch("master");
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+
+        var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}}
+            }
+            """, foregroundScheduler)));
+
+        await using (vm)
+        {
+            // Observed immediately after construction — the probe has not run.
+            Assert.Equal("main", vm.TargetBranch);
+
+            await vm.CurrentRefresh!;
+
+            // Now the background probe has updated the field.
+            Assert.Equal("master", vm.TargetBranch);
+        }
+    }
+
+    [Fact]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_InitializeAsync_ResolvesDefaultBranchOffUIThread()
+    {
+        this.InitRepoWithBranch("master");
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var pumpThreadId = pump.ThreadId;
+
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+
+        var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}}
+            }
+            """, foregroundScheduler)));
+
+        await using (vm)
+        {
+            // Interleave a pump-thread ping while InitializeAsync is running. It must be able to
+            // execute before the initial refresh finishes, proving the probe/branch enumeration
+            // ran off the foreground scheduler.
+            var pingRan = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            pump.Context.Post(_ => pingRan.SetResult(Environment.CurrentManagedThreadId), null);
+
+            var winner = await Task.WhenAny(pingRan.Task, vm.CurrentRefresh!)
+                .WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+            Assert.Same(pingRan.Task, winner);
+            Assert.Equal(pumpThreadId, await pingRan.Task);
+
+            await vm.CurrentRefresh!;
+            Assert.Equal("master", vm.TargetBranch);
+        }
+    }
+
+    [Fact]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_RefreshAsync_RunsGitOperationsOffForegroundScheduler()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+            var feature = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, feature);
+            for (var i = 0; i < 5; i++)
+            {
+                File.WriteAllText(Path.Combine(this.repoDir, $"f{i}.txt"), $"content{i}");
+                Commands.Stage(repo, "*");
+                repo.Commit($"Commit {i}", sig, sig);
+            }
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var pumpThreadId = pump.ThreadId;
+
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+
+        var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """, foregroundScheduler)));
+
+        await using (vm)
+        {
+            var refreshTaskTcs = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
+            pump.Context.Post(_ => refreshTaskTcs.SetResult(vm.RefreshAsync()), null);
+            var refreshTask = await refreshTaskTcs.Task;
+
+            // Interleave a pump ping. If git ops were running on the foreground scheduler, this
+            // would be blocked behind the git work.
+            var pingRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            pump.Context.Post(_ => pingRan.SetResult(), null);
+
+            var winner = await Task.WhenAny(pingRan.Task, refreshTask).WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+            Assert.Same(pingRan.Task, winner);
+
+            await refreshTask;
+            _ = pumpThreadId;
+        }
+    }
+
+    [Fact]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_RefreshAsync_MarshalsFinalCollectionUpdatesToForegroundScheduler()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+            var feature = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, feature);
+            File.WriteAllText(Path.Combine(this.repoDir, "file1.txt"), "c1");
+            Commands.Stage(repo, "*");
+            repo.Commit("Feature commit", sig, sig);
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var pumpThreadId = pump.ThreadId;
+
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+
+        var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """, foregroundScheduler)));
+
+        await using (vm)
+        {
+            // Final ObservableCollection swap raises PropertyChanged for CommitList/FileList/FileDiffs
+            // via the injected foreground scheduler. Verify each of those fires on the pump thread.
+            var propChangeThreadIds = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
+            vm.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName is not null)
+                {
+                    propChangeThreadIds[e.PropertyName] = Environment.CurrentManagedThreadId;
+                }
+            };
+
+            await vm.CurrentRefresh!;
+
+            Assert.True(propChangeThreadIds.ContainsKey(nameof(vm.CommitList)));
+            Assert.True(propChangeThreadIds.ContainsKey(nameof(vm.FileList)));
+            Assert.True(propChangeThreadIds.ContainsKey(nameof(vm.FileDiffs)));
+            Assert.Equal(pumpThreadId, propChangeThreadIds[nameof(vm.CommitList)]);
+            Assert.Equal(pumpThreadId, propChangeThreadIds[nameof(vm.FileList)]);
+            Assert.Equal(pumpThreadId, propChangeThreadIds[nameof(vm.FileDiffs)]);
+        }
+    }
+
+    [Fact]
+    public async Task GitWorktreeReviewWorkspaceTabViewModel_TargetBranch_Set_DoesNotBlockCallingThread()
+    {
+        this.InitRepoWithBranch("main");
+
+        using (var repo = new Repository(this.repoDir))
+        {
+            var sig = new Signature("tester", "tester@example.com", DateTimeOffset.UtcNow);
+            var feature = repo.CreateBranch("feature", repo.Head.Tip);
+            Commands.Checkout(repo, feature);
+            for (var i = 0; i < 5; i++)
+            {
+                File.WriteAllText(Path.Combine(this.repoDir, $"f{i}.txt"), $"content{i}");
+                Commands.Stage(repo, "*");
+                repo.Commit($"Commit {i}", sig, sig);
+            }
+        }
+
+        var repoPath = JsonSerializer.Serialize(this.repoDir);
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        var foregroundScheduler = await pump.PostAsync(() =>
+            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
+
+        var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
+            {
+                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "entity-types": ["entity", "git-worktree"],
+                "names": [["worktrees", "test"]],
+                "display-name": { "default": "Test" },
+                "path": {{repoPath}},
+                "target-branch": "main"
+            }
+            """, foregroundScheduler)));
+
+        await using (vm)
+        {
+            await vm.CurrentRefresh!;
+
+            // Set TargetBranch from the pump thread — the setter must return promptly (not block
+            // while the git log walk runs). Immediately after, post a ping and confirm it can run
+            // before the triggered refresh completes.
+            var setterReturnedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pingRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            pump.Context.Post(
+                _ =>
+                {
+                    vm.TargetBranch = "feature";
+                    setterReturnedTcs.SetResult();
+                    pump.Context.Post(__ => pingRan.SetResult(), null);
+                },
+                null);
+
+            await setterReturnedTcs.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+            await pingRan.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+
+            // If we reach here without hitting the 15s timeout, the setter did not block.
+            Assert.True(true);
+        }
+    }
 }
+
 

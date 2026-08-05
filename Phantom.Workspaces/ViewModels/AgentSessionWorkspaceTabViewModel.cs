@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Gui.Shared.Utilities;
@@ -29,13 +30,25 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
-    private readonly AsyncDisposableCollection leaseDisposables = new();
+    private readonly AsyncDisposableCollection leaseDisposables;
+    private readonly TimeProvider timeProvider;
     private RunningAgentChatLease? lease;
     private AgentRunningIndicatorTabHeaderItemViewModel? runningIndicator;
 
     public AgentSessionWorkspaceTabViewModel()
+        : this(TimeProvider.System)
     {
     }
+
+    internal AgentSessionWorkspaceTabViewModel(TimeProvider timeProvider)
+    {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.leaseDisposables = new AsyncDisposableCollection(this.OnLeaseDisposeError);
+    }
+
+    private void OnLeaseDisposeError(Exception ex)
+        => this.loggerFactory?.CreateLogger<AgentSessionWorkspaceTabViewModel>()
+            .LogError(ex, "Error disposing agent session lease.");
 
     public AgentTabState State
     {
@@ -61,7 +74,14 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
 
     public string? AgentSessionId { get; init; }
 
-    public string? WorkspacePaneId { get; init; }
+    /// <summary>
+    /// The workspace-pane id the tab currently lives in.
+    /// Init-stamped from the creating handler's <c>SelectedWorkspacePane?.Id</c>; overwritten
+    /// authoritatively by <see cref="WorkspacePaneViewModel"/>'s Tabs.CollectionChanged handler
+    /// when the tab is added to a pane so <see cref="CreateTabDescriptor"/> reflects the actual
+    /// owning pane, not the pane that happened to be active at creation time (#1135).
+    /// </summary>
+    public string? WorkspacePaneId { get; internal set; }
 
     public RunningAgentChatLease? Lease => this.lease;
 
@@ -182,7 +202,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.CreateTabDescriptor(),
                 "Running",
                 textSummary ?? string.Empty,
-                DateTime.UtcNow,
+                this.timeProvider.GetUtcNow().UtcDateTime,
                 RunningState.Running,
                 NotificationState.Interesting));
         }
@@ -195,7 +215,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                 this.CreateTabDescriptor(),
                 heading,
                 reason,
-                DateTime.UtcNow,
+                this.timeProvider.GetUtcNow().UtcDateTime,
                 RunningState.Idle,
                 NotificationState.Interesting));
         }
@@ -211,7 +231,7 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
                     this.CreateTabDescriptor(),
                     "Running",
                     textSummary ?? string.Empty,
-                    DateTime.UtcNow,
+                    this.timeProvider.GetUtcNow().UtcDateTime,
                     RunningState.Running,
                     NotificationState.NotInteresting));
             }

@@ -215,7 +215,9 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
-            CancellationToken ct)
+            string? displayNameOverride,
+            string? descriptionOverride,
+            string? nameOverride, CancellationToken ct)
         {
             CreateCalls.Add((definition, sessionId));
 
@@ -229,6 +231,8 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             {
                 AgentDefinition = null,
                 ConfiguredStore = new InMemoryAgentPersistenceStore(),
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
             });
 
             var chatClientAgent = new ChatClientAgent(receiver, new ChatClientAgentOptions
@@ -249,7 +253,7 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             return Task.FromResult(lease);
         }
 
-        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, CancellationToken ct) =>
+        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>
             throw new NotImplementedException();
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetOrCreateAsync(
@@ -258,7 +262,7 @@ public sealed class CopilotSubAgentRouterMiddlewareTests
             AgentServices? services,
             string? displayNameOverride,
             string? descriptionOverride,
-            CancellationToken ct) =>
+            bool registerAsRunningAgent, CancellationToken ct) =>
             throw new NotImplementedException();
     }
 

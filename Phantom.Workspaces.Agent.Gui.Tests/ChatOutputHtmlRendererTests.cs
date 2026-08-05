@@ -52,7 +52,7 @@ public sealed class ChatOutputHtmlRendererTests
             "assistant",
             [("msg-0-c0", "<div>hi</div>")]);
 
-        Assert.Contains("data-sticky-base-level=\"0\"", html);
+        Assert.Contains("data-sticky-base-level=\"1\"", html);
     }
 
     [Fact]
@@ -354,7 +354,7 @@ public sealed class ChatOutputHtmlRendererTests
     [Fact]
     public void RenderToolGroupWrapper_SummaryHasDataStickyLevel2()
     {
-        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper("c0", 2, "last_tool(…)", "<div>inner</div>");
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper("c0", 2, new[] { "last_tool" }, "<div>inner</div>");
 
         Assert.Contains("data-sticky-level=\"2\"", html);
     }
@@ -821,7 +821,7 @@ public sealed class ChatOutputHtmlRendererTests
             "help",
             [("msg-0-c0", "<div>help content</div>")]);
 
-        Assert.Contains("[help]", html, StringComparison.Ordinal);
+        Assert.Contains("<span>help</span>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("[diagnostic]", html, StringComparison.Ordinal);
     }
 
@@ -909,5 +909,158 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.True(badgeIndex >= 0);
         Assert.True(toggleIndex >= 0);
         Assert.True(toggleIndex > badgeIndex, "Toggle button must appear after the count badge.");
+    }
+
+    // ── Issue #1069: tool result truncation ────────────────────────────────────
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeResultJson_SummaryShowsLineCount()
+    {
+        var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
+        var largeResult = string.Join("\n", Enumerable.Range(0, lineCount).Select(i => $"line-{i}"));
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
+
+        Assert.Contains($"result  ({lineCount} lines)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeSingleLineResult_SummaryShowsCharacterCount()
+    {
+        var largeResult = new string('x', ChatOutputHtmlRenderer.MaxToolResultCharacters + 500);
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
+
+        Assert.Contains($"result  ({largeResult.Length} characters)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeResultJson_BodyDoesNotContainFullPayload()
+    {
+        var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
+        var lines = Enumerable.Range(0, lineCount).Select(i => $"line-{i}").ToList();
+        lines[10] = "UNIQUE_PAYLOAD_MARKER_XYZ";
+        var largeResult = string.Join("\n", lines);
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
+
+        Assert.DoesNotContain("UNIQUE_PAYLOAD_MARKER_XYZ", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithEscapedJsonStringResult_DoesNotRenderRawEscapeSequencesVerbatim()
+    {
+        // A JSON-string payload re-serialized to a single escaped one-liner larger than the cap.
+        var inner = string.Concat(Enumerable.Repeat("{\\u0022key\\u0022:\\u0022value\\r\\n\\u0022},", 200));
+        var escapedOneLiner = "\"" + inner + "\"";
+        Assert.True(escapedOneLiner.Length > ChatOutputHtmlRenderer.MaxToolResultCharacters);
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", escapedOneLiner);
+
+        Assert.DoesNotContain("\\u0022", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\r\\n", html, StringComparison.Ordinal);
+        Assert.Contains($"result  ({escapedOneLiner.Length} characters)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithSmallResultJson_ShownInFullUntruncated()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", "{\"result\":\"ok\"}");
+
+        // Small result: the actual value is rendered in the body, and no "(N lines)"/"(N characters)"
+        // collapse summary is emitted.
+        Assert.Contains("ok", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("lines)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("characters)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallPair_WithLargeResultJson_FullPayloadPreservedInDetailsTarget()
+    {
+        var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
+        var largeResult = string.Join("\n", Enumerable.Range(0, lineCount).Select(i => $"line-{i}"));
+        var resultDetails = "{\"kind\":\"result\",\"marker\":\"FULL_PAYLOAD_TOKEN\"}";
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallPair(
+            "c0", "my_tool", "{}", largeResult, callDetailsJson: null, resultDetailsJson: resultDetails);
+
+        Assert.Contains("data-details-target=", html, StringComparison.Ordinal);
+        Assert.Contains("FULL_PAYLOAD_TOKEN", html, StringComparison.Ordinal);
+    }
+
+    // ── Issue #927: role prefixes, sticky headers, and tool-group summary redesign ─────
+
+    [Fact]
+    public void RenderMessage_UserRole_StickyBaseLevelIsZero()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "user",
+            [("msg-0-c0", "<div>hi</div>")]);
+
+        Assert.Contains("data-sticky-base-level=\"0\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderMessage_AssistantRole_StickyBaseLevelIsOne()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "assistant",
+            [("msg-0-c0", "<div>hi</div>")]);
+
+        Assert.Contains("data-sticky-base-level=\"1\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_UserRole_NoSquareBrackets()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "user");
+
+        Assert.DoesNotContain("[user]", html, StringComparison.Ordinal);
+        Assert.Contains("<span>user</span>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderHeader_AssistantRole_NoSquareBrackets()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant");
+
+        Assert.DoesNotContain("[assistant]", html, StringComparison.Ordinal);
+        Assert.Contains("<span>assistant</span>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_MultipleTools_ListsUniqueToolNames()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper(
+            "c0", 3, new[] { "powershell", "edit", "powershell" }, "<div>inner</div>");
+
+        Assert.Contains("powershell", html, StringComparison.Ordinal);
+        Assert.Contains("edit", html, StringComparison.Ordinal);
+        // Deduped: "powershell" appears exactly once even though it was passed twice.
+        Assert.Equal(
+            html.IndexOf("powershell", StringComparison.Ordinal),
+            html.LastIndexOf("powershell", StringComparison.Ordinal));
+        Assert.Contains("tools (", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_SingleTool_UsesSingularForm()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper(
+            "c0", 2, new[] { "powershell", "powershell" }, "<div>inner</div>");
+
+        Assert.Contains("tool (powershell)", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("tools (powershell)", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolGroupWrapper_Summary_HasDollarPrefix()
+    {
+        var html = ChatOutputHtmlRenderer.RenderToolGroupWrapper(
+            "c0", 2, new[] { "powershell" }, "<div>inner</div>");
+
+        Assert.Contains("data-sticky-level=\"2\">$ ", html, StringComparison.Ordinal);
     }
 }

@@ -79,8 +79,10 @@ public sealed class ReverseHttpServerTransportFactoryTests
         using var frame = JsonDocument.Parse("""{"type":"channel-message","payload":{"text":"hello"}}""");
 
         await machineC.DeliverAsync(frame.RootElement);
+        var relayAck = await machineB.Sent.ReadAsync();
         var forwarded = await machineB.Sent.ReadAsync();
 
+        Assert.Equal("channel-open-ack", relayAck.GetProperty("type").GetString());
         Assert.Equal(frame.RootElement.GetRawText(), forwarded.GetRawText());
     }
 
@@ -96,9 +98,11 @@ public sealed class ReverseHttpServerTransportFactoryTests
         await using var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
 
         machineC.CompleteInbound();
+        var relayAck = await machineB.Sent.ReadAsync();
         var close = await machineB.Sent.ReadAsync();
         await machineB.Sent.Completion;
 
+        Assert.Equal("channel-open-ack", relayAck.GetProperty("type").GetString());
         Assert.Equal("channel-close", close.GetProperty("type").GetString());
         Assert.True(machineB.Disposed);
         Assert.True(machineC.Disposed);
@@ -119,6 +123,7 @@ public sealed class ReverseHttpServerTransportFactoryTests
 
         Assert.True(machineB.Disposed);
         Assert.True(machineC.Disposed);
+        Assert.Equal("channel-open-ack", (await machineB.Sent.ReadAsync()).GetProperty("type").GetString());
         Assert.Equal("channel-close", (await machineB.Sent.ReadAsync()).GetProperty("type").GetString());
         Assert.Equal("channel-close", (await machineC.Sent.ReadAsync()).GetProperty("type").GetString());
     }
@@ -168,6 +173,54 @@ public sealed class ReverseHttpServerTransportFactoryTests
         await Task.WhenAll(leases.Select(static lease => lease!.DisposeAsync().AsTask()));
 
         Assert.Equal(0, factory.RegistrationCount);
+    }
+
+    [Fact]
+    public async Task Registration_WithStatusRegistry_RecordsConnectedInstance()
+    {
+        var statusRegistry = new ReverseConnectionStatusRegistry();
+        var factory = new ReverseHttpServerTransportFactory(statusRegistry);
+        using var request = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+
+        await using var lease = await factory.OnChannelOpenAsync(request.RootElement, new ReverseHttpClientTransportFactoryTests.FakeMessageChannel());
+
+        var status = Assert.Single(statusRegistry.GetConnectedInstances());
+        Assert.Equal("machine-c", status.ClientInstanceId);
+        Assert.Equal(0, status.InFlightCount);
+    }
+
+    [Fact]
+    public async Task RegistrationChannelCompletes_WithStatusRegistry_RemovesConnectedInstance()
+    {
+        var statusRegistry = new ReverseConnectionStatusRegistry();
+        var factory = new ReverseHttpServerTransportFactory(statusRegistry);
+        using var request = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+        var lease = await factory.OnChannelOpenAsync(request.RootElement, new ReverseHttpClientTransportFactoryTests.FakeMessageChannel());
+
+        await lease!.DisposeAsync();
+
+        Assert.Empty(statusRegistry.GetConnectedInstances());
+    }
+
+    [Fact]
+    public async Task Relay_WithStatusRegistry_UpdatesInFlightCount()
+    {
+        var statusRegistry = new ReverseConnectionStatusRegistry();
+        var factory = new ReverseHttpServerTransportFactory(statusRegistry);
+        var machineC = new RelayTestMessageChannel();
+        var machineB = new RelayTestMessageChannel();
+        using var registerRequest = JsonDocument.Parse("""{"type":"reverse-register","entity-id":"machine-c"}""");
+        await using var registration = await factory.OnChannelOpenAsync(registerRequest.RootElement, machineC);
+        using var relayRequest = JsonDocument.Parse("""{"type":"reverse-http","entity-id":"machine-c"}""");
+
+        var relay = await factory.OnChannelOpenAsync(relayRequest.RootElement, machineB);
+        var duringRelay = Assert.Single(statusRegistry.GetConnectedInstances());
+
+        await relay!.DisposeAsync();
+        var afterRelay = Assert.Single(statusRegistry.GetConnectedInstances());
+
+        Assert.Equal(1, duringRelay.InFlightCount);
+        Assert.Equal(0, afterRelay.InFlightCount);
     }
 
     private sealed class RelayTestMessageChannel : IMessageChannel

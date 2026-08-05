@@ -226,7 +226,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
             this.mainWindowViewModel,
             definitionEntity,
             agentChat.AgentSessionId,
-            owningProfileEntityId: this.profileEntity.EntityId);
+            hostProfileEntityId: this.profileEntity.EntityId);
 
         if (createdAgentSessionEntity is null)
         {

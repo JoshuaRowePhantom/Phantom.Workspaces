@@ -1,10 +1,89 @@
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm.Interfaces;
 using System.Collections.Specialized;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
 public sealed class AgentChatLastUpdatedAtTests
 {
+    // #1140: On reload, InitializeAsync must seed lastUpdatedAt from the persisted
+    // UpdatedUtc timestamp (surfaced via PersistedAgent.LastUpdatedUtc) rather than leaving
+    // it at construction-time "now". Without this, restored sub-agent cards would show
+    // "just now" instead of the correct "N days ago".
+    [Fact]
+    public async Task AgentChat_Restore_SeedsLastUpdatedAtFromPersistedTimestamp()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        const string sessionId = "seed-from-persisted";
+
+        // Persist a session whose UpdatedUtc is in the distant past.
+        var persistedTime = new DateTime(2023, 4, 5, 6, 7, 8, DateTimeKind.Utc);
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = sessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(
+                    AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson).ToJson()),
+                LastUpdatedUtc = persistedTime,
+            },
+        });
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = null,
+            AgentSessionId = sessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "restored",
+        });
+
+        // Even though the construction thread stamps lastUpdatedAt = now, the restore path
+        // must overwrite it with the persisted timestamp.
+        Assert.Equal(persistedTime, chat.LastUpdatedAt);
+    }
+
+    // #1140 regression guard: A genuinely-updated sub-agent (new history item after reload)
+    // must still advance LastUpdatedAt past the seeded persisted timestamp — the fix must not
+    // freeze the timestamp forever.
+    [Fact]
+    public async Task AgentChat_LastUpdatedAt_AdvancesOnGenuineActivityAfterRestore()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        const string sessionId = "advances-after-restore";
+
+        var persistedTime = new DateTime(2023, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = sessionId,
+                AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(
+                    AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson).ToJson()),
+                LastUpdatedUtc = persistedTime,
+            },
+        });
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = null,
+            AgentSessionId = sessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "restored",
+        });
+
+        Assert.Equal(persistedTime, chat.LastUpdatedAt);
+
+        // Genuine new activity: adding a history item must advance the timestamp.
+        chat.EnqueueSystemNote("post-restore activity");
+        await WaitForHistoryCountAsync(chat.History, 1);
+
+        Assert.True(
+            chat.LastUpdatedAt > persistedTime,
+            $"Expected LastUpdatedAt ({chat.LastUpdatedAt:o}) to advance past persisted seed ({persistedTime:o}) after a new history item.");
+    }
+
     private const string DefaultAgentDefinitionJson =
         """
         {

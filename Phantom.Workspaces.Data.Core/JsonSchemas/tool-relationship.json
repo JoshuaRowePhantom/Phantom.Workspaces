@@ -57,6 +57,16 @@
       "type": "string",
       "format": "date-time",
       "description": "RFC 3339 UTC date-time set by the host immediately before a run is launched; the due-check indicator for whether to start a new run."
+    },
+    "last-completed": {
+      "type": "string",
+      "format": "date-time",
+      "description": "RFC 3339 UTC date-time set by the host immediately after a run's per-run tool-execution-result is written. A second, independent signal for 'did the last run terminate?' so stuck runs can be detected even if the per-run result was orphaned."
+    },
+    "last-status": {
+      "type": "string",
+      "enum": ["succeeded", "failed"],
+      "description": "Terminal status of the run associated with last-completed; mirrors the per-run tool-execution-result's status."
     }
   }
 }

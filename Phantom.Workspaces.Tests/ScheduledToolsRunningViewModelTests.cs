@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text.Json;
@@ -320,6 +321,17 @@ public sealed class ScheduledToolsRunningViewModelTests
         row.ExpandCommand.Execute(null);
 
         Assert.True(row.IsExpanded);
+        // ExpandCommand fires LoadRecentRunsAsync as fire-and-forget. #1203 pushed the load
+        // off the UI thread, so allow the load a bounded amount of time to complete before
+        // asserting rather than racing an additional load.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(30));
+        while (row.RecentRuns.Count == 0)
+        {
+            await Task.Yield();
+            timeoutCts.Token.ThrowIfCancellationRequested();
+        }
+
         Assert.Single(row.RecentRuns);
     }
 
@@ -370,6 +382,146 @@ public sealed class ScheduledToolsRunningViewModelTests
     }
 
     [Fact]
+    public async Task LoadRecentRunsAsync_PreservesSynchronizationContext_MutatesRecentRunsOnCapturedContext()
+    {
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        // Loader that always completes on a thread-pool thread so the continuation
+        // has to be marshalled back to the captured context to preserve UI-thread affinity.
+        var loaderThreadIds = new ConcurrentBag<int>();
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            async cancellationToken =>
+            {
+                await Task.Yield();
+                await Task.Run(() => { loaderThreadIds.Add(Environment.CurrentManagedThreadId); }, cancellationToken);
+                return (IReadOnlyList<RunSummaryViewModel>)new[]
+                {
+                    new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                    new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 31, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", "boom"),
+                };
+            });
+
+        var observedThreadIds = new ConcurrentBag<int>();
+        row.RecentRuns.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+        };
+
+        await pump.PostAsync(async () =>
+        {
+            await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        Assert.Equal(2, row.RecentRuns.Count);
+        var singleObserverThread = Assert.Single(observedThreadIds.Distinct());
+        Assert.Equal(pump.ThreadId, singleObserverThread);
+        // Sanity: the loader really did complete off the pump thread.
+        Assert.All(loaderThreadIds, id => Assert.NotEqual(pump.ThreadId, id));
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsAsync_WhenLoaderCompletesOffThread_DoesNotMutateCollectionOffUiThread()
+    {
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+
+        // A loader that only completes when a background thread sets its TCS.
+        // This guarantees the awaiter would resume off the pump thread if
+        // ConfigureAwait(false) regressed into LoadRecentRunsAsync.
+        var completionThreadId = 0;
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            async cancellationToken =>
+            {
+                var completion = new TaskCompletionSource<IReadOnlyList<RunSummaryViewModel>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                _ = Task.Run(() =>
+                {
+                    completionThreadId = Environment.CurrentManagedThreadId;
+                    completion.SetResult(new[]
+                    {
+                        new RunSummaryViewModel(
+                            new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero),
+                            TimeSpan.FromSeconds(1),
+                            "succeeded",
+                            null),
+                    });
+                }, cancellationToken);
+                return await completion.Task;
+            });
+
+        var observedThreadIds = new ConcurrentBag<int>();
+        var mutationException = default(Exception);
+        row.RecentRuns.CollectionChanged += (sender, args) =>
+        {
+            observedThreadIds.Add(Environment.CurrentManagedThreadId);
+            try
+            {
+                // Enumerating during the notification is what PanelContainerGenerator does;
+                // if the collection is being mutated from another thread this throws.
+                foreach (var _ in row.RecentRuns) { }
+            }
+            catch (InvalidOperationException ex)
+            {
+                mutationException = ex;
+            }
+        };
+
+        await pump.PostAsync(async () =>
+        {
+            await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        Assert.NotEqual(0, completionThreadId);
+        Assert.NotEqual(pump.ThreadId, completionThreadId);
+        Assert.Null(mutationException);
+        Assert.All(observedThreadIds, id => Assert.Equal(pump.ThreadId, id));
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsAsync_ReloadClearsAndRepopulates_ShowsMostRecentFirst()
+    {
+        var callCount = 0;
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            cancellationToken =>
+            {
+                callCount++;
+                IReadOnlyList<RunSummaryViewModel> runs = callCount == 1
+                    ? new[]
+                    {
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 29, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", null),
+                    }
+                    : new[]
+                    {
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 40, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", "later"),
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                        new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 29, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", null),
+                    };
+                return Task.FromResult(runs);
+            });
+
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, row.RecentRuns.Count);
+        Assert.Equal("succeeded", row.RecentRuns[0].Status);
+
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        // Reload replaces (does not append) and preserves the loader's ordering.
+        Assert.Equal(3, row.RecentRuns.Count);
+        Assert.Equal("later", row.RecentRuns[0].Message);
+        Assert.Equal("failed", row.RecentRuns[0].Status);
+        Assert.Equal("succeeded", row.RecentRuns[1].Status);
+        Assert.Equal("failed", row.RecentRuns[2].Status);
+    }
+
+    [Fact]
     public async Task RefreshHistoryAsync_ConcurrentWithRefresh_DoesNotThrow()
     {
         using var pump = new SingleThreadPump(installSynchronizationContext: true);
@@ -409,5 +561,321 @@ public sealed class ScheduledToolsRunningViewModelTests
         await Task.WhenAll(refreshHistoryTask, runTask);
 
         Assert.False(exceptionCaught, "ObservableCollection was mutated from multiple threads");
+    }
+
+    [Fact]
+    public void RunSummaryViewModel_WhenRunSucceeded_ShowsCheckGlyphNotHourglass()
+    {
+        var run = new RunSummaryViewModel(
+            new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero),
+            TimeSpan.FromSeconds(3),
+            "succeeded",
+            "Scanned 1 root(s); found 2 repositories.");
+
+        Assert.Equal("✓", run.StatusGlyph);
+        Assert.NotEqual("⏳", run.StatusGlyph);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForTool_WhenRunFailed_ShowsFailedGlyphAndMessage()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: false, message: "disk full");
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        var run = Assert.Single(row.RecentRuns);
+        Assert.Equal("failed", run.Status);
+        Assert.Equal("✗", run.StatusGlyph);
+        Assert.Equal("disk full", run.Message);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForTool_WhenOrphanRunningReconciled_ShowsFailedGlyphAndReconciliationMessage()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        // Seed an orphan running result (as a prior process would have left it).
+        var orphanId = Guid.NewGuid();
+        var startTime = new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
+        using (var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{orphanId}}",
+              "entity-types": ["entity", "tool-execution-result"],
+              "names": [["computer","this-machine","tool-executions","stub","20260617T093000000Z"]],
+              "tool-name": "stub",
+              "start-time": "{{startTime:O}}",
+              "status": "running"
+            }
+            """))
+        {
+            var seedResult = await dataAccessLayer.UpdateAsync(new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed orphan" } },
+                Changes = [new EntityChange { EntityId = new EntityId(orphanId), ConcurrencyTag = null, Data = document.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+            }, TestContext.Current.CancellationToken);
+            Assert.DoesNotContain(seedResult.EntityResults, r => r.UpdateState == UpdateState.Failed);
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        await host.ReconcileOrphanRunningResultsAsync(HostName, TestContext.Current.CancellationToken);
+
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        var run = Assert.Single(row.RecentRuns);
+        Assert.Equal("failed", run.Status);
+        Assert.Equal("✗", run.StatusGlyph);
+        Assert.NotNull(run.Message);
+        Assert.Contains("reconciled", run.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // --- #1203: history load must run off the UI thread and only marshal the final merge ---
+
+    private sealed class DedicatedThreadTaskScheduler : TaskScheduler, IDisposable
+    {
+        private readonly BlockingCollection<Task> queue = new();
+        private readonly Thread thread;
+        private int totalScheduled;
+        private int peakPending;
+
+        public DedicatedThreadTaskScheduler(string name)
+        {
+            this.thread = new Thread(() =>
+            {
+                this.ExecutionThreadId = Environment.CurrentManagedThreadId;
+                this.ThreadStartedEvent.TrySetResult();
+                foreach (var task in this.queue.GetConsumingEnumerable())
+                {
+                    Interlocked.Decrement(ref this.pendingCount);
+                    this.TryExecuteTask(task);
+                }
+            }) { IsBackground = true, Name = name };
+            this.thread.Start();
+        }
+
+        public TaskCompletionSource ThreadStartedEvent { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int ExecutionThreadId { get; private set; }
+        public int TotalScheduled => Volatile.Read(ref this.totalScheduled);
+        public int PeakPending => Volatile.Read(ref this.peakPending);
+
+        private int pendingCount;
+
+        protected override void QueueTask(Task task)
+        {
+            Interlocked.Increment(ref this.totalScheduled);
+            var pending = Interlocked.Increment(ref this.pendingCount);
+            int prev;
+            do
+            {
+                prev = Volatile.Read(ref this.peakPending);
+                if (pending <= prev) break;
+            } while (Interlocked.CompareExchange(ref this.peakPending, pending, prev) != prev);
+            this.queue.Add(task);
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+        protected override IEnumerable<Task>? GetScheduledTasks() => null;
+
+        public void Dispose() => this.queue.CompleteAdding();
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_LoadsQueryResults_OffTheForegroundScheduler()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        for (var i = 0; i < 20; i++)
+        {
+            await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+        }
+
+        using var scheduler = new DedicatedThreadTaskScheduler(nameof(RefreshHistoryAsync_LoadsQueryResults_OffTheForegroundScheduler));
+        await scheduler.ThreadStartedEvent.Task;
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(
+            host,
+            dataAccessLayer,
+            foregroundScheduler: scheduler);
+
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        // Only the final MergeHistory should be scheduled on the foreground scheduler; the
+        // query, JSON parsing, and dictionary building must all happen off-scheduler.
+        Assert.Equal(1, scheduler.TotalScheduled);
+        Assert.Single(viewModel.Tools);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_LargeHistory_DoesNotBlockForegroundScheduler()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        // Simulate a large recorded history across many tool types.
+        for (var i = 0; i < 200; i++)
+        {
+            await WriteRunAsync(dataAccessLayer, timeProvider, $"tool-{i % 40}", success: i % 3 != 0);
+        }
+
+        using var scheduler = new DedicatedThreadTaskScheduler(nameof(RefreshHistoryAsync_LargeHistory_DoesNotBlockForegroundScheduler));
+        await scheduler.ThreadStartedEvent.Task;
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(
+            host,
+            dataAccessLayer,
+            foregroundScheduler: scheduler);
+
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        // The foreground scheduler must not have queued O(N) items — only the final merge.
+        Assert.True(scheduler.PeakPending <= 2, $"PeakPending was {scheduler.PeakPending}");
+        Assert.Equal(1, scheduler.TotalScheduled);
+        Assert.Equal(40, viewModel.Tools.Count);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_MergesFinalHistoryOnForegroundScheduler()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub-2", success: false);
+
+        using var scheduler = new DedicatedThreadTaskScheduler(nameof(RefreshHistoryAsync_MergesFinalHistoryOnForegroundScheduler));
+        await scheduler.ThreadStartedEvent.Task;
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(
+            host,
+            dataAccessLayer,
+            foregroundScheduler: scheduler);
+
+        var mutationThreadIds = new ConcurrentBag<int>();
+        viewModel.Tools.CollectionChanged += (_, _) =>
+            mutationThreadIds.Add(Environment.CurrentManagedThreadId);
+
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(mutationThreadIds);
+        Assert.All(mutationThreadIds, id => Assert.Equal(scheduler.ExecutionThreadId, id));
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_UsesInjectedForegroundScheduler_NotSynchronizationContext()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(dataAccessLayer, timeProvider, "stub", success: true);
+
+        using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        using var scheduler = new DedicatedThreadTaskScheduler(nameof(RefreshHistoryAsync_UsesInjectedForegroundScheduler_NotSynchronizationContext));
+        await scheduler.ThreadStartedEvent.Task;
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(
+            host,
+            dataAccessLayer,
+            foregroundScheduler: scheduler);
+
+        var mutationThreadIds = new ConcurrentBag<int>();
+        viewModel.Tools.CollectionChanged += (_, _) =>
+            mutationThreadIds.Add(Environment.CurrentManagedThreadId);
+
+        await pump.PostAsync(async () =>
+        {
+            await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+            return 0;
+        });
+
+        Assert.NotEmpty(mutationThreadIds);
+        // Mutations must happen on the injected scheduler, not on the pump's captured context.
+        Assert.All(mutationThreadIds, id => Assert.Equal(scheduler.ExecutionThreadId, id));
+        Assert.All(mutationThreadIds, id => Assert.NotEqual(pump.ThreadId, id));
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_AfterAsyncLoad_HistoryIsRenderedCorrectly()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        // Two tools; each has multiple runs so LastRunStatus reflects the most recent.
+        await WriteRunAsync(dataAccessLayer, timeProvider, "tool-a", success: true);
+        await WriteRunAsync(dataAccessLayer, timeProvider, "tool-b", success: true);
+        await WriteRunAsync(dataAccessLayer, timeProvider, "tool-a", success: false, message: "boom");
+        await WriteRunAsync(dataAccessLayer, timeProvider, "tool-b", success: true);
+
+        using var scheduler = new DedicatedThreadTaskScheduler(nameof(RefreshHistoryAsync_AfterAsyncLoad_HistoryIsRenderedCorrectly));
+        await scheduler.ThreadStartedEvent.Task;
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(
+            host,
+            dataAccessLayer,
+            foregroundScheduler: scheduler);
+
+        var raised = new ConcurrentBag<string>();
+        viewModel.PropertyChanged += (_, args) => raised.Add(args.PropertyName ?? "");
+
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, viewModel.Tools.Count);
+        var toolA = Assert.Single(viewModel.Tools, t => t.ToolType == "tool-a");
+        var toolB = Assert.Single(viewModel.Tools, t => t.ToolType == "tool-b");
+        Assert.Equal("failed", toolA.LastRunStatus);
+        Assert.Equal("succeeded", toolB.LastRunStatus);
+        Assert.True(toolA.HasFailure);
+        Assert.False(toolB.HasFailure);
+        Assert.True(viewModel.HasFailure);
+        Assert.Contains(nameof(ScheduledToolsRunningViewModel.HasRunningTools), raised);
+        Assert.Contains(nameof(ScheduledToolsRunningViewModel.HasFailure), raised);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsAsync_LoadsRunsOffThread_AndUpdatesRecentRunsOnForegroundScheduler()
+    {
+        using var scheduler = new DedicatedThreadTaskScheduler(nameof(LoadRecentRunsAsync_LoadsRunsOffThread_AndUpdatesRecentRunsOnForegroundScheduler));
+        await scheduler.ThreadStartedEvent.Task;
+
+        var loaderThreadIds = new ConcurrentBag<int>();
+        var row = new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            async cancellationToken =>
+            {
+                await Task.Run(
+                    () => loaderThreadIds.Add(Environment.CurrentManagedThreadId),
+                    cancellationToken).ConfigureAwait(false);
+                return (IReadOnlyList<RunSummaryViewModel>)new[]
+                {
+                    new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 30, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "succeeded", null),
+                    new RunSummaryViewModel(new DateTimeOffset(2026, 6, 17, 9, 31, 0, TimeSpan.Zero), TimeSpan.FromSeconds(1), "failed", "boom"),
+                };
+            },
+            foregroundScheduler: scheduler);
+
+        var mutationThreadIds = new ConcurrentBag<int>();
+        row.RecentRuns.CollectionChanged += (_, _) =>
+            mutationThreadIds.Add(Environment.CurrentManagedThreadId);
+
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, row.RecentRuns.Count);
+        // Loader must have run off the foreground scheduler.
+        Assert.All(loaderThreadIds, id => Assert.NotEqual(scheduler.ExecutionThreadId, id));
+        // RecentRuns mutations must be marshaled onto the foreground scheduler.
+        Assert.NotEmpty(mutationThreadIds);
+        Assert.All(mutationThreadIds, id => Assert.Equal(scheduler.ExecutionThreadId, id));
     }
 }

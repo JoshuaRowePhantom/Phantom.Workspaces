@@ -8,33 +8,40 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class RunningAgentRowViewModel : ViewModelBase
 {
     private bool isThinking;
+    private readonly TimeProvider timeProvider;
 
     public RunningAgentRowViewModel(
         string sessionKey,
         string workspacePaneTitle,
         string tabTitle,
         bool isThinking,
-        ICommand activateCommand)
+        ICommand activateCommand,
+        TimeProvider? timeProvider = null)
     {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.SessionKey = sessionKey;
         this.WorkspacePaneTitle = workspacePaneTitle;
         this.TabTitle = tabTitle;
         this.isThinking = isThinking;
         this.HasOpenTab = true;
         this.ActivateCommand = activateCommand;
+        this.LastActivityAt = this.timeProvider.GetUtcNow().UtcDateTime;
     }
 
     public RunningAgentRowViewModel(
         string sessionKey,
         string entityName,
-        ICommand activateCommand)
+        ICommand activateCommand,
+        TimeProvider? timeProvider = null)
     {
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.SessionKey = sessionKey;
         this.EntityName = entityName;
         this.WorkspacePaneTitle = string.Empty;
         this.TabTitle = string.Empty;
         this.HasOpenTab = false;
         this.ActivateCommand = activateCommand;
+        this.LastActivityAt = this.timeProvider.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>The session key, used for deduplication across workspace panes.</summary>
@@ -60,7 +67,7 @@ public sealed class RunningAgentRowViewModel : ViewModelBase
     }
 
     /// <summary>The time of the most recent history activity for this session, used for sorting.</summary>
-    internal DateTime LastActivityAt { get; private set; } = DateTime.UtcNow;
+    internal DateTime LastActivityAt { get; private set; }
 
     internal void UpdateLastActivityAt(DateTime at)
     {

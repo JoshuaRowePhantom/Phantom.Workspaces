@@ -1,8 +1,10 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Threading;
+using Phantom.Workspaces.Testing;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -11,29 +13,32 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class GitWorktreeWatcherTests : IDisposable
 {
-    private readonly string tempDir;
-
-    public GitWorktreeWatcherTests()
-    {
-        this.tempDir = Path.Combine(Path.GetTempPath(), "pw-watcher-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(this.tempDir);
-    }
+    private readonly TempDirectory temp = new("pw-watcher-");
+    private string tempDir => this.temp.Path;
 
     public void Dispose()
     {
-        try
-        {
-            if (Directory.Exists(this.tempDir))
-            {
-                Directory.Delete(this.tempDir, recursive: true);
-            }
-        }
-        catch (IOException)
-        {
-        }
+        this.temp.Dispose();
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
+    public void GitWorktreeWatcher_AfterTestCompletes_LeavesNoTempDirectoryBehind()
+    {
+        // Sentinel: dispose a sibling TempDirectory and assert the
+        // directory it allocated is fully removed. Regressions in the
+        // exception-safe cleanup path fail this test.
+        string siblingPath;
+        using (var sibling = new TempDirectory("pw-watcher-sentinel-"))
+        {
+            siblingPath = sibling.Path;
+            File.WriteAllText(Path.Combine(siblingPath, "some-file.txt"), "content");
+            Assert.True(Directory.Exists(siblingPath));
+        }
+
+        Assert.False(Directory.Exists(siblingPath));
+    }
+
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ChangedEventFiredAfterFileModification()
     {
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -48,7 +53,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         Assert.True(fired);
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ChangedEventDebouncedOnRapidWrites()
     {
         var count = 0;
@@ -76,7 +81,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         Assert.Equal(1, Volatile.Read(ref count));
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task DisposeUnsubscribesWatcher()
     {
         var refreshCount = 0;
@@ -95,7 +100,7 @@ public sealed class GitWorktreeWatcherTests : IDisposable
         Assert.Equal(0, Volatile.Read(ref refreshCount));
     }
 
-    [PhantomAvaloniaFact(Timeout = 10_000)]
+    [AvaloniaFact(Timeout = 10_000)]
     public async Task ChangedEventRaisedOnUIThread()
     {
         var onUiThread = false;

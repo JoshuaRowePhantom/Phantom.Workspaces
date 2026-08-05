@@ -72,6 +72,40 @@ public sealed class RunningSubAgentsHtmlTransformerTests
             op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
     }
 
+    // #1128: On session reload, restored SDK sub-agents that were "running" at shutdown
+    // must be forced to Succeeded so the running-subagents panel clears. This mirrors the
+    // observable UI behavior — the transformer must re-render into the empty state after
+    // every restored agent transitions Running -> Succeeded via SetCompletionState.
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_SessionReload_ClearsRunningPanelForRestoredAgents()
+    {
+        var agent1 = new StubSubAgent("restored-1", "Restored A", AgentChatCompletionState.Running);
+        var agent2 = new StubSubAgent("restored-2", "Restored B", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { agent1, agent2 };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        // Session-reload transition applied by AgentChat.RestoreSubAgentsAsync — flip both
+        // restored agents to Succeeded and clear only after both have been marked so we
+        // observe the final empty-panel state (intermediate re-renders that still show
+        // agent2 are expected while agent1 has already been marked).
+        agent1.SetCompletionState(AgentChatCompletionState.Succeeded);
+        agent1.RaiseActivityChanged();
+        agent2.SetCompletionState(AgentChatCompletionState.Succeeded);
+
+        sink.Clear();
+
+        agent2.RaiseActivityChanged();
+
+        // Final state: the inner panel is removed and no fresh panel is appended.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelInnerId);
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+    }
+
     // ── Content rendering ─────────────────────────────────────────────────────
 
     [Fact]
@@ -108,6 +142,24 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         Assert.Contains("powershell", html, StringComparison.Ordinal);
         Assert.Contains("edit", html, StringComparison.Ordinal);
         Assert.Equal(2, CountOccurrences(html, "<li>"));
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_DirectChild_EmitsNonEmptyDataNavigateAgentId()
+    {
+        // Fix #1152: a direct-child sub-agent's rendered `data-navigate-agent-id` attribute
+        // must not be empty. When the child was registered via ISubAgentTable.Add and its
+        // AgentChat.agentId was left blank, the panel used to emit `data-navigate-agent-id=""`
+        // and the resulting anchor click would land in NavigateToSubAgent("") — a silent no-op
+        // or worse, a fall-through to the current-agent view. This test asserts every rendered
+        // navigate-id is non-empty.
+        var agent1 = new StubSubAgent("session-guid-1", "Alpha", AgentChatCompletionState.Running);
+        var agent2 = new StubSubAgent("session-guid-2", "Beta", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent1, agent2], []);
+
+        Assert.DoesNotContain("data-navigate-agent-id=\"\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-navigate-agent-id=\"session-guid-1\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-navigate-agent-id=\"session-guid-2\"", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -368,13 +420,16 @@ public sealed class RunningSubAgentsHtmlTransformerTests
 
         agent.RaiseActivityChanged();
 
-        Assert.Equal(2, sink.Operations.Count);
+        Assert.Equal(3, sink.Operations.Count);
         Assert.Equal("remove", sink.Operations[0].Kind);
         Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelInnerId, sink.Operations[0].Path);
         Assert.Equal("update", sink.Operations[1].Kind);
         Assert.Equal(ChatOutputHtmlRenderer.SubAgentPanelSentinelId, sink.Operations[1].Path);
         Assert.Equal(ChatOutputUpdateLocation.Append, sink.Operations[1].Location);
         Assert.Contains($"id=\"{ChatOutputHtmlRenderer.SubAgentPanelInnerId}\"", sink.Operations[1].Content);
+        // Issue #1202: the transformer requests a scroll-to-bottom after the append so
+        // AgentChatOutputControl can re-stick the WebView when auto-scroll is still enabled.
+        Assert.Equal("scroll", sink.Operations[2].Kind);
     }
 
     [Fact]
@@ -509,6 +564,168 @@ public sealed class RunningSubAgentsHtmlTransformerTests
         }
 
         return count;
+    }
+
+    // ── Parent agent panel (issue #902) ───────────────────────────────────────
+
+    [Fact]
+    public void ParentAgentPanel_WithParentAgent_IsRenderedAboveSubAgentsPanel()
+    {
+        var parent = new StubSubAgent("parent-session", "Parent Agent", AgentChatCompletionState.Running);
+        var child = new StubSubAgent("a1", "Child Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink, parent);
+
+        // The parent panel is rendered into its own sentinel, which the HTML shell places above
+        // the sub-agents sentinel.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append &&
+            op.Content.Contains("running-parent-agent-panel"));
+        // The sub-agents panel is still rendered into its own (lower) sentinel.
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId);
+    }
+
+    [Fact]
+    public void ParentAgentPanel_WithNoParentAgent_IsNotRendered()
+    {
+        var child = new StubSubAgent("a1", "Child Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay> { child };
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        Assert.DoesNotContain(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelSentinelId);
+    }
+
+    [Fact]
+    public void ParentAgentPanel_ShowsParentRecentActivity()
+    {
+        var activity = new List<SubAgentActivityLine>
+        {
+            new(SubAgentActivityKind.AgentText, "Waiting for the sub-agent to finish"),
+        };
+        var parent = new StubSubAgent("parent-session", "Parent Agent", AgentChatCompletionState.Running, activity: activity);
+        var html = RunningSubAgentsHtmlTransformer.BuildParentPanelHtml(parent);
+
+        Assert.Contains("[Parent agent]", html, StringComparison.Ordinal);
+        Assert.Contains("Waiting for the sub-agent to finish", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParentAgentLink_DataNavigateAgentId_IsParentSessionId()
+    {
+        var parent = new StubSubAgent("parent-session-123", "Parent Agent", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildParentPanelHtml(parent);
+
+        Assert.Contains("data-navigate-agent-id=\"parent-session-123\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ParentAgentPanel_ActivityChanged_TriggersRerender()
+    {
+        var parent = new StubSubAgent("parent-session", "Parent Agent", AgentChatCompletionState.Running);
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink, parent);
+
+        sink.Clear();
+
+        parent.RaiseActivityChanged();
+
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "remove" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelInnerId);
+        Assert.Contains(sink.Operations, op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.ParentAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append &&
+            op.Content.Contains("running-parent-agent-panel"));
+    }
+
+    // ── #1132: Display-name rendering in the [Running sub-agents] panel ───────
+
+    [Fact]
+    public void RunningSubAgentsPanel_SubAgentRow_ShowsDisplayName()
+    {
+        var agent = new StubSubAgent("agent-xyz", "fix-reload1", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.Contains("▷ fix-reload1", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_MultipleSubAgents_EachShowsOwnDisplayName()
+    {
+        var a1 = new StubSubAgent("id-1", "fix-reload1", AgentChatCompletionState.Running);
+        var a2 = new StubSubAgent("id-2", "fix-reload2", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([a1, a2], []);
+
+        Assert.Contains("▷ fix-reload1", html, StringComparison.Ordinal);
+        Assert.Contains("▷ fix-reload2", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_SubAgentRow_FallsBackToAgentId_WhenDisplayNameEmpty()
+    {
+        var agent = new StubSubAgent("agent-xyz-123", string.Empty, AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.Contains("▷ agent-xyz-123", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_NamedSubAgent_DoesNotRenderGenericProviderLabel()
+    {
+        var agent = new StubSubAgent("agent-xyz", "fix-reload1", AgentChatCompletionState.Running);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([agent], []);
+
+        Assert.DoesNotContain("GitHub Copilot Sub-Agent", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsPanel_NestedSubAgent_ShowsChildDisplayName()
+    {
+        var nested = new StubSubAgent("child-id", "nested-name", AgentChatCompletionState.Running);
+        var parent = new StubSubAgent("parent-id", "parent-name", AgentChatCompletionState.Running, subAgents: [nested]);
+        var html = RunningSubAgentsHtmlTransformer.BuildPanelHtml([parent], []);
+
+        Assert.Contains("▷ nested-name", html, StringComparison.Ordinal);
+        Assert.Contains("▷ parent-name", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunningSubAgentsHtmlTransformer_FullRender_RequestsScrollToBottom()
+    {
+        // Issue #1202: FullRender must call sink.ScrollToBottom() after appending the sub-agent
+        // panel so AgentChatOutputControl.ScrollToBottom() gets a chance to re-stick the WebView
+        // (gated on AutoScrollEnabled). Without this, the WebView's scrollHeight-growth transient
+        // latches auto-scroll off and subsequent streamed deltas no longer scroll into view.
+        var subAgents = new ObservableCollection<IRunningSubAgentDisplay>();
+        var sink = new RecordingSink();
+        using var transformer = new RunningSubAgentsHtmlTransformer(subAgents, [], sink);
+
+        sink.Clear();
+
+        var agent = new StubSubAgent("a1", "Code Reviewer", AgentChatCompletionState.Running);
+        subAgents.Add(agent);
+
+        // The append op is emitted first; the scroll request must follow so the browser has already
+        // grown scrollHeight by the time the scroll command posts.
+        var appendIndex = sink.Operations.FindIndex(op =>
+            op.Kind == "update" &&
+            op.Path == ChatOutputHtmlRenderer.SubAgentPanelSentinelId &&
+            op.Location == ChatOutputUpdateLocation.Append);
+        Assert.True(appendIndex >= 0, "Expected a sub-agent panel Append operation.");
+
+        var scrollIndex = sink.Operations.FindIndex(op => op.Kind == "scroll");
+        Assert.True(scrollIndex > appendIndex,
+            $"Expected a scroll op after the append (append={appendIndex}, scroll={scrollIndex}).");
     }
 
     private sealed record Operation(string Kind, string Path, ChatOutputUpdateLocation Location, string Content);

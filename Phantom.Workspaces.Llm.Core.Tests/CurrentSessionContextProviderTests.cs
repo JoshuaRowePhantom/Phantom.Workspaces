@@ -255,6 +255,109 @@ public sealed class CurrentSessionContextProviderTests
         Assert.Equal("captured-host", ReadFirstNameLeaf(result.GetProperty("user_computer_profile")));
     }
 
+    [Fact]
+    public async Task GetCurrentSession_HappyPath_ReturnsUserComputerAndProfile()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await SeedAgentSessionAsync(dataAccessLayer, AgentSessionId, ["agent-sessions", "one"]);
+        var profile = await SeedEntityAsync(dataAccessLayer, ["entity", "user-computer-profile"], ["profiles", "host-a"]);
+        var user = await SeedEntityAsync(dataAccessLayer, ["entity", "user"], ["users", "alice"]);
+        var computer = await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", "host-a"]);
+
+        var result = await InvokeAsync(
+            dataAccessLayer,
+            new CurrentSessionContext
+            {
+                AgentSessionId = AgentSessionId,
+                UserComputerProfile = profile,
+                User = user,
+                Computer = computer,
+            });
+
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("user").ValueKind);
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("computer").ValueKind);
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("user_computer_profile").ValueKind);
+    }
+
+    [Fact]
+    public async Task GetCurrentSession_ReturnedEntities_MatchCurrentIdentity()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await SeedAgentSessionAsync(dataAccessLayer, AgentSessionId, ["agent-sessions", "one"]);
+        var profile = await SeedEntityAsync(dataAccessLayer, ["entity", "user-computer-profile"], ["profiles", "host-a"]);
+        var user = await SeedEntityAsync(dataAccessLayer, ["entity", "user"], ["users", "alice"]);
+        var computer = await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", "host-a"]);
+
+        var result = await InvokeAsync(
+            dataAccessLayer,
+            new CurrentSessionContext
+            {
+                AgentSessionId = AgentSessionId,
+                UserComputerProfile = profile,
+                User = user,
+                Computer = computer,
+            });
+
+        Assert.Equal(profile.EntityId.Value.ToString(), ReadEntityId(result.GetProperty("user_computer_profile")));
+        Assert.Equal(user.EntityId.Value.ToString(), ReadEntityId(result.GetProperty("user")));
+        Assert.Equal(computer.EntityId.Value.ToString(), ReadEntityId(result.GetProperty("computer")));
+    }
+
+    [Fact]
+    public async Task GetCurrentSession_ContextWithoutComputer_ResolvesComputerFromProfileReference()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await SeedAgentSessionAsync(dataAccessLayer, AgentSessionId, ["agent-sessions", "one"]);
+        await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", "host-c"]);
+        var profile = await SeedProfileWithComputerReferenceAsync(
+            dataAccessLayer,
+            ["profiles", "host-c"],
+            ["computers", "hostname", "host-c"]);
+
+        var result = await InvokeAsync(
+            dataAccessLayer,
+            new CurrentSessionContext
+            {
+                AgentSessionId = AgentSessionId,
+                UserComputerProfile = profile,
+                // Computer intentionally omitted; the tool must resolve it from the profile reference.
+            });
+
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("computer").ValueKind);
+        Assert.Equal("host-c", ReadFirstNameLeaf(result.GetProperty("computer")));
+    }
+
+    [Fact]
+    public async Task GetCurrentSession_ToolName_IsGetCurrentSession()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var provider = new CurrentSessionContextProvider(
+            dataAccessLayer,
+            new CurrentSessionContext { AgentSessionId = AgentSessionId });
+
+        var tool = Assert.Single(await GetToolsAsync(provider));
+
+        Assert.Equal("get_current_session", tool.Name);
+    }
+
+    [Fact]
+    public async Task CurrentSessionToolset_CombinedChain_ExposesGetCurrentSessionTool()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var chain = ToolsetFactory.CreateCurrentSessionToolsetFactory(
+            dataAccessLayer,
+            new CurrentSessionContext { AgentSessionId = AgentSessionId },
+            ToolsetFactory.CreateDefaultToolsetFactory());
+
+        var provider = Assert.IsType<CurrentSessionContextProvider>(
+            await chain.CreateToolsetAsync(
+                new AgentSchema.CustomTool { Kind = "current-session", Name = "current-session" },
+                new AgentServices()));
+        var tools = await GetToolsAsync(provider);
+
+        Assert.Contains(tools, static tool => string.Equals(tool.Name, "get_current_session", StringComparison.Ordinal));
+    }
+
     private static async Task<JsonElement> InvokeAsync(
         IDataAccessLayer dataAccessLayer,
         CurrentSessionContext context,
@@ -329,6 +432,32 @@ public sealed class CurrentSessionContextProviderTests
         return getResult.Batches.SelectMany(static batch => batch.Entities).Single();
     }
 
+    private static async Task<EntitySnapshot> SeedProfileWithComputerReferenceAsync(
+        IDataAccessLayer dataAccessLayer,
+        string[] entityName,
+        string[] computerReference)
+    {
+        var entityId = new EntityId();
+        using var jsonDocument = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId.Value}}",
+              "entity-types": ["entity", "user-computer-profile"],
+              "names": [{{JsonSerializer.Serialize(entityName)}}],
+              "computer-reference": {{JsonSerializer.Serialize(computerReference)}}
+            }
+            """);
+        await WriteEntityAsync(dataAccessLayer, jsonDocument.RootElement.Clone());
+
+        var getResult = await dataAccessLayer.GetAsync(
+            new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = entityId }],
+            },
+            CancellationToken.None);
+        return getResult.Batches.SelectMany(static batch => batch.Entities).Single();
+    }
+
     private static async Task WriteEntityAsync(IDataAccessLayer dataAccessLayer, JsonElement entityData)
     {
         var updateResult = await dataAccessLayer.UpdateAsync(
@@ -354,6 +483,9 @@ public sealed class CurrentSessionContextProviderTests
 
     private static string? ReadAgentSessionId(JsonElement entity)
         => entity.GetProperty("data").GetProperty("agent-session-id").GetString();
+
+    private static string? ReadEntityId(JsonElement entity)
+        => entity.GetProperty("entityId").GetString();
 
     private static string? ReadFirstNameLeaf(JsonElement entity)
     {

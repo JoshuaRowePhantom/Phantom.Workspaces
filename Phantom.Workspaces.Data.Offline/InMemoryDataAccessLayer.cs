@@ -9,14 +9,18 @@ namespace Phantom.Workspaces.Data.Offline;
 public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 {
     private readonly IEmbeddingsProvider embeddingsProvider;
+    private readonly TimeProvider timeProvider;
     private readonly object embeddingsLock = new();
     private readonly Dictionary<EntityId, IReadOnlyList<float>> storedEmbeddings = new();
     private readonly Dictionary<string, Timestamp?> queueHeads = new(StringComparer.Ordinal);
     private State currentState = State.CreateInitial();
 
-    public InMemoryDataAccessLayer(IEmbeddingsProvider? embeddingsProvider = null)
+    public InMemoryDataAccessLayer(
+        IEmbeddingsProvider? embeddingsProvider = null,
+        TimeProvider? timeProvider = null)
     {
         this.embeddingsProvider = embeddingsProvider ?? new DeterministicEmbeddingsProvider();
+        this.timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public Task<ExportResult> ExportAsync(
@@ -69,7 +73,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
         while (true)
         {
             var state = this.ReadState();
-            var updateOutcome = state.UpdateAsync(request, cancellationToken);
+            var updateOutcome = state.UpdateAsync(request, this.timeProvider, cancellationToken);
 
             if (ReferenceEquals(
                 Interlocked.CompareExchange(ref this.currentState, updateOutcome.NextState, state),
@@ -296,6 +300,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
         public UpdateOutcome UpdateAsync(
             UpdateRequest request,
+            TimeProvider timeProvider,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -423,7 +428,7 @@ public sealed class InMemoryDataAccessLayer : IDataAccessLayer
 
                 nextSequenceNumber++;
                 var timestamp = new Timestamp(
-                    DateTimeOffset.UtcNow,
+                    timeProvider.GetUtcNow(),
                     nextSequenceNumber.ToString());
                 var entityNames = ExtractEntityNames(change.Data);
                 var entityTypeNames = ExtractEntityTypeNames(change.Data);

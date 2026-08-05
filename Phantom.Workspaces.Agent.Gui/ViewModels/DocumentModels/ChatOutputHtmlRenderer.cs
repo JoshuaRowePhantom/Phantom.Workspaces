@@ -34,8 +34,17 @@ internal static class ChatOutputHtmlRenderer
     public const string RunningContainerId = "running-items-container";
     public const string SubAgentPanelSentinelId = "subagent-panel-sentinel";
     public const string SubAgentPanelInnerId = "subagent-panel-inner";
+    public const string ParentAgentPanelSentinelId = "parent-agent-panel-sentinel";
+    public const string ParentAgentPanelInnerId = "parent-agent-panel-inner";
 
     private static readonly JsonSerializerOptions PrettyJsonOptions = new() { WriteIndented = true };
+
+    // Tool RESULT display caps (issue #1069). A result whose payload exceeds either threshold is
+    // collapsed to a short "(N lines)" / "(N characters)" summary instead of dumping the entire
+    // escaped one-liner into the summary and the fully-expanded tree into the body. The full
+    // payload remains available for inspection via the data-details-target attribute.
+    internal const int MaxToolResultLines = 20;
+    internal const int MaxToolResultCharacters = 2000;
 
     // Assistant/user text is authored in Markdown. Raw HTML pass-through is disabled so any literal
     // angle brackets in the model output are escaped (the rendered HTML is injected into the chat
@@ -124,16 +133,31 @@ internal static class ChatOutputHtmlRenderer
     }
 
     /// <summary>
-    /// Renders the outer "tools (N calls)" wrapper used only when there are more than one call in a
-    /// group. The <paramref name="summary"/> is a pre-formatted one-liner such as
-    /// <c>last_tool(…)</c>. <paramref name="innerHtml"/> is the pre-rendered set of
+    /// Renders the outer tool-group wrapper used only when there are more than one call in a group.
+    /// The summary lists the UNIQUE tool names in first-seen order, prefixed with <c>$ </c>:
+    /// <c>$ tool (name)</c> for a single unique tool, <c>$ tools (n1, n2, …)</c> otherwise.
+    /// <paramref name="toolNames"/> is the (possibly duplicated) list of tool names for the group's
+    /// calls; it is deduplicated here. <paramref name="innerHtml"/> is the pre-rendered set of
     /// <c>details.chat-tool-group-item</c> elements placed directly inside.
     /// </summary>
-    public static string RenderToolGroupWrapper(string contentId, int callCount, string summary, string innerHtml)
+    public static string RenderToolGroupWrapper(string contentId, int callCount, IReadOnlyList<string> toolNames, string innerHtml)
     {
+        var uniqueToolNames = new List<string>();
+        foreach (var name in toolNames)
+        {
+            if (!string.IsNullOrEmpty(name) && !uniqueToolNames.Contains(name, StringComparer.Ordinal))
+            {
+                uniqueToolNames.Add(name);
+            }
+        }
+
+        var toolWord = uniqueToolNames.Count == 1 ? "tool" : "tools";
+        var joinedNames = string.Join(", ", uniqueToolNames.Select(HtmlEscape));
+
         var builder = new StringBuilder();
         builder.Append("<details class=\"chat-content chat-tool-group-wrapper\" id=\"").Append(contentId).Append("\">");
-        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">tools  ").Append(HtmlEscape(summary))
+        builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"2\">$ ").Append(toolWord)
+            .Append(" (").Append(joinedNames).Append(')')
             .Append("  (").Append(callCount).Append(" calls)")
             .Append("<button type=\"button\" class=\"tool-expand-toggle\" data-tool-expand-toggle ")
             .Append("aria-label=\"Expand or collapse all tools\" aria-hidden=\"true\">")
@@ -196,7 +220,7 @@ internal static class ChatOutputHtmlRenderer
 
         if (resultJson is not null)
         {
-            var resultSummary = FirstLine(resultJson);
+            var resultSummary = SummarizeResult(resultJson);
 
             // Tool-RESULT block — gutter host (copy + inspect).
             builder.Append("<details class=\"chat-tool-result\" data-copy-target data-inspect-target");
@@ -214,7 +238,8 @@ internal static class ChatOutputHtmlRenderer
             builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">result  ").Append(HtmlEscape(resultSummary)).Append("</summary>");
             if (!string.IsNullOrEmpty(resultJson))
             {
-                builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(RenderToolPayload(resultJson)).Append("</pre>");
+                var (bodyHtml, _) = RenderToolResultBody(resultJson);
+                builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(bodyHtml).Append("</pre>");
             }
 
             builder.Append("</details>");
@@ -258,7 +283,6 @@ internal static class ChatOutputHtmlRenderer
         else
         {
             var innerBuilder = new StringBuilder();
-            var lastCallName = string.Empty;
             var memberIndex = 0;
             foreach (var call in calls)
             {
@@ -276,11 +300,11 @@ internal static class ChatOutputHtmlRenderer
                     SerializeContentJson(call),
                     result is not null ? SerializeContentJson(result) : null,
                     $"{contentId}-{memberIndex}"));
-                lastCallName = call.Name ?? string.Empty;
                 memberIndex++;
             }
 
-            return RenderToolGroupWrapper(contentId, calls.Count, lastCallName + "(…)", innerBuilder.ToString());
+            var toolNames = calls.Select(c => c.Name ?? string.Empty).ToList();
+            return RenderToolGroupWrapper(contentId, calls.Count, toolNames, innerBuilder.ToString());
         }
     }
 
@@ -293,8 +317,9 @@ internal static class ChatOutputHtmlRenderer
         string? jumpLinkHtml = null)
     {
         var builder = new StringBuilder();
+        var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
-            .Append(messageId).Append("\" data-sticky-base-level=\"0\">");
+            .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\">");
         builder.Append(RenderHeader(messageId, roleLabel, timestamp));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
@@ -379,8 +404,9 @@ internal static class ChatOutputHtmlRenderer
         }
 
         var builder = new StringBuilder();
-        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"1\">");
-        builder.Append("<span>[").Append(HtmlEscape(roleLabel)).Append("]</span>");
+        var stickyLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+        builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"").Append(stickyLevel).Append("\">");
+        builder.Append("<span>").Append(HtmlEscape(roleLabel)).Append("</span>");
         if (timestamp.HasValue)
         {
             builder.Append("<span class=\"chat-timestamp\" data-utc=\"")
@@ -742,6 +768,52 @@ internal static class ChatOutputHtmlRenderer
         var newlineIdx = trimmed.IndexOf('\n');
         return newlineIdx >= 0 ? trimmed[..newlineIdx].TrimEnd('\r') : trimmed;
     }
+
+    private static int CountLines(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return 0;
+        }
+
+        var count = 1;
+        foreach (var c in text)
+        {
+            if (c == '\n')
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static bool ToolResultOverflows(string resultJson)
+        => resultJson.Length > MaxToolResultCharacters || CountLines(resultJson) > MaxToolResultLines;
+
+    private static string ToolResultOverflowSummary(string resultJson)
+    {
+        var lineCount = CountLines(resultJson);
+        return lineCount > 1
+            ? $"({lineCount} lines)"
+            : $"({resultJson.Length} characters)";
+    }
+
+    // Summary line for the tool RESULT block. Small results show their real first line; oversized
+    // results collapse to "(N lines)" / "(N characters)" so the escaped one-liner is never dumped
+    // verbatim into the summary (issue #1069).
+    private static string SummarizeResult(string resultJson)
+        => ToolResultOverflows(resultJson)
+            ? ToolResultOverflowSummary(resultJson)
+            : FirstLine(resultJson);
+
+    // Body for the tool RESULT block. Small results render in full; oversized results render only
+    // the short "(N lines)" / "(N characters)" summary instead of the fully-expanded payload tree
+    // (issue #1069). The full payload stays available via data-details-target.
+    private static (string Html, bool Overflowed) RenderToolResultBody(string resultJson)
+        => ToolResultOverflows(resultJson)
+            ? (HtmlEscape(ToolResultOverflowSummary(resultJson)), true)
+            : (RenderToolPayload(resultJson), false);
 
     private static string DiagnosticHeader(string text)
     {

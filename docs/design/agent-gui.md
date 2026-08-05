@@ -187,7 +187,7 @@ A single text box sits at the bottom of the control. The text box operates in on
 | **Enter** | Append the composed text to the **default input queue** (the immediate/first queue). |
 | **Ctrl+Enter** | Append the composed text to the **default input queue** (same as Enter). |
 | **Ctrl+Q** | Append the composed text to the **most recently created queue**. |
-| **Ctrl+Shift+Q** | **Create a new queue** and append the composed text to it. The new queue becomes the most recently created queue for subsequent Ctrl+Q presses. |
+| **Ctrl+Shift+Q** | **Create a new queue in the Held (paused) state** and append the composed text to it. The staged message is not dispatched until the queue is released, so the user can configure or reorder it first. The new queue becomes the most recently created queue for subsequent Ctrl+Q presses. |
 | **Shift+Enter** | Switch to **formatted mode** without enqueuing. The text box expands to show multiple lines. |
 
 After any enqueue gesture the text box is cleared and focus returns to it.
@@ -201,7 +201,7 @@ In formatted mode the text box accepts multi-line input. The enqueue gestures ch
 | **Enter** | Insert a newline at the cursor. |
 | **Ctrl+Enter** | Enqueue the composed text into the **default input queue** and return to normal mode. |
 | **Ctrl+Q** | Enqueue the composed text into the **most recently created queue** and return to normal mode. |
-| **Ctrl+Shift+Q** | **Create a new queue**, enqueue the composed text into it, and return to normal mode. |
+| **Ctrl+Shift+Q** | **Create a new queue in the Held (paused) state**, enqueue the composed text into it, and return to normal mode. The staged message is not dispatched until the queue is released. |
 | **Esc** | Return to normal mode without enqueuing. The composed text is preserved in the text box. |
 
 The text box should show a visible indicator (e.g., a label or border change) when in formatted mode so the user knows Enter will not immediately submit.

@@ -1,39 +1,44 @@
-using System;
+using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Services.Notifications;
 
 namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// A built-in scheduled tool that discovers any active VS Code dev tunnel for the current
-/// user/machine and upserts a single <c>vscode-tunnel</c> entity under the user-computer-profile,
-/// named at the fixed leaf <c>vscode-tunnel</c>.
+/// user/machine by invoking <c>code tunnel status</c> and parsing its stdout, then upserts a
+/// single <c>vscode-tunnel</c> entity under the user-computer-profile. All CLI invocations are
+/// routed through the shared <see cref="VsCodeCliInvoker"/> so stdout/stderr/exit code are
+/// logged and surfaced to the user on failure. When the CLI reports that no tunnel is running
+/// the tool does not upsert any entity.
 /// </summary>
 public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 {
     /// <summary>Optional tool-entity property overriding the VS Code CLI executable path.</summary>
     public const string CliPathProperty = "cli-path";
 
-    /// <summary>Optional tool-entity property overriding the VS Code tunnel JSON file path.</summary>
-    public const string TunnelJsonPathProperty = "tunnel-json-path";
-
     private readonly ICurrentExecutionContextProvider currentExecutionContextProvider;
     private readonly ILogger<VsCodeTunnelDiscoveryTool> logger;
-    private readonly Func<string, CancellationToken, Task<int>>? processRunner;
+    private readonly IVsCodeTunnelStatusResolver tunnelStatusResolver;
     private readonly Func<string> defaultCliPathResolver;
 
     public VsCodeTunnelDiscoveryTool(
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
-        Func<string, CancellationToken, Task<int>>? processRunner = null,
+        IVsCodeTunnelStatusResolver? tunnelStatusResolver = null,
         Func<string>? defaultCliPathResolver = null,
+        INotificationService? notificationService = null,
         ILogger<VsCodeTunnelDiscoveryTool>? logger = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
         this.logger = logger ?? NullLogger<VsCodeTunnelDiscoveryTool>.Instance;
-        this.processRunner = processRunner;
+        this.tunnelStatusResolver = tunnelStatusResolver
+            ?? new VsCodeTunnelStatusResolver(
+                invoker: new VsCodeCliInvoker(notificationService: notificationService, logger: this.logger),
+                logger: this.logger);
         this.defaultCliPathResolver = defaultCliPathResolver ?? VsCodeCliLocator.ResolveDefaultCliPath;
     }
 
@@ -43,31 +48,49 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
     {
         ArgumentNullException.ThrowIfNull(context);
 
-        var tunnelJsonPath = ResolveTunnelJsonPath(context.Tool.Data);
-        var tunnelName = ReadTunnelNameFromFile(tunnelJsonPath);
-
-        if (tunnelName is null)
-        {
-            return WorkspaceToolExecutionResult.Failure($"Tunnel JSON not found or unreadable at {tunnelJsonPath}");
-        }
-
         var cliPath = this.ResolveCliPath(context.Tool.Data);
-        bool active;
+
+        VsCodeTunnelResolution resolution;
         try
         {
-            active = await this.CheckTunnelActiveAsync(cliPath, context.CancellationToken).ConfigureAwait(false);
+            resolution = await this.tunnelStatusResolver
+                .ResolveAsync(cliPath, context.CancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Win32Exception ex)
+        {
+            return WorkspaceToolExecutionResult.Failure(
+                $"VS Code CLI ('code') not found or not runnable: {ex.Message}");
         }
         catch (Exception ex)
         {
-            return WorkspaceToolExecutionResult.Failure($"Failed to run VS Code CLI: {ex.Message}");
+            return WorkspaceToolExecutionResult.Failure($"Failed to run 'code tunnel status': {ex.Message}");
+        }
+
+        if (resolution.CliResult is null)
+        {
+            return WorkspaceToolExecutionResult.Failure(
+                $"VS Code CLI ('code') not found or not runnable: {resolution.CliLaunchError}");
+        }
+
+        if (resolution.Status is null)
+        {
+            var cli = resolution.CliResult;
+            if (cli.ExitCode != 0)
+            {
+                return WorkspaceToolExecutionResult.Failure(
+                    $"'code tunnel status' failed (exit {cli.ExitCode}).\nStdout:\n{cli.StandardOut}\nStderr:\n{cli.StandardError}");
+            }
+
+            // No tunnel currently running — do not upsert a stale entity.
+            return WorkspaceToolExecutionResult.Success();
         }
 
         var entityName = this.BuildEntityName();
         var entityId = CreateDeterministicEntityId(entityName);
-        var tunnelUrl = $"https://vscode.dev/tunnel/{tunnelName}";
 
         using var entityDataDocument = JsonDocument.Parse(
-            BuildVsCodeTunnelJson(entityId, entityName, tunnelName, tunnelUrl, active));
+            BuildVsCodeTunnelJson(entityId, entityName, resolution.Status.TunnelName, resolution.Status.TunnelUrl, resolution.Status.IsConnected));
 
         await context.DataAccessLayer.UpdateAsync(
             new UpdateRequest
@@ -102,60 +125,6 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             "vscode-tunnel");
     }
 
-    /// <summary>
-    /// The default VS Code tunnel JSON path: <c>&lt;user home&gt;/.vscode/cli/code_tunnel.json</c>.
-    /// The user home is read from the <c>USERPROFILE</c> environment variable when set (so discovery
-    /// can be tested against an isolated home), falling back to the OS user-profile folder.
-    /// </summary>
-    public static string GetDefaultTunnelJsonPath()
-    {
-        var home = Environment.GetEnvironmentVariable("USERPROFILE");
-        if (string.IsNullOrWhiteSpace(home))
-        {
-            home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        }
-
-        return Path.Combine(home, ".vscode", "cli", "code_tunnel.json");
-    }
-
-    private static string ResolveTunnelJsonPath(JsonElement? toolData)
-    {
-        if (toolData is JsonElement toolDataValue
-            && toolDataValue.ValueKind == JsonValueKind.Object
-            && toolDataValue.TryGetProperty(TunnelJsonPathProperty, out var pathElement)
-            && pathElement.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(pathElement.GetString()))
-        {
-            return pathElement.GetString()!;
-        }
-
-        return GetDefaultTunnelJsonPath();
-    }
-
-    private static string? ReadTunnelNameFromFile(string path)
-    {
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
-            if (document.RootElement.TryGetProperty("tunnel_name", out var tunnelNameElement)
-                && tunnelNameElement.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(tunnelNameElement.GetString()))
-            {
-                return tunnelNameElement.GetString();
-            }
-        }
-        catch (JsonException)
-        {
-        }
-
-        return null;
-    }
-
     private string ResolveCliPath(JsonElement? toolData)
     {
         if (toolData is JsonElement toolDataValue
@@ -168,24 +137,6 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
         }
 
         return this.defaultCliPathResolver();
-    }
-
-    private async Task<bool> CheckTunnelActiveAsync(string cliPath, CancellationToken cancellationToken)
-    {
-        var runner = this.processRunner ?? DefaultRunTunnelStatusAsync;
-        var exitCode = await runner(cliPath, cancellationToken).ConfigureAwait(false);
-        return exitCode == 0;
-    }
-
-    private async Task<int> DefaultRunTunnelStatusAsync(string cliPath, CancellationToken cancellationToken)
-    {
-        var parameters = VsCodeCliLocator.BuildRunProcessParameters(cliPath, "tunnel status");
-        var result = await ProcessRunner.RunAndLogAsync(
-            parameters,
-            this.logger,
-            operationDescription: "vscode tunnel status",
-            cancellationToken).ConfigureAwait(false);
-        return result.ExitCode;
     }
 
     private static EntityId CreateDeterministicEntityId(EntityName entityName)

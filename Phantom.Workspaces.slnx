@@ -34,13 +34,17 @@
   <Project Path="Phantom.Workspaces.Llm.Test.Mcp/Phantom.Workspaces.Llm.Test.Mcp.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Interfaces/Phantom.Workspaces.Llm.Interfaces.csproj" />
   <Project Path="Phantom.Workspaces.Llm.Echo/Phantom.Workspaces.Llm.Echo.csproj" />
+  <Project Path="Phantom.Workspaces.Logging/Phantom.Workspaces.Logging.csproj" />
   <Project Path="Phantom.Workspaces.Tools.Tests/Phantom.Workspaces.Tools.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Tools.Test/Phantom.Workspaces.Tools.Test.csproj" />
   <Project Path="Phantom.Workspaces.Testing.Gui/Phantom.Workspaces.Testing.Gui.csproj" />
+  <Project Path="Phantom.Workspaces.Testing/Phantom.Workspaces.Testing.csproj" />
   <Project Path="Phantom.Workspaces.Transport.Tests/Phantom.Workspaces.Transport.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Transport/Phantom.Workspaces.Transport.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server.Tests/Phantom.Workspaces.Web.Server.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Web.Server/Phantom.Workspaces.Web.Server.csproj" />
+  <Project Path="Phantom.Dock.Avalonia.TabSwitching/Phantom.Dock.Avalonia.TabSwitching/Phantom.Dock.Avalonia.TabSwitching.csproj" />
+  <Project Path="Phantom.Dock.Avalonia.TabSwitching/Phantom.Dock.Avalonia.TabSwitching.Tests/Phantom.Dock.Avalonia.TabSwitching.Tests.csproj" />
   <Project Path="Phantom.Workspaces/Phantom.Workspaces.csproj" />
   <Project Path="Phantom.Workspaces.IntegrationTests/Phantom.Workspaces.IntegrationTests.csproj" />
 </Solution>

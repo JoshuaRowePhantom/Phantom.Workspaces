@@ -7,8 +7,11 @@
         mc:Ignorable="d"
         x:Class="Phantom.Workspaces.SettingsDialogWindow"
         x:DataType="vm:WorkspacesSettingsViewModel"
-        Width="680"
-        Height="560"
+        SizeToContent="WidthAndHeight"
+        MinWidth="680"
+        MaxWidth="1100"
+        MinHeight="480"
+        MaxHeight="800"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
         Title="Settings">
@@ -24,6 +27,9 @@
         </DataTemplate>
         <DataTemplate DataType="vm:UpdateSettingsViewModel">
             <views:UpdateSettingsView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:LogsSettingsViewModel">
+            <views:LogsSettingsView />
         </DataTemplate>
     </Window.DataTemplates>
 

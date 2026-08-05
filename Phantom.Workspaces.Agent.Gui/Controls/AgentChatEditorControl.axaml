@@ -3,6 +3,8 @@
              xmlns:vm="using:Phantom.Workspaces.Agent.Gui.ViewModels"
              xmlns:controls="using:Phantom.Workspaces.Agent.Gui.Controls"
              xmlns:converters="using:Phantom.Workspaces.Agent.Gui.Converters"
+             xmlns:dock="using:Dock.Avalonia.Controls"
+             xmlns:ts="using:Phantom.Dock.Avalonia.TabSwitching"
              x:Class="Phantom.Workspaces.Agent.Gui.Controls.AgentChatEditorControl"
              x:CompileBindings="False"
              x:DataType="vm:AgentViewModel">
@@ -99,6 +101,14 @@
                     <TextBlock Text="Display name"
                                Classes="muted"/>
                     <TextBox Text="{Binding DisplayName}"
+                             IsReadOnly="True"
+                             Classes="agent-detail-value copyable-text"/>
+                </StackPanel>
+                <StackPanel Spacing="4"
+                            IsVisible="{Binding AgentName, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <TextBlock Text="Agent name"
+                               Classes="muted"/>
+                    <TextBox Text="{Binding AgentName}"
                              IsReadOnly="True"
                              Classes="agent-detail-value copyable-text"/>
                 </StackPanel>
@@ -215,41 +225,41 @@
                            TextWrapping="Wrap"/>
             </DockPanel>
         </DataTemplate>
+        <!-- Fix #1112: the "Sub-agents (N)" group node's DetailContent is only ever the browser
+             card. Individual sub-agent transcripts are hosted as their own DocumentDock Documents
+             (each sub-agent nav item's DetailContent is its own ConversationDetail), so exactly one
+             AgentChatOutputControl/WebView2 surface is materialised at a time — the overlapping
+             Panel/ItemsControl deck that airspace-clobbered the transcripts is gone. -->
         <DataTemplate DataType="vm:SubAgentsContainerViewModel">
-            <Panel>
-                <ContentControl Content="{Binding Browser}"
-                                IsVisible="{Binding IsShowingBrowser}"/>
-                <ItemsControl ItemsSource="{Binding Slots}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <Panel/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="vm:SubAgentSlotViewModel" x:CompileBindings="True">
-                            <Panel IsVisible="{Binding IsSelected}">
-                                <ContentControl Content="{Binding SubAgentViewModel.ConversationDetail}"/>
-                            </Panel>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </Panel>
+            <ContentControl Content="{Binding Browser}"/>
         </DataTemplate>
     </UserControl.DataTemplates>
 
     <Border Classes="agent-pane">
         <Grid x:Name="EditorGrid">
             <Grid.ColumnDefinitions>
+                <!-- Issue #1051: MinWidth=160 (was 0) so a drag can never collapse the tree pane
+                     into the native output surface; relaxed to 0 by SetTreeCollapsed for the
+                     intentional programmatic full-collapse. -->
                 <ColumnDefinition Width="280"
-                                  MinWidth="0"
+                                  MinWidth="160"
                                   MaxWidth="480"/>
                 <ColumnDefinition Width="24"
                                   MinWidth="24"
                                   MaxWidth="24"/>
-                <ColumnDefinition Width="*"/>
+                <!-- Issue #1051: MinWidth=240 so a drag can never squeeze the native HTML output
+                     pane to ~0 and hide the splitter behind the WebView airspace. -->
+                <ColumnDefinition Width="*"
+                                  MinWidth="240"/>
             </Grid.ColumnDefinitions>
+            <!-- Issue #1111: SelectedItem is two-way bound to AgentViewModel.SelectedEditorItem so
+                 programmatic navigation (initial selection, tree collapse, sub-agent jump-button)
+                 also drives TreeViewItem.IsSelected — the visual key for the blue .selected
+                 recolour in the shared entity-card style. Code-behind expands ancestors on VM
+                 selection changes so the target container is materialised. -->
             <TreeView x:Name="NavigationTree"
                       ItemsSource="{Binding EditorItems}"
+                      SelectedItem="{Binding SelectedEditorItem, Mode=TwoWay}"
                       ItemTemplate="{StaticResource AgentNavigationTreeHeaderItemTemplate}"
                       Classes="entity-card-tree-view entity-card-tree-sticky"
                       MinWidth="160"
@@ -271,28 +281,39 @@
                           Classes="main-splitter"
                           ResizeBehavior="PreviousAndNext"/>
             <ToggleButton x:Name="TreeCollapseToggle"
-                          Width="16"
-                          Height="16"
+                          Classes="pane-collapser"
                           HorizontalAlignment="Center"
                           VerticalAlignment="Center"
                           Grid.Column="1"
-                          Click="OnTreeCollapseToggleClicked"
-                          Content="◀"/>
-            <Panel Grid.Column="2">
-                <ItemsControl ItemsSource="{Binding DetailContentSlots}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <Panel/>
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate DataType="vm:DetailContentSlot">
-                            <ContentControl Content="{Binding Content}"
-                                            IsVisible="{Binding IsVisible}"/>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </Panel>
+                          Click="OnTreeCollapseToggleClicked"/>
+            <!-- Issue #1035: the detail region is a locked, tab-strip-less Dock.Avalonia
+                 DocumentDock (cache-N/show-one). Every nav node's DetailContent —
+                 including every sub-agent child — is a first-class cached Document, so the panel is
+                 never blank. Docking is fully disabled (IsDockingEnabled=False), the floating-window
+                 layer is off, and the tab strip is hidden via the scoped DockDocumentControlTabStripVisible
+                 resource. Tree selection drives the active document via AgentViewModel.SelectedEditorItem. -->
+            <dock:DockControl Grid.Column="2"
+                              Layout="{Binding DetailLayout}"
+                              IsDockingEnabled="False"
+                              EnableManagedWindowLayer="False"
+                              ts:DockTabSwitch.InstallOnTopLevel="True"
+                              ts:DockTabSwitch.Enabled="True">
+                <ts:DockTabSwitch.Bindings>
+                    <ts:DockTabSwitchBindings>
+                        <ts:DockTabSwitchGestures Modifiers="Control,Alt"
+                                                  Keys="Digits"
+                                                  Scope="AllSwitchable" />
+                    </ts:DockTabSwitchBindings>
+                </ts:DockTabSwitch.Bindings>
+                <dock:DockControl.Resources>
+                    <x:Boolean x:Key="DockDocumentControlTabStripVisible">False</x:Boolean>
+                </dock:DockControl.Resources>
+                <dock:DockControl.DataTemplates>
+                    <DataTemplate DataType="vm:AgentDetailDocument">
+                        <ContentControl Content="{Binding DetailContent}"/>
+                    </DataTemplate>
+                </dock:DockControl.DataTemplates>
+            </dock:DockControl>
         </Grid>
     </Border>
 </UserControl>

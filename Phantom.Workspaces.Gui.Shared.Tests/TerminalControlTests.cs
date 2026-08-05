@@ -71,7 +71,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – screen buffer updates ───────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_PushBytes_UpdatesScreenBuffer()
     {
         var stream = new MemoryStream();
@@ -101,7 +101,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – key-down writes VT sequence to stream ──────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_KeyDown_WritesSequenceToStream()
     {
         var stream = new MemoryStream();
@@ -130,7 +130,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – resize callback ─────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_Resize_CallsResizeCallback()
     {
         var resizeCalls = new System.Collections.Generic.List<(int cols, int rows)>();
@@ -260,7 +260,7 @@ public sealed class TerminalControlTests
         Assert.False(vtc.SgrMouseMode);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_Render_WhenCellHasNullRgbAttributes_DoesNotThrow()
     {
         var vm = new TerminalSessionViewModel
@@ -287,7 +287,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – Terminal.Background resource override ──────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_TerminalBackgroundResource_OverridesDefaultBackground()
     {
         var overrideBrush = new SolidColorBrush(Colors.HotPink);
@@ -360,7 +360,7 @@ public sealed class TerminalControlTests
 
     // ── Cell metrics – pixel snapping (issue #708) ───────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_CellWidth_IsWholePixel()
     {
         var control = new TerminalControl();
@@ -373,7 +373,7 @@ public sealed class TerminalControlTests
         Assert.Equal(Math.Floor(control.CellWidth), control.CellWidth);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_CellHeight_IsWholePixel()
     {
         var control = new TerminalControl();
@@ -386,7 +386,7 @@ public sealed class TerminalControlTests
         Assert.Equal(Math.Floor(control.CellHeight), control.CellHeight);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_CellHeight_HasNoExtraLeading()
     {
         var control = new TerminalControl();
@@ -403,7 +403,7 @@ public sealed class TerminalControlTests
         Assert.Equal(expected, control.CellHeight);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_AdjacentCellOrigins_LandOnWholePixels()
     {
         var control = new TerminalControl();
@@ -444,7 +444,7 @@ public sealed class TerminalControlTests
 
     // ── ReadLoopAsync incomplete VT sequences ─────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ReadLoopAsync_IncompleteOscSequence_DoesNotThrow()
     {
         var chunked = new ChunkedStream(
@@ -478,7 +478,7 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ReadLoopAsync_SequenceSplitAcrossTwoChunks_RenderedCorrectly()
     {
         var chunked = new ChunkedStream(
@@ -519,7 +519,7 @@ public sealed class TerminalControlTests
         Assert.Equal('o', line[4].Char);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ReadLoopAsync_MalformedStream_ExceedingThreshold_ClearsAndContinues()
     {
         // 17 chunks of 4096 bytes each = 69632 bytes > 65536 threshold.
@@ -560,7 +560,7 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ReadLoopAsync_PartialSequenceThenCompleteText_BothRenderedCorrectly()
     {
         var chunked = new ChunkedStream(
@@ -599,7 +599,7 @@ public sealed class TerminalControlTests
         Assert.Equal('t', line[3].Char);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task ReadLoopAsync_MultipleIncompleteChunks_ReassembledIntoCompleteSequence()
     {
         var chunked = new ChunkedStream(
@@ -635,7 +635,7 @@ public sealed class TerminalControlTests
 
     // ── ReadLoopAsync unhandled VT sequences (issue #713) ─────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UnhandledOscSequence_Param110_DoesNotKillReadLoop()
     {
         var chunked = new ChunkedStream(
@@ -662,7 +662,7 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UnhandledOscSequence_Param4_DoesNotKillReadLoop()
     {
         var chunked = new ChunkedStream(
@@ -688,7 +688,7 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UnhandledCsiSequence_KittyQuery_DoesNotKillReadLoop()
     {
         var chunked = new ChunkedStream(
@@ -714,7 +714,7 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UnhandledCsiSequence_GreaterThanM_DoesNotKillReadLoop()
     {
         var chunked = new ChunkedStream(
@@ -740,7 +740,7 @@ public sealed class TerminalControlTests
         Assert.True(vm.IsExited);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task UnknownSequence_AfterPartialText_TextStillRendered()
     {
         var chunked = new ChunkedStream(
@@ -768,7 +768,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – VT mouse reporting ──────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingEnabled_WritesVtSequenceToInput()
     {
         var stream = new MemoryStream();
@@ -806,7 +806,7 @@ public sealed class TerminalControlTests
         Assert.Equal((byte)'M', written[2]);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingEnabled_X10Mode_SuppressesMotionEvents()
     {
         var stream = new MemoryStream();
@@ -846,7 +846,7 @@ public sealed class TerminalControlTests
         Assert.Equal(pressLength, stream.Length);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingEnabled_ScrollWheel_WritesButton64Or65()
     {
         var stream = new MemoryStream();
@@ -878,7 +878,7 @@ public sealed class TerminalControlTests
         Assert.Contains((byte)'`', written);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingEnabled_ModifierKeys_EncodedInSequence()
     {
         var stream = new MemoryStream();
@@ -972,7 +972,7 @@ public sealed class TerminalControlTests
 
     // ── TerminalControl – native mouse selection path (no VT mouse mode active) ──────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_LeftDrag_SelectsText()
     {
         var stream = new MemoryStream();
@@ -1015,7 +1015,7 @@ public sealed class TerminalControlTests
         Assert.Contains("Hello", selected);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_DoubleClick_SelectsWord()
     {
         var stream = new MemoryStream();
@@ -1049,7 +1049,7 @@ public sealed class TerminalControlTests
         Assert.Equal("Hello", selected);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_TripleClick_SelectsLine()
     {
         var stream = new MemoryStream();
@@ -1084,7 +1084,7 @@ public sealed class TerminalControlTests
         Assert.DoesNotContain("Second Line", selected);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_AltDrag_SelectsRectangularRegion()
     {
         var stream = new MemoryStream();
@@ -1115,7 +1115,7 @@ public sealed class TerminalControlTests
         Assert.True(control.SelectionModel.IsRectangular);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_ShiftClick_ExtendsSelection()
     {
         var stream = new MemoryStream();
@@ -1154,7 +1154,7 @@ public sealed class TerminalControlTests
         Assert.NotEmpty(selected);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TerminalControl_MouseReportingDisabled_RightClick_PastesFromClipboard()
     {
         var stream = new MemoryStream();
@@ -1204,7 +1204,7 @@ public sealed class TerminalControlTests
         // This test verifies selection clearing and that the method executes without crashing.
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TerminalControl_MouseReportingDisabled_MiddleClick_PastesFromClipboard()
     {
         var stream = new MemoryStream();
@@ -1234,7 +1234,7 @@ public sealed class TerminalControlTests
     }
 
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_MouseReportingDisabled_Scroll_MovesViewport()
     {
         var stream = new MemoryStream();
@@ -1271,7 +1271,7 @@ public sealed class TerminalControlTests
         Assert.NotEqual(initialTopRow, afterScrollTopRow);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_CtrlLeftClickOnUrl_RaisesNavigationRequestedEvent()
     {
         var stream = new MemoryStream();
@@ -1304,7 +1304,7 @@ public sealed class TerminalControlTests
         Assert.Equal("https://example.com", navigatedUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_CtrlLeftClickNotOnUrl_DoesNotRaiseNavigationRequested()
     {
         var stream = new MemoryStream();
@@ -1337,7 +1337,7 @@ public sealed class TerminalControlTests
         Assert.Null(navigatedUrl);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_NavigationRequested_NullHandler_NoException()
     {
         var stream = new MemoryStream();
@@ -1369,7 +1369,7 @@ public sealed class TerminalControlTests
 
     // ── Kitty keyboard protocol (issue #725) ──────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void KittyKeyboard_QueryReceived_RespondsWithNoEnhancements()
     {
         var stream = new MemoryStream();
@@ -1390,7 +1390,7 @@ public sealed class TerminalControlTests
         Assert.Equal("\x1b[?0u", response);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void KittyKeyboard_PushFlags_Acknowledged()
     {
         var stream = new MemoryStream();
@@ -1409,7 +1409,7 @@ public sealed class TerminalControlTests
         Assert.Null(ex);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void KittyKeyboard_PopFlags_Acknowledged()
     {
         var stream = new MemoryStream();
@@ -1428,7 +1428,7 @@ public sealed class TerminalControlTests
         Assert.Null(ex);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void KittyKeyboard_SetFlags_NoOp()
     {
         var stream = new MemoryStream();
@@ -1447,7 +1447,7 @@ public sealed class TerminalControlTests
         Assert.Null(ex);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void KeyModifierOption_Set_NoOp()
     {
         var stream = new MemoryStream();
@@ -1466,7 +1466,7 @@ public sealed class TerminalControlTests
         Assert.Null(ex);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void KeyModifierOption_Query_RespondsWithDefaultValue()
     {
         var stream = new MemoryStream();
@@ -1489,7 +1489,7 @@ public sealed class TerminalControlTests
 
     // ── Device attributes (issue #725) ────────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void PrimaryDeviceAttributes_Queried_RespondsWithCapabilities()
     {
         var stream = new MemoryStream();
@@ -1510,7 +1510,7 @@ public sealed class TerminalControlTests
         Assert.Equal("\x1b[?64;1;2;6;22c", response);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SecondaryDeviceAttributes_Queried_Responds()
     {
         var stream = new MemoryStream();
@@ -1531,7 +1531,7 @@ public sealed class TerminalControlTests
         Assert.Equal("\x1b[>0;0;0c", response);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void DeviceStatusReport_Queried_RespondsOK()
     {
         var stream = new MemoryStream();
@@ -1552,7 +1552,7 @@ public sealed class TerminalControlTests
         Assert.Equal("\x1b[0n", response);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorPositionReport_Queried_RespondsWithCurrentPosition()
     {
         var stream = new MemoryStream();
@@ -1576,7 +1576,7 @@ public sealed class TerminalControlTests
 
     // ── DECSCUSR cursor shape (issue #725) ────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_BlinkingBlock_SetCorrectly()
     {
         var control = CreateControlWithSession();
@@ -1584,7 +1584,7 @@ public sealed class TerminalControlTests
         Assert.Equal(1, control.CursorShape);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_SteadyBlock_SetCorrectly()
     {
         var control = CreateControlWithSession();
@@ -1592,7 +1592,7 @@ public sealed class TerminalControlTests
         Assert.Equal(2, control.CursorShape);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_BlinkingUnderline_SetCorrectly()
     {
         var control = CreateControlWithSession();
@@ -1600,7 +1600,7 @@ public sealed class TerminalControlTests
         Assert.Equal(3, control.CursorShape);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_SteadyUnderline_SetCorrectly()
     {
         var control = CreateControlWithSession();
@@ -1608,7 +1608,7 @@ public sealed class TerminalControlTests
         Assert.Equal(4, control.CursorShape);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_BlinkingBar_SetCorrectly()
     {
         var control = CreateControlWithSession();
@@ -1616,7 +1616,7 @@ public sealed class TerminalControlTests
         Assert.Equal(5, control.CursorShape);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_SteadyBar_SetCorrectly()
     {
         var control = CreateControlWithSession();
@@ -1624,7 +1624,7 @@ public sealed class TerminalControlTests
         Assert.Equal(6, control.CursorShape);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void CursorShape_Reset_RestoresDefault()
     {
         var control = CreateControlWithSession();
@@ -1636,7 +1636,7 @@ public sealed class TerminalControlTests
 
     // ── OSC palette/colors (issue #725) ───────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscPaletteSet_ColorN_StoredInPalette()
     {
         var control = CreateControlWithSession();
@@ -1644,7 +1644,7 @@ public sealed class TerminalControlTests
         Assert.Equal(Color.FromRgb(0xff, 0, 0), control.PaletteOverrides[1]);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscPaletteReset_ColorN_ClearedFromPalette()
     {
         var control = CreateControlWithSession();
@@ -1654,7 +1654,7 @@ public sealed class TerminalControlTests
         Assert.False(control.PaletteOverrides.ContainsKey(1));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscDefaultFg_Set_OverridesTerminalDefault()
     {
         var control = CreateControlWithSession();
@@ -1662,7 +1662,7 @@ public sealed class TerminalControlTests
         Assert.Equal(Color.FromRgb(0xff, 0, 0), control.DefaultFgOverride);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscDefaultFg_Reset_RestoresTerminalDefault()
     {
         var control = CreateControlWithSession();
@@ -1672,7 +1672,7 @@ public sealed class TerminalControlTests
         Assert.Null(control.DefaultFgOverride);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscDefaultBg_Set_OverridesTerminalDefault()
     {
         var control = CreateControlWithSession();
@@ -1680,7 +1680,7 @@ public sealed class TerminalControlTests
         Assert.Equal(Color.FromRgb(0, 0xff, 0), control.DefaultBgOverride);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscDefaultBg_Reset_RestoresTerminalDefault()
     {
         var control = CreateControlWithSession();
@@ -1690,7 +1690,7 @@ public sealed class TerminalControlTests
         Assert.Null(control.DefaultBgOverride);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscCursorColor_Set_AffectsCursorRendering()
     {
         var control = CreateControlWithSession();
@@ -1698,7 +1698,7 @@ public sealed class TerminalControlTests
         Assert.Equal(Color.FromRgb(0xff, 0xff, 0), control.CursorColorOverride);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscCursorColor_Reset_RestoresDefault()
     {
         var control = CreateControlWithSession();
@@ -1710,7 +1710,7 @@ public sealed class TerminalControlTests
 
     // ── Synchronized output (issue #725) ──────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SynchronizedOutput_Begin_BatchesDomUpdates()
     {
         var control = CreateControlWithSession();
@@ -1718,7 +1718,7 @@ public sealed class TerminalControlTests
         Assert.Equal(1, control.SynchronizedOutputNestingLevel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SynchronizedOutput_End_FlushesAllPendingUpdates()
     {
         var control = CreateControlWithSession();
@@ -1729,7 +1729,7 @@ public sealed class TerminalControlTests
         Assert.Equal(0, control.SynchronizedOutputNestingLevel);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void SynchronizedOutput_Nested_OnlyFlushesOnOutermostEnd()
     {
         var control = CreateControlWithSession();
@@ -1743,7 +1743,7 @@ public sealed class TerminalControlTests
 
     // ── Shell integration (issue #725) ────────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ShellIntegration_PromptStart_MarksPromptRegion()
     {
         var control = CreateControlWithSession();
@@ -1751,7 +1751,7 @@ public sealed class TerminalControlTests
         Assert.Contains(control.ShellMarks, m => m.Type == "PromptStart");
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ShellIntegration_CommandEnd_RecordsExitCode()
     {
         var control = CreateControlWithSession();
@@ -1760,7 +1760,7 @@ public sealed class TerminalControlTests
         Assert.Equal(0, mark.ExitCode);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ShellIntegration_WorkingDirectory_UpdatesCwd()
     {
         var control = CreateControlWithSession();
@@ -1770,7 +1770,7 @@ public sealed class TerminalControlTests
 
     // ── Hyperlinks (issue #725) ───────────────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void Hyperlink_Open_RendersClickableLink()
     {
         var control = CreateControlWithSession();
@@ -1778,7 +1778,7 @@ public sealed class TerminalControlTests
         Assert.NotEmpty(control.Hyperlinks);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void Hyperlink_Close_EndsClickableRegion()
     {
         var control = CreateControlWithSession();
@@ -1788,7 +1788,7 @@ public sealed class TerminalControlTests
 
     // ── Window title (issue #725) ─────────────────────────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscTitle_Osc0_UpdatesTabTitle()
     {
         var control = CreateControlWithSession();
@@ -1796,7 +1796,7 @@ public sealed class TerminalControlTests
         Assert.Equal("MyTitle", control.Title);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void OscTitle_Osc2_UpdatesTabTitle()
     {
         var control = CreateControlWithSession();
@@ -1806,7 +1806,7 @@ public sealed class TerminalControlTests
 
     // ── OnDetachedFromVisualTree disposal (issue #643) ────────────────────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_OnDetachedFromVisualTree_CancelsPendingResize()
     {
         var resizeCallCount = 0;
@@ -1842,7 +1842,7 @@ public sealed class TerminalControlTests
         window.Close();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_OnDetachedFromVisualTree_NoSession_DoesNotThrow()
     {
         var control = new TerminalControl();
@@ -1863,7 +1863,7 @@ public sealed class TerminalControlTests
 
     // ── ScheduleResize timer does not leak after detach (issue #784) ─────────────────────────
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_ScheduleResize_DoesNotLeakAfterVisualTreeDetach()
     {
         var resizeCallCount = 0;
@@ -1900,7 +1900,7 @@ public sealed class TerminalControlTests
         window.Close();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void TerminalControl_ScheduleResize_DoesNotLeakAfterSessionDetach()
     {
         var resizeCallCount = 0;

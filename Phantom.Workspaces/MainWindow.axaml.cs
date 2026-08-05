@@ -31,8 +31,6 @@ public partial class MainWindow : Window
         {
             if (this.DataContext is MainWindowViewModel vm)
             {
-                vm.IsAltHeld = false;
-                vm.IsShiftHeld = false;
                 vm.NavStackPopup.Dismiss();
             }
         };
@@ -40,9 +38,16 @@ public partial class MainWindow : Window
 
     private void AddDockDataTemplates()
     {
-        foreach (var template in new DockDataTemplates())
+        // #1196: construct DockDataTemplates ONCE and share the same IDataTemplate
+        // instances with Window scope AND TopLevelDockControl scope. Sharing (rather
+        // than constructing twice) makes the top-level DockControl's DataTemplates
+        // the single source floating PhantomHostWindows reuse via
+        // IFactory.DockControls. See #1119 for why both scopes are required.
+        var templates = new DockDataTemplates();
+        foreach (var template in templates)
         {
             this.DataTemplates.Add(template);
+            this.TopLevelDockControl.DataTemplates.Add(template);
         }
     }
 
@@ -56,13 +61,6 @@ public partial class MainWindow : Window
         if (e.Key is Key.LeftCtrl or Key.RightCtrl)
         {
             viewModel.NavStackPopup.OpenAtCurrentPosition();
-            return;
-        }
-
-        if (e.Key is Key.LeftAlt or Key.RightAlt)
-        {
-            viewModel.IsAltHeld = true;
-            viewModel.IsShiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             return;
         }
 
@@ -118,40 +116,32 @@ public partial class MainWindow : Window
             return;
         }
 
-        var index = GetDigitIndex(e.PhysicalKey);
-        if (index < 0)
+        // Ctrl+F: open the find bar and focus + select-all the find input.
+        // #1199: defer focus/select-all past the IsVisible binding and layout pass, since the
+        // FindTextBox is invisible until Find.IsOpen flips true. Focus() on an unattached
+        // control does not reliably move focus. SelectAll() also missing before, so re-Ctrl-F
+        // on an already-open bar now re-selects text so typing replaces the query.
+        if (e.Key == Key.F && e.KeyModifiers == KeyModifiers.Control)
         {
+            viewModel.Find.OpenCommand.Execute(null);
+
+            Avalonia.Threading.Dispatcher.UIThread.Post(
+                () =>
+                {
+                    var findTextBox = this.FindControl<TextBox>("FindTextBox");
+                    if (findTextBox is null)
+                    {
+                        return;
+                    }
+                    findTextBox.Focus();
+                    findTextBox.SelectAll();
+                },
+                Avalonia.Threading.DispatcherPriority.Input);
+
+            e.Handled = true;
             return;
         }
 
-        if (e.KeyModifiers == KeyModifiers.Alt)
-        {
-            viewModel.GoToTabAtIndexCommand.Execute(index.ToString());
-            e.Handled = true;
-        }
-        else if (e.KeyModifiers == (KeyModifiers.Alt | KeyModifiers.Shift))
-        {
-            viewModel.GoToWorkspacePaneAtIndexCommand.Execute(index.ToString());
-            e.Handled = true;
-        }
-    }
-
-    private static int GetDigitIndex(PhysicalKey key)
-    {
-        return key switch
-        {
-            PhysicalKey.Digit1 => 0,
-            PhysicalKey.Digit2 => 1,
-            PhysicalKey.Digit3 => 2,
-            PhysicalKey.Digit4 => 3,
-            PhysicalKey.Digit5 => 4,
-            PhysicalKey.Digit6 => 5,
-            PhysicalKey.Digit7 => 6,
-            PhysicalKey.Digit8 => 7,
-            PhysicalKey.Digit9 => 8,
-            PhysicalKey.Digit0 => 9,
-            _ => -1,
-        };
     }
 
     private async void OnOpenSettingsClicked(
@@ -176,7 +166,9 @@ public partial class MainWindow : Window
             configuration,
             viewModel,
             (Application.Current as App)?.UpdateController,
-            action => Avalonia.Threading.Dispatcher.UIThread.Post(action));
+            action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            viewModel.LogDirectoryProvider,
+            new Phantom.Workspaces.Install.RealProcessLauncher());
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
 
         await settingsWindow.ShowDialog(this);
@@ -235,10 +227,5 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (e.Key is Key.LeftAlt or Key.RightAlt)
-        {
-            viewModel.IsAltHeld = false;
-            viewModel.IsShiftHeld = false;
-        }
     }
 }

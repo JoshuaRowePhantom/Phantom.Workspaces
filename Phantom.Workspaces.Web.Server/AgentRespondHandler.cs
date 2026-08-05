@@ -9,35 +9,21 @@ namespace Phantom.Workspaces.Web.Server;
 /// <summary>
 /// Executes a remote agent turn for the <c>POST /agent/respond</c> endpoint. This is the remote
 /// host side of the Workspaces trust-model remoting: it runs the agent locally and, when the caller
-/// supplies a trust profile, enforces its tool-call policy on the agent's tools.
+/// supplies a trust profile, enforces its tool-call policy on the agent's tools. Relaying a turn to a
+/// connected instance is now handled at the transport layer by the <c>/reverse-transport/connect</c>
+/// hub relay, so this handler no longer relays over the reverse tunnel.
 /// </summary>
 public static class AgentRespondHandler
 {
     /// <summary>
-    /// Runs a single agent turn for the supplied request and returns the chat response. When the
-    /// request targets a non-local client instance that is currently connected to this host over a
-    /// reverse tunnel, the turn is relayed to that connected instance; otherwise the agent runs
-    /// locally and (when supplied) the caller's trust profile tool-call policy is enforced.
+    /// Runs a single agent turn for the supplied request and returns the chat response. The agent
+    /// runs locally and (when supplied) the caller's trust profile tool-call policy is enforced.
     /// </summary>
     public static async Task<ChatResponse> RespondAsync(
         RemoteAgentRequest request,
-        ReverseExecutionRegistry? reverseExecutionRegistry = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-
-        if (TryGetConnectedReverseTarget(request, reverseExecutionRegistry, out var targetClientInstance))
-        {
-            var reverseClient = new ReverseRemoteChatClient(
-                reverseExecutionRegistry!,
-                targetClientInstance,
-                request.AgentDefinitionJson,
-                request.AgentSessionId);
-
-            return await reverseClient
-                .GetResponseAsync(request.Messages, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
-        }
 
         var agentDefinition = AgentDefinition.FromJson(request.AgentDefinitionJson);
         var (chatClient, _) = AgentFactory.CreateChatClient(agentDefinition);
@@ -57,17 +43,5 @@ public static class AgentRespondHandler
         return await chatClient
             .GetResponseAsync(request.Messages, chatOptions, cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    private static bool TryGetConnectedReverseTarget(
-        RemoteAgentRequest request,
-        ReverseExecutionRegistry? reverseExecutionRegistry,
-        out string targetClientInstance)
-    {
-        targetClientInstance = request.TargetClientInstance ?? string.Empty;
-        return reverseExecutionRegistry is not null
-            && !string.IsNullOrWhiteSpace(targetClientInstance)
-            && !string.Equals(targetClientInstance, TrustProfile.LocalClientInstance, StringComparison.Ordinal)
-            && reverseExecutionRegistry.IsConnected(targetClientInstance);
     }
 }

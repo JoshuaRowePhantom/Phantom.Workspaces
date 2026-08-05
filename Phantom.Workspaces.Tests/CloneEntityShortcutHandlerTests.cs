@@ -1,9 +1,10 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Dock.Model.Controls;
-using Dock.Model.Core;
+using global::Dock.Model.Controls;
+using global::Dock.Model.Core;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -45,7 +46,7 @@ public sealed class CloneEntityShortcutHandlerTests
         Assert.True(await handler.ShouldApplyTo(mainWindowViewModel, Shortcut.Clone, entity));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task Handle_OpensCloneEntityWorkspaceTabViewModel_WithoutCreatingEntity()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());

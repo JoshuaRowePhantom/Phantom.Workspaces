@@ -2,7 +2,25 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls"
         x:CompileBindings="False">
+    <!-- Free, MIT-licensed Markdown.Avalonia renderer theme + syntax-highlight appendix used by
+         WorkspaceMarkdownView. Kept here (not App.axaml) so the Markdown.Avalonia assemblies stay
+         referenced only by this shared assembly, keeping their root 'Markdown' namespace out of the
+         application's global namespace. -->
+    <StyleInclude Source="avares://Markdown.Avalonia/StyleCollections/MarkdownStyleFluentTheme.axaml" />
+    <StyleInclude Source="avares://AvaloniaEdit/Themes/Fluent/AvaloniaEdit.xaml" />
+    <StyleInclude Source="avares://Markdown.Avalonia.SyntaxHigh/StyleCollections/AppendixOfFluentTheme.axaml" />
+
     <Styles.Resources>
+        <!-- WorkspaceMarkdownView code styling resources (issue #1173). Values mirror the WebView
+             chat-output-shell.html tokens (chat-font-family, chat-foreground, chat-tool-body-background).
+             Brushes are aliased to Fluent-theme color keys so they swap with light/dark theming just
+             like the HTML view's .light class swap. The Style overrides that consume these keys live
+             in MarkdownCodeStyles.axaml, attached directly to MarkdownScrollViewer.Styles so they
+             outrank the Fluent theme's own code selectors. -->
+        <FontFamily x:Key="Markdown.CodeFontFamily">Cascadia Code,Consolas,Courier New,monospace</FontFamily>
+        <SolidColorBrush x:Key="Markdown.CodeForeground" Color="{DynamicResource SystemBaseHighColor}" />
+        <SolidColorBrush x:Key="Markdown.CodeBlockBackground" Color="{DynamicResource SystemChromeMediumLowColor}" />
+
         <!-- Default theme fallbacks for apps that do not inject profile resources. -->
         <FontFamily x:Key="Theme.FontFamily">Inter</FontFamily>
         <x:Double x:Key="Theme.FontSize.Base">13</x:Double>
@@ -41,6 +59,13 @@
             </Template>
         </Setter>
     </Style>
+    <Style Selector="Border.entity-find-bar">
+        <Setter Property="Padding" Value="6,4" />
+        <Setter Property="Margin" Value="6,4,6,0" />
+    </Style>
+    <Style Selector="TextBox.entity-find-input">
+        <Setter Property="MinWidth" Value="200" />
+    </Style>
     <Style Selector="TextBlock.heading">
         <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.heading.FontWeight}" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.heading.Foreground}" />
@@ -59,7 +84,7 @@
         <Setter Property="Opacity" Value="{DynamicResource Theme.Class.caption.Opacity}" />
         <Setter Property="FontSize" Value="{DynamicResource Theme.Class.caption.FontSize}" />
     </Style>
-    <Style Selector="TextBlock.muted">
+    <Style Selector=":is(TextBlock).muted">
         <Setter Property="FontWeight" Value="{DynamicResource Theme.Class.muted.FontWeight}" />
         <Setter Property="Foreground" Value="{DynamicResource Theme.Class.muted.Foreground}" />
         <Setter Property="Opacity" Value="{DynamicResource Theme.Class.muted.Opacity}" />
@@ -165,13 +190,6 @@
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="HorizontalContentAlignment" Value="Center" />
     </Style>
-    <Style Selector="Button.workspace-save-button">
-        <Setter Property="MinWidth" Value="28" />
-        <Setter Property="MinHeight" Value="24" />
-        <Setter Property="Padding" Value="6,2" />
-        <Setter Property="Margin" Value="4,0,4,0" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-    </Style>
     <Style Selector="TreeView.entity-card-tree.entity-card-tree-entity Border.entity-card-tree-type-bar">
         <Setter Property="CornerRadius" Value="2" />
         <Setter Property="VerticalAlignment" Value="Stretch" />
@@ -262,6 +280,36 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- Issue #1064: any legacy `entity-card-tree` respects the card's hard minimum widths AND
+         stays reachable, mirroring the #1049 `entity-card-tree-view` wrapper. H=Auto keeps a
+         horizontal scrollbar available; a single items-region wrapper caps content to the inner
+         scroller's viewport (so it wraps and never overflows when wide) but floors at MinWidth=160
+         (so a horizontal scrollbar appears and the minimum-width card is scrollable when the
+         viewport is narrower than the minimum). The tree's own inner scroller supplies vertical
+         scrolling; no surrounding ScrollViewer is required. -->
+    <!-- Issue #1177: use VirtualizingStackPanel so trees with thousands of entity cards realize
+         only viewport-sized batches. VirtualizingStackPanel in Avalonia 12.1 is a pixel-scrolling
+         panel driven by the enclosing ScrollViewer's EffectiveViewportChanged, so smooth per-pixel
+         scrolling is preserved. The MinWidth/MaxWidth two-regime wrapper from #1049/#1064 is
+         preserved here: MinWidth="160" floors the panel so the horizontal scrollbar stays reachable
+         when the viewport is narrower than a card's minimum, and MaxWidth bound to the parent
+         ScrollViewer's Viewport.Width caps content to the viewport so cards wrap without
+         overflowing when the viewport is wider than the minimum. These are per-panel constraints
+         on the non-scrolled (horizontal) axis and do not interfere with pixel virtualization on
+         the scrolled (vertical) axis. -->
+    <Style Selector="TreeView.entity-card-tree">
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+        <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
+        <Setter Property="ItemsPanel">
+            <ItemsPanelTemplate>
+                <VirtualizingStackPanel Orientation="Vertical"
+                                        HorizontalAlignment="Stretch"
+                                        MinWidth="160"
+                                        MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+            </ItemsPanelTemplate>
+        </Setter>
+    </Style>
     <Style Selector="TreeView.entity-card-tree-view">
         <Setter Property="Background" Value="{DynamicResource Theme.Surface.EntityPane.Background}" />
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto" />
@@ -269,10 +317,10 @@
         <Setter Property="ScrollViewer.AllowAutoHide" Value="False" />
         <Setter Property="ItemsPanel">
             <ItemsPanelTemplate>
-                <StackPanel Orientation="Vertical"
-                            HorizontalAlignment="Stretch"
-                            MinWidth="160"
-                            MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
+                <VirtualizingStackPanel Orientation="Vertical"
+                                        HorizontalAlignment="Stretch"
+                                        MinWidth="160"
+                                        MaxWidth="{Binding $parent[ScrollViewer].Viewport.Width}" />
             </ItemsPanelTemplate>
         </Setter>
     </Style>
@@ -339,6 +387,13 @@
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="FontSize" Value="18" />
         <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="Button.settings-gear.top-right">
+        <Setter Property="MinHeight" Value="0" />
+        <Setter Property="VerticalAlignment" Value="Stretch" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="Padding" Value="8,4" />
     </Style>
     <Style Selector="Border.pane-header">
         <Setter Property="Padding" Value="12,10" />
@@ -596,16 +651,21 @@
     <Style Selector="StackPanel.workspace-entity-card-content.workspace-entity-deleted">
         <Setter Property="Opacity" Value="0.4" />
     </Style>
+    <Style Selector="WrapPanel.workspace-entity-header-wrap">
+        <Setter Property="Orientation" Value="Horizontal" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+    </Style>
     <Style Selector="StackPanel.workspace-entity-header-row">
         <Setter Property="Orientation" Value="Vertical" />
         <Setter Property="Spacing" Value="2" />
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="MinWidth" Value="100" />
     </Style>
-    <Style Selector="StackPanel.workspace-entity-header-row > TextBlock">
+    <Style Selector="StackPanel.workspace-entity-header-row > :is(TextBlock)">
         <Setter Property="TextWrapping" Value="Wrap" />
     </Style>
-    <Style Selector="TextBlock.workspace-entity-title">
+    <Style Selector=":is(TextBlock).workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
     </Style>
     <Style Selector="WrapPanel.workspace-entity-actions-row">
@@ -730,7 +790,7 @@
     <Style Selector="StackPanel.workspace-template-browser-root">
         <Setter Property="Spacing" Value="6" />
     </Style>
-    <Style Selector="TextBlock.workspace-field-label">
+    <Style Selector=":is(TextBlock).workspace-field-label">
         <Setter Property="Margin" Value="0,4,8,0" />
         <Setter Property="MinWidth" Value="67" />
     </Style>
@@ -739,7 +799,7 @@
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="MinWidth" Value="67" />
     </Style>
-    <Style Selector="TextBlock.workspace-field-read-value">
+    <Style Selector=":is(TextBlock).workspace-field-read-value">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
         <Setter Property="TextWrapping" Value="Wrap" />
         <Setter Property="Margin" Value="0,4,0,0" />
@@ -762,10 +822,6 @@
     </Style>
     <Style Selector="Control.workspace-markdown-viewer">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
-    </Style>
-    <Style Selector="Control.workspace-markdown-viewer /template/ ScrollViewer">
-        <Setter Property="VerticalScrollBarVisibility" Value="Disabled" />
-        <Setter Property="HorizontalScrollBarVisibility" Value="Disabled" />
     </Style>
     <Style Selector="Control.workspace-markdown-editor">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
@@ -1231,24 +1287,6 @@
         <Setter Property="ToolTip.Tip" Value="{Binding Content.TabViewModel.TabTooltip}" />
     </Style>
 
-    <!-- Alt+N shortcut index badge on tab headers -->
-    <Style Selector="Border.alt-index-badge">
-        <Setter Property="Background" Value="{DynamicResource SystemAccentColor}" />
-        <Setter Property="CornerRadius" Value="4" />
-        <Setter Property="Padding" Value="3,1" />
-        <Setter Property="Margin" Value="0,-2,-2,0" />
-        <Setter Property="Opacity" Value="0" />
-        <Setter Property="ZIndex" Value="10" />
-        <Setter Property="Transitions">
-            <Transitions>
-                <DoubleTransition Property="Opacity" Duration="0:0:0.1" Easing="LinearEasing" />
-            </Transitions>
-        </Setter>
-    </Style>
-    <Style Selector="Border.alt-index-badge.alt-held">
-        <Setter Property="Opacity" Value="1" />
-    </Style>
-
     <Style Selector="Button.workspace-url-link">
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderThickness" Value="0" />
@@ -1258,6 +1296,49 @@
     </Style>
     <Style Selector="Button.workspace-url-link:pointerover /template/ ContentPresenter">
         <Setter Property="Background" Value="Transparent" />
+    </Style>
+
+    <!-- Issue #1120: shared pane-collapser toggle. Rounded box with white ">>"/"<<" chevron
+         glyphs whose direction reflects state (unchecked = expanded = "<<", checked = collapsed
+         = ">>"). Used by BOTH the agent-chat tree collapser and the MainWindow left-pane
+         collapser so they stay visually identical. -->
+    <Style Selector="ToggleButton.pane-collapser">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="24" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Background" Value="{DynamicResource SystemAccentColor}" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{DynamicResource Theme.Collapser.Glyph.Foreground}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Classes="pane-collapser-box"
+                        Background="{TemplateBinding Background}"
+                        CornerRadius="4">
+                    <TextBlock Classes="pane-collapser-glyph"
+                               Text="&lt;&lt;"
+                               FontSize="10"
+                               FontWeight="Bold"
+                               Foreground="{TemplateBinding Foreground}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center" />
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ToggleButton.pane-collapser:checked /template/ TextBlock.pane-collapser-glyph">
+        <Setter Property="Text" Value="&gt;&gt;" />
+    </Style>
+
+    <!-- Universal accelerator-key forwarding for every NativeWebView-derived control (issue #1231).
+         Matching AcceleratorAwareWebView (and its subclasses ConfiguredWebView / ControllableWebViewControl)
+         via :is() installs BrowserAcceleratorBehavior so every WebView2 accelerator key (Ctrl+W, Alt+N,
+         Alt-hold, ...) is re-raised as a routed KeyDown/KeyUp event. This makes the attachment automatic
+         for every WebView host — including the standalone WebBrowserTabView — rather than per-site
+         code-behind. SetIsEnabled is idempotent, so the explicit call in AgentChatOutputControl remains
+         a harmless safety belt. See #1208 for the underlying WebView2 subscription mechanism. -->
+    <Style Selector=":is(controls|AcceleratorAwareWebView)">
+        <Setter Property="controls:BrowserAcceleratorBehavior.IsEnabled" Value="True" />
     </Style>
 
 </Styles>

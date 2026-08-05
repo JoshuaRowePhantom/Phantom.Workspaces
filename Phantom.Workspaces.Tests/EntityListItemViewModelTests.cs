@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
@@ -9,7 +10,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityListItemViewModelTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToggleExpandCommand_UpdatesItemAndNodeExpansionState()
     {
         var node = new EntityListNodeViewModel(
@@ -36,7 +37,7 @@ public sealed class EntityListItemViewModelTests
         Assert.Equal("▴", item.ExpandArrow);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void ToggleExpandCommand_DisabledWhenNoChildren()
     {
         var node = new EntityListNodeViewModel(
@@ -54,7 +55,7 @@ public sealed class EntityListItemViewModelTests
         Assert.False(item.ToggleExpandCommand.CanExecute(null));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void JsonButton_TogglesRawJsonEditorVisibility()
     {
         var node = new EntityListNodeViewModel(
@@ -84,7 +85,7 @@ public sealed class EntityListItemViewModelTests
         Assert.True(item.ShowRawJsonEditor);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task DeleteButton_InvokesDeleteCommand()
     {
         var deleteInvocations = 0;

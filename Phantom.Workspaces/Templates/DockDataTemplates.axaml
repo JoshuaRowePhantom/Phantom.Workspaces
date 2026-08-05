@@ -3,10 +3,33 @@
                xmlns:vm="using:Phantom.Workspaces.ViewModels"
                xmlns:dock="using:Dock.Avalonia.Controls"
                xmlns:dmc="using:Dock.Model.Controls"
+               xmlns:ts="using:Phantom.Dock.Avalonia.TabSwitching"
                x:Class="Phantom.Workspaces.Templates.DockDataTemplates">
     <!-- Supply root dock template (normally auto-created). -->
     <DataTemplate DataType="dmc:IRootDock">
         <dock:RootDockControl />
+    </DataTemplate>
+
+    <!-- Supply proportional (split) dock template (normally auto-created).
+         Required because AutoCreateDataTemplates="False" on the hosting
+         DockControls; without it a "New Horizontal/Vertical Dock"
+         ProportionalDock renders as its raw type name
+         (Dock.Model.Mvvm.Controls.ProportionalDock). See #1130. -->
+    <DataTemplate DataType="dmc:IProportionalDock">
+        <dock:ProportionalDockControl />
+    </DataTemplate>
+
+    <!-- Supply proportional-dock splitter template (normally auto-created).
+         Required because AutoCreateDataTemplates="False"; without it a
+         ProportionalDockSplitter (produced by "New Horizontal/Vertical Dock"
+         or any SplitToDock) renders as its raw type name
+         (Dock.Model.Mvvm.Controls.ProportionalDockSplitter). Mirrors the
+         default DockDataTemplateHelper mapping, including the CanResize /
+         ResizePreview bindings on ProportionalStackPanelSplitter. See #1130. -->
+    <DataTemplate DataType="dmc:IProportionalDockSplitter">
+        <ProportionalStackPanelSplitter
+            IsResizingEnabled="{Binding CanResize}"
+            PreviewResize="{Binding ResizePreview}" />
     </DataTemplate>
 
     <!-- WorkspaceContentDock is our typed subclass of DocumentDock.
@@ -14,12 +37,23 @@
          (on PART_ContentControl) is bypassed, so AutoCreateDataTemplates=False
          lets our DataTemplate on DockControl be found first. Setting
          HeaderTemplate here is a local value (priority 1), which beats the
-         ControlTheme setter (priority 3). -->
+         ControlTheme setter (priority 3).
+
+         #1196: These concrete-subtype templates (WorkspaceContentDock and
+         WorkspacesPaneDock) MUST appear BEFORE the generic
+         DataTemplate DataType="dmc:IDocumentDock" below. Avalonia's
+         DataTemplates lookup is first-match-wins by declaration order, and both
+         subclasses implement IDocumentDock; if the generic template preceded
+         them, the top-level WorkspacesPaneDock would match DocumentDockControl
+         first and render with Dock's default header (a plain Title TextBlock),
+         so the pulsating-brain / exclamation indicators would never appear on
+         workspace tabs. -->
     <DataTemplate DataType="vm:WorkspaceContentDock">
         <dock:DocumentControl>
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspaceDocument">
-                    <ContentControl Content="{Binding EffectiveTabHeader}" />
+                    <ContentControl Content="{Binding EffectiveTabHeader}"
+                                    ContentTemplate="{StaticResource TabHeaderTemplate}" />
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
         </dock:DocumentControl>
@@ -37,22 +71,24 @@
         <dock:DocumentControl>
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspacePaneDocument">
-                    <ContentControl Content="{Binding EffectiveTabHeader}" />
+                    <ContentControl Content="{Binding EffectiveTabHeader}"
+                                    ContentTemplate="{StaticResource TabHeaderTemplate}" />
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
-            <dock:DocumentControl.Styles>
-                <Style Selector="DocumentTabStrip">
-                    <Setter Property="RightContent">
-                        <Template>
-                            <Button Classes="workspace-save-button"
-                                    Content="💾"
-                                    ToolTip.Tip="Save workspace (Ctrl+S)"
-                                    Command="{ReflectionBinding $parent[Window].DataContext.SelectedWorkspacePane.SaveCommand}" />
-                        </Template>
-                    </Setter>
-                </Style>
-            </dock:DocumentControl.Styles>
         </dock:DocumentControl>
+    </DataTemplate>
+
+    <!-- Supply base DocumentDock template (normally auto-created).
+         Required because the app's typed subclasses (WorkspaceContentDock /
+         WorkspacesPaneDock) do not cover the plain Dock.Model.Mvvm.Controls.DocumentDock
+         that WorkspaceDockFactory (inherits from Dock.Model.Mvvm.Factory) creates
+         via CreateDocumentDock() during a runtime split. Without it the newly
+         created dock half renders as its raw type name
+         (Dock.Model.Mvvm.Controls.DocumentDock). See #1130.
+         #1196: MUST stay AFTER the concrete WorkspaceContentDock / WorkspacesPaneDock
+         templates above so those more-specific matches win first. -->
+    <DataTemplate DataType="dmc:IDocumentDock">
+        <dock:DocumentDockControl />
     </DataTemplate>
 
     <!-- Workspace-level tab: shows the workspace's ContentLayout.
@@ -62,13 +98,22 @@
          templates and cause tab icons to go missing (regression from #374). -->
     <DataTemplate DataType="vm:WorkspacePaneDocument">
         <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}"
-                          AutoCreateDataTemplates="False">
+                          AutoCreateDataTemplates="False"
+                          ts:DockTabSwitch.Enabled="True">
+            <ts:DockTabSwitch.Bindings>
+                <ts:DockTabSwitchBindings>
+                    <ts:DockTabSwitchGestures Modifiers="Alt"
+                                              Keys="Digits"
+                                              Scope="FocusedDockOnly" />
+                </ts:DockTabSwitchBindings>
+            </ts:DockTabSwitch.Bindings>
             <dock:DockControl.DataTemplates>
                 <DataTemplate DataType="vm:WorkspaceContentDock">
                     <dock:DocumentControl>
                         <dock:DocumentControl.HeaderTemplate>
                             <DataTemplate x:DataType="vm:WorkspaceDocument">
-                                <ContentControl Content="{Binding EffectiveTabHeader}" />
+                                <ContentControl Content="{Binding EffectiveTabHeader}"
+                                                ContentTemplate="{StaticResource TabHeaderTemplate}" />
                             </DataTemplate>
                         </dock:DocumentControl.HeaderTemplate>
                     </dock:DocumentControl>
@@ -76,46 +121,24 @@
                 <DataTemplate DataType="vm:WorkspaceDocument">
                     <ContentControl Content="{Binding TabViewModel}" />
                 </DataTemplate>
+                <!-- Supply proportional (split) dock template within the inner pane
+                     DockControl too, since it has its own scoped, non-inheriting
+                     template set (#1130). -->
+                <DataTemplate DataType="dmc:IProportionalDock">
+                    <dock:ProportionalDockControl />
+                </DataTemplate>
+                <!-- Supply splitter and base DocumentDock templates within the inner
+                     pane DockControl too, since AutoCreateDataTemplates="False" and its
+                     template lookup does not walk up to ancestor scopes (#1130). -->
+                <DataTemplate DataType="dmc:IProportionalDockSplitter">
+                    <ProportionalStackPanelSplitter
+                        IsResizingEnabled="{Binding CanResize}"
+                        PreviewResize="{Binding ResizePreview}" />
+                </DataTemplate>
+                <DataTemplate DataType="dmc:IDocumentDock">
+                    <dock:DocumentDockControl />
+                </DataTemplate>
             </dock:DockControl.DataTemplates>
         </dock:DockControl>
-    </DataTemplate>
-
-    <!-- These DataTemplates are duplicated from WorkspaceDataTemplates.axaml so that they are
-         reachable from within Dock.Avalonia's tab-header rendering scope, which does not walk
-         up to the App-level DataTemplates collection (same class of issue as #374). -->
-    <DataTemplate DataType="vm:TabHeaderViewModel">
-        <Grid HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-                <TextBlock Text="{Binding Title}" />
-                <ItemsControl ItemsSource="{Binding Items}">
-                    <ItemsControl.ItemsPanel>
-                        <ItemsPanelTemplate>
-                            <StackPanel Orientation="Horizontal" Spacing="2" />
-                        </ItemsPanelTemplate>
-                    </ItemsControl.ItemsPanel>
-                </ItemsControl>
-            </StackPanel>
-            <!-- Alt+Shift+N shortcut badge: visible only for panes 1–10; fades in when Alt+Shift is held -->
-            <Border Classes="alt-index-badge"
-                    Classes.alt-held="{Binding IsShortcutBadgeVisible}"
-                    IsVisible="{Binding AltShortcutLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Top"
-                    ZIndex="10">
-                <TextBlock Text="{Binding AltShortcutLabel}"
-                           Classes="caption"
-                           HorizontalAlignment="Center" />
-            </Border>
-        </Grid>
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="glyph-indicator pulsating-brain"
-                     IsIndeterminate="{Binding IsRunning}" />
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:NotificationIndicatorTabHeaderItemViewModel">
-        <ProgressBar Classes="glyph-indicator exclamation-indicator"
-                     IsIndeterminate="{Binding HasUnread}" />
     </DataTemplate>
 </DataTemplates>

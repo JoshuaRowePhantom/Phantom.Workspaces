@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using AgentSchema;
-using GitHub.Copilot.SDK;
+using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -23,9 +23,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: factory,
-            subAgentTable: table,
+            factory ?? new FakeRunningAgentChatFactory(),
+            table ?? new FakeSubAgentTable(),
             logger: null);
         return (router, channel);
     }
@@ -88,9 +87,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: null,
-            subAgentTable: null,
+            new FakeRunningAgentChatFactory(),
+            new FakeSubAgentTable(),
             logger: null);
 
         var toolStart1 = new ToolExecutionStartEvent
@@ -133,9 +131,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: null,
-            subAgentTable: null,
+            new FakeRunningAgentChatFactory(),
+            new FakeSubAgentTable(),
             logger: null);
 
         var events = new List<AssistantMessageDeltaEvent>
@@ -189,9 +186,8 @@ public sealed class CopilotSdkEventPipelineTests
         var channel = Channel.CreateUnbounded<ChatResponseUpdate>();
         var router = new CopilotSubAgentRouter(
             channel.Writer,
-            registry: null,
-            factory: null,
-            subAgentTable: null,
+            new FakeRunningAgentChatFactory(),
+            new FakeSubAgentTable(),
             logger: null);
 
         using var cts = new CancellationTokenSource();
@@ -403,7 +399,9 @@ public sealed class CopilotSdkEventPipelineTests
             AgentDefinition definition,
             AgentSessionId sessionId,
             AgentServices? services,
-            CancellationToken ct)
+            string? displayNameOverride,
+            string? descriptionOverride,
+            string? nameOverride, CancellationToken ct)
         {
             IChatClient client = new CopilotSubAgentChatClient();
 
@@ -414,6 +412,8 @@ public sealed class CopilotSdkEventPipelineTests
                 AgentSessionId = sessionId.Value,
                 ConfiguredStore = _store,
                 ClientOverride = client,
+                DisplayNameOverride = displayNameOverride,
+                DescriptionOverride = descriptionOverride,
                 ForegroundScheduler = TaskScheduler.Default,
             });
 
@@ -426,7 +426,7 @@ public sealed class CopilotSdkEventPipelineTests
             return lease;
         }
 
-        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, CancellationToken ct) =>
+        Task<RunningAgentChatLease> IRunningAgentChatFactory.GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent, CancellationToken ct) =>
             throw new NotImplementedException();
 
         Task<RunningAgentChatLease> IRunningAgentChatFactory.GetOrCreateAsync(
@@ -435,7 +435,7 @@ public sealed class CopilotSdkEventPipelineTests
             AgentServices? services,
             string? displayNameOverride,
             string? descriptionOverride,
-            CancellationToken ct) =>
+            bool registerAsRunningAgent, CancellationToken ct) =>
             throw new NotImplementedException();
     }
 
@@ -449,5 +449,129 @@ public sealed class CopilotSdkEventPipelineTests
             var sessionId = new AgentSessionId(agentChat.AgentSessionId);
             return Task.FromResult(new SubAgent(sessionId, agentChat, null));
         }
+    }
+
+    // #1128: A restored (reloaded) session whose persisted sub-agents were "running" at
+    // shutdown produces no terminal SDK event on reload, so every restored sub-agent must
+    // be forced to a terminal Succeeded state; otherwise the UI running indicators never
+    // clear. This is the end-to-end reload path exercised via AgentChatFactory +
+    // AgentChat.RestoreSubAgentsAsync (issue #1128 root cause).
+    [Fact]
+    public async Task SessionReload_RestoredSubAgents_AllMarkedTerminal()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var parentSessionId = "reload-e2e";
+
+        const string echoDefJson = """
+            { "kind": "prompt", "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [] }
+            """;
+        var echoDef = AgentDefinitionLoader.LoadAgentFromJson(echoDefJson);
+        var childIds = new[] { "reload-child-a", "reload-child-b", "reload-child-c" };
+        foreach (var childId in childIds)
+        {
+            await store.StoreAsync(new StoreRequestAgent
+            {
+                Agent = new PersistedAgent
+                {
+                    AgentSessionId = childId,
+                    AgentDefinitionJson = MongoDB.Bson.BsonDocument.Parse(echoDef.ToJson()),
+                }
+            });
+            await store.AddSubAgentLinkAsync(parentSessionId, childId);
+        }
+
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = echoDef,
+            AgentSessionId = parentSessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "reloaded-parent",
+            AgentServices = new AgentServices { RunningAgentChatFactory = factory },
+        });
+
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        Assert.Equal(childIds.Length, parent.SubAgents.Count);
+        foreach (var stub in parent.SubAgents.Cast<SubAgent>())
+        {
+            await using var lease = await stub.AcquireLeaseAsync();
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        }
+    }
+
+    // #1140 (end-to-end reload path): the observable "N ago" label a sub-agent navigation
+    // card displays is bound (via AgentEditorNavigationItemViewModel -> IRunningSubAgent ->
+    // SubAgent -> AgentChat.LastUpdatedAt) to the child chat's LastUpdatedAt. After a
+    // session reload, that value must be the persisted last-activity timestamp, not the
+    // reload time. This test drives the full restore path through the real
+    // AgentChatFactory and asserts the materialised child chat's LastUpdatedAt matches the
+    // persisted UpdatedUtc while #1128's forced-terminal transition still fires.
+    [Fact]
+    public async Task SessionReload_CompletedSubAgents_CardShowsPersistedTime()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        const string parentSessionId = "reload-parent-card";
+        const string childSessionId = "reload-child-card";
+
+        const string echoDefJson = """
+            { "kind": "prompt", "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [] }
+            """;
+        var echoDef = AgentDefinitionLoader.LoadAgentFromJson(echoDefJson);
+        var echoDefBson = MongoDB.Bson.BsonDocument.Parse(echoDef.ToJson());
+
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = parentSessionId,
+                AgentDefinitionJson = echoDefBson,
+            },
+        });
+        var childPersistedTime = new DateTime(2021, 9, 8, 7, 6, 5, DateTimeKind.Utc);
+        await store.StoreAsync(new StoreRequestAgent
+        {
+            Agent = new PersistedAgent
+            {
+                AgentSessionId = childSessionId,
+                AgentDefinitionJson = echoDefBson,
+                LastUpdatedUtc = childPersistedTime,
+            },
+        });
+        await store.AddSubAgentLinkAsync(parentSessionId, childSessionId);
+
+        await using var factory = new AgentChatFactory(
+            store,
+            new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            TaskScheduler.Default);
+
+        await using var parent = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = echoDef,
+            AgentSessionId = parentSessionId,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "reloaded-parent",
+            AgentServices = new AgentServices { RunningAgentChatFactory = factory },
+        });
+
+        await parent.WaitForRestoredSubAgentsMarkedTerminalAsync();
+
+        var stub = Assert.IsType<SubAgent>(Assert.Single(parent.SubAgents));
+        await using var lease = await stub.AcquireLeaseAsync();
+
+        // The card's ago-label reads LastUpdatedAt through this chain — it must show the
+        // persisted time, not the reload time. And the running marker must clear (#1128).
+        Assert.Equal(childPersistedTime, lease.AgentChat.LastUpdatedAt);
+        Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
     }
 }

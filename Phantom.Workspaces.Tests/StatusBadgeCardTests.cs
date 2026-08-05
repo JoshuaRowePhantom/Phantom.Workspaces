@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Globalization;
 using System.Text.Json;
 using Avalonia;
@@ -11,7 +12,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class StatusBadgeCardTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_BuildsStatusBadgeForAnnotatedTaskStatus()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -37,7 +38,7 @@ public sealed class StatusBadgeCardTests
         Assert.Equal("status: completed", badge.Tooltip);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_BuildsBadStatusBadgeForBlockedTask()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -61,7 +62,7 @@ public sealed class StatusBadgeCardTests
         Assert.Equal("Theme.Status.Bad", badge.BrushKey);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task FieldEditorFactory_ProducesNoStatusBadgeForUnannotatedEntity()
     {
         var broker = await EntityBroker.CreateInitializedAsync(
@@ -84,7 +85,7 @@ public sealed class StatusBadgeCardTests
         Assert.Empty(badges);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void StatusBrushKeyConverter_ResolvesKnownKeyToConfiguredBrush()
     {
         var configuredBrush = new SolidColorBrush(Color.FromRgb(0x2E, 0x7D, 0x32));
@@ -99,7 +100,7 @@ public sealed class StatusBadgeCardTests
         Assert.Same(configuredBrush, resolved);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void StatusBrushKeyConverter_UnknownKey_ReturnsTransparent()
     {
         var resolved = StatusBrushKeyConverter.Instance.Convert(

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System.Collections.Specialized;
 using System.Text.Json;
 using System.Threading;
@@ -10,7 +11,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class EntityBrowserWorkspaceTabViewModelTests
 {
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_TracksParentChildMetadataAndExpansion()
     {
         var broker = await CreateBrokerAsync();
@@ -104,7 +105,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_FolderItem_ExpandsViaItemToggleCommand()
     {
         var broker = await CreateBrokerAsync();
@@ -183,7 +184,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -245,8 +246,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         var noteItem = await WaitForItemAsync(
             viewModel,
-            item => string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal)
-                && item.FieldEditors.Any(static fieldEditor => fieldEditor.FieldName == "content"));
+            item => string.Equals(item.ItemKey, "[\"documentation\",\"markdown-note\"]", StringComparison.Ordinal));
+        // Issue #1177: field editors are built lazily on first realization. Simulate realization
+        // by explicitly asking the card to build its editors, then wait for them to appear.
+        noteItem.Node.Card.EnsureFieldEditorsBuilt();
+        await WaitForCardFieldEditorsAsync(noteItem, editors => editors.Any(fe => fe.FieldName == "content"));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
@@ -255,7 +259,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_UsesMarkdownMimeEditor_WhenValueShapeIsLocalizedMimeAttachment()
     {
         var broker = await CreateBrokerAsync();
@@ -316,9 +320,11 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         var noteItem = await WaitForItemAsync(
             viewModel,
-            item => (string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
-                    || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal))
-                && item.FieldEditors.Any(static fieldEditor => fieldEditor.FieldName == "content"));
+            item => string.Equals(item.DisplayName, "Localized Mime Note", StringComparison.Ordinal)
+                || string.Equals(item.ItemKey, "[\"notes\",\"localized-mime\"]", StringComparison.Ordinal));
+        // Issue #1177: field editors are built lazily on first realization.
+        noteItem.Node.Card.EnsureFieldEditorsBuilt();
+        await WaitForCardFieldEditorsAsync(noteItem, editors => editors.Any(fe => fe.FieldName == "content"));
         var contentField = Assert.Single(noteItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "content");
         var localizedEditor = Assert.IsType<LocalizedMimeAttachmentFieldEditorViewModel>(contentField);
         var markdownEditor = Assert.IsType<MarkdownMimeAttachmentFieldEditorViewModel>(localizedEditor.ActiveEditor);
@@ -327,7 +333,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_UsesJsonSchemaFieldEditor_ForSchemaField()
     {
         var broker = await CreateBrokerAsync();
@@ -388,8 +394,10 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
 
         var noteTypeItem = await WaitForItemAsync(
             viewModel,
-            item => item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal)
-                && item.FieldEditors.Any(fieldEditor => fieldEditor.FieldName == "schema"));
+            item => item.ItemKey.StartsWith("[\"entity-types\",", StringComparison.Ordinal));
+        // Issue #1177: field editors are built lazily on first realization.
+        noteTypeItem.Node.Card.EnsureFieldEditorsBuilt();
+        await WaitForCardFieldEditorsAsync(noteTypeItem, editors => editors.Any(fe => fe.FieldName == "schema"));
         var schemaField = Assert.Single(noteTypeItem.FieldEditors, static fieldEditor => fieldEditor.FieldName == "schema");
         var schemaEditor = Assert.IsType<JsonSchemaFieldEditorViewModel>(schemaField);
         Assert.Contains("\"properties\"", schemaEditor.JsonText, StringComparison.Ordinal);
@@ -400,7 +408,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
     // Regression test for #644: when many SubscribeChildPathAsync completions fire concurrent
     // RebuildTreeAsync() calls, the coalescing loop must ensure all entities become visible
     // without a test-host timeout caused by N×M parallel rebuilds.
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task BrowserList_CoalescesRebuildRequests_WhenManySubscriptionsComplete()
     {
         var broker = await CreateBrokerAsync();
@@ -463,7 +471,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await viewModel.DisposeAsync();
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task DisposeAsync_DuringRebuild_DoesNotHang()
     {
         var broker = await CreateBrokerAsync();
@@ -517,7 +525,7 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         // If we reach here and the dispatcher drains cleanly after this test completes, the fix works.
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task DisposeAsync_UnsubscribesCollectionChangedEvents()
     {
         var broker = await CreateBrokerAsync();
@@ -572,6 +580,288 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         await Task.Yield();
 
         Assert.False(rebuildTriggered, "EntityList must not be updated after DisposeAsync unsubscribes events.");
+    }
+
+    [AvaloniaFact]
+    public async Task BrowserList_OnOpen_DoesNotMaterializeCollapsedDescendants()
+    {
+        var broker = await CreateBrokerAsync();
+        await SeedDeepTreeAsync(broker);
+
+        var rootSubscription = await CreateRootSubscriptionAsync(broker);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-lazy-open",
+            Title = "Entity Browser",
+        };
+
+        // The root is expanded by default, so its immediate child folder ("alpha") is materialized and
+        // must report that it has children (chevron shown) even though it is collapsed.
+        var alphaItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+
+        // #1232: a collapsed folder must NOT materialize any child node view models. Its metadata
+        // (ImmediateChildKeys / ChildItemKeys) is populated from its subscription, but no descendant
+        // EntityListNodeViewModel is constructed until the folder is expanded.
+        Assert.Empty(alphaItem.Node.Children);
+        Assert.Contains("[\"alpha\",\"beta\"]", alphaItem.ChildItemKeys);
+
+        // No grandchild-or-deeper item is materialized while everything below the root is collapsed.
+        Assert.DoesNotContain(
+            viewModel.EntityList.Items,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            viewModel.EntityList.Items,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\",\"gamma\"]", StringComparison.Ordinal));
+
+        await viewModel.DisposeAsync();
+    }
+
+    [AvaloniaFact]
+    public async Task BrowserList_HasChildren_ReflectsChildrenWithoutMaterializingDescendants()
+    {
+        var broker = await CreateBrokerAsync();
+        await SeedDeepTreeAsync(broker);
+
+        var rootSubscription = await CreateRootSubscriptionAsync(broker);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-lazy-haschildren",
+            Title = "Entity Browser",
+        };
+
+        var alphaItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+
+        // HasChildren is driven by the subscription probe, not by materialized child nodes.
+        Assert.False(alphaItem.IsExpanded);
+        Assert.True(alphaItem.HasChildren);
+        Assert.True(alphaItem.Node.HasChildren);
+        Assert.Empty(alphaItem.Node.Children);
+
+        await viewModel.DisposeAsync();
+    }
+
+    [AvaloniaFact]
+    public async Task BrowserList_ExpandingFolder_LazilySubscribesAndPopulatesChildren()
+    {
+        var broker = await CreateBrokerAsync();
+        await SeedDeepTreeAsync(broker);
+
+        var rootSubscription = await CreateRootSubscriptionAsync(broker);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-lazy-expand",
+            Title = "Entity Browser",
+        };
+
+        var alphaItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+
+        // Expanding "alpha" lazily loads only its immediate child ("beta"); "beta" itself remains
+        // collapsed, so its child ("gamma") must not be materialized.
+        alphaItem.IsExpanded = true;
+
+        var betaItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+        Assert.Equal(alphaItem.ItemKey, betaItem.ParentItemKey);
+        Assert.False(betaItem.IsExpanded);
+        Assert.Empty(betaItem.Node.Children);
+        Assert.DoesNotContain(
+            viewModel.EntityList.Items,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\",\"gamma\"]", StringComparison.Ordinal));
+
+        await viewModel.DisposeAsync();
+    }
+
+    [AvaloniaFact]
+    public async Task BrowserList_CollapsingFolder_DoesNotDropAlreadyLoadedChildren()
+    {
+        var broker = await CreateBrokerAsync();
+        await SeedDeepTreeAsync(broker);
+
+        var rootSubscription = await CreateRootSubscriptionAsync(broker);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(broker, rootSubscription)
+        {
+            Id = "entity-browser-collapse-preserve",
+            Title = "Entity Browser",
+        };
+
+        var alphaItem = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\"]", StringComparison.Ordinal)
+                && item.HasChildren);
+
+        // Expand "alpha" so its immediate child "beta" is loaded and materialized.
+        alphaItem.IsExpanded = true;
+        await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal));
+        Assert.Single(alphaItem.Node.Children);
+
+        // Collapse "alpha": its child item leaves the visible flat list...
+        alphaItem.IsExpanded = false;
+        await WaitForConditionAsync(
+            viewModel,
+            () => viewModel.EntityList.Items.All(
+                item => !string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal)));
+
+        // ...but the already-loaded "beta" node view model is PRESERVED under "alpha" (issue #1232),
+        // rather than dropped and re-subscribed, so re-expanding is instant.
+        Assert.False(alphaItem.IsExpanded);
+        Assert.Single(alphaItem.Node.Children);
+        Assert.Equal(
+            "[\"alpha\",\"beta\"]",
+            JsonSerializer.Serialize(alphaItem.Node.Children[0].NameComponents));
+
+        // Re-expanding surfaces the preserved child again.
+        alphaItem.IsExpanded = true;
+        var reExpandedBeta = await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\",\"beta\"]", StringComparison.Ordinal));
+        Assert.Equal(alphaItem.ItemKey, reExpandedBeta.ParentItemKey);
+
+        await viewModel.DisposeAsync();
+    }
+
+    [AvaloniaFact]
+    public async Task BrowserList_RebuildPublishesItemsThroughForegroundScheduler()
+    {
+        var broker = await CreateBrokerAsync();
+        await SeedDeepTreeAsync(broker);
+
+        var uiContext = SynchronizationContext.Current;
+        Assert.NotNull(uiContext);
+        var recordingScheduler = new CountingSynchronizationContextScheduler(uiContext!);
+
+        var rootSubscription = await CreateRootSubscriptionAsync(broker);
+        var viewModel = new EntityBrowserWorkspaceTabViewModel(
+            broker,
+            rootSubscription,
+            fieldEditorFactory: null,
+            foregroundScheduler: recordingScheduler)
+        {
+            Id = "entity-browser-scheduler",
+            Title = "Entity Browser",
+        };
+
+        await WaitForItemAsync(
+            viewModel,
+            item => string.Equals(item.ItemKey, "[\"alpha\"]", StringComparison.Ordinal));
+
+        // #1232: the collection mutation (SetItems) must be published through the injected foreground
+        // scheduler rather than run directly on whatever thread the rebuild happens to be on.
+        Assert.True(
+            recordingScheduler.QueuedTaskCount > 0,
+            "Expected EntityList.SetItems to be published through the injected foreground scheduler.");
+
+        await viewModel.DisposeAsync();
+    }
+
+    private static async Task SeedDeepTreeAsync(EntityBroker broker)
+    {
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("aaaaaaaa-0000-0000-0000-000000000001"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-3), "1"),
+                """
+                {
+                  "entity-id": "aaaaaaaa-0000-0000-0000-000000000001",
+                  "entity-types": ["entity", "folder"],
+                  "names": [["alpha"]],
+                  "display-name": { "default": "Alpha" }
+                }
+                """));
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("aaaaaaaa-0000-0000-0000-000000000002"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-2), "1"),
+                """
+                {
+                  "entity-id": "aaaaaaaa-0000-0000-0000-000000000002",
+                  "entity-types": ["entity", "folder"],
+                  "names": [["alpha", "beta"]],
+                  "display-name": { "default": "Beta" }
+                }
+                """));
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                new EntityId("aaaaaaaa-0000-0000-0000-000000000003"),
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-1), "1"),
+                """
+                {
+                  "entity-id": "aaaaaaaa-0000-0000-0000-000000000003",
+                  "entity-types": ["entity", "folder"],
+                  "names": [["alpha", "beta", "gamma"]],
+                  "display-name": { "default": "Gamma" }
+                }
+                """));
+    }
+
+    private static Task<SubscribedGet> CreateRootSubscriptionAsync(EntityBroker broker)
+    {
+        return broker.SubscribeGetAsync(
+            new GetRequest
+            {
+                Entities =
+                [
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateSelf,
+                    },
+                    new GetEntityRequest
+                    {
+                        EntityName = EntityName.Root,
+                        EnumerateChildren = EnumerateChildrenAction.EnumerateChildren,
+                    },
+                ],
+                Timestamps = [null],
+            },
+            TestContext.Current.CancellationToken);
+    }
+
+    // Records how many tasks are queued so a test can assert that collection mutations are published
+    // through the injected foreground scheduler. Execution is delegated to the captured UI
+    // synchronization context so the dispatcher still pumps the continuation (issue #1232).
+    private sealed class CountingSynchronizationContextScheduler : TaskScheduler
+    {
+        private readonly SynchronizationContext context;
+        private int queuedTaskCount;
+
+        public CountingSynchronizationContextScheduler(SynchronizationContext context)
+        {
+            this.context = context;
+        }
+
+        public int QueuedTaskCount => Volatile.Read(ref this.queuedTaskCount);
+
+        protected override void QueueTask(Task task)
+        {
+            Interlocked.Increment(ref this.queuedTaskCount);
+            this.context.Post(_ => this.TryExecuteTask(task), null);
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+        {
+            return false;
+        }
+
+        protected override IEnumerable<Task>? GetScheduledTasks()
+        {
+            return null;
+        }
     }
 
     private static Task<EntityBroker> CreateBrokerAsync()
@@ -703,6 +993,44 @@ public sealed class EntityBrowserWorkspaceTabViewModelTests
         finally
         {
             viewModel.EntityList.Items.CollectionChanged -= handler;
+        }
+    }
+
+    // Issue #1177: field editors are built lazily on first realization, so tests inspecting
+    // FieldEditors must first invoke EnsureFieldEditorsBuilt on the target card and then wait for
+    // the card's PropertyChanged notification for FieldEditors before asserting.
+    private static async Task WaitForCardFieldEditorsAsync(
+        EntityListItemViewModel item,
+        Func<IReadOnlyCollection<EntityFieldEditorViewModel>, bool> predicate)
+    {
+        if (predicate(item.FieldEditors))
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (string.Equals(e.PropertyName, nameof(EntityListItemViewModel.FieldEditors), StringComparison.Ordinal)
+                && predicate(item.FieldEditors))
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        item.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            if (predicate(item.FieldEditors))
+            {
+                return;
+            }
+
+            await signal.Task;
+        }
+        finally
+        {
+            item.PropertyChanged -= OnPropertyChanged;
         }
     }
 }

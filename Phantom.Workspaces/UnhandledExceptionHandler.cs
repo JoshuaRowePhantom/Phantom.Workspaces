@@ -35,6 +35,8 @@ internal static class UnhandledExceptionHandler
 
     internal static void OnDispatcherUnhandledException(object? sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        // #1093: record the fault through the centralized helper before showing the crash dialog.
+        Services.Logging.GlobalExceptionLogging.OnDispatcherUnhandled(e.Exception);
         e.Handled = true;
         ShowOrDiscard(e.Exception, isTerminating: false);
     }

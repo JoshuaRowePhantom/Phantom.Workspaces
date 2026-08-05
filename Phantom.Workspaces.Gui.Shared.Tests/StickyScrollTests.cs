@@ -13,7 +13,7 @@ namespace Phantom.Workspaces.Gui.Shared.Tests;
 
 public sealed class StickyScrollTests
 {
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void ModeledEntityCardTemplate_ApplyLayer_MakesParentHeaderDrawAboveChildHeader()
     {
         var parentBranchHeader = new Border { Width = 220, Height = 40 };
@@ -50,8 +50,15 @@ public sealed class StickyScrollTests
             Height = 160,
             Content = content,
         };
-        StickyScroll.SetIsEnabled(scrollViewer, true);
 
+        // NOTE: this test verifies the *static* Engine.ApplyLayer helper against the
+        // ModeledEntityCardTemplate visual tree. It intentionally does NOT enable the auto-engine
+        // (StickyScroll.SetIsEnabled) because that would subscribe a LayoutUpdated handler which
+        // races with the manual ApplyLayer call under -Mode full load: any queued layout pass
+        // that runs between ApplyLayer(...,1975) and the assertion causes Engine.Update() to
+        // reset the ZIndex chain to 0 as its first step, and if TranslatePoint transiently
+        // returns null the pin is not re-applied, leaving parentBranchHeader.ZIndex==0 so
+        // IsDrawnAbove falls back to sibling-index order (parent added first) and fails (#1105).
         var window = new Window
         {
             Width = 280,
@@ -66,7 +73,7 @@ public sealed class StickyScrollTests
         window.Close();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void DrawOrderComparator_UsesSiblingOrder_WhenZIndexIsEqual()
     {
         var first = new Border { Width = 100, Height = 40 };
@@ -92,7 +99,7 @@ public sealed class StickyScrollTests
         window.Close();
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void LayerHelpers_ApplyLayer_MakesStickyDrawAboveNonSticky()
     {
         using var host = CreateHost();
@@ -108,7 +115,7 @@ public sealed class StickyScrollTests
         Assert.True(IsDrawnAbove(host.StickyHeader, host.NonStickyHeader, host.ScrollViewer));
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public void LayerHelpers_ResetLayer_ClearsZIndex_AndPinnedClass()
     {
         using var host = CreateHost();
@@ -169,8 +176,11 @@ public sealed class StickyScrollTests
             Height = 120,
             Content = canvas,
         };
-        StickyScroll.SetIsEnabled(scrollViewer, true);
 
+        // See ModeledEntityCardTemplate_ApplyLayer_MakesParentHeaderDrawAboveChildHeader for
+        // why the auto-engine is deliberately not enabled here — the LayerHelpers_* tests
+        // exercise the static Engine.ApplyLayer/ResetLayer helpers directly and must not race
+        // with LayoutUpdated-driven Engine.Update() calls under -Mode full load (#1105).
         var window = new Window
         {
             Width = 240,

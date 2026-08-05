@@ -16,12 +16,15 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
     private const string EntityNamePrefixesIndexDirectoryName = "entityNamePrefixes";
     private readonly object updateLock = new();
     private readonly Dictionary<EntityId, EntitySnapshot> deletedEntities = new();
+    private readonly TimeProvider timeProvider;
     private long nextSequenceNumber;
 
     public FilesystemDataAccessLayer(
-        string path)
+        string path,
+        TimeProvider? timeProvider = null)
     {
         this.Path = path;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         Directory.CreateDirectory(this.Path);
         this.nextSequenceNumber = this.LoadNextSequenceNumber();
     }
@@ -281,7 +284,7 @@ public sealed class FilesystemDataAccessLayer : IDataAccessLayer
             }
 
             var nextSequenceNumber = this.nextSequenceNumber + 1;
-            var modifiedTime = new Timestamp(DateTimeOffset.UtcNow, nextSequenceNumber.ToString());
+            var modifiedTime = new Timestamp(this.timeProvider.GetUtcNow(), nextSequenceNumber.ToString());
             var nextTag = new ConcurrencyTag(nextSequenceNumber.ToString());
             var nextSnapshot = new EntitySnapshot
             {

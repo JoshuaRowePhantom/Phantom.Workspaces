@@ -70,7 +70,7 @@ public sealed class ChatOutputControlLifecycleWebViewTests
                 new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
             chat.History.Add(new AgentChatHistoryItem { Role = ChatRole.User, Contents = [new TextContent("hello")] });
             using var loggerFactory = new ObservableLoggerFactory();
-            await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory);
+            await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
 
             var control = new AgentChatOutputControl { DataContext = viewModel };
             var browser = GetBrowser(control);

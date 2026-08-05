@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Tools;
 
 /// <summary>
 /// Shared helper for detecting and reading metadata from Git repositories.
-/// Used by <see cref="GitWorkspaceDiscoveryTool"/> and <see cref="GitWorkspaceUpdateTool"/>
+/// Used by <see cref="GitWorkspaceScanTool"/> and <see cref="GitWorkspaceUpdateTool"/>
 /// to avoid duplicating detection and read logic.
 /// </summary>
 public static class GitRepositoryMetadataReader
@@ -30,10 +30,31 @@ public static class GitRepositoryMetadataReader
         int maxDepth,
         CancellationToken cancellationToken,
         ILogger? logger = null)
+        => EnumerateGitRepositories(root, maxDepth, Array.Empty<string>(), cancellationToken, logger);
+
+    /// <summary>
+    /// Overload accepting a collection of excluded paths. Any directory whose full path equals one
+    /// of the (already-expanded, already-normalized) excludes, or lies under it (with a directory
+    /// separator boundary), is skipped along with its entire subtree. Comparison is case-insensitive.
+    /// </summary>
+    public static IEnumerable<string> EnumerateGitRepositories(
+        string root,
+        int maxDepth,
+        IReadOnlyCollection<string> excludes,
+        CancellationToken cancellationToken,
+        ILogger? logger = null)
     {
         var pending = new Stack<(string Path, int Depth)>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        pending.Push((Path.GetFullPath(root), 0));
+        var rootFullPath = Path.GetFullPath(root);
+
+        if (IsUnderAnyExclude(rootFullPath, excludes))
+        {
+            logger?.LogDebug("Skipping excluded directory: {Path}", rootFullPath);
+            yield break;
+        }
+
+        pending.Push((rootFullPath, 0));
 
         while (pending.Count > 0)
         {
@@ -76,9 +97,66 @@ public static class GitRepositoryMetadataReader
                     continue;
                 }
 
+                if (IsUnderAnyExclude(subdirectory, excludes))
+                {
+                    logger?.LogDebug("Skipping excluded directory: {Path}", subdirectory);
+                    continue;
+                }
+
                 pending.Push((subdirectory, depth + 1));
             }
         }
+    }
+
+    /// <summary>
+    /// Returns true if <paramref name="path"/> is equal to, or lies under, any of the supplied
+    /// exclude paths. Excludes are expected to be already expanded (env-var substituted) and
+    /// normalized via <see cref="Path.GetFullPath(string)"/> with trailing separators trimmed.
+    /// A directory-separator boundary is required to avoid false positives such as
+    /// <c>C:\root\TempStuff</c> matching an exclude of <c>C:\root\Temp</c>.
+    /// </summary>
+    internal static bool IsUnderAnyExclude(string path, IReadOnlyCollection<string> excludes)
+    {
+        if (excludes.Count == 0)
+        {
+            return false;
+        }
+
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(path)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        foreach (var exclude in excludes)
+        {
+            if (string.IsNullOrEmpty(exclude))
+            {
+                continue;
+            }
+
+            if (string.Equals(fullPath, exclude, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (fullPath.StartsWith(exclude + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (fullPath.StartsWith(exclude + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -28,7 +28,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly List<AgentViewModel> subAgentViewModels = [];
     private readonly List<RunningAgentChatLease> subAgentLeases = [];
     private readonly ObservableCollection<IRunningSubAgentDisplay> subAgentDisplayItems = [];
-    private readonly ObservableCollection<DetailContentSlot> detailContentSlots = [];
+    private readonly ObservableCollection<AgentDetailDocumentItem> allDetailContents = [];
+    private readonly Dictionary<AgentViewModel, NotifyCollectionChangedEventHandler> subAgentDetailSubscriptions = new();
     private readonly ObservableCollection<AgentEditorNavigationItemViewModel> subAgentAllChildren = [];
     private readonly AgentEditorNavigationItemViewModel chatDetailsNavItem;
     private readonly AgentEditorNavigationItemViewModel toolsNavItem;
@@ -41,14 +42,28 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private bool showChatInputHelpText = true;
     private string agentSessionId;
     private AgentEditorNavigationItemViewModel? selectedEditorItem;
+    private readonly string detailKeyPrefix = System.Guid.NewGuid().ToString("N");
+    private readonly AgentDetailDockFactory detailDockFactory;
+    private AgentDetailDocumentItem? selectedDetailItem;
 
-    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler? foregroundScheduler = null)
+    // #1122: foregroundScheduler is a required constructor parameter. A silent
+    // TaskScheduler.Default fallback caused sub-agent restore continuations to run on the
+    // thread pool and mutate UI-bound collections off the UI thread, crashing the app.
+    // Every construction site must supply a UI-thread scheduler (e.g. captured via
+    // SynchronizationContextTaskScheduler.FromCurrent() on the UI thread) so that the
+    // continuation in AddSubAgentSlotLazy performs its UI-affine mutations on the correct
+    // thread. Tests that do not exercise UI-thread affinity may pass TaskScheduler.Default.
+    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
-        this.foregroundScheduler = foregroundScheduler ?? TaskScheduler.Default;
+        this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
         this.agentSessionId = agentChat.AgentSessionId;
+        this.ParentAgentViewModel = parentAgentViewModel;
+        this.ParentAgentDisplay = parentAgentViewModel is not null
+            ? new RunningParentAgentDisplay(parentAgentViewModel.agentChat)
+            : null;
         this.DisplayName = displayName;
         this.Description = description;
         this.conversationDetail = new AgentChatConversationDetailViewModel(this);
@@ -71,7 +86,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.UnholdAllQueuesCommand = new RelayCommand(() => this.InputQueue?.UnholdAllQueuesCommand.Execute(null));
         this.EditorItems = [];
 
-        this.NavigateToAgentHandler = this.NavigateToSubAgent;
+        this.NavigateToAgentHandler = this.NavigateToAgent;
 
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged += this.OnToolsChanged;
@@ -82,12 +97,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
         ((INotifyCollectionChanged)agentChat.SubAgents).CollectionChanged += this.OnSubAgentsCollectionChanged;
 
-        // Create detail content slots.
-        this.detailContentSlots.Add(new DetailContentSlot(this.conversationDetail) { IsVisible = true });
-        this.detailContentSlots.Add(new DetailContentSlot(this.chatDetailsDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.toolsDetail));
-        this.detailContentSlots.Add(new DetailContentSlot(this.subAgentsContainerDetail));
-        this.DetailContentSlots = new ReadOnlyObservableCollection<DetailContentSlot>(this.detailContentSlots);
+        // Build the flat detail-content collection (one item per nav node's DetailContent) and the
+        // locked, tab-strip-less DocumentDock that hosts them (issue #1035). Every node — including
+        // each sub-agent child — contributes a first-class cached document, so no detail panel is
+        // ever blank. Sub-agents append their own items recursively (see AddSubAgentSlotEager).
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/conversation", "Chat", this.conversationDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-details", "Chat details", this.chatDetailsDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-tools", "Tools", this.toolsDetail));
+        this.allDetailContents.Add(new AgentDetailDocumentItem($"{this.detailKeyPrefix}/chat-sub-agents", "Sub-agents", this.subAgentsContainerDetail));
+        this.AllDetailContents = new ReadOnlyObservableCollection<AgentDetailDocumentItem>(this.allDetailContents);
+        this.detailDockFactory = new AgentDetailDockFactory(this.allDetailContents);
 
         // Build fixed navigation items once.
         this.chatDetailsNavItem = new AgentEditorNavigationItemViewModel(
@@ -157,6 +176,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public string Description { get; }
 
+    /// <summary>
+    /// Caller-supplied sub-agent name/id (issue #1151) sourced from <c>AgentChat.Name</c>. Empty
+    /// for root agents and for sub-agents whose caller did not supply a name.
+    /// </summary>
+    public string Name => this.agentChat.Name;
+
     public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
 
     public ObservableLoggerFactory LoggerFactory => this.loggerFactory;
@@ -221,6 +246,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// <summary>UI-layer display wrappers for each direct child sub-agent, in the order they were created.</summary>
     public ReadOnlyObservableCollection<IRunningSubAgentDisplay> SubAgentDisplays { get; }
 
+    /// <summary>The parent agent's view model, or <see langword="null"/> for root agents.</summary>
+    public AgentViewModel? ParentAgentViewModel { get; }
+
+    /// <summary>
+    /// Display wrapper for this agent's parent, used to render the [Parent agent] panel above the
+    /// [Running sub-agents] panel. <see langword="null"/> for root agents.
+    /// </summary>
+    public IRunningSubAgentDisplay? ParentAgentDisplay { get; }
+
     public ICommand InterruptCommand { get; }
 
     public ICommand ToggleReasoningVisibilityCommand { get; }
@@ -257,7 +291,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public ObservableCollection<AgentEditorNavigationItemViewModel> EditorItems { get; }
 
-    public ReadOnlyObservableCollection<DetailContentSlot> DetailContentSlots { get; }
+    public ReadOnlyObservableCollection<AgentDetailDocumentItem> AllDetailContents { get; }
+
+    /// <summary>
+    /// The root Dock layout bound to the detail region's <c>DockControl.Layout</c> (issue #1035).
+    /// Hosts the locked, tab-strip-less <see cref="AgentDetailDocumentDock"/> whose cached documents
+    /// are generated from <see cref="AllDetailContents"/>.
+    /// </summary>
+    public global::Dock.Model.Controls.IRootDock DetailLayout => this.detailDockFactory.Layout;
+
+    /// <summary>The cached detail document currently active in the detail dock, or null.</summary>
+    public AgentDetailDocument? SelectedDetailDocument => this.detailDockFactory.GetDocument(this.selectedDetailItem);
+
+    /// <summary>Test/host seam: the factory that owns the detail dock and its document registry.</summary>
+    internal AgentDetailDockFactory DetailDockFactory => this.detailDockFactory;
 
     public bool IsChatRunning => this.RunningItems.Count > 0;
 
@@ -276,28 +323,32 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                 this.toolsDetail.SetRootItem(value);
             }
 
-            // Update the sub-agents container when a sub-agent nav item is selected.
+            // Fix #1112: only the "Sub-agents (N)" group node still uses the shared container as
+            // its DetailContent (for the browser card). Individual sub-agent nav items now carry
+            // their own ConversationDetail, so they resolve to a distinct AgentDetailDocumentItem
+            // via the ReferenceEquals scan below and no longer need ShowSubAgent slot toggling.
             if (value is not null && ReferenceEquals(value.DetailContent, this.subAgentsContainerDetail))
             {
-                if (value.Id == "chat-sub-agents")
+                this.subAgentsContainerDetail.ShowBrowser();
+            }
+
+            // Activate the cached detail document whose content matches the selected node
+            // (issue #1035). Replaces the old ReferenceEquals slot-visibility toggle; every node —
+            // including sub-agent children — resolves to a first-class document, so nothing blanks.
+            var selectedContent = value?.DetailContent;
+            AgentDetailDocumentItem? item = null;
+            foreach (var candidate in this.allDetailContents)
+            {
+                if (ReferenceEquals(candidate.Content, selectedContent))
                 {
-                    // The group node itself — show the browser card.
-                    this.subAgentsContainerDetail.ShowBrowser();
-                }
-                else if (value.Id.StartsWith("sub-agent-", StringComparison.Ordinal))
-                {
-                    // An individual sub-agent child node.
-                    var agentId = value.Id.Substring("sub-agent-".Length);
-                    this.subAgentsContainerDetail.ShowSubAgent(agentId);
+                    item = candidate;
+                    break;
                 }
             }
 
-            // Update detail content slot visibility.
-            var selected = value?.DetailContent;
-            foreach (var slot in this.detailContentSlots)
-            {
-                slot.IsVisible = ReferenceEquals(slot.Content, selected);
-            }
+            this.selectedDetailItem = item;
+            this.detailDockFactory.SetActiveDetail(item);
+            this.RaisePropertyChanged(nameof(this.SelectedDetailDocument));
         }
     }
 
@@ -514,6 +565,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.toolsTransformer.Dispose();
         this.subAgentsTransformer.Dispose();
+        foreach (var (subAgentViewModel, handler) in this.subAgentDetailSubscriptions)
+        {
+            ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged -= handler;
+        }
+        this.subAgentDetailSubscriptions.Clear();
         this.InputQueue?.Dispose();
         this.conversationDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
@@ -534,6 +590,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         {
             if (display is IDisposable d)
                 d.Dispose();
+        }
+
+        if (this.ParentAgentDisplay is IDisposable parentDisplayDisposable)
+        {
+            parentDisplayDisposable.Dispose();
         }
 
         // Dispose sub-agent leases
@@ -557,7 +618,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     }
 
     private void OnRunningItemsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        => this.RaisePropertyChanged(nameof(this.IsChatRunning));
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            this.RaisePropertyChanged(nameof(this.IsChatRunning));
+            return;
+        }
+
+        Dispatcher.UIThread.Post(() => this.RaisePropertyChanged(nameof(this.IsChatRunning)));
+    }
 
     private void OnSubAgentsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
@@ -566,6 +635,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             foreach (IRunningSubAgent subAgent in e.NewItems)
             {
                 this.AddSubAgentSlot(subAgent);
+            }
+        }
+
+        if (e.OldItems is not null)
+        {
+            foreach (IRunningSubAgent subAgent in e.OldItems)
+            {
+                this.RemoveSubAgentDetailContents(subAgent.AgentId);
             }
         }
     }
@@ -601,19 +678,88 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         var display = new RunningSubAgentDisplay(subAgentChat);
         this.subAgentDisplayItems.Add(display);
-        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler);
+        var subAgentViewModel = new AgentViewModel(subAgentChat, subAgent.DisplayName, subAgent.Description, this.loggerFactory, this.foregroundScheduler, this);
         // Delegate the sub-agent's navigation handler to this parent so ancestor navigation works
         // (issue #1046): the parent can resolve its own children, and if the target is above this
         // agent it falls through to ancestor resolution logic in NavigateToSubAgent.
         subAgentViewModel.NavigateToAgentHandler = this.NavigateToAgentHandler;
         this.subAgentViewModels.Add(subAgentViewModel);
+        // Recursively aggregate the sub-agent's flat detail-content collection into this agent's
+        // collection so every sub-agent node (and its descendants) has a first-class cached document
+        // in the root dock (issue #1035). The sub-agent's collection already includes its own
+        // sub-agents, so arbitrary nesting depth is handled without special-casing.
+        this.AppendSubAgentDetailContents(subAgentViewModel);
         // Use the AgentChat's AgentId, not the stub's AgentId (which may be the session ID for lazy stubs)
         this.subAgentsContainerDetail.AddSlot(subAgentChat.AgentId, subAgentViewModel, subAgentChat);
     }
 
+    private void AppendSubAgentDetailContents(AgentViewModel subAgentViewModel)
+    {
+        foreach (var item in subAgentViewModel.AllDetailContents)
+        {
+            if (!this.allDetailContents.Contains(item))
+            {
+                this.allDetailContents.Add(item);
+            }
+        }
+
+        NotifyCollectionChangedEventHandler handler = (_, e) => this.OnSubAgentDetailContentsChanged(e);
+        ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged += handler;
+        this.subAgentDetailSubscriptions[subAgentViewModel] = handler;
+    }
+
+    private void OnSubAgentDetailContentsChanged(NotifyCollectionChangedEventArgs e)
+    {
+        if (e.NewItems is not null)
+        {
+            foreach (AgentDetailDocumentItem item in e.NewItems)
+            {
+                if (!this.allDetailContents.Contains(item))
+                {
+                    this.allDetailContents.Add(item);
+                }
+            }
+        }
+
+        if (e.OldItems is not null)
+        {
+            foreach (AgentDetailDocumentItem item in e.OldItems)
+            {
+                this.allDetailContents.Remove(item);
+            }
+        }
+    }
+
+    private void RemoveSubAgentDetailContents(string agentId)
+    {
+        var subAgentViewModel = this.subAgentViewModels
+            .FirstOrDefault(vm => string.Equals(vm.agentChat.AgentId, agentId, StringComparison.Ordinal));
+        if (subAgentViewModel is null)
+        {
+            return;
+        }
+
+        if (this.subAgentDetailSubscriptions.TryGetValue(subAgentViewModel, out var handler))
+        {
+            ((INotifyCollectionChanged)subAgentViewModel.AllDetailContents).CollectionChanged -= handler;
+            this.subAgentDetailSubscriptions.Remove(subAgentViewModel);
+        }
+
+        foreach (var item in subAgentViewModel.AllDetailContents)
+        {
+            this.allDetailContents.Remove(item);
+        }
+    }
+
     private void AddSubAgentSlotLazy(SubAgent stub)
     {
-        // Start async lease acquisition and schedule UI update when complete
+        // #1122: The continuation body performs UI-affine mutations (allDetailContents,
+        // subAgentDisplayItems, Dock updates via AgentDetailDockFactory) and MUST run on the
+        // UI-thread foregroundScheduler. The scheduler is now a required constructor
+        // parameter so the value is guaranteed to be a real UI-thread scheduler in production.
+        // We also wrap the success branch in try/catch so any exception thrown by the UI-thread
+        // work is observed and logged rather than surfacing as an unobserved-task exception on
+        // the finalizer thread (which previously crashed the process).
         var acquisitionTask = stub.AcquireLeaseAsync();
         acquisitionTask.ContinueWith(
             task =>
@@ -626,7 +772,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     {
                         this.subAgentLeases.Add(lease);
                     }
-                    this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                    try
+                    {
+                        this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                    }
+                    catch (Exception ex)
+                    {
+                        this.logger.LogError(ex, "Failed to add restored sub-agent slot {AgentId}", stub.SessionId.Value);
+                    }
                 }
                 else if (task.IsFaulted)
                 {
@@ -638,8 +791,62 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.foregroundScheduler);
     }
 
+    /// <summary>
+    /// Navigates to any agent in the loaded agent tree identified by its agent id or session id.
+    /// Walks up to the root, then searches descendants, so navigating to a parent/ancestor id opens
+    /// that agent's view. Falls through to <see cref="NavigateToSubAgent"/> for the resolved agent.
+    /// </summary>
+    public void NavigateToAgent(string agentId)
+    {
+        var root = this;
+        while (root.ParentAgentViewModel is not null)
+        {
+            root = root.ParentAgentViewModel;
+        }
+
+        var target = root.FindInTreeById(agentId);
+        var resolvedAgentId = target is not null ? target.agentChat.AgentId : agentId;
+        root.NavigateToSubAgent(resolvedAgentId);
+    }
+
+    private AgentViewModel? FindInTreeById(string agentId)
+    {
+        // Fix #1152: An empty/whitespace id must never match. Two unrelated sub-agents whose
+        // agentId is empty (e.g. seeded before the AgentChat.agentId fallback landed, or in
+        // partially initialized states) would otherwise silently collide here.
+        if (string.IsNullOrWhiteSpace(agentId))
+        {
+            return null;
+        }
+
+        if (string.Equals(this.agentChat.AgentId, agentId, StringComparison.Ordinal) ||
+            string.Equals(this.agentChat.AgentSessionId, agentId, StringComparison.Ordinal))
+        {
+            return this;
+        }
+
+        foreach (var child in this.subAgentViewModels)
+        {
+            var found = child.FindInTreeById(agentId);
+            if (found is not null)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
+
     private void NavigateToSubAgent(string agentId)
     {
+        // Fix #1152: Guard against empty/whitespace ids before the string.Equals check below,
+        // which would otherwise treat "empty == this agent's empty AgentId" as "navigate to self"
+        // and dismiss the click silently. A blank id has no meaningful target — do nothing.
+        if (string.IsNullOrWhiteSpace(agentId))
+        {
+            return;
+        }
+
         // If the target is this agent itself, show the conversation view (navigate to self/root).
         if (string.Equals(agentId, this.agentChat.AgentId, StringComparison.Ordinal))
         {
@@ -665,12 +872,17 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             return;
         }
 
-        // Select the child nav item for this agent (or fall back to the group itself).
-        var childItem = subAgentsGroup.Children.FirstOrDefault(c =>
+        // Fix #1134: resolve against the FULL (unfiltered) set so completed (Succeeded/Failed)
+        // sub-agents — which HideCompletedAgents removes from subAgentsGroup.Children — are still
+        // found and their own AgentDetailDocumentItem (its HTML view) is activated via the
+        // SelectedEditorItem setter's ReferenceEquals scan. Using the filtered
+        // subAgentsGroup.Children caused completed sub-agents to fall back to the group node,
+        // which shows the shared browser card instead of the sub-agent's own transcript.
+        var childItem = this.subAgentAllChildren.FirstOrDefault(c =>
             c.Id == $"sub-agent-{agentId}");
 
-        this.SelectedEditorItem = childItem ?? subAgentsGroup;
         subAgentsGroup.IsExpanded = true;
+        this.SelectedEditorItem = childItem ?? subAgentsGroup;
 
         // Ensure the container shows the requested sub-agent.
         this.subAgentsContainerDetail.ShowSubAgent(agentId);
@@ -747,13 +959,20 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         protected override AgentEditorNavigationItemViewModel Create(SubAgentSlotViewModel slot)
         {
             var subRoot = slot.SubAgentViewModel.EditorItems.FirstOrDefault();
+            // Fix #1112: each sub-agent nav item's DetailContent is its OWN ConversationDetail (not
+            // the shared subAgentsContainerDetail). That way SelectedEditorItem's ReferenceEquals
+            // scan over AllDetailContents finds the sub-agent's own AgentDetailDocumentItem (added
+            // via AppendSubAgentDetailContents), so SetActiveDetail activates a distinct Document
+            // per sub-agent. The DocumentDock only realises the active Document's content, so at
+            // most one AgentChatOutputControl / native WebView2 surface is materialised at a time —
+            // eliminating the airspace overlap where every sub-agent showed the same transcript.
             return new AgentEditorNavigationItemViewModel(
                 $"sub-agent-{slot.AgentId}",
                 slot.SubAgentViewModel.DisplayName,
                 null,
                 slot.SubAgentViewModel.Description,
                 null,
-                this.subAgentsNavItem.DetailContent,
+                slot.SubAgentViewModel.ConversationDetail,
                 subRoot?.Children.ToArray() ?? [],
                 runningSubAgent: slot.RunningSubAgent);
         }
@@ -796,7 +1015,15 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         // Projects the full (unfiltered) set of sub-agent nav items in Target into
         // subAgentsNavItem.Children, excluding completed (Succeeded/Failed) items when
-        // HideCompletedAgents is true. Preserves source order. See issue #1033.
+        // HideCompletedAgents is true. See issue #1033.
+        //
+        // Fix #1153: Applies a composite ordering to the visible children BEFORE reconciliation:
+        //   1. Running/idle items first, completed (Succeeded/Failed) items last.
+        //   2. Within each group, most-recently-updated first (descending LastUpdatedAt), so
+        //      the item the operator is actively watching stays near the top and completed
+        //      history sinks to the bottom.
+        // The reconciliation loop below moves items to their new positions in-place so
+        // Avalonia's ItemsControl sees ordinary Move/Add/Remove events, not a full reset.
         private void RefreshVisibleChildren()
         {
             var hide = this.subAgentsNavItem.HideCompletedAgents;
@@ -809,6 +1036,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     desired.Add(item);
                 }
             }
+
+            desired = desired
+                .OrderBy(item => (item.IsSucceeded || item.IsFailed) ? 1 : 0)
+                .ThenByDescending(item => item.LastUpdatedAt ?? DateTime.MinValue)
+                .ToList();
 
             for (int i = this.visibleChildren.Count - 1; i >= 0; i--)
             {

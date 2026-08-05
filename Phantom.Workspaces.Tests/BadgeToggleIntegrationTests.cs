@@ -15,11 +15,19 @@ namespace Phantom.Workspaces.Tests;
 /// </summary>
 public sealed class BadgeToggleIntegrationTests
 {
-    [PhantomAvaloniaFact]
+    private static readonly InterestTypeDefinition StandardActionable = new(
+        "actionable", "❗", "○", "Actionable", "Not actionable", "Mark actionable", "Clear actionable", null,
+        TargetParticipant: "target",
+        AppliesTo: [new InterestAppliesTo("user", null, InterestSessionValue.UserEntityId)]);
+
+    private static InterestCatalog StandardCatalog() => new([StandardActionable]);
+
+    [AvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_AppliesInterest()
     {
         var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        broker.InterestCatalog = StandardCatalog();
 
         var taskId = new EntityId(Guid.NewGuid());
         await SeedTaskAsync(broker.EntityRepository.DataAccessLayer, taskId);
@@ -39,7 +47,7 @@ public sealed class BadgeToggleIntegrationTests
             && types.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && type.GetString() == "actionable"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_WhenUpdateFails_ThrowsException()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -59,7 +67,7 @@ public sealed class BadgeToggleIntegrationTests
         // Wire up toggle function manually for this test
         var toggleFunc = async (SubscribedEntityViewModel entity, string interestTypeName) =>
         {
-            await InterestToggle.ToggleAsync(broker, entity.Snapshot, interestTypeName, ct);
+            await InterestToggle.ToggleAsync(broker, entity.Snapshot, StandardActionable, ct);
         };
         var subscribedEntity = new SubscribedEntityViewModel(bogusSnapshot, null, toggleFunc);
 
@@ -70,11 +78,12 @@ public sealed class BadgeToggleIntegrationTests
         Assert.NotNull(exception);
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task SubscribedEntityViewModel_ToggleInterestAsync_RemovesExistingInterest()
     {
         var ct = TestContext.Current.CancellationToken;
         var broker = await EntityBroker.CreateInitializedAsync(new UnknownRepositorySource(), ct);
+        broker.InterestCatalog = StandardCatalog();
 
         var taskId = new EntityId(Guid.NewGuid());
         await SeedTaskAsync(broker.EntityRepository.DataAccessLayer, taskId);
@@ -92,7 +101,7 @@ public sealed class BadgeToggleIntegrationTests
         // Create a new SubscribedEntityViewModel with the relationship-aware snapshot
         var toggleFunc = async (SubscribedEntityViewModel entity, string interestTypeName) =>
         {
-            await InterestToggle.ToggleAsync(broker, entity.Snapshot, interestTypeName, ct);
+            await InterestToggle.ToggleAsync(broker, entity.Snapshot, StandardActionable, ct);
         };
         subscribedEntity = new SubscribedEntityViewModel(withInterestSnapshot, null, toggleFunc);
 
@@ -107,7 +116,7 @@ public sealed class BadgeToggleIntegrationTests
             && types.EnumerateArray().Any(type => type.ValueKind == JsonValueKind.String && type.GetString() == "actionable"));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityListNodeViewModel_BadgeCommand_CanExecute_WhenEntityExists()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -139,7 +148,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.True(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public void EntityListNodeViewModel_BadgeCommand_CannotExecute_WhenEntityIsNull()
     {
         // Create a card node without an entity (display-only node)
@@ -164,7 +173,7 @@ public sealed class BadgeToggleIntegrationTests
         Assert.False(cardNode.Card.ToggleInterestCommand.CanExecute(badgesViewModel.Badges.First()));
     }
 
-    [PhantomAvaloniaFact]
+    [AvaloniaFact]
     public async Task EntityCardViewModel_ToggleInterestCommand_WhenToggleFails_PropagatesException()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -184,7 +193,7 @@ public sealed class BadgeToggleIntegrationTests
         // Wire up toggle function that will fail
         var toggleFunc = async (SubscribedEntityViewModel entity, string interestTypeName) =>
         {
-            await InterestToggle.ToggleAsync(broker, entity.Snapshot, interestTypeName, ct);
+            await InterestToggle.ToggleAsync(broker, entity.Snapshot, StandardActionable, ct);
         };
         var subscribedEntity = new SubscribedEntityViewModel(bogusSnapshot, null, toggleFunc);
 

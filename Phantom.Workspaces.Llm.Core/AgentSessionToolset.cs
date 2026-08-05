@@ -17,6 +17,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
     private readonly AgentChatRef _parentChatRef;
     private readonly CurrentSessionContext _currentSessionContext;
     private readonly IRunningAgentChatFactory _factory;
+    private readonly TimeProvider _timeProvider;
     private readonly Dictionary<AgentSessionId, RunningAgentChatLease> _leases = new();
     private readonly object _leasesLock = new();
     private readonly CancellationTokenSource _disposeCts = new();
@@ -27,12 +28,14 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
     internal AgentSessionToolset(
         AgentChatRef parentChatRef,
         CurrentSessionContext currentSessionContext,
-        IRunningAgentChatFactory factory)
+        IRunningAgentChatFactory factory,
+        TimeProvider? timeProvider = null)
         : base(null, null, null)
     {
         _parentChatRef = parentChatRef;
         _currentSessionContext = currentSessionContext;
         _factory = factory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _tools =
         [
             new AgentSessionCreateTool(this),
@@ -277,7 +280,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             RunningAgentChatLease lease;
             try
             {
-                lease = await _toolset._factory.CreateAsync(definition, sessionId, null, cancellationToken);
+                lease = await _toolset._factory.CreateAsync(definition, sessionId, null, ct: cancellationToken);
             }
             catch (Exception ex)
             {
@@ -301,7 +304,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             {
                 session_id = sessionId.Value,
                 status = GetStatus(lease.AgentChat),
-                created_at = DateTimeOffset.UtcNow.ToString("O"),
+                created_at = _toolset._timeProvider.GetUtcNow().ToString("O"),
             });
         }
     }
@@ -735,7 +738,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             try
             {
                 while (chat.RunningItems.Count > 0 && !linked.Token.IsCancellationRequested)
-                    await Task.Delay(50, linked.Token);
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), _toolset._timeProvider, linked.Token);
             }
             catch (OperationCanceledException)
             {
@@ -850,7 +853,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                         }
 
                         // Brief yield to allow the processing loop to drain RunningItems.
-                        await Task.Delay(10, disposeCts.Token);
+                        await Task.Delay(TimeSpan.FromMilliseconds(10), _toolset._timeProvider, disposeCts.Token);
                     }
                 }
                 catch (OperationCanceledException)

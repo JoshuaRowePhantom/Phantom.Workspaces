@@ -202,7 +202,9 @@ public partial class App : Application
             configuration,
             viewModel,
             (Current as App)?.UpdateController,
-            action => Dispatcher.UIThread.Post(action));
+            action => Dispatcher.UIThread.Post(action),
+            viewModel.LogDirectoryProvider,
+            new Phantom.Workspaces.Install.RealProcessLauncher());
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
         await settingsWindow.ShowDialog(mainWindow);
     }
@@ -251,37 +253,67 @@ public partial class App : Application
 
             loadingWindow.Show();
             loadingViewModel.StatusText = "Initializing main workspace view model.";
+
+            // #1086: resolve the log directory in exactly one place (driven by WorkspacesConfiguration)
+            // and build the process logger factory backed by the rolling file provider before any
+            // service that logs is constructed. The same directory is later handed to the embedded
+            // web host so GUI and web host never diverge.
+            var logDirectoryProvider = new Services.Logging.LogDirectoryProvider(
+                configuration ?? new WorkspacesConfiguration(),
+                configurationFilePath);
+            var loggerFactory = Services.Logging.LoggingBootstrap.CreateLoggerFactory(logDirectoryProvider);
+
+            // #1093: route global uncaught/unobserved exceptions through the #1086 file facility now
+            // that the logger factory exists (the crash-dialog handlers installed in Program.Main stay
+            // in place; this adds the missing logging half).
+            Services.Logging.GlobalExceptionLogging.Register(loggerFactory);
+
             var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
             var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), foregroundScheduler);
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(agentChatFactory),
-                agentPersistenceStoreCache);
+                agentPersistenceStoreCache,
+                loggerFactory: loggerFactory,
+                logDirectoryProvider: logDirectoryProvider,
+                configurationPersistence: persistenceService);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
+            // #1172: register the canonical URL opener now that MainWindowViewModel exists
+            // (it implements IWorkspaceTabService). The TopLevel accessor is late-bound to
+            // desktop.MainWindow because the real MainWindow is created after InitializeAsync.
+            applicationServices.SetUrlOpener(
+                Services.UrlOpener.CreateDefault(
+                    viewModel,
+                    () => desktop.MainWindow as Avalonia.Controls.TopLevel));
+
             loadingViewModel.StatusText = "Loading repository data and profile.";
-            try
-            {
-                await viewModel.InitializeAsync();
-            }
-            catch (Exception ex)
-            {
-                loadingViewModel.StatusText = $"Failed to connect: {ex.Message}";
-                await Task.Delay(5000); // Give user time to read the error
-                desktop.Shutdown();
-                return;
-            }
 
-            loadingViewModel.StatusText = "Opening main window.";
-            var mainWindow = new MainWindow(viewModel);
-            viewModel.WireWindowFocus(() => RestoreMainWindow(mainWindow));
-            mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
-            desktop.MainWindow = mainWindow;
-            mainWindow.Show();
-            loadingWindow.Close();
+            // #1186: Route the "initialize + open main window" sequence through
+            // StartupSplashRunner so the loading window is dismissed inside a
+            // finally block regardless of how initialize exits. Previously the
+            // splash was closed only on the happy path, so a fault or hang inside
+            // RestoreSubAgentsAsync (the reported #1186 cause) left it stuck in
+            // front indefinitely.
+            var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+                initializeAsync: () => viewModel.InitializeAsync(),
+                setStatus: msg => loadingViewModel.StatusText = msg,
+                onFaultDelay: () => Task.Delay(5000), // Give user time to read the error
+                shutdown: () => desktop.Shutdown(),
+                postInitialize: () =>
+                {
+                    loadingViewModel.StatusText = "Opening main window.";
+                    var mainWindow = new MainWindow(viewModel);
+                    viewModel.WireWindowFocus(() => RestoreMainWindow(mainWindow));
+                    mainWindow.Icon = TrayIconImageFactory.Create(updateAvailable: false);
+                    desktop.MainWindow = mainWindow;
+                    mainWindow.Show();
+                    this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration());
+                },
+                closeSplash: () => loadingWindow.Close());
 
-            this.WireTrayAndUpdates(desktop, mainWindow, configuration ?? new WorkspacesConfiguration());
+            _ = succeeded;
             return;
         }
 

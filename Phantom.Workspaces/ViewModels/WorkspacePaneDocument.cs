@@ -7,11 +7,12 @@ namespace Phantom.Workspaces.ViewModels;
 /// <summary>
 /// Dock document wrapper for WorkspacePaneViewModel (workspace-level tab).
 /// </summary>
-public class WorkspacePaneDocument : Document
+public class WorkspacePaneDocument : Document, IAsyncDisposable
 {
     private readonly TabHeaderViewModel cachedTabHeader;
     private readonly AgentRunningIndicatorTabHeaderItemViewModel runningIndicator;
     private readonly NotificationIndicatorTabHeaderItemViewModel notificationIndicator;
+    private int disposed;
 
     public WorkspacePaneDocument(WorkspacePaneViewModel workspacePane)
     {
@@ -58,4 +59,17 @@ public class WorkspacePaneDocument : Document
     /// </summary>
     [JsonIgnore]
     public TabHeaderViewModel EffectiveTabHeader => this.cachedTabHeader;
+
+    /// <summary>
+    /// Unsubscribes from the wrapped <see cref="WorkspacePaneViewModel"/> and cascades
+    /// disposal into it — which in turn disposes each child <see cref="WorkspaceTabViewModel"/>
+    /// (releasing any running-agent leases). See #1198.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (System.Threading.Interlocked.Exchange(ref this.disposed, 1) != 0)
+            return;
+        this.WorkspacePane.PropertyChanged -= this.OnWorkspacePanePropertyChanged;
+        await this.WorkspacePane.DisposeAsync().ConfigureAwait(false);
+    }
 }

@@ -1,3 +1,4 @@
+using Avalonia.Headless.XUnit;
 using System;
 using System.IO;
 using System.Text;
@@ -145,7 +146,7 @@ public sealed class TerminalMouseModeStateTests
         Assert.Null(state.EffectiveMode);
     }
 
-    [PhantomAvaloniaFact(Timeout = 15_000)]
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task TerminalControl_PushMouseModeEnable_UpdatesMouseModeState()
     {
         var stream = new TestStream();

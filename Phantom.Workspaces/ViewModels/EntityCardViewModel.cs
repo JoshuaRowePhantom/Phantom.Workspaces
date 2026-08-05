@@ -4,8 +4,10 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using Avalonia.Threading;
 using Phantom.Workspaces.Data;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -31,14 +33,32 @@ public sealed class EntityCardViewModel : ViewModelBase
     private readonly string displayName;
     private readonly string entityType;
     private readonly JsonValidationViewModel validation;
-    private readonly List<EntityDisplayItemViewModel> displayItems = [];
     private IReadOnlyCollection<EntityFieldEditorViewModel> fieldEditors;
     private ExternalEntityCardViewModel? externalCard;
     private string rawJsonText;
+    private string? matchQuery;
+    private bool isSelected;
     private bool isEditMode;
     private bool isJsonVisible;
     private IReadOnlyCollection<EntityFieldEditorViewModel>? editModeSnapshot;
     private string? editModeRawJsonSnapshot;
+    private MainWindowViewModel? shortcutMainWindowViewModel;
+    private ShortcutManager? shortcutManager;
+    private IReadOnlyList<EntityShortcutViewModel> shortcuts = Array.Empty<EntityShortcutViewModel>();
+    private CancellationTokenSource? shortcutResolutionCts;
+    // Issue #1177: field editors are built lazily on first realization instead of eagerly in the
+    // constructor. This flag guards EnsureFieldEditorsBuilt so the build is scheduled at most once,
+    // and it also gates the snapshot-change rebuild so unrealized cards do not re-launch schema work
+    // when their entity data changes.
+    private int fieldEditorsBuildRequested;
+    // Issue #1185: the most recently scheduled lazy field-editor build task, exposed so tests (and
+    // any deterministic caller) can await completion of the lazy realization rather than pumping
+    // the dispatcher and guessing when the async build has finished.
+    private Task fieldEditorsBuildTask = Task.CompletedTask;
+    // Issue #1177: optional caller-supplied lazy builder. When set (see SetLazyFieldEditorBuilder),
+    // it is invoked by BuildFieldEditorsAsync instead of the FieldEditorFactory path so the entity
+    // browser can defer its own FieldTypeResolver-based schema work until the card is realized.
+    private Func<CancellationToken, Task<IReadOnlyCollection<EntityFieldEditorViewModel>>>? lazyFieldEditorBuilder;
 
     public EntityCardViewModel(
         SubscribedEntityViewModel entity,
@@ -58,7 +78,6 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.Badges = new BadgesViewModel(new BadgesModel());
         this.StatusBadges = new StatusBadgesViewModel(new StatusBadgesModel());
         this.SetFieldEditorEditMode(false);
-        this.RefreshDisplayItems();
         entity.PropertyChanged += this.OnEntityPropertyChanged;
         this.ToggleEditModeCommand = new RelayCommand(
             _ => this.EnterEditMode(),
@@ -72,7 +91,47 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.ToggleJsonViewCommand = entity.ToggleRawJsonVisibilityCommand;
         this.DeleteEntityCommand = entity.DeleteEntityCommand;
         this.externalCard = this.cardViewName == "external" ? ExternalEntityCardViewModel.Create(entity) : null;
-        Lifetime.Run(this.BuildFieldEditorsAsync);
+        // Issue #1177: do NOT eagerly build field editors here. Realizing the card control triggers
+        // EnsureFieldEditorsBuilt via EntityCardControl.OnAttachedToVisualTree, so off-screen cards
+        // in a virtualized tree pay no schema/type-resolution cost.
+        if (fieldEditors is { Count: > 0 })
+        {
+            // Callers that supplied pre-built editors intend the card to display them as-is; mark
+            // the build as already satisfied so subsequent EnsureFieldEditorsBuilt calls are no-ops.
+            this.fieldEditorsBuildRequested = 1;
+        }
+    }
+
+    /// <summary>
+    /// Issue #1177: schedules a one-shot background build of this card's field editors. Called by
+    /// <c>EntityCardControl.OnAttachedToVisualTree</c> on first realization, so off-screen cards in
+    /// a virtualized tree pay no schema/type-resolution cost. Subsequent calls are no-ops.
+    /// </summary>
+    public void EnsureFieldEditorsBuilt()
+    {
+        if (Interlocked.Exchange(ref this.fieldEditorsBuildRequested, 1) == 1)
+        {
+            return;
+        }
+
+        // Issue #1185: capture the build task so tests and other deterministic callers can await
+        // completion of the lazy realization instead of pumping the dispatcher speculatively. The
+        // task is also handed to Lifetime so it participates in the ViewModel's cancellation and
+        // dispose-await semantics.
+        var task = this.BuildFieldEditorsAsync(this.Lifetime.Token);
+        this.fieldEditorsBuildTask = task;
+        Lifetime.Run(_ => task);
+    }
+
+    /// <summary>
+    /// Issue #1177: registers a lazy builder that produces this card's field editors when the card
+    /// is first realized. The entity browser uses this to hand off its own resolver-based build
+    /// closure so the browser's tree rebuild does not have to await schema work per entity.
+    /// </summary>
+    public void SetLazyFieldEditorBuilder(
+        Func<CancellationToken, Task<IReadOnlyCollection<EntityFieldEditorViewModel>>> builder)
+    {
+        this.lazyFieldEditorBuilder = builder;
     }
 
     public EntityCardViewModel(
@@ -116,9 +175,15 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public ExternalEntityCardViewModel? ExternalCard => this.externalCard;
 
-    public IReadOnlyCollection<EntityDisplayItemViewModel> DisplayItems => this.displayItems;
-
     public IReadOnlyCollection<EntityFieldEditorViewModel> FieldEditors => this.fieldEditors;
+
+    /// <summary>
+    /// Issue #1185: exposes the most recently scheduled lazy field-editor build task so
+    /// deterministic callers (and tests) can await the async build's completion instead of
+    /// pumping the dispatcher and guessing. Returns <see cref="Task.CompletedTask"/> before any
+    /// build has been requested, or once the last build has completed.
+    /// </summary>
+    public Task FieldEditorsBuildTask => this.fieldEditorsBuildTask;
 
     public JsonValidationViewModel Validation => this.validation;
 
@@ -126,7 +191,26 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public StatusBadgesViewModel StatusBadges { get; private set; }
 
-    public ObservableCollection<EntityShortcutViewModel> Shortcuts { get; } = [];
+    /// <summary>
+    /// The shortcuts currently applicable to this card. Reassigned wholesale on every resolution
+    /// so the ItemsControl rebinds atomically (fix #1144 — the previous in-place Clear()/Add loop
+    /// duplicated shortcuts when overlapping resolution runs interleaved).
+    /// </summary>
+    public IReadOnlyList<EntityShortcutViewModel> Shortcuts
+    {
+        get => this.shortcuts;
+        private set
+        {
+            if (!this.SetProperty(ref this.shortcuts, value))
+            {
+                return;
+            }
+
+            this.RaisePropertyChanged(nameof(this.HasShortcuts));
+            this.RaisePropertyChanged(nameof(this.ShowJsonButton));
+            this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+        }
+    }
 
     public RelayCommand? ActivateShortcutCommand { get; private set; }
 
@@ -217,6 +301,131 @@ public sealed class EntityCardViewModel : ViewModelBase
 
     public string JsonButtonText => "{}";
 
+    /// <summary>
+    /// Currently active find query used to compute the highlight run over <see cref="DisplayName"/>
+    /// and <see cref="EntityType"/>. Empty when no find session is active.
+    /// </summary>
+    public string? MatchQuery
+    {
+        get => this.matchQuery;
+        set
+        {
+            var normalized = string.IsNullOrEmpty(value) ? null : value;
+            if (!this.SetProperty(ref this.matchQuery, normalized))
+            {
+                return;
+            }
+
+            this.RaisePropertyChanged(nameof(this.IsFindMatch));
+            this.RaisePropertyChanged(nameof(this.DisplayNameBefore));
+            this.RaisePropertyChanged(nameof(this.DisplayNameMatch));
+            this.RaisePropertyChanged(nameof(this.DisplayNameAfter));
+            this.RaisePropertyChanged(nameof(this.EntityTypeBefore));
+            this.RaisePropertyChanged(nameof(this.EntityTypeMatch));
+            this.RaisePropertyChanged(nameof(this.EntityTypeAfter));
+            this.RaisePropertyChanged(nameof(this.DisplayNameMatchStart));
+            this.RaisePropertyChanged(nameof(this.DisplayNameMatchLength));
+        }
+    }
+
+    /// <summary>
+    /// True while this card is the currently-active find selection. Also used by find navigation to
+    /// track which card should be brought into view.
+    /// </summary>
+    public bool IsSelected
+    {
+        get => this.isSelected;
+        set => this.SetProperty(ref this.isSelected, value);
+    }
+
+    /// <summary>
+    /// True while the current <see cref="MatchQuery"/> is non-empty and matches somewhere in the
+    /// card text (used to gate the yellow-background inline run).
+    /// </summary>
+    public bool IsFindMatch => !string.IsNullOrEmpty(this.matchQuery)
+        && (this.DisplayNameMatchStart >= 0 || this.EntityTypeMatchStart >= 0);
+
+    /// <summary>
+    /// True when the current <see cref="MatchQuery"/> matches only inside the entity's JSON values
+    /// (not the visible card text). Set by <see cref="FindViewModel"/>.
+    /// </summary>
+    public bool MatchInJson { get; set; }
+
+    public int DisplayNameMatchStart => FindMatchIndex(this.DisplayName, this.matchQuery);
+
+    public int DisplayNameMatchLength => this.matchQuery?.Length ?? 0;
+
+    public string DisplayNameBefore => SliceBefore(this.DisplayName, this.DisplayNameMatchStart);
+
+    public string DisplayNameMatch => SliceMatch(this.DisplayName, this.DisplayNameMatchStart, this.DisplayNameMatchLength);
+
+    public string DisplayNameAfter => SliceAfter(this.DisplayName, this.DisplayNameMatchStart, this.DisplayNameMatchLength);
+
+    public int EntityTypeMatchStart => FindMatchIndex(this.EntityType, this.matchQuery);
+
+    public int EntityTypeMatchLength => this.matchQuery?.Length ?? 0;
+
+    public string EntityTypeBefore => SliceBefore(this.EntityType, this.EntityTypeMatchStart);
+
+    public string EntityTypeMatch => SliceMatch(this.EntityType, this.EntityTypeMatchStart, this.EntityTypeMatchLength);
+
+    public string EntityTypeAfter => SliceAfter(this.EntityType, this.EntityTypeMatchStart, this.EntityTypeMatchLength);
+
+    /// <summary>
+    /// Joined label of every non-abstract entity type the entity declares (issue #1164). A tool+note
+    /// entity shows both "tool" and "note" here rather than only the primary type. When no subscribed
+    /// entity is bound (the display-only constructor), falls back to the single supplied entity type.
+    /// </summary>
+    public string EntityTypeLabels => this.entity is null
+        ? this.entityType
+        : string.Join(", ", this.entity.NonAbstractEntityTypeNames);
+
+    private static int FindMatchIndex(string? text, string? query)
+    {
+        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(query))
+        {
+            return -1;
+        }
+
+        return text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string SliceBefore(string? text, int matchStart)
+    {
+        if (string.IsNullOrEmpty(text) || matchStart < 0)
+        {
+            return text ?? string.Empty;
+        }
+
+        return text.Substring(0, matchStart);
+    }
+
+    private static string SliceMatch(string? text, int matchStart, int matchLength)
+    {
+        if (string.IsNullOrEmpty(text) || matchStart < 0 || matchLength <= 0)
+        {
+            return string.Empty;
+        }
+
+        return text.Substring(matchStart, matchLength);
+    }
+
+    private static string SliceAfter(string? text, int matchStart, int matchLength)
+    {
+        if (string.IsNullOrEmpty(text) || matchStart < 0)
+        {
+            return string.Empty;
+        }
+
+        int end = matchStart + matchLength;
+        if (end >= text.Length)
+        {
+            return string.Empty;
+        }
+
+        return text.Substring(end);
+    }
+
     public string RawJsonText
     {
         get => this.rawJsonText;
@@ -248,16 +457,91 @@ public sealed class EntityCardViewModel : ViewModelBase
         RelayCommand activateShortcutCommand)
     {
         this.ActivateShortcutCommand = activateShortcutCommand;
-        this.Shortcuts.Clear();
-        foreach (var shortcut in shortcuts)
+        this.Shortcuts = shortcuts.ToList();
+        this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
+    }
+
+    /// <summary>
+    /// Supplies the card the context it needs to resolve its own shortcuts: the
+    /// <see cref="MainWindowViewModel"/> (which provides handler applicability and the
+    /// <c>ActivateShortcutCommand</c>) and the <see cref="ViewModels.ShortcutManager"/>. Assigning the
+    /// context wires <see cref="ActivateShortcutCommand"/> and re-resolves the shortcuts, so every card
+    /// path (tree, single-entity view, etc.) is self-sufficient without an external push.
+    /// </summary>
+    public void SetShortcutContext(
+        MainWindowViewModel mainWindowViewModel,
+        ShortcutManager shortcutManager)
+    {
+        this.shortcutMainWindowViewModel = mainWindowViewModel;
+        this.shortcutManager = shortcutManager;
+        this.ActivateShortcutCommand = mainWindowViewModel.ActivateShortcutCommand;
+        this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
+        this.QueueShortcutResolution();
+    }
+
+    /// <summary>
+    /// Resolves the card's shortcuts from the current entity and shortcut context, then
+    /// atomically reassigns <see cref="Shortcuts"/>. Fix #1144 — every resolution builds a fresh
+    /// local list, checks <paramref name="ct"/> before assigning, and marshals the assignment
+    /// (which raises PropertyChanged observed by the bound ItemsControl) onto the UI thread.
+    /// No-op when no shortcut context or entity is available.
+    /// </summary>
+    public async Task ResolveShortcutsAsync(CancellationToken ct = default)
+    {
+        if (this.shortcutMainWindowViewModel is not { } mainWindowViewModel
+            || this.shortcutManager is not { } manager
+            || this.entity is null)
         {
-            this.Shortcuts.Add(shortcut);
+            return;
         }
 
-        this.RaisePropertyChanged(nameof(this.HasShortcuts));
-        this.RaisePropertyChanged(nameof(this.ActivateShortcutCommand));
-        this.RaisePropertyChanged(nameof(this.ShowJsonButton));
-        this.RaisePropertyChanged(nameof(this.ShowDeleteButton));
+        var resolved = new List<EntityShortcutViewModel>();
+        await foreach (var shortcut in manager
+            .GetShortcutsForAsync(mainWindowViewModel, this.entity)
+            .WithCancellation(ct)
+            .ConfigureAwait(false))
+        {
+            resolved.Add(new EntityShortcutViewModel
+            {
+                Shortcut = shortcut,
+                Entity = this.entity,
+                ShortcutManager = manager,
+            });
+        }
+
+        if (ct.IsCancellationRequested)
+        {
+            return;
+        }
+
+        // Atomic single-reference swap on the UI thread. No await between build and assignment.
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            this.Shortcuts = resolved;
+        }
+        else
+        {
+            await Dispatcher.UIThread.InvokeAsync(() => this.Shortcuts = resolved);
+        }
+    }
+
+    private void QueueShortcutResolution()
+    {
+        if (this.shortcutMainWindowViewModel is null
+            || this.shortcutManager is null
+            || this.entity is null)
+        {
+            return;
+        }
+
+        // Supersession guard (#1144): cancel any in-flight resolution so a stale older-snapshot
+        // run can't finish last and assign a superseded shortcut set.
+        this.shortcutResolutionCts?.Cancel();
+        this.shortcutResolutionCts?.Dispose();
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(this.Lifetime.Token);
+        this.shortcutResolutionCts = linked;
+
+        Lifetime.Run(_ => this.ResolveShortcutsAsync(linked.Token));
     }
 
     /// <summary>
@@ -313,6 +597,17 @@ public sealed class EntityCardViewModel : ViewModelBase
     /// </summary>
     private async Task BuildFieldEditorsAsync(CancellationToken ct = default)
     {
+        // Issue #1177: prefer a caller-supplied lazy builder when present. This lets the entity
+        // browser hand its own FieldTypeResolver-based build closure to each card so realized cards
+        // populate their editors on demand without the browser having to await schema work per
+        // entity during rebuild.
+        if (this.lazyFieldEditorBuilder is not null)
+        {
+            var lazyBuilt = await this.lazyFieldEditorBuilder(ct).ConfigureAwait(true);
+            this.SetFieldEditors(lazyBuilt);
+            return;
+        }
+
         if (this.fieldEditorFactory is null
             || this.entity?.Data is not JsonElement entityData
             || entityData.ValueKind != JsonValueKind.Object)
@@ -320,8 +615,12 @@ public sealed class EntityCardViewModel : ViewModelBase
             return;
         }
 
+        // Issue #1164: pass every non-abstract entity type so the factory can compose per-type
+        // presentations (e.g. a tool+note entity contributes the note's content field via the note
+        // entity-type-view, not just the primary "tool" type).
+        var entityTypeNames = this.entity.NonAbstractEntityTypeNames;
         var built = await this.fieldEditorFactory
-            .BuildFieldEditorsAsync(entityData, this.entity.EntityType)
+            .BuildFieldEditorsAsync(entityData, entityTypeNames)
             .ConfigureAwait(true);
 
         this.SetFieldEditors(built);
@@ -426,15 +725,6 @@ public sealed class EntityCardViewModel : ViewModelBase
         this.SaveEditModeCommand.RaiseCanExecuteChanged();
     }
 
-    private void RefreshDisplayItems()
-    {
-        this.displayItems.Clear();
-        if (this.entity?.Snapshot.Data is JsonElement)
-        {
-            this.displayItems.AddRange(this.entity.DisplayItems);
-        }
-    }
-
     private static string BuildRawJsonText(
         JsonElement? data)
     {
@@ -482,6 +772,7 @@ public sealed class EntityCardViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
+            this.RaisePropertyChanged(nameof(this.EntityTypeLabels));
             return;
         }
 
@@ -489,13 +780,22 @@ public sealed class EntityCardViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.DisplayName));
             this.RaisePropertyChanged(nameof(this.EntityType));
-            this.RefreshDisplayItems();
-            this.RaisePropertyChanged(nameof(this.DisplayItems));
+            this.RaisePropertyChanged(nameof(this.EntityTypeLabels));
             if (!this.IsEditMode)
             {
                 this.rawJsonText = BuildRawJsonText(this.entity?.Data);
                 this.RaisePropertyChanged(nameof(this.RawJsonText));
-                Lifetime.Run(this.BuildFieldEditorsAsync);
+                // Issue #1177: only re-run the field-editor build if the card has previously been
+                // realized (i.e. its editors were built). Non-realized cards skip this to avoid
+                // waking up thousands of virtualized cards on every snapshot change.
+                if (Volatile.Read(ref this.fieldEditorsBuildRequested) == 1)
+                {
+                    // Issue #1185: track the rebuild task alongside the initial build so tests can
+                    // observe deterministic completion of snapshot-triggered rebuilds too.
+                    var rebuildTask = this.BuildFieldEditorsAsync(this.Lifetime.Token);
+                    this.fieldEditorsBuildTask = rebuildTask;
+                    Lifetime.Run(_ => rebuildTask);
+                }
             }
 
             if (this.cardViewName == "external" && this.entity is not null)
@@ -503,6 +803,9 @@ public sealed class EntityCardViewModel : ViewModelBase
                 this.externalCard = ExternalEntityCardViewModel.Create(this.entity);
                 this.RaisePropertyChanged(nameof(this.ExternalCard));
             }
+
+            // Re-resolve shortcuts for the new data (applicability can change with the snapshot).
+            this.QueueShortcutResolution();
 
             return;
         }

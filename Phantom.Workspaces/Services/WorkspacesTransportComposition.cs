@@ -1,0 +1,95 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm.Core.Transport;
+using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Http;
+using Phantom.Workspaces.Transport.Local;
+using Phantom.Workspaces.Transport.ReverseHttp;
+
+namespace Phantom.Workspaces.Services;
+
+/// <summary>
+/// Production composition that resolves and builds the unified-transport surfaces so consumers can
+/// obtain executor / chat / mcp / shell through the transport layer. It registers and builds
+/// <see cref="LocalTransportFactory"/> and <see cref="UserComputerProfileTransportFactory"/>
+/// (alongside <see cref="HttpClientTransportFactory"/> and
+/// <see cref="ReverseHttpForwardingTransportFactory"/>) into an <see cref="ITransportFactoryRegistry"/>,
+/// and exposes the resolved registry plus <see cref="Llm.Core.Transport.TransportTrustedExecutor"/>,
+/// <see cref="Services.WorkspacesTransportHost"/> and
+/// <see cref="ReverseConnectionStatusRegistry"/> for later resolution by the production consumers.
+/// Additive: no existing consumer is switched onto these surfaces yet — the old
+/// <c>ReverseExecutionRegistry</c> / <c>CreateSelector</c> stack remains wired.
+/// </summary>
+public sealed class WorkspacesTransportComposition : IAsyncDisposable
+{
+    private readonly HttpClientTransportFactory httpClientTransportFactory;
+    private readonly ReverseHttpForwardingTransportFactory reverseHttpForwardingTransportFactory;
+    private readonly LocalTransportFactory localTransportFactory;
+    private readonly UserComputerProfileTransportFactory userComputerProfileTransportFactory;
+
+    public WorkspacesTransportComposition(
+        IDataAccessLayer dataAccessLayer,
+        WorkspaceEntitySession workspaceEntitySession,
+        IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null)
+    {
+        ArgumentNullException.ThrowIfNull(dataAccessLayer);
+        ArgumentNullException.ThrowIfNull(workspaceEntitySession);
+
+        this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
+        this.LocalListeners = new TransportRegistry();
+
+        var registry = new TransportFactoryRegistry();
+        this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);
+        this.userComputerProfileTransportFactory =
+            new UserComputerProfileTransportFactory(dataAccessLayer, workspaceEntitySession, registry);
+        this.httpClientTransportFactory = new HttpClientTransportFactory();
+        this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory();
+
+        registry.Register(this.localTransportFactory);
+        registry.Register(this.userComputerProfileTransportFactory);
+        registry.Register(this.httpClientTransportFactory);
+        registry.Register(this.reverseHttpForwardingTransportFactory);
+        this.TransportFactoryRegistry = registry;
+
+        this.TrustedExecutor = new TransportTrustedExecutor(registry, new ExecutionTargetResolver());
+
+        this.HubFactories = hubFactories ?? [];
+        this.TransportHost = new WorkspacesTransportHost(this.LocalListeners, this.HubFactories);
+    }
+
+    /// <summary>The resolved registry that builds transports for every registered descriptor type.</summary>
+    public ITransportFactoryRegistry TransportFactoryRegistry { get; }
+
+    /// <summary>The local listener registry (chat/mcp/shell) that this machine hosts as an executor.</summary>
+    public TransportRegistry LocalListeners { get; }
+
+    /// <summary>Transport-layer connection-status surface for inbound reverse-HTTP registrations.</summary>
+    public ReverseConnectionStatusRegistry ConnectionStatusRegistry { get; }
+
+    /// <summary>The transport-backed <see cref="Llm.Interfaces.ITrustedExecutor"/> over the registry.</summary>
+    public TransportTrustedExecutor TrustedExecutor { get; }
+
+    /// <summary>GUI-side host that registers with hubs and dispatches relayed frames to local listeners.</summary>
+    public WorkspacesTransportHost TransportHost { get; }
+
+    /// <summary>The configured reverse-HTTP hub client factories the host registers with.</summary>
+    public IReadOnlyList<ReverseHttpClientTransportFactory> HubFactories { get; }
+
+    /// <summary>Starts the GUI-side transport host (hub registration + dispatcher hosting).</summary>
+    public Task StartAsync(CancellationToken cancellationToken = default)
+        => this.TransportHost.StartAsync(cancellationToken);
+
+    public async ValueTask DisposeAsync()
+    {
+        await this.TransportHost.DisposeAsync().ConfigureAwait(false);
+        await this.TrustedExecutor.DisposeAsync().ConfigureAwait(false);
+        await this.userComputerProfileTransportFactory.DisposeAsync().ConfigureAwait(false);
+        await this.localTransportFactory.DisposeAsync().ConfigureAwait(false);
+        await this.reverseHttpForwardingTransportFactory.DisposeAsync().ConfigureAwait(false);
+        await this.httpClientTransportFactory.DisposeAsync().ConfigureAwait(false);
+    }
+}

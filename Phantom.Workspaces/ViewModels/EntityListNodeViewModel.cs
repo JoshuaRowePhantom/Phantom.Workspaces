@@ -17,6 +17,11 @@ namespace Phantom.Workspaces.ViewModels;
 public sealed class EntityListNodeViewModel : ViewModelBase
 {
     private bool isExpanded;
+    private bool? hasChildrenOverride;
+    private IReadOnlyList<string> immediateChildKeys = Array.Empty<string>();
+    private bool matchesFilter;
+    private bool isAncestorOfMatch;
+    private bool hideUnmatched;
     private IBrush? parentColorBrush;
     private Action<EntityListNodeViewModel, bool>? onExpansionChanged;
 
@@ -73,7 +78,47 @@ public sealed class EntityListNodeViewModel : ViewModelBase
 
     public RelayCommand ToggleExpandCommand { get; }
 
-    public bool HasChildren => this.Children.Count > 0;
+    /// <summary>
+    /// True when this node has children. For lazy loading (issue #1232) a collapsed folder is not
+    /// materialized: its child <see cref="EntityListNodeViewModel"/> instances are not created until
+    /// the user expands it. In that state <see cref="Children"/> is empty, so the expand affordance
+    /// is instead driven by <see cref="SetHasChildren"/>, which records whether the node's underlying
+    /// subscription reports any children. Once children are materialized, their presence takes over.
+    /// </summary>
+    public bool HasChildren => this.Children.Count > 0 || this.hasChildrenOverride == true;
+
+    /// <summary>
+    /// Records whether this node has children without materializing them. Used by the entity browser
+    /// to show the expand chevron for a collapsed folder while deferring construction of its child
+    /// node view models (and their descendants) until the folder is expanded (issue #1232).
+    /// </summary>
+    public void SetHasChildren(bool value)
+    {
+        if (this.hasChildrenOverride == value)
+        {
+            return;
+        }
+
+        this.hasChildrenOverride = value;
+        this.ToggleExpandCommand.RaiseCanExecuteChanged();
+        this.RaisePropertyChanged(nameof(this.HasChildren));
+        this.RaisePropertyChanged(nameof(this.ExpandArrow));
+        this.RaisePropertyChanged(nameof(this.ContentCornerRadius));
+        this.RaisePropertyChanged(nameof(this.ExpandSectionCornerRadius));
+    }
+
+    /// <summary>
+    /// The item keys of this node's immediate children as reported by its subscription, recorded even
+    /// while the folder is collapsed and its child node view models are not materialized (issue #1232).
+    /// Consumed by the entity browser to expose child-item metadata without building descendant nodes.
+    /// </summary>
+    public IReadOnlyList<string> ImmediateChildKeys => this.immediateChildKeys;
+
+    /// <summary>Records the immediate-child item keys without materializing child node view models (issue #1232).</summary>
+    public void SetImmediateChildKeys(IReadOnlyList<string> keys)
+    {
+        this.immediateChildKeys = keys ?? Array.Empty<string>();
+    }
 
     public IBrush? ParentColorBrush
     {
@@ -99,19 +144,62 @@ public sealed class EntityListNodeViewModel : ViewModelBase
                 return;
             }
 
-            this.VisibleChildren.Clear();
-            if (value)
-            {
-                foreach (var child in this.Children)
-                {
-                    this.VisibleChildren.Add(child);
-                }
-            }
-
+            this.RefreshVisibleChildren();
             this.RaisePropertyChanged(nameof(this.ExpandArrow));
 
             // Notify parent that expansion state changed so it can manage subscriptions
             this.onExpansionChanged?.Invoke(this, value);
+        }
+    }
+
+    /// <summary>
+    /// True while this node itself matches the active find query. Set by <see cref="EntityListViewModel.ApplyFindFilter"/>.
+    /// </summary>
+    public bool MatchesFilter
+    {
+        get => this.matchesFilter;
+        internal set => this.SetProperty(ref this.matchesFilter, value);
+    }
+
+    /// <summary>
+    /// True while at least one descendant of this node matches the active find query.
+    /// </summary>
+    public bool IsAncestorOfMatch
+    {
+        get => this.isAncestorOfMatch;
+        internal set => this.SetProperty(ref this.isAncestorOfMatch, value);
+    }
+
+    /// <summary>
+    /// True while the find session is hiding unmatched children. When set, <see cref="VisibleChildren"/>
+    /// includes only children that match themselves or are ancestors of a match.
+    /// </summary>
+    public bool HideUnmatched
+    {
+        get => this.hideUnmatched;
+        internal set => this.SetProperty(ref this.hideUnmatched, value);
+    }
+
+    /// <summary>
+    /// Rebuilds <see cref="VisibleChildren"/> from <see cref="Children"/> honoring both
+    /// <see cref="IsExpanded"/> and the find-filter flags. Called by the find machinery.
+    /// </summary>
+    internal void RefreshVisibleChildren()
+    {
+        this.VisibleChildren.Clear();
+        if (!this.isExpanded)
+        {
+            return;
+        }
+
+        foreach (var child in this.Children)
+        {
+            if (!this.hideUnmatched
+                || child.MatchesFilter
+                || child.IsAncestorOfMatch)
+            {
+                this.VisibleChildren.Add(child);
+            }
         }
     }
 
@@ -143,17 +231,7 @@ public sealed class EntityListNodeViewModel : ViewModelBase
         this.RaisePropertyChanged(nameof(this.ContentCornerRadius));
         this.RaisePropertyChanged(nameof(this.ExpandSectionCornerRadius));
 
-        if (!this.IsExpanded)
-        {
-            this.VisibleChildren.Clear();
-            return;
-        }
-
-        this.VisibleChildren.Clear();
-        foreach (var child in this.Children)
-        {
-            this.VisibleChildren.Add(child);
-        }
+        this.RefreshVisibleChildren();
     }
 
     public void SetExpansionChangedCallback(

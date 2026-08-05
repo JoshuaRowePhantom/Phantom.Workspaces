@@ -23,6 +23,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public static Shortcut Review { get; } = new("Review", "±");
     public static Shortcut VsCode { get; } = new("VsCode", "⌨");
     public static Shortcut VsCodeWeb { get; } = new("VsCodeWeb", "🌐");
+    public static Shortcut CopyEntityId { get; } = new("CopyEntityId", "📋");
 
     public string Name { get; }
 
@@ -41,6 +42,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
         "Review" => "Review changes",
         "VsCode" => "Open in VS Code",
         "VsCodeWeb" => "Open in VS Code Web",
+        "CopyEntityId" => "Copy entity id",
         _ => this.Name,
     };
 
@@ -76,4 +78,6 @@ public sealed class Shortcut : IEquatable<Shortcut>
     {
         return HashCode.Combine(this.Name, this.Label);
     }
+
+    public override string ToString() => this.Name;
 }

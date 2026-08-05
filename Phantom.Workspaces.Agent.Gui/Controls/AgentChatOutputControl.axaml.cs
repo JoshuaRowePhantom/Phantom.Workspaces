@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Media;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -94,6 +95,18 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             acceleratorWebView.AltKeyStateChanged += this.OnBrowserAltKeyStateChanged;
             acceleratorWebView.GoToTabAtIndexRequested += this.OnBrowserGoToTabAtIndexRequested;
             acceleratorWebView.GoToWorkspacePaneAtIndexRequested += this.OnBrowserGoToWorkspacePaneAtIndexRequested;
+        }
+
+        // Generic accelerator forwarding (issue #1189): install BrowserAcceleratorBehavior so that
+        // every WebView2 accelerator key is re-raised as a routed KeyDown/KeyUp event on the browser
+        // control itself. Avalonia's tunnel/bubble routing then walks every ancestor — including
+        // DockTabSwitchController's tunnel handlers (Alt-hold overlay) and MainWindow.OnPreviewKeyDown.
+        // A KeyBinding ancestor walk after the raise mirrors KeyboardDevice.ProcessRawEvent and
+        // fires Window-level bindings such as Ctrl+W. Replaces the earlier direct-invoke path from
+        // #1168 which bypassed the routed pipeline.
+        if (browserControl is Avalonia.Controls.Control avaloniaControl)
+        {
+            BrowserAcceleratorBehavior.SetIsEnabled(avaloniaControl, true);
         }
     }
 
@@ -308,7 +321,8 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             statusSink: this,
             resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
             subAgents: vm.SubAgentDisplays,
-            ancestors: BuildAncestors(vm.AgentChat));
+            ancestors: BuildAncestors(vm.AgentChat),
+            parentAgent: vm.ParentAgentDisplay);
         this.browser.EndBatch();
 
         // Enable auto-scroll so the page follows live updates; the explicit scroll-to-bottom

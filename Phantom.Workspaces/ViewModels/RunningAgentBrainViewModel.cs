@@ -21,6 +21,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     private readonly Action<string, string?> activateTab;
     private readonly Action<string> openAgentForSession;
     private readonly Action<Action> dispatch;
+    private readonly TimeProvider timeProvider;
 
     private bool isAnyRunning;
     private bool isOpen;
@@ -40,13 +41,15 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         Func<IEnumerable<AgentTabInfo>> getAllAgentTabs,
         Action<string, string?> activateTab,
         Action<string> openAgentForSession,
-        Action<Action> dispatch)
+        Action<Action> dispatch,
+        TimeProvider? timeProvider = null)
     {
         this.table = table;
         this.getAllAgentTabs = getAllAgentTabs;
         this.activateTab = activateTab;
         this.openAgentForSession = openAgentForSession;
         this.dispatch = dispatch;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
         this.table.RunningSessions.CollectionChanged += this.OnSessionsChanged;
         this.Refresh();
@@ -85,7 +88,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     public void Refresh()
     {
         if (this._disposed) return;
-        this.IsAnyRunning = this.table.RunningSessions.Count > 0;
+        this.IsAnyRunning = this.table.RunningSessions.Any(s => !s.IsSubAgent);
 
         // Build lookup: agentSessionId → AgentTabInfo (only Ready tabs with a known session ID)
         var tabsBySessionId = new Dictionary<string, AgentTabInfo>(StringComparer.Ordinal);
@@ -98,7 +101,9 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         var currentSessionKeys = new HashSet<string>(
-            this.table.RunningSessions.Select(s => s.SessionId.Value),
+            this.table.RunningSessions
+                .Where(s => !s.IsSubAgent)
+                .Select(s => s.SessionId.Value),
             StringComparer.Ordinal);
 
         // Remove rows for sessions no longer in the table
@@ -121,6 +126,14 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         // Add or update a row for each active session
         foreach (var session in this.table.RunningSessions.ToList())
         {
+            // Issue #1205 Fix 2 (defensive): sub-agents must never appear in the running-agents
+            // flyout. Fix 1 blocks the leak at the factory; this filter guarantees a stray
+            // sub-agent registration cannot render as a "No Open Tab" row.
+            if (session.IsSubAgent)
+            {
+                continue;
+            }
+
             var sessionKey = session.SessionId.Value;
             var hasTab = tabsBySessionId.TryGetValue(sessionKey, out var tabInfo);
             var existing = this.Rows.FirstOrDefault(r =>
@@ -178,7 +191,8 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             workspacePaneTitle: tabInfo.PaneTitle,
             tabTitle: tabInfo.Tab.Title,
             isThinking: tabInfo.Tab.Agent?.IsChatRunning ?? false,
-            activateCommand: activateCmd);
+            activateCommand: activateCmd,
+            timeProvider: this.timeProvider);
     }
 
     private RunningAgentRowViewModel CreateFallbackRow(RunningAgentChatWithEntityInfo session)
@@ -194,7 +208,8 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         return new RunningAgentRowViewModel(
             sessionKey: capturedSessionKey,
             entityName: session.EntityName,
-            activateCommand: activateCmd);
+            activateCommand: activateCmd,
+            timeProvider: this.timeProvider);
     }
 
     /// <summary>
@@ -223,7 +238,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 string.Equals(r.SessionKey, sessionKey, StringComparison.Ordinal));
             if (row is not null)
             {
-                row.UpdateLastActivityAt(DateTime.UtcNow);
+                row.UpdateLastActivityAt(this.timeProvider.GetUtcNow().UtcDateTime);
                 this.ResortRows();
             }
         };

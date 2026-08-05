@@ -60,4 +60,24 @@ internal static class WorkspaceEntitySnapshotReader
 
         return null;
     }
+
+    public static IReadOnlyList<string>? TryGetStringArrayProperty(
+        EntitySnapshot snapshot,
+        string propertyName)
+    {
+        if (snapshot.Data is not JsonElement entityData
+            || !entityData.TryGetProperty(propertyName, out var valueElement)
+            || valueElement.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        return valueElement
+            .EnumerateArray()
+            .Where(static item => item.ValueKind == JsonValueKind.String)
+            .Select(static item => item.GetString())
+            .Where(static value => !string.IsNullOrWhiteSpace(value))
+            .Cast<string>()
+            .ToArray();
+    }
 }

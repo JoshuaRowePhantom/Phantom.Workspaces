@@ -1414,4 +1414,46 @@ public class AgentFactoryTests
         public string ResolveApiKey(string? apiKeyValue, string? serverName) => key;
         public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default) => Task.FromResult(key);
     }
+
+    // ─── Fix #1187: hosted Copilot sub-agent AgentDefinition compatibility ─────
+
+    [Fact]
+    public void AgentFactory_CreateChatClient_HostedSubAgentDefinition_DoesNotThrow()
+    {
+        // Fix #1187: the full canonical hosted-Copilot sub-agent AgentDefinition (built by
+        // CopilotSubAgentDefinitionDefaults.Create) must be accepted by AgentFactory and
+        // resolve to the CopilotSubAgentChatClient — never trip the "Agent definition does
+        // not specify a model." throw.
+        var definition = Phantom.Workspaces.Llm.Interfaces.CopilotSubAgentDefinitionDefaults.Create(
+            subAgentSessionId: "session-1187-factory-a",
+            displayName: null,
+            description: null,
+            name: null);
+
+        var result = AgentFactory.CreateChatClient(definition);
+
+        Assert.IsType<CopilotSubAgentChatClient>(result.ChatClient);
+    }
+
+    [Fact]
+    public void AgentFactory_CreateChatClient_HostedSubAgentDefinition_ResolvesProviderBeforeModelIdValidation()
+    {
+        // Fix #1187 (composes with #912): the github-copilot-subagent provider fast-path is
+        // entered before the model-id validation. The canonical hosted sub-agent uses the
+        // "cli-hosted" sentinel model.id — which is semantically unused because the CLI owns
+        // model selection — and must still be accepted.
+        var definition = Phantom.Workspaces.Llm.Interfaces.CopilotSubAgentDefinitionDefaults.Create(
+            subAgentSessionId: "session-1187-factory-b",
+            displayName: null,
+            description: null,
+            name: null);
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.Equal(
+            Phantom.Workspaces.Llm.Interfaces.CopilotSubAgentDefinitionDefaults.HostedSubAgentModelId,
+            promptAgent.Model?.Id);
+
+        var result = AgentFactory.CreateChatClient(definition);
+        Assert.IsType<CopilotSubAgentChatClient>(result.ChatClient);
+    }
 }
