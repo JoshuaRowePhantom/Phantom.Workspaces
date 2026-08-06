@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Controls;
@@ -548,6 +549,77 @@ public sealed class EntityCardControlTests
             Assert.True(
                 renderedLength >= displayName.Length,
                 $"Rendered {renderedLength} chars < display name {displayName.Length}; text was clipped.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1266 (retry): rendered-bounds coverage for the shared entity-card action-button style.
+    // The headless test App applies SharedStyles globally, so a Button carrying the shared class
+    // receives the shipped 28x28 footprint after a real layout pass.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_ActionButtons_ShareUniformSize()
+    {
+        var buttons = new[] { "🔧", "{}", "💾", "✖", "A" }
+            .Select(glyph =>
+            {
+                var button = new Button { Content = glyph };
+                button.Classes.Add("entity-card-action-button");
+                return button;
+            })
+            .ToArray();
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var button in buttons)
+        {
+            panel.Children.Add(button);
+        }
+
+        var window = new Window { Content = panel, Width = 400, Height = 200 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            foreach (var button in buttons)
+            {
+                Assert.Equal(28, button.Bounds.Width, precision: 1);
+                Assert.Equal(28, button.Bounds.Height, precision: 1);
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardActionButton_HighlightedVariant_KeepsSameFootprint()
+    {
+        var baseButton = new Button { Content = "A" };
+        baseButton.Classes.Add("entity-card-action-button");
+
+        var highlightedButton = new Button { Content = "A" };
+        highlightedButton.Classes.Add("entity-card-action-button");
+        highlightedButton.Classes.Add("highlighted");
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(baseButton);
+        panel.Children.Add(highlightedButton);
+
+        var window = new Window { Content = panel, Width = 400, Height = 200 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            // The highlighted variant only changes visual accents — never the footprint.
+            Assert.Equal(baseButton.Bounds.Width, highlightedButton.Bounds.Width, precision: 1);
+            Assert.Equal(baseButton.Bounds.Height, highlightedButton.Bounds.Height, precision: 1);
+            Assert.Equal(28, highlightedButton.Bounds.Width, precision: 1);
+            Assert.Equal(28, highlightedButton.Bounds.Height, precision: 1);
         }
         finally
         {
