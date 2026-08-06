@@ -8,13 +8,13 @@
             <ProgressBar Classes="running-indicator running-indicator-agent"
                          IsIndeterminate="{Binding IsRunning}" />
         </Border>
-        <!-- Exclamation slot (visible when IsInteresting) -->
+        <!-- Exclamation slot (visible when interesting AND unread) -->
         <Border Width="20" Height="20" VerticalAlignment="Center">
             <TextBlock Text="!"
                        Classes="notification-unread-indicator"
                        VerticalAlignment="Center"
                        HorizontalAlignment="Center"
-                       IsVisible="{Binding IsInteresting}" />
+                       IsVisible="{Binding ShowsAttentionIndicator}" />
         </Border>
         <!-- Workspace name (muted, hidden when null/empty) + tab title -->
         <StackPanel Spacing="1">

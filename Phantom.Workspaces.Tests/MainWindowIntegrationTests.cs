@@ -2267,6 +2267,81 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OnActiveDockableChanged_WhenTabBecomesActive_ClearsNotificationsViewRowIndicator()
+    {
+        // #1223: activating a tab with an unread interesting notification must clear the "!" on the
+        // corresponding Notifications-view row (ShowsAttentionIndicator), not just the tab header.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var workspaceIdA = new EntityId("ff123001-ff00-4f00-8f00-ff0000001001");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdA,
+            """
+            {
+              "entity-id": "ff123001-ff00-4f00-8f00-ff0000001001",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-1223-a"]],
+              "display-name": { "default": "Notif 1223 A" },
+              "regions": []
+            }
+            """);
+
+        var workspaceIdB = new EntityId("ff123002-ff00-4f00-8f00-ff0000001002");
+        await UpsertEntityAndLoadAsync(
+            entityBroker,
+            workspaceIdB,
+            """
+            {
+              "entity-id": "ff123002-ff00-4f00-8f00-ff0000001002",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "notif-1223-b"]],
+              "display-name": { "default": "Notif 1223 B" },
+              "regions": []
+            }
+            """);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceIdB });
+
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "notif-1223-tab-b", Title = "Tab B" };
+        await viewModel.OpenTabAsync(tabB);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var paneAIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdA.ToString());
+        Assert.True(paneAIndex >= 0);
+
+        // Switch to pane A so pane B's notification starts unread.
+        ActivateWorkspacePaneAtIndex(viewModel, paneAIndex.ToString());
+
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "notif-1223-tab-b" },
+            "Tab B", "notif", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var notifRow = Assert.Single(viewModel.NotificationsViewModel!.Rows,
+            r => r.TabKey == "notif-1223-tab-b");
+        Assert.True(notifRow.ShowsAttentionIndicator,
+            "Row should show the attention indicator while the notification is unread.");
+
+        // Activate pane B (the active-dockable-change path that marks its active tab read).
+        var workspacesDock = FindDocumentDockIn(viewModel.Layout!);
+        var paneBDoc = workspacesDock!.VisibleDockables!
+            .OfType<WorkspacePaneDocument>()
+            .First(d => d.WorkspacePane.Id == workspaceIdB.ToString());
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        dockFactory.SetActiveDockable(paneBDoc);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        Assert.True(notifRow.IsRead);
+        Assert.False(notifRow.ShowsAttentionIndicator,
+            "Activating the tab must clear the Notifications-view row '!' indicator.");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task WorkspacePaneActivation_WhenNonActiveTabsHaveUnreadNotifications_LeavesNonActiveTabNotificationsUnread()
     {
         await using var viewModel = CreateTestMainWindowViewModel();

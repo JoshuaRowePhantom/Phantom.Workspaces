@@ -128,6 +128,23 @@ public sealed class NotificationsViewModelTests
     }
 
     [Fact]
+    public void OnNotificationsChanged_WhenNotificationMarkedRead_ClearsRowAttentionIndicator()
+    {
+        var provider = new FakeActiveTabProvider();
+        var service = new NotificationService(provider);
+        var viewModel = new NotificationsViewModel(service, new FakeTabNavigator());
+        service.Notify(InterestingNotification(Tab("tab-1"), "Test notification"));
+
+        var row = viewModel.Rows.Single(r => r.TabKey == "tab-1");
+        Assert.True(row.ShowsAttentionIndicator);
+
+        service.MarkRead("tab-1");
+
+        Assert.True(row.IsRead);
+        Assert.False(row.ShowsAttentionIndicator);
+    }
+
+    [Fact]
     public void OnNotificationsChanged_WhenInterestingNotificationArrives_SetsIsOpenTrue()
     {
         var provider = new FakeActiveTabProvider();
