@@ -279,6 +279,85 @@ public sealed class ShellTabViewModelTests
         Assert.Equal("bash", tab.Spec.Command);
     }
 
+    // ── #1235: tooltip-facing projection properties ─────────────────────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void CommandLine_ReturnsSpecCommand()
+    {
+        var tab = CreateTab(MakeSpec("pwsh"));
+
+        Assert.Equal("pwsh", tab.CommandLine);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void Arguments_JoinsSpecCommandArgumentsWithSpaces()
+    {
+        var tab = CreateTab(new ShellEntityOpenSpec
+        {
+            Mode = "pty",
+            Command = "git",
+            CommandArguments = new[] { "status", "--short" },
+        });
+
+        Assert.Equal("status --short", tab.Arguments);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void Arguments_WhenNoArguments_ReturnsEmptyString()
+    {
+        var tab = CreateTab(MakeSpec("pwsh"));
+
+        Assert.Equal(string.Empty, tab.Arguments);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WorkingDirectory_ReturnsSpecWorkingDirectory()
+    {
+        var tab = CreateTab(new ShellEntityOpenSpec
+        {
+            Mode = "pty",
+            Command = "git",
+            WorkingDirectory = @"C:\repo",
+        });
+
+        Assert.Equal(@"C:\repo", tab.WorkingDirectory);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void ArgumentsAndWorkingDirectory_WhenCommandLineChanges_RaisePropertyChanged()
+    {
+        var tab = CreateTab(new ShellEntityOpenSpec
+        {
+            Mode = "pty",
+            Command = "git",
+            CommandArguments = new[] { "status" },
+            WorkingDirectory = @"C:\repo",
+        });
+
+        var raised = new List<string?>();
+        tab.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        tab.CommandLine = "pwsh";
+
+        Assert.Contains(nameof(ShellTabViewModel.Arguments), raised);
+        Assert.Contains(nameof(ShellTabViewModel.WorkingDirectory), raised);
+    }
+
+    private static ShellTabViewModel CreateTab(ShellEntityOpenSpec spec) =>
+        new(
+            new RecordingTerminalSession(),
+            spec,
+            sessionFactory: null,
+            sourceEntityId: null,
+            concurrencyTag: null,
+            sourceEntityData: null,
+            entityWriter: null,
+            dialogOpener: null)
+        {
+            Id = "t",
+            Title = "t",
+        };
+
     private static ShellEntityOpenSpec MakeSpec(string command) =>
         new() { Mode = "pty", Command = command };
 

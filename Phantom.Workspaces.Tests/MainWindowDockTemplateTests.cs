@@ -998,6 +998,130 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
+    // ── #1235: rich per-content-type tab tooltips (TabTooltipView) ──────────
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabTooltipView_ResolvesBrowserTemplate_ForWebViewModel()
+    {
+        Assert.Equal(
+            typeof(WebViewModel),
+            ResolveTabTooltipTemplateDataType(new WebViewModel("https://example.com") { Id = "b", Title = "b" }));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabTooltipView_ResolvesShellTemplate_ForShellTabViewModel()
+    {
+        Assert.Equal(
+            typeof(ShellTabViewModel),
+            ResolveTabTooltipTemplateDataType(CreateShellTab()));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabTooltipView_ResolvesEntityTemplate_ForEntityWorkspaceTabViewModel()
+    {
+        Assert.Equal(
+            typeof(EntityWorkspaceTabViewModel),
+            ResolveTabTooltipTemplateDataType(new EntityWorkspaceTabViewModel { Id = "e", Title = "Entity" }));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabTooltipView_ResolvesAgentTemplate_ForAgentSessionWorkspaceTabViewModel()
+    {
+        Assert.Equal(
+            typeof(AgentSessionWorkspaceTabViewModel),
+            ResolveTabTooltipTemplateDataType(new AgentSessionWorkspaceTabViewModel { Id = "a", Title = "Agent" }));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabTooltipView_ResolvesFallbackTemplate_ForUnknownTabKind()
+    {
+        // A tab kind with no dedicated template resolves the WorkspaceTabViewModel fallback.
+        Assert.Equal(
+            typeof(WorkspaceTabViewModel),
+            ResolveTabTooltipTemplateDataType(new PlainTabViewModel { Id = "p", Title = "Plain" }));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabTooltipView_ForBrowserTab_RendersFullUrlWithoutHeavyContentView()
+    {
+        var vm = new WebViewModel("https://example.com/very/long/path?query=1&more=2")
+        {
+            Id = "b",
+            Title = "Example Page",
+        };
+        var view = new TabTooltipView { DataContext = vm };
+        var window = new Window { Content = view };
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var texts = view.GetVisualDescendants()
+                .OfType<TextBlock>()
+                .Select(t => t.Text)
+                .ToList();
+
+            Assert.Contains("Example Page", texts);
+            Assert.Contains(vm.AddressBarUrl, texts);
+            // The "Browser tab" label proves the tooltip template — not the ambient
+            // WorkspaceDataTemplates browser content view — rendered this content.
+            Assert.Contains("Browser tab", texts);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static System.Type? ResolveTabTooltipTemplateDataType(object viewModel)
+    {
+        var view = new TabTooltipView();
+        var template = view.DataTemplates
+            .OfType<Avalonia.Markup.Xaml.Templates.DataTemplate>()
+            .FirstOrDefault(t => t.Match(viewModel));
+        return template?.DataType;
+    }
+
+    private static ShellTabViewModel CreateShellTab() =>
+        new(
+            new NoopTerminalSession(),
+            new Phantom.Workspaces.ViewModels.ShellEntityOpenSpec { Mode = "pty", Command = "pwsh" },
+            sessionFactory: null,
+            sourceEntityId: null,
+            concurrencyTag: null,
+            sourceEntityData: null,
+            entityWriter: null,
+            dialogOpener: null)
+        {
+            Id = "s",
+            Title = "Shell",
+        };
+
+    private sealed class PlainTabViewModel : WorkspaceTabViewModel
+    {
+    }
+
+    private sealed class NoopTerminalSession : Phantom.Workspaces.Llm.Shell.ITerminalSession
+    {
+        private readonly System.IO.MemoryStream stream = new();
+
+        public System.IO.Stream Stream => this.stream;
+
+        public System.Threading.Tasks.ValueTask ResizeAsync(int columns, int rows, System.Threading.CancellationToken cancellationToken)
+            => System.Threading.Tasks.ValueTask.CompletedTask;
+
+        public System.Threading.Tasks.ValueTask SignalAsync(string signal, System.Threading.CancellationToken cancellationToken)
+            => System.Threading.Tasks.ValueTask.CompletedTask;
+
+        public System.Threading.Tasks.Task<int> WaitForExitAsync() => System.Threading.Tasks.Task.FromResult(0);
+
+        public System.Threading.Tasks.ValueTask DisposeAsync()
+        {
+            this.stream.Dispose();
+            return System.Threading.Tasks.ValueTask.CompletedTask;
+        }
+    }
+
     private static WorkspacePaneDocument? FindFirstWorkspacePaneDocument(Avalonia.Controls.Window window)
     {
         return window.GetLogicalDescendants()

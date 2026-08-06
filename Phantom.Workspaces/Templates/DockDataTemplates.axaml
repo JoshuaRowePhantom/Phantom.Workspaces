@@ -4,6 +4,7 @@
                xmlns:dock="using:Dock.Avalonia.Controls"
                xmlns:dmc="using:Dock.Model.Controls"
                xmlns:ts="using:Phantom.Dock.Avalonia.TabSwitching"
+               xmlns:templates="using:Phantom.Workspaces.Templates"
                x:Class="Phantom.Workspaces.Templates.DockDataTemplates">
     <!-- Supply root dock template (normally auto-created). -->
     <DataTemplate DataType="dmc:IRootDock">
@@ -53,7 +54,11 @@
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspaceDocument">
                     <ContentControl Content="{Binding EffectiveTabHeader}"
-                                    ContentTemplate="{StaticResource TabHeaderTemplate}" />
+                                    ContentTemplate="{StaticResource TabHeaderTemplate}">
+                        <ToolTip.Tip>
+                            <templates:TabTooltipView DataContext="{Binding TabViewModel}" />
+                        </ToolTip.Tip>
+                    </ContentControl>
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
         </dock:DocumentControl>
@@ -113,7 +118,11 @@
                         <dock:DocumentControl.HeaderTemplate>
                             <DataTemplate x:DataType="vm:WorkspaceDocument">
                                 <ContentControl Content="{Binding EffectiveTabHeader}"
-                                                ContentTemplate="{StaticResource TabHeaderTemplate}" />
+                                                ContentTemplate="{StaticResource TabHeaderTemplate}">
+                                    <ToolTip.Tip>
+                                        <templates:TabTooltipView DataContext="{Binding TabViewModel}" />
+                                    </ToolTip.Tip>
+                                </ContentControl>
                             </DataTemplate>
                         </dock:DocumentControl.HeaderTemplate>
                     </dock:DocumentControl>
