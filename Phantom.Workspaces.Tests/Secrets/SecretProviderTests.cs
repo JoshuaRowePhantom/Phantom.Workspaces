@@ -1,4 +1,5 @@
 using System.Security;
+using System.Runtime.CompilerServices;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Secrets;
@@ -238,6 +239,18 @@ public sealed class SecretProviderTests
     }
 
     [Fact]
+    public async Task Adapter_DropsPlaintextReferenceAfterCopyingToSecureString()
+    {
+        var materialized = await ResolveGitHubLoginSecretWithEphemeralPlaintextAsync();
+
+        ForceFullCollection();
+
+        Assert.False(materialized.PlaintextReference.TryGetTarget(out _));
+        Assert.Equal(EphemeralGitHubTokenResolver.TokenValue, FromSecureString(materialized.Secret));
+        materialized.Secret.Dispose();
+    }
+
+    [Fact]
     public async Task RequestSecretsAsync_AwsLoginSource_ReturnsNotYetImplementedFailure()
     {
         var result = await RequestFailureForSourceAsync(new AwsLoginSecretSource());
@@ -368,6 +381,44 @@ public sealed class SecretProviderTests
 
     private static string FromSecureString(SecureString value)
         => Phantom.Workspaces.Llm.Secrets.SecureStringMarshal.Use(value, plain => plain);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static async Task<MaterializedGitHubSecret> ResolveGitHubLoginSecretWithEphemeralPlaintextAsync()
+    {
+        var resolver = new EphemeralGitHubTokenResolver();
+        var request = Request("GitHubToken", defaultSource: new GitHubLoginSecretSource(), sources: [new GitHubLoginSecretSource()]);
+        var provider = CreateProvider(gitHubTokenResolver: resolver.ResolveAsync);
+        provider.Dialog.Result = Accepted(Row(request, request.Memories[0], request.CandidateSecretSources[0]));
+
+        var result = await provider.RequestSecretsAsync([request], CancellationToken.None);
+        var secret = await Assert.Single(result!.AcquiredSecrets).Secret(CancellationToken.None);
+
+        return new MaterializedGitHubSecret(secret, resolver.PlaintextReference);
+    }
+
+    private static void ForceFullCollection()
+    {
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+    }
+
+    private sealed record MaterializedGitHubSecret(SecureString Secret, WeakReference<string> PlaintextReference);
+
+    private sealed class EphemeralGitHubTokenResolver
+    {
+        public const string TokenValue = "github-token-copied-to-secure-string";
+
+        public WeakReference<string> PlaintextReference { get; private set; } = new(null!);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        public Task<string?> ResolveAsync(CancellationToken cancellationToken)
+        {
+            var token = new string(TokenValue.ToCharArray());
+            this.PlaintextReference = new WeakReference<string>(token);
+            return Task.FromResult<string?>(token);
+        }
+    }
 
     private sealed class TestProvider(
         SecretProvider provider,
