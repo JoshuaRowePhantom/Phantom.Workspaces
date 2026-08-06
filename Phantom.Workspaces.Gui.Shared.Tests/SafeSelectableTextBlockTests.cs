@@ -104,31 +104,28 @@ public sealed class SafeSelectableTextBlockTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void SafeSelectableTextBlock_SearchQueryEmpty_RendersSinglePlainRun(string? query)
+    public void SafeSelectableTextBlock_SearchQueryEmpty_KeepsPlainText(string? query)
     {
         var block = new SafeSelectableTextBlock { Text = "hello world" };
         block.Measure(new Size(400, double.PositiveInfinity));
 
         block.SearchQuery = query;
 
-        var runs = Runs(block);
-        Assert.Single(runs);
-        Assert.Equal("hello world", runs[0].Text);
-        Assert.Null(runs[0].Background);
+        // No highlight -> plain Text mode is retained (no complex inline content).
+        Assert.Equal("hello world", block.Text);
+        Assert.DoesNotContain(Runs(block), r => r.Background is not null);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void SafeSelectableTextBlock_SearchQueryNoMatch_RendersSinglePlainRun()
+    public void SafeSelectableTextBlock_SearchQueryNoMatch_KeepsPlainText()
     {
         var block = new SafeSelectableTextBlock { Text = "hello world" };
         block.Measure(new Size(400, double.PositiveInfinity));
 
         block.SearchQuery = "zzz";
 
-        var runs = Runs(block);
-        Assert.Single(runs);
-        Assert.Equal("hello world", runs[0].Text);
-        Assert.Null(runs[0].Background);
+        Assert.Equal("hello world", block.Text);
+        Assert.DoesNotContain(Runs(block), r => r.Background is not null);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

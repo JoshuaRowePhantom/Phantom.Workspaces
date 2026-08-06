@@ -76,11 +76,26 @@ public class SafeSelectableTextBlock : SelectableTextBlock
         this.rebuilding = true;
         try
         {
-            // Clear Text first so InlineCollection.Add does not re-inject a Run from the old Text.
-            if (!string.IsNullOrEmpty(this.Text))
-                this.SetCurrentValue(TextProperty, null);
+            var query = this.SearchQuery;
+            var hasHighlight = !string.IsNullOrWhiteSpace(query)
+                && !string.IsNullOrEmpty(this.sourceText)
+                && this.sourceText!.IndexOf(query!, System.StringComparison.OrdinalIgnoreCase) >= 0;
 
-            TextHighlighter.Apply(inlines, this.sourceText, this.SearchQuery, this.HighlightBrush);
+            if (!hasHighlight)
+            {
+                // No highlight to render — keep the control in plain Text mode so consumers can
+                // read Text and layout follows the normal fast path.
+                inlines.Clear();
+                this.SetCurrentValue(TextProperty, this.sourceText);
+            }
+            else
+            {
+                // Clear Text first so InlineCollection.Add does not re-inject a Run from the old Text.
+                if (!string.IsNullOrEmpty(this.Text))
+                    this.SetCurrentValue(TextProperty, null);
+
+                TextHighlighter.Apply(inlines, this.sourceText, query, this.HighlightBrush);
+            }
         }
         finally
         {

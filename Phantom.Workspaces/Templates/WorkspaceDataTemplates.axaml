@@ -206,6 +206,7 @@
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding Value}"
+                       SearchQuery="{Binding $parent[entityControls:EntityCardControl].((vm:EntityCardViewModel)DataContext).SearchQuery}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
             <TextBox Grid.Column="1"
@@ -222,6 +223,7 @@
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding DisplayValue}"
+                       SearchQuery="{Binding $parent[entityControls:EntityCardControl].((vm:EntityCardViewModel)DataContext).SearchQuery}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
             <ToggleSwitch Grid.Column="1"
@@ -240,6 +242,7 @@
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding Value}"
+                       SearchQuery="{Binding $parent[entityControls:EntityCardControl].((vm:EntityCardViewModel)DataContext).SearchQuery}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
             <TextBox Grid.Column="1"
@@ -507,3 +510,4 @@
         </ItemsControl>
     </DataTemplate>
 </DataTemplates>
+

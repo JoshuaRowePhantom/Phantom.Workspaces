@@ -69,10 +69,23 @@ public class SafeTextBlock : TextBlock
         this.rebuilding = true;
         try
         {
-            if (!string.IsNullOrEmpty(this.Text))
-                this.SetCurrentValue(TextProperty, null);
+            var query = this.SearchQuery;
+            var hasHighlight = !string.IsNullOrWhiteSpace(query)
+                && !string.IsNullOrEmpty(this.sourceText)
+                && this.sourceText!.IndexOf(query!, System.StringComparison.OrdinalIgnoreCase) >= 0;
 
-            TextHighlighter.Apply(inlines, this.sourceText, this.SearchQuery, this.HighlightBrush);
+            if (!hasHighlight)
+            {
+                inlines.Clear();
+                this.SetCurrentValue(TextProperty, this.sourceText);
+            }
+            else
+            {
+                if (!string.IsNullOrEmpty(this.Text))
+                    this.SetCurrentValue(TextProperty, null);
+
+                TextHighlighter.Apply(inlines, this.sourceText, query, this.HighlightBrush);
+            }
         }
         finally
         {

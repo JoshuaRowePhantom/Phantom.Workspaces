@@ -302,10 +302,11 @@ public sealed class EntityCardViewModel : ViewModelBase
     public string JsonButtonText => "{}";
 
     /// <summary>
-    /// Currently active find query used to compute the highlight run over <see cref="DisplayName"/>
-    /// and <see cref="EntityType"/>. Empty when no find session is active.
+    /// Currently active find/search query for this card (issue #1257). Bound to the title / entity-type
+    /// / property-value <c>SafeSelectableTextBlock.SearchQuery</c> so every occurrence is highlighted,
+    /// and used to compute <see cref="Matches"/>. Null when no find session is active.
     /// </summary>
-    public string? MatchQuery
+    public string? SearchQuery
     {
         get => this.matchQuery;
         set
@@ -316,15 +317,51 @@ public sealed class EntityCardViewModel : ViewModelBase
                 return;
             }
 
-            this.RaisePropertyChanged(nameof(this.IsFindMatch));
-            this.RaisePropertyChanged(nameof(this.DisplayNameBefore));
-            this.RaisePropertyChanged(nameof(this.DisplayNameMatch));
-            this.RaisePropertyChanged(nameof(this.DisplayNameAfter));
-            this.RaisePropertyChanged(nameof(this.EntityTypeBefore));
-            this.RaisePropertyChanged(nameof(this.EntityTypeMatch));
-            this.RaisePropertyChanged(nameof(this.EntityTypeAfter));
-            this.RaisePropertyChanged(nameof(this.DisplayNameMatchStart));
-            this.RaisePropertyChanged(nameof(this.DisplayNameMatchLength));
+            this.RaisePropertyChanged(nameof(this.Matches));
+        }
+    }
+
+    /// <summary>
+    /// True while <see cref="SearchQuery"/> is non-empty and occurs (case-insensitive) somewhere in
+    /// this card's displayed match set: <see cref="DisplayName"/>, <see cref="EntityType"/>, or the
+    /// VALUE of any <see cref="EntityFieldEditorViewModel"/> in <see cref="FieldEditors"/>. Property
+    /// NAMES (<see cref="EntityFieldEditorViewModel.FieldName"/>) are EXPLICITLY EXCLUDED — matching
+    /// considers property values but never property keys/names, mirroring the highlight surfaces in
+    /// <c>EntityCardControl.axaml</c> so filter (#1256) and highlight (#1258 consumer) cannot drift.
+    /// Computed on the VIEW MODEL so it exists for unrealized (virtualized) tree nodes.
+    /// </summary>
+    public bool Matches
+    {
+        get
+        {
+            var q = this.matchQuery;
+            if (string.IsNullOrEmpty(q))
+            {
+                return false;
+            }
+
+            var cmp = StringComparison.OrdinalIgnoreCase;
+            if (!string.IsNullOrEmpty(this.DisplayName) && this.DisplayName.Contains(q, cmp))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(this.EntityType) && this.EntityType.Contains(q, cmp))
+            {
+                return true;
+            }
+
+            // Property VALUES are in the match set; property NAMES (FieldName) are NOT.
+            foreach (var editor in this.FieldEditors)
+            {
+                var value = editor.SearchableValueText;
+                if (!string.IsNullOrEmpty(value) && value.Contains(q, cmp))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -339,37 +376,10 @@ public sealed class EntityCardViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// True while the current <see cref="MatchQuery"/> is non-empty and matches somewhere in the
-    /// card text (used to gate the yellow-background inline run).
-    /// </summary>
-    public bool IsFindMatch => !string.IsNullOrEmpty(this.matchQuery)
-        && (this.DisplayNameMatchStart >= 0 || this.EntityTypeMatchStart >= 0);
-
-    /// <summary>
-    /// True when the current <see cref="MatchQuery"/> matches only inside the entity's JSON values
+    /// True when the current <see cref="SearchQuery"/> matches only inside the entity's JSON values
     /// (not the visible card text). Set by <see cref="FindViewModel"/>.
     /// </summary>
     public bool MatchInJson { get; set; }
-
-    public int DisplayNameMatchStart => FindMatchIndex(this.DisplayName, this.matchQuery);
-
-    public int DisplayNameMatchLength => this.matchQuery?.Length ?? 0;
-
-    public string DisplayNameBefore => SliceBefore(this.DisplayName, this.DisplayNameMatchStart);
-
-    public string DisplayNameMatch => SliceMatch(this.DisplayName, this.DisplayNameMatchStart, this.DisplayNameMatchLength);
-
-    public string DisplayNameAfter => SliceAfter(this.DisplayName, this.DisplayNameMatchStart, this.DisplayNameMatchLength);
-
-    public int EntityTypeMatchStart => FindMatchIndex(this.EntityType, this.matchQuery);
-
-    public int EntityTypeMatchLength => this.matchQuery?.Length ?? 0;
-
-    public string EntityTypeBefore => SliceBefore(this.EntityType, this.EntityTypeMatchStart);
-
-    public string EntityTypeMatch => SliceMatch(this.EntityType, this.EntityTypeMatchStart, this.EntityTypeMatchLength);
-
-    public string EntityTypeAfter => SliceAfter(this.EntityType, this.EntityTypeMatchStart, this.EntityTypeMatchLength);
 
     /// <summary>
     /// Joined label of every non-abstract entity type the entity declares (issue #1164). A tool+note
@@ -379,52 +389,6 @@ public sealed class EntityCardViewModel : ViewModelBase
     public string EntityTypeLabels => this.entity is null
         ? this.entityType
         : string.Join(", ", this.entity.NonAbstractEntityTypeNames);
-
-    private static int FindMatchIndex(string? text, string? query)
-    {
-        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(query))
-        {
-            return -1;
-        }
-
-        return text.IndexOf(query, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string SliceBefore(string? text, int matchStart)
-    {
-        if (string.IsNullOrEmpty(text) || matchStart < 0)
-        {
-            return text ?? string.Empty;
-        }
-
-        return text.Substring(0, matchStart);
-    }
-
-    private static string SliceMatch(string? text, int matchStart, int matchLength)
-    {
-        if (string.IsNullOrEmpty(text) || matchStart < 0 || matchLength <= 0)
-        {
-            return string.Empty;
-        }
-
-        return text.Substring(matchStart, matchLength);
-    }
-
-    private static string SliceAfter(string? text, int matchStart, int matchLength)
-    {
-        if (string.IsNullOrEmpty(text) || matchStart < 0)
-        {
-            return string.Empty;
-        }
-
-        int end = matchStart + matchLength;
-        if (end >= text.Length)
-        {
-            return string.Empty;
-        }
-
-        return text.Substring(end);
-    }
 
     public string RawJsonText
     {

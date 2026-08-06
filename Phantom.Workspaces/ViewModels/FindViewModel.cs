@@ -240,8 +240,8 @@ public sealed class FindViewModel : ViewModelBase
                 this.matches.Add(new Match(node, where));
             }
 
-            // Highlight the match query on every card so the highlight run appears / disappears.
-            node.Card.MatchQuery = this.query;
+            // Highlight the search query on every card so the highlight run appears / disappears.
+            node.Card.SearchQuery = this.query;
         }
 
         // Restore-current-on-backspace: if the previously current entity is now (again) a match

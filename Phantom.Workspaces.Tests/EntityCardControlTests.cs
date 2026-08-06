@@ -115,9 +115,97 @@ public sealed class EntityCardControlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task EntityCardControl_DisplayName_PreservesHighlightMatchRuns()
+    public void EntityCardControl_SearchQuerySetAfterRealize_DisplayNameRendersHighlightedRun()
     {
-        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.SearchQuery = "foo";
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            var highlighted = title.Inlines!
+                .OfType<Avalonia.Controls.Documents.Run>()
+                .Where(r => r.Background is not null)
+                .ToArray();
+            Assert.Single(highlighted);
+            Assert.Equal("foo", highlighted[0].Text);
+            Assert.Same(title.HighlightBrush, highlighted[0].Background);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryEmpty_DisplayNameKeepsPlainText()
+    {
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.SearchQuery = null;
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.Equal("the foo bar", title.Text);
+            Assert.DoesNotContain(title.Inlines!.OfType<Avalonia.Controls.Documents.Run>(),
+                r => r.Background is not null);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryNoMatch_DisplayNameKeepsPlainText()
+    {
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.SearchQuery = "zzz";
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.Equal("the foo bar", title.Text);
+            Assert.False(vm.Matches);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryChangedAfterRealize_HighlightUpdatesToNewQuery()
+    {
+        var vm = new EntityCardViewModel(displayName: "foo and bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
         var window = new Window { Content = card };
         try
         {
@@ -128,11 +216,15 @@ public sealed class EntityCardControlTests
                 .OfType<SafeSelectableTextBlock>()
                 .First(t => t.Classes.Contains("workspace-entity-title"));
 
-            Assert.NotNull(title.Inlines);
-            var runs = title.Inlines!.OfType<Avalonia.Controls.Documents.Run>().ToArray();
-            Assert.True(runs.Length >= 3, $"Expected at least 3 runs, found {runs.Length}.");
-            var runText = string.Concat(runs.Select(r => r.Text));
-            Assert.Contains("Run VS Code Tunnel", runText, StringComparison.Ordinal);
+            vm.SearchQuery = "foo";
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("foo", title.Inlines!.OfType<Avalonia.Controls.Documents.Run>()
+                .Single(r => r.Background is not null).Text);
+
+            vm.SearchQuery = "bar";
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("bar", title.Inlines!.OfType<Avalonia.Controls.Documents.Run>()
+                .Single(r => r.Background is not null).Text);
         }
         finally
         {
@@ -334,8 +426,7 @@ public sealed class EntityCardControlTests
 
             // Every character of the display name remains present across the wrapped lines.
             var renderedLength = lines.Sum(l => l.Length);
-            var displayName = string.Concat(
-                title.Inlines!.OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text));
+            var displayName = title.Text ?? string.Empty;
             Assert.True(
                 renderedLength >= displayName.Length,
                 $"Rendered {renderedLength} chars < display name {displayName.Length}; text was clipped.");

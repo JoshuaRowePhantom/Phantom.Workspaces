@@ -51,16 +51,14 @@ public sealed class SafeTextBlockTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void SafeTextBlock_SearchQueryEmpty_RendersSinglePlainRun()
+    public void SafeTextBlock_SearchQueryEmpty_KeepsPlainText()
     {
         var block = new SafeTextBlock { Text = "hello world" };
         block.Measure(new Size(400, double.PositiveInfinity));
 
         block.SearchQuery = "";
 
-        var runs = Runs(block);
-        Assert.Single(runs);
-        Assert.Equal("hello world", runs[0].Text);
-        Assert.Null(runs[0].Background);
+        Assert.Equal("hello world", block.Text);
+        Assert.DoesNotContain(Runs(block), r => r.Background is not null);
     }
 }

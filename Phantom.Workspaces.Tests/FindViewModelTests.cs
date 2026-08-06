@@ -551,6 +551,45 @@ public sealed class FindViewModelTests
         Assert.Equal(target.Card, find.CurrentCard);
     }
 
+    // -------------------- #1257: SearchQuery propagation to every card --------------------
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryTyped_SetsSearchQueryOnEveryCardViewModel()
+    {
+        var a = MakeStringNode("apple");
+        var b = MakeStringNode("banana");
+        var list = MakeList((a, null), (b, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "app";
+
+        Assert.Equal("app", a.Card.SearchQuery);
+        Assert.Equal("app", b.Card.SearchQuery);
+        Assert.True(a.Card.Matches);
+        Assert.False(b.Card.Matches);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_ClearedQuery_ClearsSearchQueryOnEveryCardViewModel()
+    {
+        var a = MakeStringNode("apple");
+        var b = MakeStringNode("banana");
+        var list = MakeList((a, null), (b, null));
+        var find = new FindViewModel(list);
+
+        find.Open();
+        find.Query = "app";
+        Assert.Equal("app", a.Card.SearchQuery);
+
+        find.Query = string.Empty;
+
+        Assert.True(string.IsNullOrEmpty(a.Card.SearchQuery));
+        Assert.True(string.IsNullOrEmpty(b.Card.SearchQuery));
+        Assert.False(a.Card.Matches);
+        Assert.False(b.Card.Matches);
+    }
+
     // -------------------- #1199: FindViewModel-level open-idempotence --------------------
 
     [AvaloniaFact]

@@ -43,6 +43,13 @@ public abstract class EntityFieldEditorViewModel
     public bool IsReadMode => !this.IsEditMode;
 
     /// <summary>
+    /// Text of this editor's VALUE for search/highlight purposes (issue #1257). Property NAMES
+    /// (<see cref="FieldName"/>) are intentionally excluded from the match set, so this returns only
+    /// value text. Editors with no textual value return null.
+    /// </summary>
+    public virtual string? SearchableValueText => null;
+
+    /// <summary>
     /// Invoked when <see cref="IsEditMode"/> changes. Override to cascade the edit mode to any child
     /// editors and to raise change notifications for mode-dependent presentation properties.
     /// </summary>
@@ -71,6 +78,8 @@ public sealed class StringFieldEditorViewModel : EntityFieldEditorViewModel
         get => this.value;
         set => this.SetProperty(ref this.value, value);
     }
+
+    public override string? SearchableValueText => this.Value;
 
     public override EntityFieldEditorViewModel Clone()
     {
@@ -104,6 +113,8 @@ public sealed class BooleanToggleFieldEditorViewModel : EntityFieldEditorViewMod
 
     /// <summary>Read-mode presentation of the boolean as lower-case JSON-style text.</summary>
     public string DisplayValue => this.value ? "true" : "false";
+
+    public override string? SearchableValueText => this.DisplayValue;
 
     public override EntityFieldEditorViewModel Clone()
     {
@@ -167,6 +178,8 @@ public sealed class LocalStringFieldEditorViewModel : EntityFieldEditorViewModel
     }
 
     public bool IsLocalized => this.isLocalized;
+
+    public override string? SearchableValueText => this.Value;
 
     public string? ActiveLocale => this.activeLocalizedValue?.Locale;
 

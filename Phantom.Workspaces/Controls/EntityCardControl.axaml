@@ -23,13 +23,12 @@
                     <StackPanel Classes="workspace-entity-header-row"
                                 MinWidth="100"
                                 Margin="0,0,12,0">
-                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title">
-                            <Run Text="{Binding DisplayNameBefore}" />
-                            <Run Text="{Binding DisplayNameMatch}" Background="#FFF59D" />
-                            <Run Text="{Binding DisplayNameAfter}" />
-                        </sharedControls:SafeSelectableTextBlock>
+                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title"
+                                   Text="{Binding DisplayName}"
+                                   SearchQuery="{Binding SearchQuery}" />
                         <sharedControls:SafeSelectableTextBlock Classes="muted"
-                                   Text="{Binding EntityTypeLabels}" />
+                                   Text="{Binding EntityTypeLabels}"
+                                   SearchQuery="{Binding SearchQuery}" />
                     </StackPanel>
                     <WrapPanel Classes="workspace-entity-actions-row"
                                MinWidth="100">
