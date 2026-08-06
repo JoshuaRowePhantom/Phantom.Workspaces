@@ -64,6 +64,21 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? CurrentSessionContext { get; init; }
 
+    /// <summary>
+    /// Optional secret provider used by the core secret materialization seam. Typed as
+    /// <see langword="object"/> to avoid a reverse project reference from
+    /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
+    /// code casts to <c>ISecretProvider</c>.
+    /// </summary>
+    public object? SecretProvider { get; init; }
+
+    /// <summary>
+    /// Per-materialization secret placeholder resolver. Typed as <see langword="object"/> for the
+    /// same layering reason as <see cref="SecretProvider"/>; consuming code casts to
+    /// <c>ISecretPlaceholderResolver</c>.
+    /// </summary>
+    public object? SecretPlaceholderResolver { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;
