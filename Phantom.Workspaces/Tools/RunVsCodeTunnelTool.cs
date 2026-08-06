@@ -42,6 +42,14 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     private readonly VsCodeCliInvoker cliInvoker;
     private readonly VsCodeTunnelProcessLauncher processLauncher;
     private readonly Func<CancellationToken, Task> waitBetweenPollsAsync;
+    private readonly Func<CancellationToken, Task> initialStatusCheckDelayAsync;
+
+    /// <summary>
+    /// Default grace period awaited once after spawning <c>code tunnel</c> and before the first
+    /// <c>code tunnel status</c> liveness probe, giving the freshly-spawned tunnel a chance to
+    /// authenticate and register before the first check races its startup.
+    /// </summary>
+    public static TimeSpan DefaultInitialStatusCheckDelay { get; } = TimeSpan.FromSeconds(10);
 
     public RunVsCodeTunnelTool(
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
@@ -52,6 +60,7 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         VsCodeCliInvoker? cliInvoker = null,
         VsCodeTunnelProcessLauncher? processLauncher = null,
         Func<CancellationToken, Task>? waitBetweenPollsAsync = null,
+        Func<CancellationToken, Task>? initialStatusCheckDelayAsync = null,
         ILogger<RunVsCodeTunnelTool>? logger = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
@@ -64,6 +73,8 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         this.processLauncher = processLauncher ?? DefaultProcessLauncher;
         this.waitBetweenPollsAsync = waitBetweenPollsAsync
             ?? (ct => Task.Delay(TimeSpan.FromSeconds(15), ct));
+        this.initialStatusCheckDelayAsync = initialStatusCheckDelayAsync
+            ?? (ct => Task.Delay(DefaultInitialStatusCheckDelay, ct));
     }
 
     public string ToolType => "run-vscode-tunnel";
@@ -100,6 +111,11 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
 
         try
         {
+            // Give the freshly-spawned `code tunnel` a chance to authenticate and register before
+            // the first liveness probe, so the first `code tunnel status` call does not race
+            // startup and spuriously report "not running".
+            await this.initialStatusCheckDelayAsync(context.CancellationToken).ConfigureAwait(false);
+
             while (!context.CancellationToken.IsCancellationRequested)
             {
                 if (child.HasExited)

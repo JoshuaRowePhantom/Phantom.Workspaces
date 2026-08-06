@@ -146,6 +146,7 @@ public sealed class RunVsCodeTunnelToolTests
                 calls.Add(new CliCall(cli, args, env));
                 return Task.FromResult(("running", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (cli, args) =>
@@ -181,6 +182,7 @@ public sealed class RunVsCodeTunnelToolTests
                 }
                 return Task.FromResult(("", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (_, _) => child,
@@ -212,6 +214,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (_, _) => child);
@@ -231,6 +234,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             (cli, args, env, _) => Task.FromResult(("tunnel is stopped", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (_, _) => child);
@@ -248,6 +252,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             (cli, args, env, _) => Task.FromResult(("running", 7)),  // exit 7, contains "running" in output but non-zero → not running
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (_, _) => child);
@@ -277,6 +282,7 @@ public sealed class RunVsCodeTunnelToolTests
                 }
                 return Task.FromResult(("running", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => "gh-token-xyz",
             processLauncher: (_, _) =>
@@ -310,6 +316,7 @@ public sealed class RunVsCodeTunnelToolTests
                 calls.Add(new CliCall(cli, args, env));
                 return Task.FromResult(("running", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (_, _) => { spawned = true; return child; });
@@ -339,6 +346,7 @@ public sealed class RunVsCodeTunnelToolTests
                     return Task.FromResult(("insufficient_scope", 1));
                 return Task.FromResult(("running", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => "some-token",
             processLauncher: (_, _) => { spawned = true; return child; },
@@ -359,6 +367,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (_, _) => child,
@@ -384,6 +393,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             (cli, args, env, _) => Task.FromResult(("running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (cli, args) => { spawn = new SpawnCall(cli, args); return child; });
@@ -404,6 +414,7 @@ public sealed class RunVsCodeTunnelToolTests
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
             (cli, args, env, _) => Task.FromResult(("running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
             processLauncher: (cli, args) => { spawn = new SpawnCall(cli, args); return child; });
@@ -433,6 +444,7 @@ public sealed class RunVsCodeTunnelToolTests
                 if (args.Contains("login")) loginCalled = true;
                 return Task.FromResult(("", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => null,
             tokenResolver: () => "token",
             processLauncher: (_, _) => { spawned = true; return new FakeChildProcess(); });
@@ -443,6 +455,177 @@ public sealed class RunVsCodeTunnelToolTests
         Assert.NotNull(result.ErrorMessage);
         Assert.False(loginCalled);
         Assert.False(spawned);
+    }
+
+    // ---- #1240: initial grace period before first status probe -----------------------------
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_WaitsGracePeriodBeforeFirstStatusCheck()
+    {
+        var graceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var pollGate = new ManualPollGate();
+        var statusCount = 0;
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                if (args == "tunnel status")
+                {
+                    Interlocked.Increment(ref statusCount);
+                }
+                return Task.FromResult(("tunnel is running", 0));
+            },
+            initialStatusCheckDelayAsync: _ => graceGate.Task,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child,
+            waitBetweenPollsAsync: pollGate.WaitAsync);
+
+        var runTask = tool.ExecuteAsync(this.Context());
+
+        // The grace delay is still pending, so no status probe has been issued yet.
+        Assert.Equal(0, statusCount);
+        Assert.False(runTask.IsCompleted);
+
+        // Release the grace period; the first status probe may now happen.
+        graceGate.SetResult();
+        await pollGate.ReleaseOnePoll();
+
+        Assert.True(statusCount >= 1);
+
+        // Let ExecuteAsync return.
+        child.SimulateExit(0, "done");
+        await pollGate.ReleaseOnePoll();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_TunnelUpAfterGracePeriod_ReportsRunning()
+    {
+        var graceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var graceCompleted = false;
+        var pollGate = new ManualPollGate();
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                if (args == "tunnel status")
+                {
+                    // The status probe must never run before the grace period completes.
+                    Assert.True(graceCompleted);
+                    return Task.FromResult(("tunnel is running", 0));
+                }
+                return Task.FromResult((string.Empty, 0));
+            },
+            initialStatusCheckDelayAsync: async _ =>
+            {
+                await graceGate.Task;
+                graceCompleted = true;
+            },
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child,
+            waitBetweenPollsAsync: pollGate.WaitAsync);
+
+        var runTask = tool.ExecuteAsync(this.Context());
+
+        graceGate.SetResult();
+        await pollGate.ReleaseOnePoll();
+
+        // Tunnel reported running after the grace period, so the tool keeps blocking rather than
+        // returning a spurious "not running" failure.
+        Assert.False(runTask.IsCompleted);
+
+        child.SimulateExit(0, "done");
+        await pollGate.ReleaseOnePoll();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_StatusStillFailsAfterGracePeriod_ReturnsNotRunning()
+    {
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult(("tunnel is stopped", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.True(child.WasKilled);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("no longer reports the tunnel as running", result.ResultContent);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ChildExitsDuringGracePeriod_ReturnsFailureWithCliOutput()
+    {
+        var graceGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: _ => graceGate.Task,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child);
+
+        var runTask = tool.ExecuteAsync(this.Context());
+
+        // Simulate the child crashing during the warm-up window, then release the grace delay.
+        child.SimulateExit(17, "crash-during-warmup");
+        graceGate.SetResult();
+
+        var result = await runTask;
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("17", result.ErrorMessage);
+        Assert.Contains("crash-during-warmup", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_CancellationDuringGracePeriod_KillsChildAndReturns()
+    {
+        using var cts = new CancellationTokenSource();
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: ct =>
+            {
+                var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                ct.Register(() => tcs.TrySetCanceled(ct));
+                return tcs.Task;
+            },
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child);
+
+        var runTask = tool.ExecuteAsync(this.Context() with { CancellationToken = cts.Token });
+
+        // Cancel while parked in the grace delay.
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await runTask);
+        Assert.True(child.WasKilled);
+    }
+
+    [Fact]
+    public void RunVsCodeTunnelTool_DefaultInitialGracePeriod_IsTenSeconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(10), RunVsCodeTunnelTool.DefaultInitialStatusCheckDelay);
     }
 
     [Fact]
@@ -459,6 +642,7 @@ public sealed class RunVsCodeTunnelToolTests
                 calls.Add(new CliCall(cli, args, env));
                 return Task.FromResult(("running", 0));
             },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => "token",
             processLauncher: (_, _) => child);
