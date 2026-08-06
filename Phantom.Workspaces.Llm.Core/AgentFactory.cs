@@ -123,6 +123,23 @@ public static class AgentFactory
     }
 
     /// <summary>
+    /// Resolves the <see cref="CurrentSessionContext"/> used to wire the agent-session toolset. Prefers a
+    /// host-supplied context (<see cref="AgentServices.CurrentSessionContext"/>), merging in the effective
+    /// <paramref name="sessionId"/>, so the Copilot / running-agent path serves <c>get_current_session</c>
+    /// with populated user / computer / profile members (issue #1236). Falls back to a session-id-only
+    /// context when the host supplied none, preserving legacy behaviour.
+    /// </summary>
+    internal static CurrentSessionContext ResolveSessionContext(AgentServices? services, string sessionId)
+    {
+        if (services?.CurrentSessionContext is CurrentSessionContext supplied)
+        {
+            return supplied with { AgentSessionId = sessionId };
+        }
+
+        return new CurrentSessionContext { AgentSessionId = sessionId };
+    }
+
+    /// <summary>
     /// Extracts tool definitions from a PromptAgent for registration with ChatClient.
     /// </summary>
     /// <param name="agent">The PromptAgent to extract tools from.</param>
@@ -574,7 +591,7 @@ public static class AgentFactory
         if (services?.RunningAgentChatFactory is IRunningAgentChatFactory runningFactory)
         {
             var sessionId = createAgentChatRequest.AgentSessionId ?? Guid.NewGuid().ToString("n");
-            var sessionContext = new CurrentSessionContext { AgentSessionId = sessionId };
+            var sessionContext = ResolveSessionContext(services, sessionId);
             agentChatRef = new AgentChatRef();
             var sessionToolsetFactory = ToolsetFactory.CreateAgentSessionToolsetFactory(
                 agentChatRef,

@@ -557,6 +557,63 @@ public class AgentFactoryTests
     }
 
     [Fact]
+    public void CreateAgentChatAsync_CopilotPath_UsesHostSuppliedCurrentSessionContext()
+    {
+        var user = MakeSnapshot(["entity", "user"], ["users", "username", "alice"]);
+        var profile = MakeSnapshot(["entity", "user-computer-profile"], ["profiles", "host-a"]);
+        var computer = MakeSnapshot(["entity", "computer"], ["computers", "hostname", "host-a"]);
+        var hostContext = new CurrentSessionContext
+        {
+            AgentSessionId = "will-be-overwritten",
+            User = user,
+            UserComputerProfile = profile,
+            Computer = computer,
+        };
+        var services = new AgentServices { CurrentSessionContext = hostContext };
+
+        var resolved = AgentFactory.ResolveSessionContext(services, "session-42");
+
+        Assert.Equal("session-42", resolved.AgentSessionId);
+        Assert.Same(user, resolved.User);
+        Assert.Same(profile, resolved.UserComputerProfile);
+        Assert.Same(computer, resolved.Computer);
+    }
+
+    [Fact]
+    public void CreateAgentChatAsync_CopilotPath_NoHostContext_FallsBackToMinimalContext()
+    {
+        var services = new AgentServices();
+
+        var resolved = AgentFactory.ResolveSessionContext(services, "session-42");
+
+        Assert.Equal("session-42", resolved.AgentSessionId);
+        Assert.Null(resolved.User);
+        Assert.Null(resolved.UserComputerProfile);
+        Assert.Null(resolved.Computer);
+    }
+
+    private static Data.EntitySnapshot MakeSnapshot(string[] entityTypes, string[] entityName)
+    {
+        var entityId = new Data.EntityId();
+        using var document = System.Text.Json.JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId.Value}}",
+              "entity-types": {{System.Text.Json.JsonSerializer.Serialize(entityTypes)}},
+              "names": [{{System.Text.Json.JsonSerializer.Serialize(entityName)}}]
+            }
+            """);
+        return new Data.EntitySnapshot
+        {
+            EntityId = entityId,
+            ConcurrencyTag = new Data.ConcurrencyTag("1"),
+            ModifiedTime = new Data.Timestamp(System.DateTimeOffset.UtcNow, System.Guid.NewGuid().ToString()),
+            Data = document.RootElement.Clone(),
+            Relationships = System.Array.Empty<Data.EntitySnapshot>(),
+        };
+    }
+
+    [Fact]
     public async Task CreateAgentChat_LogChatWithoutLoggerFactory_Throws()
     {
         var agent = AgentDefinitionLoader.LoadAgentFromJson(

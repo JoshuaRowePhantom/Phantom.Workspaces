@@ -39,6 +39,7 @@ public sealed class AgentSessionShortcutContext
     {
         var agentPersistenceStore = await this.GetAgentPersistenceStoreAsync(mainWindowViewModel);
         var dataAccessLayer = mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
+        var currentSessionContext = await this.BuildCurrentSessionContextAsync(dataAccessLayer);
         var workspaceGuiContextProvider = new WorkspaceGuiContextProvider(
             new WorkspaceGuiContext
             {
@@ -51,7 +52,7 @@ public sealed class AgentSessionShortcutContext
                 workspaceGuiContextProvider,
                 ToolsetFactory.CreateCurrentSessionToolsetFactory(
                     dataAccessLayer,
-                    await this.BuildCurrentSessionContextAsync(dataAccessLayer),
+                    currentSessionContext,
                     ToolsetFactory.CreateDefaultToolsetFactory())));
 
         // Materialize a user-account entity the first time a Copilot session resolves a GitHub
@@ -68,50 +69,23 @@ public sealed class AgentSessionShortcutContext
             ToolsetFactory = toolsetFactory,
             ToolResourceFactory = this.CreateToolResourceFactory(dataAccessLayer),
             AccountUpsertService = accountUpsertService,
+            // Hand the resolved host context to the running-agent / Copilot path so
+            // get_current_session is populated there too (issue #1236).
+            CurrentSessionContext = currentSessionContext,
         };
     }
 
-    private async Task<CurrentSessionContext> BuildCurrentSessionContextAsync(
+    private Task<CurrentSessionContext> BuildCurrentSessionContextAsync(
         IDataAccessLayer dataAccessLayer)
     {
         var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
-        var userEntityName = new EntityName("users", "username", executionContext.UserName);
-        var computerEntityName = new EntityName("computers", "hostname", executionContext.ComputerName);
-        var profileEntityName = new EntityName(
-            "computer-user-profiles",
-            "users", "username", executionContext.UserName,
-            "computers", "hostname", executionContext.EffectiveComputerName);
-
-        var userComputerProfile = await ResolveEntityAsync(dataAccessLayer, profileEntityName);
-        var user = await ResolveEntityAsync(dataAccessLayer, userEntityName);
-        var computer = await ResolveEntityAsync(dataAccessLayer, computerEntityName);
-
-        return new CurrentSessionContext
-        {
-            AgentSessionId = string.Empty,
-            UserComputerProfile = userComputerProfile,
-            User = user,
-            Computer = computer,
-        };
-    }
-
-    private static async Task<EntitySnapshot?> ResolveEntityAsync(
-        IDataAccessLayer dataAccessLayer,
-        EntityName entityName)
-    {
-        var getResult = await dataAccessLayer.GetAsync(
-            new GetRequest
-            {
-                Entities =
-                [
-                    new GetEntityRequest { EntityName = entityName },
-                ],
-            },
-            System.Threading.CancellationToken.None);
-
-        return getResult.Batches
-            .SelectMany(static batch => batch.Entities)
-            .FirstOrDefault(static entity => entity.Data is not null);
+        return CurrentSessionContextFactory.CreateForHostAsync(
+            agentSessionId: string.Empty,
+            dataAccessLayer: dataAccessLayer,
+            userName: executionContext.UserName,
+            computerName: executionContext.ComputerName,
+            effectiveComputerName: executionContext.EffectiveComputerName,
+            cancellationToken: System.Threading.CancellationToken.None);
     }
 
     private IToolResourceFactory CreateToolResourceFactory(IDataAccessLayer dataAccessLayer)

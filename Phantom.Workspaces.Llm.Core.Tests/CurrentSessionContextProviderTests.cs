@@ -358,6 +358,54 @@ public sealed class CurrentSessionContextProviderTests
         Assert.Contains(tools, static tool => string.Equals(tool.Name, "get_current_session", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task GetCurrentSession_CopilotSessionWithResolvedHost_ReturnsPopulatedProfileAndUser()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await SeedAgentSessionAsync(dataAccessLayer, AgentSessionId, ["agent-sessions", "one"]);
+        var profile = await SeedEntityAsync(dataAccessLayer, ["entity", "user-computer-profile"], ["profiles", "host-a"]);
+        var user = await SeedEntityAsync(dataAccessLayer, ["entity", "user"], ["users", "alice"]);
+        var computer = await SeedEntityAsync(dataAccessLayer, ["entity", "computer"], ["computers", "hostname", "host-a"]);
+
+        // Mirrors the running-agent / Copilot path once AgentFactory prefers the host-resolved context.
+        var result = await InvokeAsync(
+            dataAccessLayer,
+            new CurrentSessionContext
+            {
+                AgentSessionId = AgentSessionId,
+                UserComputerProfile = profile,
+                User = user,
+                Computer = computer,
+            });
+
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("user_computer_profile").ValueKind);
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("user").ValueKind);
+        Assert.Equal(JsonValueKind.Object, result.GetProperty("computer").ValueKind);
+    }
+
+    [Fact]
+    public async Task GetCurrentSession_UnresolvedHost_ReturnsExplicitNullMembersNotEmptyObject()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+
+        var result = await InvokeAsync(
+            dataAccessLayer,
+            new CurrentSessionContext { AgentSessionId = "unresolved-session" });
+
+        // Guard against the #1236 regression: members must be present with an explicit JSON null,
+        // never dropped so the object renders as "{}".
+        Assert.True(result.TryGetProperty("agent_session", out var agentSession));
+        Assert.Equal(JsonValueKind.Null, agentSession.ValueKind);
+        Assert.True(result.TryGetProperty("user_computer_profile", out var profile));
+        Assert.Equal(JsonValueKind.Null, profile.ValueKind);
+        Assert.True(result.TryGetProperty("user", out var user));
+        Assert.Equal(JsonValueKind.Null, user.ValueKind);
+        Assert.True(result.TryGetProperty("computer", out var computer));
+        Assert.Equal(JsonValueKind.Null, computer.ValueKind);
+        Assert.True(result.TryGetProperty("agent_definition", out var definition));
+        Assert.Equal(JsonValueKind.Null, definition.ValueKind);
+    }
+
     private static async Task<JsonElement> InvokeAsync(
         IDataAccessLayer dataAccessLayer,
         CurrentSessionContext context,

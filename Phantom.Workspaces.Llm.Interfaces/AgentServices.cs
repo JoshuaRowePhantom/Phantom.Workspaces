@@ -55,6 +55,15 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? SlashCommandRegistry { get; init; }
 
+    /// <summary>
+    /// An already-resolved host session context (user / computer / profile) the host hands in so the
+    /// running-agent / Copilot path can serve <c>get_current_session</c> with populated members instead
+    /// of a session-id-only context (issue #1236). Typed as <see langword="object"/> to avoid a reverse
+    /// project reference from <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>;
+    /// consuming code casts to <c>CurrentSessionContext</c>.
+    /// </summary>
+    public object? CurrentSessionContext { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;
