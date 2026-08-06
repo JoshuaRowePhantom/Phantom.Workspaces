@@ -56,6 +56,7 @@
                         <TextBlock Classes="agent-chat-status-line-label"
                                    Text="{Binding StatusLine.TokensDisplay}"
                                    VerticalAlignment="Center"
+                                   ToolTip.Tip="{Binding StatusLine.TokensTooltip}"
                                    IsVisible="{Binding StatusLine.HasTokens}"/>
                         <CheckBox Classes="agent-chat-autoscroll-toggle"
                                   Content="Auto-scroll"

@@ -79,6 +79,88 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.True(statusLine.HasTokens);
     }
 
+    [AvaloniaFact]
+    public async Task TokensDisplay_WhenCachedInputAvailable_RendersCachedInParentheses()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        SetUsageAndRaiseUsageChanged(
+            agentViewModel.AgentChat,
+            inputTokenCount: 3_602_110,
+            outputTokenCount: 19_755,
+            cacheReadTokenCount: 3_402_119);
+
+        Assert.Equal("3,602,110 in (3,402,119 cached) / 19,755 out", statusLine.TokensDisplay);
+    }
+
+    [AvaloniaFact]
+    public async Task TokensDisplay_WhenCostAvailable_AppendsDollarAmount()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        SetUsageAndRaiseUsageChanged(
+            agentViewModel.AgentChat,
+            inputTokenCount: 3_602_110,
+            outputTokenCount: 19_755,
+            cacheReadTokenCount: 3_402_119,
+            sessionCostMicroUsd: 1_234_000);
+
+        Assert.Equal("3,602,110 in (3,402,119 cached) / 19,755 out \u00b7 $1.23", statusLine.TokensDisplay);
+    }
+
+    [AvaloniaFact]
+    public async Task TokensDisplay_WhenNoCostData_OmitsDollarGracefully()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        SetUsageAndRaiseUsageChanged(
+            agentViewModel.AgentChat,
+            inputTokenCount: 1234,
+            outputTokenCount: 56);
+
+        Assert.Equal("1,234 in / 56 out", statusLine.TokensDisplay);
+    }
+
+    [AvaloniaFact]
+    public async Task TokensDisplay_WhenNoCacheData_OmitsCachedParentheses()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        SetUsageAndRaiseUsageChanged(
+            agentViewModel.AgentChat,
+            inputTokenCount: 1234,
+            outputTokenCount: 56,
+            sessionCostMicroUsd: 1_230_000);
+
+        Assert.Equal("1,234 in / 56 out \u00b7 $1.23", statusLine.TokensDisplay);
+    }
+
+    [AvaloniaFact]
+    public async Task TokensDisplay_WhenOutputMissing_ReturnsNull()
+    {
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+
+        SetUsageAndRaiseUsageChanged(
+            agentViewModel.AgentChat,
+            inputTokenCount: 1234,
+            outputTokenCount: null,
+            cacheReadTokenCount: 500,
+            sessionCostMicroUsd: 1_230_000);
+
+        Assert.Null(statusLine.TokensDisplay);
+        Assert.False(statusLine.HasTokens);
+    }
+
     [Fact]
     public async Task IsReasoningVisible_WhenAgentPropertyChanges_PropagatesChange()
     {
@@ -193,6 +275,28 @@ public sealed class AgentChatStatusLineViewModelTests
     {
         SetBackingField(agentChat, nameof(AgentChat.TotalInputTokenCount), inputTokenCount);
         SetBackingField(agentChat, nameof(AgentChat.TotalOutputTokenCount), outputTokenCount);
+
+        var usageChangedField = typeof(AgentChat).GetField(
+            "UsageChanged",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("UsageChanged event field was not found.");
+        var usageChanged = (EventHandler?)usageChangedField.GetValue(agentChat);
+        usageChanged?.Invoke(agentChat, EventArgs.Empty);
+    }
+
+    private static void SetUsageAndRaiseUsageChanged(
+        AgentChat agentChat,
+        long? inputTokenCount,
+        long? outputTokenCount,
+        long? cacheReadTokenCount = null,
+        long? reasoningTokenCount = null,
+        long? sessionCostMicroUsd = null)
+    {
+        SetBackingField(agentChat, nameof(AgentChat.TotalInputTokenCount), inputTokenCount);
+        SetBackingField(agentChat, nameof(AgentChat.TotalOutputTokenCount), outputTokenCount);
+        SetBackingField(agentChat, nameof(AgentChat.TotalCacheReadTokenCount), cacheReadTokenCount);
+        SetBackingField(agentChat, nameof(AgentChat.TotalReasoningTokenCount), reasoningTokenCount);
+        SetBackingField(agentChat, nameof(AgentChat.TotalSessionCostMicroUsd), sessionCostMicroUsd);
 
         var usageChangedField = typeof(AgentChat).GetField(
             "UsageChanged",

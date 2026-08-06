@@ -68,6 +68,13 @@ public static class CopilotSdkStreamAdapter
     public const string CacheWriteTokensCountName = "copilot.sdk.cache_write_tokens";
 
     /// <summary>
+    /// <see cref="UsageDetails.AdditionalCounts"/> key for the provider-reported dollar cost of an
+    /// assistant call, stored in micro-USD (<c>(long)Math.Round(cost * 1_000_000)</c>) because
+    /// <see cref="UsageDetails.AdditionalCounts"/> is an integer dictionary. Divide by 1e6 to display.
+    /// </summary>
+    public const string CostMicroUsdCountName = "copilot.sdk.cost_micro_usd";
+
+    /// <summary>
     /// Translates raw Copilot SDK session events into <see cref="ChatResponseUpdate"/> items.
     /// The stream completes normally on <see cref="SessionIdleEvent"/> and faults with
     /// <see cref="InvalidOperationException"/> on <see cref="SessionErrorEvent"/>. Unrecognised
@@ -282,6 +289,14 @@ public static class CopilotSdkStreamAdapter
         AddAdditionalCount(details, ReasoningTokensCountName, data.ReasoningTokens);
         AddAdditionalCount(details, CacheReadTokensCountName, data.CacheReadTokens);
         AddAdditionalCount(details, CacheWriteTokensCountName, data.CacheWriteTokens);
+
+#pragma warning disable GHCP001 // AssistantUsageData.Cost is evaluation-only but is the authoritative per-call $ cost.
+        if (data.Cost is double cost)
+#pragma warning restore GHCP001
+        {
+            details.AdditionalCounts ??= [];
+            details.AdditionalCounts[CostMicroUsdCountName] = (long)Math.Round(cost * 1_000_000);
+        }
 
         return new UsageContent(details);
     }

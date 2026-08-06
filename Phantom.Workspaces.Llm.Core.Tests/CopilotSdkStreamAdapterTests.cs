@@ -372,6 +372,71 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UsageEventWithCost_PopulatesCostMicroUsdAdditionalCount()
+    {
+#pragma warning disable GHCP001 // AssistantUsageData.Cost is evaluation-only.
+        var updates = await TranslateAsync(new AssistantUsageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantUsageData
+            {
+                Model = "test-model",
+                InputTokens = 100,
+                OutputTokens = 40,
+                Cost = 1.23,
+            },
+        });
+#pragma warning restore GHCP001
+
+        var update = Assert.Single(updates);
+        var usage = Assert.IsType<UsageContent>(Assert.Single(update.Contents));
+        Assert.Equal(1_230_000, usage.Details.AdditionalCounts![CopilotSdkStreamAdapter.CostMicroUsdCountName]);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UsageEventWithoutCost_OmitsCostAdditionalCount()
+    {
+        var updates = await TranslateAsync(new AssistantUsageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantUsageData
+            {
+                Model = "test-model",
+                InputTokens = 100,
+                OutputTokens = 40,
+            },
+        });
+
+        var update = Assert.Single(updates);
+        var usage = Assert.IsType<UsageContent>(Assert.Single(update.Contents));
+        Assert.True(
+            usage.Details.AdditionalCounts is null
+            || !usage.Details.AdditionalCounts.ContainsKey(CopilotSdkStreamAdapter.CostMicroUsdCountName));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UsageEvent_MapsCacheReadAndWriteTokens()
+    {
+        var updates = await TranslateAsync(new AssistantUsageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantUsageData
+            {
+                Model = "test-model",
+                InputTokens = 100,
+                OutputTokens = 40,
+                CacheReadTokens = 30,
+                CacheWriteTokens = 12,
+            },
+        });
+
+        var update = Assert.Single(updates);
+        var usage = Assert.IsType<UsageContent>(Assert.Single(update.Contents));
+        Assert.Equal(30, usage.Details.AdditionalCounts![CopilotSdkStreamAdapter.CacheReadTokensCountName]);
+        Assert.Equal(12, usage.Details.AdditionalCounts[CopilotSdkStreamAdapter.CacheWriteTokensCountName]);
+    }
+
+    [Fact]
     public async Task TranslateCopilotSdkSessionEvents_UsageEventWithNullCounts_YieldsEmptyDetails()
     {
         var updates = await TranslateAsync(new AssistantUsageEvent

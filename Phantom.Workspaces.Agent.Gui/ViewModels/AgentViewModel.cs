@@ -225,6 +225,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public long? TotalOutputTokenCount => this.agentChat.TotalOutputTokenCount;
 
+    public long? TotalCacheReadTokenCount => this.agentChat.TotalCacheReadTokenCount;
+
+    public long? TotalCacheWriteTokenCount => this.agentChat.TotalCacheWriteTokenCount;
+
+    public long? TotalReasoningTokenCount => this.agentChat.TotalReasoningTokenCount;
+
+    public double? TotalSessionCostUsd => this.agentChat.TotalSessionCostUsd;
+
     public string ModelApiType => this.ResolveAgentModel()?.ApiType ?? string.Empty;
 
     public string ModelConnectionType => this.ResolveAgentModel()?.Connection switch
@@ -903,6 +911,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.RaisePropertyChanged(nameof(this.TotalInputTokenCount));
         this.RaisePropertyChanged(nameof(this.TotalOutputTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalCacheReadTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalCacheWriteTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalReasoningTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalSessionCostUsd));
     }
 
     private sealed class ToolsCollectionTransformer : CollectionTransformer<AgentChatToolViewModel, AgentEditorNavigationItemViewModel>

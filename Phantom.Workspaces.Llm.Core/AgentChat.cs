@@ -590,6 +590,22 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     public long? TotalOutputTokenCount { get; private set; }
 
+    /// <summary>Session total of cache-read (prompt-cache hit) input tokens, when the provider reports them.</summary>
+    public long? TotalCacheReadTokenCount { get; private set; }
+
+    /// <summary>Session total of cache-write (prompt-cache fill) input tokens, when the provider reports them.</summary>
+    public long? TotalCacheWriteTokenCount { get; private set; }
+
+    /// <summary>Session total of reasoning tokens, when the provider reports them.</summary>
+    public long? TotalReasoningTokenCount { get; private set; }
+
+    /// <summary>Session total dollar cost in micro-USD, summed from provider-reported per-call cost.</summary>
+    public long? TotalSessionCostMicroUsd { get; private set; }
+
+    /// <summary>Session total dollar cost in USD, or <c>null</c> when no cost data is available.</summary>
+    public double? TotalSessionCostUsd
+        => this.TotalSessionCostMicroUsd is long micro ? micro / 1_000_000.0 : null;
+
     public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
 
     public IReadOnlyList<AgentChatToolItem> GetToolSnapshot()
@@ -2023,8 +2039,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     {
         var inputTokenCountToAdd = 0L;
         var outputTokenCountToAdd = 0L;
+        var cacheReadTokenCountToAdd = 0L;
+        var cacheWriteTokenCountToAdd = 0L;
+        var reasoningTokenCountToAdd = 0L;
+        var costMicroUsdToAdd = 0L;
         var hasInputTokenCount = false;
         var hasOutputTokenCount = false;
+        var hasCacheReadTokenCount = false;
+        var hasCacheWriteTokenCount = false;
+        var hasReasoningTokenCount = false;
+        var hasCost = false;
 
         foreach (var usageContent in update.Contents.OfType<UsageContent>())
         {
@@ -2039,10 +2063,42 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 outputTokenCountToAdd += outputTokenCount;
                 hasOutputTokenCount = true;
             }
+
+            var additionalCounts = usageContent.Details.AdditionalCounts;
+            if (additionalCounts is not null)
+            {
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.CacheReadTokensCountName, out var cacheRead))
+                {
+                    cacheReadTokenCountToAdd += cacheRead;
+                    hasCacheReadTokenCount = true;
+                }
+
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.CacheWriteTokensCountName, out var cacheWrite))
+                {
+                    cacheWriteTokenCountToAdd += cacheWrite;
+                    hasCacheWriteTokenCount = true;
+                }
+
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.ReasoningTokensCountName, out var reasoning))
+                {
+                    reasoningTokenCountToAdd += reasoning;
+                    hasReasoningTokenCount = true;
+                }
+
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.CostMicroUsdCountName, out var costMicroUsd))
+                {
+                    costMicroUsdToAdd += costMicroUsd;
+                    hasCost = true;
+                }
+            }
         }
 
         var previousInputTokenCount = this.TotalInputTokenCount;
         var previousOutputTokenCount = this.TotalOutputTokenCount;
+        var previousCacheReadTokenCount = this.TotalCacheReadTokenCount;
+        var previousCacheWriteTokenCount = this.TotalCacheWriteTokenCount;
+        var previousReasoningTokenCount = this.TotalReasoningTokenCount;
+        var previousCostMicroUsd = this.TotalSessionCostMicroUsd;
 
         if (hasInputTokenCount)
         {
@@ -2054,8 +2110,32 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             this.TotalOutputTokenCount = (this.TotalOutputTokenCount ?? 0L) + outputTokenCountToAdd;
         }
 
+        if (hasCacheReadTokenCount)
+        {
+            this.TotalCacheReadTokenCount = (this.TotalCacheReadTokenCount ?? 0L) + cacheReadTokenCountToAdd;
+        }
+
+        if (hasCacheWriteTokenCount)
+        {
+            this.TotalCacheWriteTokenCount = (this.TotalCacheWriteTokenCount ?? 0L) + cacheWriteTokenCountToAdd;
+        }
+
+        if (hasReasoningTokenCount)
+        {
+            this.TotalReasoningTokenCount = (this.TotalReasoningTokenCount ?? 0L) + reasoningTokenCountToAdd;
+        }
+
+        if (hasCost)
+        {
+            this.TotalSessionCostMicroUsd = (this.TotalSessionCostMicroUsd ?? 0L) + costMicroUsdToAdd;
+        }
+
         if (this.TotalInputTokenCount != previousInputTokenCount
-            || this.TotalOutputTokenCount != previousOutputTokenCount)
+            || this.TotalOutputTokenCount != previousOutputTokenCount
+            || this.TotalCacheReadTokenCount != previousCacheReadTokenCount
+            || this.TotalCacheWriteTokenCount != previousCacheWriteTokenCount
+            || this.TotalReasoningTokenCount != previousReasoningTokenCount
+            || this.TotalSessionCostMicroUsd != previousCostMicroUsd)
         {
             this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
