@@ -232,6 +232,124 @@ public sealed class EntityCardControlTests
         }
     }
 
+    // Issue #1257: a property VALUE whose text matches the active search query must render a
+    // highlighted Run in the field-value SafeSelectableTextBlock. This is the new highlight surface
+    // introduced by binding SearchQuery to the field-value presentation control.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryMatchesPropertyValue_PropertyValueTextRendersHighlightedRun()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", "the foo bar"),
+        };
+        var vm = new EntityCardViewModel(entity, fieldEditors);
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var value = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-field-read-value"));
+            Assert.Equal("the foo bar", value.Text);
+
+            vm.SearchQuery = "foo";
+            Dispatcher.UIThread.RunJobs();
+
+            var highlighted = value.Inlines!
+                .OfType<Avalonia.Controls.Documents.Run>()
+                .Where(r => r.Background is not null)
+                .ToArray();
+            Assert.Single(highlighted);
+            Assert.Equal("foo", highlighted[0].Text);
+            Assert.Same(value.HighlightBrush, highlighted[0].Background);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1257: a property NAME label must never be highlighted, even when the query is a
+    // substring of the field name. The field-name label control does not bind SearchQuery, so it
+    // stays a single plain Run regardless of the query.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryMatchesPropertyName_PropertyNameLabelRendersSinglePlainRun()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", "xyz"),
+        };
+        var vm = new EntityCardViewModel(entity, fieldEditors);
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            // "pat" is a substring of the field name "path" but not of any value/display name.
+            vm.SearchQuery = "pat";
+            Dispatcher.UIThread.RunJobs();
+
+            var label = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-field-label") && t.Text == "path");
+
+            // The label control never binds SearchQuery, so it stays plain text with no highlight.
+            Assert.Null(label.SearchQuery);
+            Assert.Equal("path", label.Text);
+            Assert.DoesNotContain(
+                label.Inlines!.OfType<Avalonia.Controls.Documents.Run>(),
+                r => r.Background is not null);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1257 (interaction with #1177 virtualization): when SearchQuery is assigned on the card
+    // view model while its container is virtualized (not realized), realizing the container — here,
+    // attaching a freshly-created EntityCardControl bound to that same view model — must apply the
+    // highlight on realize rather than only responding to post-realize query changes.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_VirtualizedItemRealizedAfterSearchQuerySet_ShowsHighlightOnRealize()
+    {
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+
+        // Query set before any control is realized against this view model.
+        vm.SearchQuery = "foo";
+
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            var highlighted = title.Inlines!
+                .OfType<Avalonia.Controls.Documents.Run>()
+                .Where(r => r.Background is not null)
+                .ToArray();
+            Assert.Single(highlighted);
+            Assert.Equal("foo", highlighted[0].Text);
+            Assert.Same(title.HighlightBrush, highlighted[0].Background);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardControl_FieldReadMode_ValueIsSafeSelectableTextBlock()
     {
