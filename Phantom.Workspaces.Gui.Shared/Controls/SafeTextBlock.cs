@@ -5,36 +5,29 @@ using Avalonia.Media;
 namespace Phantom.Workspaces.Gui.Shared.Controls;
 
 /// <summary>
-/// A <see cref="SelectableTextBlock"/> subclass that short-circuits MeasureOverride when
-/// availableSize.Width is zero, preventing TextFormatterImpl.PerformTextWrapping from creating
-/// one TextLineImpl per character (6 million lines → 5.8 GB allocation) when TextWrapping=Wrap
-/// and the control is first-measured with Size(0,0) by Avalonia's layout manager.
+/// A non-selectable <see cref="TextBlock"/> peer of <see cref="SafeSelectableTextBlock"/>. It carries
+/// the same zero-width <see cref="MeasureOverride"/> guard (issue #394) and the same reusable
+/// text-highlight capability (issue #1258) for surfaces that want search highlighting without
+/// selection/copy. Both controls route through <see cref="TextHighlighter"/> so the run-building and
+/// layout-invalidation logic stays DRY.
 /// </summary>
-/// <remarks>
-/// Also carries a reusable text-highlight capability (issue #1258): setting <see cref="SearchQuery"/>
-/// re-formats the control so every case-insensitive occurrence of the query is drawn with a
-/// <see cref="HighlightBrush"/> background. Unlike a template of three bound <c>Run</c> children,
-/// rebuilding the inlines here re-formats the cached text layout, so the highlight actually
-/// re-renders when either the text or the query changes after realize.
-/// </remarks>
-public class SafeSelectableTextBlock : SelectableTextBlock
+public class SafeTextBlock : TextBlock
 {
     /// <summary>
     /// The substring to highlight (case-insensitive, all occurrences). Null / empty / whitespace
     /// renders a single plain run with no highlight.
     /// </summary>
     public static readonly StyledProperty<string?> SearchQueryProperty =
-        AvaloniaProperty.Register<SafeSelectableTextBlock, string?>(nameof(SearchQuery));
+        AvaloniaProperty.Register<SafeTextBlock, string?>(nameof(SearchQuery));
 
     /// <summary>The background brush painted behind matched substrings.</summary>
     public static readonly StyledProperty<IBrush> HighlightBrushProperty =
-        AvaloniaProperty.Register<SafeSelectableTextBlock, IBrush>(
+        AvaloniaProperty.Register<SafeTextBlock, IBrush>(
             nameof(HighlightBrush),
             new SolidColorBrush(Color.Parse("#FFF59D")));
 
-    // The authoritative source text. TextBlock/InlineCollection mutate the Text property as a side
-    // effect of populating Inlines (see InlineCollection.Add + TextBlock.OnPropertyChanged), so we
-    // cannot read this.Text after the first rebuild — we track the source ourselves.
+    // The authoritative source text. See SafeSelectableTextBlock for why this.Text cannot be trusted
+    // once the inlines are populated.
     private string? sourceText;
     private bool rebuilding;
 
@@ -76,7 +69,6 @@ public class SafeSelectableTextBlock : SelectableTextBlock
         this.rebuilding = true;
         try
         {
-            // Clear Text first so InlineCollection.Add does not re-inject a Run from the old Text.
             if (!string.IsNullOrEmpty(this.Text))
                 this.SetCurrentValue(TextProperty, null);
 
