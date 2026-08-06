@@ -455,6 +455,12 @@ public sealed class SecretProviderTests
             return Task.CompletedTask;
         }
 
+        public Task DeleteAsync(string hash, CancellationToken ct)
+        {
+            this.records.Remove(hash);
+            return Task.CompletedTask;
+        }
+
         public Task<IReadOnlyDictionary<string, MemorizedSecret>> LoadAllAsync(CancellationToken ct)
         {
             this.LoadAllCount++;

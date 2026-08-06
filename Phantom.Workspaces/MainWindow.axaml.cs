@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
@@ -211,6 +212,27 @@ public partial class MainWindow : Window
         await scheduledTasksWindow.ShowDialog(this);
         this.openScheduledTasksWindow = null;
         scheduledTasksViewModel.Dispose();
+    }
+
+    private async void OnOpenCredentialManagerClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        var services = viewModel.ApplicationServices;
+        var managerViewModel = new CredentialManagerDialogViewModel(
+            services.AllowedSecretsStore,
+            services.PlatformSecretStore,
+            services.CredentialPicker,
+            new SecretMemoryEnumerator(services.AllowedSecretsStore, services.PlatformSecretStore));
+        await managerViewModel.LoadAsync();
+
+        var window = new CredentialManagerDialogWindow(managerViewModel);
+        await window.ShowDialog(this);
     }
 
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)

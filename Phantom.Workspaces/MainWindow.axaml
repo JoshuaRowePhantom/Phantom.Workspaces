@@ -91,6 +91,11 @@
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
                     </Button>
 
+                    <Button Classes="settings-gear top-right"
+                            Content="🤫"
+                            ToolTip.Tip="Memorized secrets and credentials"
+                            Click="OnOpenCredentialManagerClicked" />
+
                     <Panel VerticalAlignment="Stretch"
                            IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <Button x:Name="RunningAgentBrainButton"

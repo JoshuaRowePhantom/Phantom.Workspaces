@@ -86,6 +86,26 @@ public sealed class AllowedSecretsStore : IAllowedSecretsStore
     }
 
     /// <inheritdoc />
+    public async Task DeleteAsync(string hash, CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(hash);
+
+        await this.gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var map = await this.EnsureLoadedAsync(ct).ConfigureAwait(false);
+            if (map.Remove(hash))
+            {
+                await this.PersistAsync(map, ct).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            this.gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyDictionary<string, MemorizedSecret>> LoadAllAsync(CancellationToken ct)
     {
         await this.gate.WaitAsync(ct).ConfigureAwait(false);

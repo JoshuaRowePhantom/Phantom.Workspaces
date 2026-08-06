@@ -17,7 +17,9 @@ public sealed class ApplicationServices
         ILogDirectoryProvider? logDirectoryProvider = null,
         ConfigurationPersistenceService? configurationPersistence = null,
         ISecretProvider? secretProvider = null,
-        ICredentialPicker? credentialPicker = null)
+        ICredentialPicker? credentialPicker = null,
+        IAllowedSecretsStore? allowedSecretsStore = null,
+        IPlatformSecretStore? platformSecretStore = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -25,18 +27,22 @@ public sealed class ApplicationServices
         this.LoggerFactory = loggerFactory;
         this.LogDirectoryProvider = logDirectoryProvider;
         this.ConfigurationPersistence = configurationPersistence;
-        if (secretProvider is null || credentialPicker is null)
+        if (secretProvider is null || credentialPicker is null || allowedSecretsStore is null || platformSecretStore is null)
         {
             var defaults = CreateDefaultSecretServices();
             secretProvider ??= defaults.SecretProvider;
             credentialPicker ??= defaults.CredentialPicker;
+            allowedSecretsStore ??= defaults.AllowedSecretsStore;
+            platformSecretStore ??= defaults.PlatformSecretStore;
         }
 
         this.SecretProvider = secretProvider;
         this.CredentialPicker = credentialPicker;
+        this.AllowedSecretsStore = allowedSecretsStore;
+        this.PlatformSecretStore = platformSecretStore;
     }
 
-    internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker) CreateDefaultSecretServices()
+    internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
     {
         IPlatformSecretStore platformStore;
         if (OperatingSystem.IsWindows())
@@ -62,7 +68,7 @@ public sealed class ApplicationServices
 
         var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
         var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
-        return (secretProvider, credentialPicker);
+        return (secretProvider, credentialPicker, allowedSecretsStore, platformStore);
     }
 
     public IRunningAgentChatTable RunningAgentChats { get; }
@@ -93,6 +99,12 @@ public sealed class ApplicationServices
 
     /// <summary>The process-wide picker for choosing or creating platform credentials.</summary>
     public ICredentialPicker CredentialPicker { get; }
+
+    /// <summary>The process-wide store for remembered secret-use grants.</summary>
+    public IAllowedSecretsStore AllowedSecretsStore { get; }
+
+    /// <summary>The process-wide platform credential store.</summary>
+    public IPlatformSecretStore PlatformSecretStore { get; }
 
     /// <summary>
     /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>

@@ -65,6 +65,20 @@ public sealed class AllowedSecretsStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_RemovesRecordAndPersists()
+    {
+        var store = this.CreateStore();
+        await store.PutAsync("hash-1", SampleRecord(), CancellationToken.None);
+        await store.PutAsync("hash-2", SampleRecord("Other"), CancellationToken.None);
+
+        await store.DeleteAsync("hash-1", CancellationToken.None);
+
+        var reloaded = this.CreateStore();
+        Assert.Null(await reloaded.TryGetAsync("hash-1", CancellationToken.None));
+        Assert.NotNull(await reloaded.TryGetAsync("hash-2", CancellationToken.None));
+    }
+
+    [Fact]
     public async Task LoadAllAsync_EmptyFile_ReturnsEmptyMap()
     {
         var store = this.CreateStore();

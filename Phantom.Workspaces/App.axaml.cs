@@ -309,7 +309,9 @@ public partial class App : Application
                 logDirectoryProvider: logDirectoryProvider,
                 configurationPersistence: persistenceService,
                 secretProvider: secretProvider,
-                credentialPicker: credentialPicker);
+                credentialPicker: credentialPicker,
+                allowedSecretsStore: allowedSecretsStore,
+                platformSecretStore: platformStore);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             // #1172: register the canonical URL opener now that MainWindowViewModel exists

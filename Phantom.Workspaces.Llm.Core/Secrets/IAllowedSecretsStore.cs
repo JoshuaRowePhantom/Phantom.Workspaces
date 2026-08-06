@@ -16,6 +16,9 @@ public interface IAllowedSecretsStore
     /// <summary>Stores (creating or overwriting) the grant under <paramref name="hash"/>.</summary>
     Task PutAsync(string hash, MemorizedSecret record, CancellationToken ct);
 
+    /// <summary>Deletes the grant under <paramref name="hash"/> when present.</summary>
+    Task DeleteAsync(string hash, CancellationToken ct);
+
     /// <summary>Returns a snapshot of every stored hash → grant mapping.</summary>
     Task<IReadOnlyDictionary<string, MemorizedSecret>> LoadAllAsync(CancellationToken ct);
 }
