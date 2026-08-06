@@ -651,8 +651,7 @@
     <Style Selector="StackPanel.workspace-entity-card-content.workspace-entity-deleted">
         <Setter Property="Opacity" Value="0.4" />
     </Style>
-    <Style Selector="WrapPanel.workspace-entity-header-wrap">
-        <Setter Property="Orientation" Value="Horizontal" />
+    <Style Selector="controls|EntityCardHeaderPanel.workspace-entity-header-wrap">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="StackPanel.workspace-entity-header-row">
@@ -667,12 +666,6 @@
     </Style>
     <Style Selector=":is(TextBlock).workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
-    </Style>
-    <Style Selector="WrapPanel.workspace-entity-actions-row">
-        <Setter Property="Orientation" Value="Horizontal" />
-        <Setter Property="HorizontalAlignment" Value="Right" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="MinWidth" Value="100" />
     </Style>
     <Style Selector="Button.workspace-edit-indicator-button">
         <Setter Property="HorizontalAlignment" Value="Right" />

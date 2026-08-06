@@ -305,16 +305,17 @@ public sealed class MainWindowAxamlTests
         var dataTemplatesContent = ReadMainAppFile(Path.Combine("Templates", "WorkspaceDataTemplates.axaml"));
         Assert.DoesNotContain("entity-card-tree-type-bar", dataTemplatesContent, StringComparison.Ordinal);
 
-        // #1213 replaced the fixed three-column header Grid with a wrapping
-        // DockPanel + WrapPanel so the header reflows to a second line when the
-        // card is narrow. The type bar is docked to the left of that header
-        // DockPanel (so it stays constrained to the header, not the whole card),
-        // and the actions live in the wrapping actions row.
+        // #1264 replaced the fixed three-column header Grid / stock WrapPanel
+        // combination with a DockPanel + custom EntityCardHeaderPanel. The type
+        // bar is docked to the left of that header DockPanel (so it stays
+        // constrained to the header, not the whole card), and the custom panel
+        // owns the right-anchored action wrapping.
         var entityCardContent = ReadMainAppFile(Path.Combine("Controls", "EntityCardControl.axaml"));
         Assert.Contains("Classes=\"entity-card-tree-type-bar\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("DockPanel.Dock=\"Left\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("<sharedControls:EntityCardHeaderPanel", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("Classes=\"workspace-entity-header-wrap\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("Classes=\"workspace-entity-actions-row\"", entityCardContent, StringComparison.Ordinal);
+        Assert.Contains("ActionsMinWidth=\"100\"", entityCardContent, StringComparison.Ordinal);
         Assert.DoesNotContain("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
 
