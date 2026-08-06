@@ -337,6 +337,12 @@ public static class AgentFactory
             return new ChatClientResult(new TestProviderChatClient(), "Test Chat Client");
         }
 
+        model = await CreateClientModelWithResolvedSecretPlaceholdersAsync(
+            agent,
+            model,
+            services,
+            cancellationToken).ConfigureAwait(false);
+
         return provider switch
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
@@ -1062,6 +1068,96 @@ public static class AgentFactory
 
         var resolved = await resolver.ResolveApiKeyAsync(apiKeyValue, serverName, cancellationToken).ConfigureAwait(false);
         return body(resolved);
+    }
+
+    private static async Task<Model> CreateClientModelWithResolvedSecretPlaceholdersAsync(
+        AgentDefinition agent,
+        Model model,
+        AgentServices? services,
+        CancellationToken cancellationToken)
+    {
+        if (services?.SecretPlaceholderResolver is not ISecretPlaceholderResolver secretResolver
+            || model.Options?.AdditionalProperties is not { } additionalProperties)
+        {
+            return model;
+        }
+
+        var clonedAgent = AgentDefinition.FromJson(agent.ToJson())
+            ?? throw new InvalidOperationException("Failed to clone the agent definition for secret option resolution.");
+        var clonedModel = (clonedAgent as PromptAgent)?.Model
+            ?? throw new InvalidOperationException("Cloned agent definition does not specify a model.");
+        additionalProperties = clonedModel.Options?.AdditionalProperties;
+        if (additionalProperties is null)
+        {
+            return clonedModel;
+        }
+
+        foreach (var key in additionalProperties.Keys.ToArray())
+        {
+            additionalProperties[key] = (await ResolveModelOptionValueAsync(
+                additionalProperties[key],
+                secretResolver,
+                cancellationToken).ConfigureAwait(false))!;
+        }
+
+        return clonedModel;
+    }
+
+    private static async Task<object?> ResolveModelOptionValueAsync(
+        object? value,
+        ISecretPlaceholderResolver secretResolver,
+        CancellationToken cancellationToken)
+    {
+        if (value is string text)
+        {
+            return await ResolveModelOptionStringAsync(text, secretResolver, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (value is IDictionary<string, object> dictionary)
+        {
+            foreach (var key in dictionary.Keys.ToArray())
+            {
+                dictionary[key] = (await ResolveModelOptionValueAsync(
+                    dictionary[key],
+                    secretResolver,
+                    cancellationToken).ConfigureAwait(false))!;
+            }
+        }
+
+        return value;
+    }
+
+    private static async Task<string> ResolveModelOptionStringAsync(
+        string value,
+        ISecretPlaceholderResolver secretResolver,
+        CancellationToken cancellationToken)
+    {
+        var matches = System.Text.RegularExpressions.Regex.Matches(value, @"\$\{SECRET:[^}]+\}");
+        if (matches.Count == 0)
+        {
+            return value;
+        }
+
+        var builder = new System.Text.StringBuilder(value.Length);
+        var position = 0;
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            builder.Append(value, position, match.Index - position);
+            if (secretResolver.TryResolve(match.Value, out var retriever))
+            {
+                using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
+                builder.Append(SecureStringMarshal.Use(secure, static plain => plain));
+            }
+            else
+            {
+                builder.Append(match.Value);
+            }
+
+            position = match.Index + match.Length;
+        }
+
+        builder.Append(value, position, value.Length - position);
+        return builder.ToString();
     }
 
     internal static async Task<string> ResolveApiKeyAsync(
