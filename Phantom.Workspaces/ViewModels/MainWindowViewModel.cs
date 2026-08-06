@@ -135,6 +135,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
+        this.OpenCredentialManagerCommand = new RelayCommand(_ => this.OpenCredentialManagerRequested?.Invoke());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
             persistenceStoreCache: services.AgentPersistenceStoreCache);
@@ -232,6 +233,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand NavigateBackCommand { get; }
     public RelayCommand NavigateForwardCommand { get; }
     public RelayCommand DuplicateBrowserTabCommand { get; }
+
+    /// <summary>
+    /// Opens the credential/memorized-secrets manager dialog (#1267). Exposed as a command so the
+    /// 🤫 top-right button and any keyboard binding open the same dialog through one path; the
+    /// view raises the actual window via <see cref="OpenCredentialManagerRequested"/>.
+    /// </summary>
+    public RelayCommand OpenCredentialManagerCommand { get; }
+
+    /// <summary>Raised when <see cref="OpenCredentialManagerCommand"/> is invoked.</summary>
+    public event Action? OpenCredentialManagerRequested;
 
     /// <summary>
     /// Find (Ctrl-F) session over the active View's <see cref="ViewPopulationViewModel"/>. The population

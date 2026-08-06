@@ -104,6 +104,33 @@ public sealed class AllowedSecretsStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteAsync_UnknownHash_IsNoOp()
+    {
+        var store = this.CreateStore();
+        await store.PutAsync("hash-1", SampleRecord(), CancellationToken.None);
+        var before = await File.ReadAllTextAsync(this.filePath, CancellationToken.None);
+
+        await store.DeleteAsync("does-not-exist", CancellationToken.None);
+
+        // The backing file is left byte-for-byte unchanged and the existing record survives.
+        var after = await File.ReadAllTextAsync(this.filePath, CancellationToken.None);
+        Assert.Equal(before, after);
+
+        var reloaded = this.CreateStore();
+        Assert.NotNull(await reloaded.TryGetAsync("hash-1", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task DeleteAsync_UnknownHash_EmptyStore_DoesNotCreateFile()
+    {
+        var store = this.CreateStore();
+
+        await store.DeleteAsync("does-not-exist", CancellationToken.None);
+
+        Assert.False(File.Exists(this.filePath));
+    }
+
+    [Fact]
     public void Ctor_ConfigurationPathNull_UsesDefaultBesideConfigJson()
     {
         var store = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration { Path = null });

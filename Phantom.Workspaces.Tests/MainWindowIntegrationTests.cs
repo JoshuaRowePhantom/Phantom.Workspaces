@@ -27,9 +27,11 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Shell;
+using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Trust;
 using Phantom.Workspaces.ViewModels;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
@@ -248,6 +250,57 @@ public sealed class MainWindowIntegrationTests
 
     // Regression tests for issue #1169: a discoverable Save Workspace button must be present
     // in the TopRightBar (the earlier attempt in DockDataTemplates.axaml never rendered).
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindow_ShushButton_OpensCredentialManagerDialog()
+    {
+        // Issue #1267: clicking the 🤫 top-right button opens the credential-manager dialog. Wire
+        // hermetic secret services so LoadAsync never touches the real credential store / filesystem.
+        var tempAllowedPath = Path.Combine(
+            Path.GetTempPath(),
+            "Phantom.Workspaces.Tests",
+            Guid.NewGuid().ToString("N"),
+            "allowed-secrets.json");
+        var services = new ApplicationServices(
+            CreateTestRunningAgentChatTable(),
+            new AgentPersistenceStoreCache(),
+            credentialPicker: new NullCredentialPicker(),
+            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration { Path = tempAllowedPath }),
+            platformSecretStore: new NullPlatformSecretStore());
+
+        await using var viewModel = CreateTestMainWindowViewModel(applicationServices: services);
+        await viewModel.InitializeAsync();
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            ForceLayoutPass(window);
+
+            var shushButton = window.GetVisualDescendants()
+                .OfType<Button>()
+                .First(b => b.Content is string content && content == "🤫");
+
+            shushButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+
+            for (var i = 0; i < 20 && window.LastCredentialManagerDialog is null; i++)
+            {
+                await Dispatcher.UIThread.InvokeAsync(() => { });
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            var dialog = window.LastCredentialManagerDialog;
+            Assert.NotNull(dialog);
+            Assert.IsType<CredentialManagerDialogViewModel>(dialog!.DataContext);
+
+            dialog.Close();
+            Dispatcher.UIThread.RunJobs();
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
 
     private static Button? GetSaveWorkspaceButton(Window window) =>
         window.GetVisualDescendants()

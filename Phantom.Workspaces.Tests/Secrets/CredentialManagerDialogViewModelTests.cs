@@ -69,8 +69,118 @@ public sealed class CredentialManagerDialogViewModelTests
         Assert.Equal("Azure login (not yet implemented)", SecretSourceDisplay.GetLabel(new AzureLoginSecretSource()));
     }
 
+    [Fact]
+    public async Task IsSavedCredential_TrueForSavedCredential_FalseForGitHubLogin()
+    {
+        var allowed = new FakeAllowedSecretsStore(new Dictionary<string, MemorizedSecret>
+        {
+            ["h1"] = Record("Use A", new CredentialStoreSecretSource("Prod")),
+            ["h2"] = Record("Use B", new GitHubLoginSecretSource()),
+        });
+        var vm = Create(allowed, new FakePlatformSecretStore());
+
+        await vm.LoadAsync(TestContext.Current.CancellationToken);
+
+        var saved = Assert.Single(vm.CredentialGroups, group => group.IsSavedCredential);
+        Assert.Equal("Prod", saved.CredentialName);
+        Assert.NotNull(saved.EditCommand);
+
+        var gitHub = Assert.Single(vm.CredentialGroups, group => !group.IsSavedCredential);
+        Assert.Null(gitHub.CredentialName);
+        Assert.Null(gitHub.EditCommand);
+    }
+
+    [Fact]
+    public async Task EditSavedCredential_InvokesCredentialPicker()
+    {
+        var source = new CredentialStoreSecretSource("Prod");
+        var allowed = new FakeAllowedSecretsStore(new Dictionary<string, MemorizedSecret>
+        {
+            ["h1"] = Record("Use A", source),
+        });
+        var picker = new FakeCredentialPicker();
+        var vm = Create(allowed, new FakePlatformSecretStore(), picker);
+        await vm.LoadAsync(TestContext.Current.CancellationToken);
+
+        var group = Assert.Single(vm.CredentialGroups);
+        Assert.NotNull(group.EditCommand);
+        group.EditCommand!.Execute(null);
+        await group.EditCommand.LastExecutionTask!;
+
+        Assert.Equal("Prod", Assert.Single(picker.PickedNames));
+    }
+
+    [Fact]
+    public async Task HasSelection_IsFalse_WhenNothingChecked()
+    {
+        var allowed = new FakeAllowedSecretsStore(new Dictionary<string, MemorizedSecret>
+        {
+            ["h1"] = Record("Use A", new CredentialStoreSecretSource("Prod")),
+        });
+        var vm = Create(allowed, new FakePlatformSecretStore("Unused"));
+
+        await vm.LoadAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(vm.HasSelection);
+        Assert.False(vm.DeleteSelectedCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task HasSelection_IsTrue_WhenUsePlaceChecked()
+    {
+        var allowed = new FakeAllowedSecretsStore(new Dictionary<string, MemorizedSecret>
+        {
+            ["h1"] = Record("Use A", new CredentialStoreSecretSource("Prod")),
+        });
+        var vm = Create(allowed, new FakePlatformSecretStore());
+        await vm.LoadAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(vm.CredentialGroups).UsePlaces.Single().IsMarkedForDelete = true;
+
+        Assert.True(vm.HasSelection);
+        Assert.True(vm.DeleteSelectedCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task HasSelection_IsTrue_WhenUnusedCredentialChecked()
+    {
+        var allowed = new FakeAllowedSecretsStore(new Dictionary<string, MemorizedSecret>());
+        var vm = Create(allowed, new FakePlatformSecretStore("Unused"));
+        await vm.LoadAsync(TestContext.Current.CancellationToken);
+
+        Assert.Single(vm.UnusedSavedCredentials).IsMarkedForDelete = true;
+
+        Assert.True(vm.HasSelection);
+        Assert.True(vm.DeleteSelectedCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task DoesNotExposeSecretValues()
+    {
+        var allowed = new FakeAllowedSecretsStore(new Dictionary<string, MemorizedSecret>
+        {
+            ["h1"] = Record("Use A", new CredentialStoreSecretSource("Prod")),
+        });
+        var platform = new FakePlatformSecretStore("Prod", "Unused");
+        var vm = Create(allowed, platform);
+
+        await vm.LoadAsync(TestContext.Current.CancellationToken);
+        Assert.Single(vm.CredentialGroups).UsePlaces.Single().IsMarkedForDelete = true;
+        Assert.Single(vm.UnusedSavedCredentials).IsMarkedForDelete = true;
+        await vm.DeleteSelectedAsync(TestContext.Current.CancellationToken);
+
+        // The manager only enumerates value-free descriptors; it never reads secret material.
+        Assert.Empty(platform.ReadNames);
+    }
+
     private static CredentialManagerDialogViewModel Create(FakeAllowedSecretsStore allowed, FakePlatformSecretStore platform)
         => new(allowed, platform, new FakeCredentialPicker(), new SecretMemoryEnumerator(allowed, platform));
+
+    private static CredentialManagerDialogViewModel Create(
+        FakeAllowedSecretsStore allowed,
+        FakePlatformSecretStore platform,
+        FakeCredentialPicker picker)
+        => new(allowed, platform, picker, new SecretMemoryEnumerator(allowed, platform));
 
     private static MemorizedSecret Record(string display, SecretSource source)
         => new(new SecretUseMemory(SecretUseScope.AllUses, display, display), source, DateTimeOffset.UtcNow);
@@ -107,8 +217,13 @@ public sealed class CredentialManagerDialogViewModelTests
 
         public List<string> DeletedNames { get; } = [];
 
+        public List<string> ReadNames { get; } = [];
+
         public Task<SecureString?> ReadAsync(string name, CancellationToken ct)
-            => Task.FromResult<SecureString?>(null);
+        {
+            this.ReadNames.Add(name);
+            return Task.FromResult<SecureString?>(null);
+        }
 
         public Task WriteAsync(string name, SecureString value, CancellationToken ct)
             => Task.CompletedTask;
@@ -128,8 +243,13 @@ public sealed class CredentialManagerDialogViewModelTests
     {
         public bool IsSupported => true;
 
+        public List<string?> PickedNames { get; } = [];
+
         public Task<string?> PickAsync(string? initialCredentialName, CancellationToken ct)
-            => Task.FromResult<string?>(initialCredentialName);
+        {
+            this.PickedNames.Add(initialCredentialName);
+            return Task.FromResult<string?>(initialCredentialName);
+        }
     }
 }
 

@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         AddDockDataTemplates();
         this.DataContext = viewModel;
+        viewModel.OpenCredentialManagerRequested += this.OnOpenCredentialManagerRequested;
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
         this.AddHandler(InputElement.KeyUpEvent, this.OnPreviewKeyUp, RoutingStrategies.Tunnel);
         this.Deactivated += (_, _) =>
@@ -214,9 +215,25 @@ public partial class MainWindow : Window
         scheduledTasksViewModel.Dispose();
     }
 
-    private async void OnOpenCredentialManagerClicked(
+    private void OnOpenCredentialManagerClicked(
         object? sender,
         RoutedEventArgs e)
+    {
+        if (this.DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.OpenCredentialManagerCommand.Execute(null);
+        }
+    }
+
+    private async void OnOpenCredentialManagerRequested()
+    {
+        await this.OpenCredentialManagerAsync();
+    }
+
+    /// <summary>The most recently opened credential-manager dialog window (test observation, #1267).</summary>
+    internal CredentialManagerDialogWindow? LastCredentialManagerDialog { get; private set; }
+
+    private async Task OpenCredentialManagerAsync()
     {
         if (this.DataContext is not MainWindowViewModel viewModel)
         {
@@ -232,6 +249,7 @@ public partial class MainWindow : Window
         await managerViewModel.LoadAsync();
 
         var window = new CredentialManagerDialogWindow(managerViewModel);
+        this.LastCredentialManagerDialog = window;
         await window.ShowDialog(this);
     }
 
