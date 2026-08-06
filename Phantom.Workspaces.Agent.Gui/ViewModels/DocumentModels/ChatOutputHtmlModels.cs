@@ -179,6 +179,15 @@ internal sealed class ChatMessageHtmlModel
             jumpLinkHtml);
     }
 
+    /// <summary>
+    /// Returns only the concatenated binding HTML without the outer <c>&lt;div class="chat-message"&gt;</c>
+    /// frame or role header. Used when this message is a grouped member inside a
+    /// <see cref="ToolCallGroupHtmlModel"/> — the group itself owns the single message frame and header
+    /// (issue #1225).
+    /// </summary>
+    public string BuildGroupedMemberHtml()
+        => string.Concat(this.bindings.Select(b => b.Html));
+
     public void Update(AgentChatHistoryItem newSource)
     {
         if (ReferenceEquals(newSource, this.source))
@@ -452,9 +461,16 @@ internal sealed class ToolCallGroupHtmlModel
     /// <summary>
     /// Builds the complete group element for DOM insertion, with <paramref name="firstMessageHtml"/>
     /// (or the concatenated member HTML) pre-placed inside the body container.
+    /// The group owns the single <c>&lt;div class="chat-message assistant"&gt;</c> frame and header
+    /// so grouped members contribute only their binding HTML (issue #1225).
     /// </summary>
     public string BuildHtml(string firstMessageHtml)
-        => ChatOutputHtmlRenderer.RenderToolCallGroup(this.GroupId, this.DistinctToolNames, this.CallCount, firstMessageHtml);
+        => ChatOutputHtmlRenderer.RenderToolCallGroup(
+            this.GroupId,
+            this.DistinctToolNames,
+            this.CallCount,
+            firstMessageHtml,
+            this.members[0].Source.Timestamp);
 
     /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model)
@@ -464,7 +480,7 @@ internal sealed class ToolCallGroupHtmlModel
         this.sink.UpdateContent(
             ChatOutputHtmlRenderer.ToolGroupBodyId(this.GroupId),
             ChatOutputUpdateLocation.Append,
-            model.BuildHtml());
+            model.BuildGroupedMemberHtml());
         model.IsInserted = true;
 
         this.EmitSummaryUpdate();
@@ -787,7 +803,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 this.sink.UpdateContent(
                     groupablePredecessor.Model.ElementId,
                     ChatOutputUpdateLocation.Replace,
-                    group.BuildHtml(groupablePredecessor.Model.BuildHtml()));
+                    group.BuildHtml(groupablePredecessor.Model.BuildGroupedMemberHtml()));
                 groupablePredecessor.Group = group;
                 groupablePredecessor.IsTopLevelFirstGroupMember = true;
 
@@ -861,7 +877,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             this.sink,
             first.Model);
         first.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
-        var body = new StringBuilder(first.Model.BuildHtml());
+        var body = new StringBuilder(first.Model.BuildGroupedMemberHtml());
         first.Group = rebuiltGroup;
         first.IsTopLevelFirstGroupMember = true;
 
@@ -872,7 +888,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             rebuiltGroup.AppendItemStateOnly(member.Model);
             member.Group = rebuiltGroup;
             member.IsTopLevelFirstGroupMember = false;
-            body.Append(member.Model.BuildHtml());
+            body.Append(member.Model.BuildGroupedMemberHtml());
         }
 
         this.sink.UpdateContent(group.GroupId, ChatOutputUpdateLocation.Replace, rebuiltGroup.BuildHtml(body.ToString()));
@@ -1728,7 +1744,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 {
                     if (ReferenceEquals(plan.Slots[j].Group, group))
                     {
-                        body.Append(plan.Slots[j].Model.BuildHtml());
+                        body.Append(plan.Slots[j].Model.BuildGroupedMemberHtml());
                         plan.Slots[j].Model.IsInserted = true;
                     }
                     else if (plan.Slots[j].HasDomElement)

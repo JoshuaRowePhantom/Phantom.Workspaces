@@ -1280,12 +1280,17 @@ public sealed class ChatOutputHtmlModelTests
 
         var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, 2);
 
-        // The member message elements (with their per-content ids) remain intact inside the group
-        // body, so later EmitDiff operations can target the nested ids.
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(0)}\"", html);
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.MessageId(1)}\"", html);
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentsContainerId(ChatOutputHtmlRenderer.MessageId(0))}\"", html);
-        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentsContainerId(ChatOutputHtmlRenderer.MessageId(1))}\"", html);
+        // Grouped members no longer emit per-member <div class="chat-message"> frames (issue #1225).
+        // The group owns the single message frame; per-content binding element ids remain intact
+        // so later EmitDiff operations can still target them.
+        var groupId = ChatOutputHtmlRenderer.ToolGroupId(0);
+        Assert.Contains($"id=\"{groupId}\"", html);
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-message"));
+        Assert.Contains("tool_a", html);
+        Assert.Contains("tool_b", html);
+        // Per-content binding ids are still present for diff targeting.
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.MessageId(0), 0)}\"", html);
+        Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentId(ChatOutputHtmlRenderer.MessageId(1), 0)}\"", html);
     }
 
     [Fact]
@@ -3173,5 +3178,212 @@ public sealed class ChatOutputHtmlModelTests
             op.Location == ChatOutputUpdateLocation.Replace && op.Path.Contains("summary"));
         Assert.NotNull(summaryOp);
         Assert.Contains("data-tool-expand-toggle", summaryOp!.Content, StringComparison.Ordinal);
+    }
+
+    // ── Issue #1225: coalesce consecutive assistant tool-call messages into a single element ─
+
+    [Fact]
+    public void ConsecutiveAssistantToolCalls_CoalesceIntoSingleChatMessageElement()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            ToolCallMessage("tool_c", "c3"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Exactly one <div class="chat-message"> frame for the coalesced run.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-message"));
+        // One <details class="chat-tool-group"> inside.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        // Three tool-group-item sub-entries.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group-item").Count);
+    }
+
+    [Fact]
+    public void ConsecutiveAssistantToolCalls_EmitExactlyOneAssistantHeader()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            ToolCallMessage("tool_c", "c3"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-header"));
+        Assert.Contains(">assistant<", html);
+    }
+
+    [Fact]
+    public void CoalescedToolCalls_ListEachInvocationWithNameArgsAndResult()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("read_file", "c1"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "file contents")] },
+            ToolCallMessage("write_file", "c2"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c2", "ok")] },
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Each tool invocation present as its own chat-tool-group-item.
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group-item").Count);
+        Assert.Contains("read_file", html);
+        Assert.Contains("write_file", html);
+        // Results injected.
+        Assert.Contains("file contents", html);
+    }
+
+    [Fact]
+    public void ToolCallRun_InterruptedByAssistantText_StartsNewCoalescedRun()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            TextMessage(ChatRole.Assistant, "thinking..."),
+            ToolCallMessage("tool_c", "c3"),
+            ToolCallMessage("tool_d", "c4"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Two separate coalesced groups + one standalone text message = 3 chat-message frames.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-message").Count);
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\"").Count);
+        Assert.Contains("thinking...", html);
+    }
+
+    [Fact]
+    public void ToolCallRun_InterruptedByUserMessage_StartsNewCoalescedRun()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            TextMessage(ChatRole.User, "stop"),
+            ToolCallMessage("tool_c", "c3"),
+            ToolCallMessage("tool_d", "c4"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Two groups + one user message = 3 chat-message frames.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-message").Count);
+        Assert.Contains("chat-user-message", html);
+    }
+
+    [Fact]
+    public void ToolCallRun_WithInterleavedResultOnlyMessages_StaysCoalesced()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "result")] },
+            ToolCallMessage("tool_b", "c2"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c2", "result")] },
+            ToolCallMessage("tool_c", "c3"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // All three tool calls in one coalesced element.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-message"));
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        Assert.Contains("3 calls", html);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task LiveTransformer_ConsecutiveToolCalls_ArrivingIncrementally_CoalesceIntoSingleElement()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(ToolCallMessage("tool_b", "c2"));
+        history.Add(ToolCallMessage("tool_c", "c3"));
+
+        // The Replace op creates the group with a single chat-message frame.
+        var replaceOp = sink.ContentOperations.First(op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-tool-group"));
+        var messageMatches = System.Text.RegularExpressions.Regex.Matches(replaceOp.Content, "chat-message");
+        Assert.Single(messageMatches);
+        var headerMatches = System.Text.RegularExpressions.Regex.Matches(replaceOp.Content, "chat-header");
+        Assert.Single(headerMatches);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task LiveTransformer_ToolCallRun_LosingAllButOneMember_UngroupsToStandaloneMessage()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        // Remove one member, leaving a single survivor that must ungroup to standalone.
+        history.RemoveAt(1);
+
+        // The surviving member is re-emitted as a standalone chat-message with its own header.
+        var replaceOp = sink.ContentOperations.First(op =>
+            op.Location == ChatOutputUpdateLocation.Replace);
+        Assert.Contains("chat-message", replaceOp.Content);
+        Assert.Contains("chat-header", replaceOp.Content);
+        Assert.Contains("tool_a", replaceOp.Content);
+        // No group wrapper on the standalone message.
+        Assert.DoesNotContain("chat-tool-group-body", replaceOp.Content);
+    }
+
+    [Fact]
+    public void GenerateHistoryChunk_ConsecutiveToolCalls_EmitsSingleMessageFrameWithGroupBody()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "go"),
+            ToolCallMessage("tool_a", "c1"),
+            ToolCallMessage("tool_b", "c2"),
+            ToolCallMessage("tool_c", "c3"),
+            TextMessage(ChatRole.Assistant, "done"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // 3 chat-message frames total: user, coalesced group, assistant text.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-message").Count);
+        // Exactly one chat-tool-group inside the coalesced frame.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        // Group has 3 calls.
+        Assert.Contains("3 calls", html);
+        // Group header is "assistant".
+        var groupId = ChatOutputHtmlRenderer.ToolGroupId(1);
+        Assert.Contains($"id=\"{groupId}\"", html);
     }
 }

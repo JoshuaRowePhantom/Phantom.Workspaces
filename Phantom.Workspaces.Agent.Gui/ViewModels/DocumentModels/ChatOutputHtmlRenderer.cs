@@ -79,20 +79,29 @@ internal static class ChatOutputHtmlRenderer
 
     /// <summary>
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
-    /// tool-call messages. <paramref name="bodyContent"/> is the pre-rendered HTML of the first
-    /// message and is placed directly inside the body container.
+    /// tool-call messages, wrapped in a single <c>div.chat-message.chat-assistant-message</c> frame
+    /// with one role header (issue #1225). <paramref name="bodyContent"/> is the pre-rendered
+    /// grouped-member binding HTML placed directly inside the body container.
     /// <paramref name="toolNames"/> is the deduped, first-seen-order list of tool names in the group.
+    /// <paramref name="timestamp"/> is the first member's timestamp for the shared header.
     /// </summary>
-    public static string RenderToolCallGroup(string groupId, IReadOnlyList<string> toolNames, int callCount, string bodyContent)
+    public static string RenderToolCallGroup(string groupId, IReadOnlyList<string> toolNames, int callCount, string bodyContent, DateTimeOffset? timestamp = null)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
+        builder.Append("<div class=\"chat-message ").Append(RoleClass("assistant")).Append("\" id=\"")
+            .Append(groupId).Append("\" data-sticky-base-level=\"1\">");
+        builder.Append(RenderHeader(groupId, "assistant", timestamp));
+        builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(groupId)).Append("\">");
+        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(ToolGroupDetailsId(groupId)).Append("\">");
         builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount));
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
+        builder.Append("</div></div>");
         return builder.ToString();
     }
+
+    public static string ToolGroupDetailsId(string groupId) => $"{groupId}-details";
 
     /// <summary>
     /// Builds the <c>summary</c> element for a tool-call group. Always lists the unique tool names
