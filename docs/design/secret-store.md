@@ -37,9 +37,16 @@ Restated from the owner as unambiguous, testable statements.
    `${GITHUB_TOKEN}` env-var syntax used in
    `AgentFactory.ResolveApiKey` /
    `AgentDefinitionParameterSubstitutor.SubstitutePlaceholders`). At agent
-   materialization time these uses are discovered, each is turned into a
-   `SecretRequest`, and (subject to consent, §5) the values are injected in place
-   of the placeholders before the chat client / tools are constructed.
+   materialization time these uses are discovered by walking **every string
+   field** in the `AgentDefinition` tree (not just `Model.Options.AdditionalProperties`
+   and each `Tool.Options`), each is turned into a `SecretRequest`, and (subject
+   to consent, §5) each occurrence is rewritten in place to a per-materialization
+   **reference token** `${SECRET:<useHandle>}`. **Plaintext secret values are
+   never substituted into `AgentDefinition`.** The reference token is resolved
+   to a `SecureString` and marshaled to plaintext only at the last-second SDK
+   constructor seam inside `AgentFactory`, via `SecureStringMarshal.Use(...)`
+   (see §Non-functional §14 and §Detailed design → `ISecretPlaceholderResolver`
+   / `SecureStringMarshal`).
 
 4. **Consent dialog (`SecretUseDialog`).** When any requested secret is not
    already covered by a stored consent decision, a single modal dialog is shown
@@ -124,13 +131,22 @@ Restated from the owner as unambiguous, testable statements.
    is defined never to match any stored record.
 
 9. **Local per-user consent store.** Consent records
-   (hash → `MemorizedSecret`) are persisted to a JSON file
-   `%APPDATA%\Phantom.Workspaces\allowed-secrets.json`, alongside
-   `config.json` (see `ConfigurationPersistenceService.GetDefaultConfigurationPath`,
-   features\Phantom.Workspaces\Configuration\ConfigurationPersistenceService.cs:54).
-   The file contains **no secret values** — only the source descriptor
-   (`SecretSource`) and the memory descriptor (`SecretUseMemory`). This aligns
-   with the existing invariant documented at
+   (hash → `MemorizedSecret`) are persisted to a JSON file whose path is a
+   **configurable property** on `AllowedSecretsStoreConfiguration.Path`. When
+   unset it defaults to a location beside the primary `config.json`
+   (see `ConfigurationPersistenceService.GetDefaultConfigurationPath`,
+   features\Phantom.Workspaces\Configuration\ConfigurationPersistenceService.cs:54),
+   typically `%APPDATA%\Phantom.Workspaces\allowed-secrets.json`. Making the
+   path configurable lets a user who relocates their `config.json` carry their
+   consent decisions with it.
+   The file contains **only hashes and scope metadata — never any secret
+   values**. Concretely the on-disk records carry: the `hash` key (SHA-256 hex
+   of a `SecretUseScopePreimage`), `MemorizedSecret.Memory` (`Scope`,
+   `DisplayString`, `Hash`), `MemorizedSecret.Source` (`SecretSource` subclass
+   discriminator + credential *name* / display string), and
+   `MemorizedSecret.GrantedAt`. No `SecureString`-sourced material, no resolved
+   API token, and no placeholder-handle map (which is ephemeral, per-materialization)
+   is ever written. This aligns with the existing invariant documented at
    `ConfigurationPersistenceService.cs:15-17`: *"Only secret sources … are
    persisted; raw secret values are never written."*
 
@@ -183,9 +199,37 @@ Restated from the owner as unambiguous, testable statements.
 
 ### Non-functional / security invariants
 
-14. Secret values are held in `SecureString` at rest in memory, and only ever
-    materialized to a `string` inside `AgentFactory` at the moment they are handed
-    to a chat-client / tool constructor.
+14. **SecureString-until-last-second.** Secret values live exclusively in
+    `SecureString` from the moment they are read out of the platform secret
+    store through every intermediate model, scan result, provider result,
+    materializer result, and `AgentServices`-bag transit. They are marshaled to
+    a plaintext `string` for the FIRST and ONLY time inside
+    `SecureStringMarshal.Use(SecureString value, Func<string, T> body)` —
+    a helper (in `Phantom.Workspaces.Llm.Secrets`) that wraps
+    `Marshal.SecureStringToBSTR(value)` / `Marshal.PtrToStringBSTR(bstr)` /
+    `Marshal.ZeroFreeBSTR(bstr)` in a `try/finally` so the native BSTR buffer is
+    zero-freed even if `body` throws. `body` is expected to hand the plaintext
+    directly to an SDK constructor (e.g. `new OpenAIClient(plain, endpoint)`)
+    and MUST NOT stash the plaintext in any Phantom.Workspaces-owned field,
+    log line, or exception message.
+
+    Concrete no-plaintext-intermediate invariants derived from §14:
+    - `SecretRetriever.Secret` is `Func<CancellationToken, Task<SecureString>>`,
+      never `Task<string>`.
+    - `IPlatformSecretStore.ReadAsync` returns `Task<SecureString?>`, never
+      `Task<string?>`.
+    - `AllowedSecretsStore` persists only hashes and scope metadata (see §9).
+    - `SecretUsageScanner.RewritePlaceholders` substitutes
+      `${SECRET:<useHandle>}` reference tokens, never plaintext.
+    - `AgentDefinitionSecretMaterializer` returns
+      `MaterializedAgentDefinition(AgentDefinition, ISecretPlaceholderResolver)`;
+      the definition carries only reference tokens.
+    - Managed `string` cannot be reliably zeroed by user code (interning / GC).
+      `SecureStringMarshal.Use` guarantees the *native* BSTR is zero-freed and
+      bounds the plaintext lifetime to a single caller-supplied delegate; once
+      the SDK object holds its internal copy of the credential (unavoidable),
+      no Phantom.Workspaces-owned field, log, or exception carries the
+      plaintext.
 15. `allowed-secrets.json` is written with `FileMode.Create` and uses the same
     `JsonSerializerOptions` (camel-case, `WhenWritingNull`, indented,
     string-enum) as `ConfigurationPersistenceService`
@@ -618,7 +662,12 @@ New files:
 | `Phantom.Workspaces.Llm.Core\Secrets\SecretUseMemory.cs` | Data model (`DisplayString`, `Hash`). |
 | `Phantom.Workspaces.Llm.Core\Secrets\SecretUseScope.cs` | Enum of the seven scopes + `SecretUseScopePreimage` static helper. |
 | `Phantom.Workspaces.Llm.Core\Secrets\MemorizedSecret.cs` | Persisted record. |
-| `Phantom.Workspaces.Llm.Core\Secrets\SecretRetriever.cs` | Lazy `SecureString` accessor. |
+| `Phantom.Workspaces.Llm.Core\Secrets\SecretRetriever.cs` | Lazy `SecureString` accessor. Value is exposed exclusively as `SecureString`; conversion to plaintext is only via `SecureStringMarshal.Use`. |
+| `Phantom.Workspaces.Llm.Core\Secrets\ISecretPlaceholderResolver.cs` | Seam mapping `${SECRET:<useHandle>}` reference tokens (produced by `SecretUsageScanner.RewritePlaceholders`) back to a `SecretRetriever`. Per-materialization; never persisted. |
+| `Phantom.Workspaces.Llm.Core\Secrets\SecretPlaceholderResolver.cs` | Dictionary-backed concrete `ISecretPlaceholderResolver` populated by `AgentDefinitionSecretMaterializer`. |
+| `Phantom.Workspaces.Llm.Core\Secrets\SecureStringMarshal.cs` | Last-second helper: `Use<T>(SecureString, Func<string,T>)` wraps `SecureStringToBSTR`/`PtrToStringBSTR`/`ZeroFreeBSTR` in a `try/finally`. |
+| `Phantom.Workspaces.Llm.Core\Secrets\MaterializedAgentDefinition.cs` | Record bundling the rewritten `AgentDefinition` (containing reference tokens only) with the `ISecretPlaceholderResolver` that resolves them. |
+| `Phantom.Workspaces.Llm.Core\Secrets\AllowedSecretsStoreConfiguration.cs` | Small record carrying the (optional) configurable path to `allowed-secrets.json`. Defaults to a location beside `config.json`. |
 | `Phantom.Workspaces.Llm.Core\Secrets\RequestSecretsResult.cs` | Aggregate result. |
 | `Phantom.Workspaces.Llm.Core\Secrets\SecretRequestFailure.cs` | Failure record + enum. |
 | `Phantom.Workspaces.Llm.Core\Secrets\IPlatformSecretStore.cs` | Backend contract. |
@@ -651,8 +700,8 @@ Modified files:
 | `Phantom.Workspaces.Llm.Core\Phantom.Workspaces.Llm.Core.csproj` | Add `<PackageReference Include="Meziantou.Framework.Win32.CredentialManager" />` (centrally versioned). Guarded by Windows-only usage inside `WindowsCredentialManagerSecretStore`. |
 | `Phantom.Workspaces\Services\ApplicationServices.cs` | Add `ISecretProvider SecretProvider` property + ctor parameter. |
 | `Phantom.Workspaces\App.axaml.cs` (`OnFrameworkInitializationCompleted`, around the current construction of `ApplicationServices` — this is the same seam that today constructs `RunningAgentChatTable`, `AgentPersistenceStoreCache`, and `ConfigurationPersistenceService`) | Construct `WindowsCredentialManagerSecretStore` (or `NullPlatformSecretStore`), `AllowedSecretsStore`, `AvaloniaSecretUseDialogHost`, and `SecretProvider`; pass the provider into `ApplicationServices`. |
-| `Phantom.Workspaces.Llm.Core\AgentFactory.cs` (`CreateChatClientAsync`) | After `AgentDefinitionParameterSubstitutor.Substitute`, call `AgentDefinitionSecretMaterializer.MaterializeAsync(definition, manifest, secretProvider, cancellationToken)`; abort with a typed exception if it returns `null`. `services.SecretProvider` is passed in via `AgentServices`. |
-| `Phantom.Workspaces.Llm.Core\AgentServices` (existing service bag consumed by `AgentFactory`) | Add `ISecretProvider? SecretProvider` slot. |
+| `Phantom.Workspaces.Llm.Core\AgentFactory.cs` (`CreateChatClientAsync`) | After `AgentDefinitionParameterSubstitutor.Substitute`, call `AgentDefinitionSecretMaterializer.MaterializeAsync(definition, manifest, secretProvider, cancellationToken)`; abort with a typed exception if it returns `null`. Apply `services = services with { SecretPlaceholderResolver = materialized.Resolver }`. At each SDK-construction seam, when the API-key field is a `${SECRET:<useHandle>}` reference token registered with `services.SecretPlaceholderResolver`, resolve it to a `SecureString` and marshal to plaintext via `SecureStringMarshal.Use(...)` immediately before the SDK constructor. `services.SecretProvider` is passed in via `AgentServices`. |
+| `Phantom.Workspaces.Llm.Core\AgentServices` (existing service bag consumed by `AgentFactory`) | Add `ISecretProvider? SecretProvider` slot AND `ISecretPlaceholderResolver? SecretPlaceholderResolver` slot. The placeholder resolver is per-materialization; set inside `CreateChatClientAsync` after `MaterializeAsync`. |
 | `Phantom.Workspaces.Llm.Core\AgentFactory.CreateGitHubCopilotClient` (line ~761–800) | Where the token is currently fetched via `IApiKeyResolver` / `GitHubAuthTokenResolver`, if the manifest uses `${SECRET:...}` for the API key the resolved value is already in-place. Otherwise the existing GitHub-CLI path is used unchanged. |
 
 The GUI dialog and DI host live in `Phantom.Workspaces` (main GUI project),
@@ -849,6 +898,70 @@ pre-selects the recommended default when it renders a row.
 **Members:**
 - `string SecretName { get; }`
 - `Func<CancellationToken, Task<SecureString>> Secret { get; }` — lazy accessor.
+  **Values are only ever exposed as `SecureString`.** The single approved
+  conversion path to plaintext is `SecureStringMarshal.Use(...)` (see below);
+  callers MUST NOT stash the returned `SecureString` in a `string` field,
+  log it, print it, or persist it.
+
+#### `ISecretPlaceholderResolver`
+
+**Namespace:** `Phantom.Workspaces.Llm.Secrets`
+**Kind:** `interface`
+**Responsibility:** The seam that maps a per-materialization reference token
+`${SECRET:<useHandle>}` (produced by `SecretUsageScanner.RewritePlaceholders`)
+back to its `SecretRetriever`. Populated by
+`AgentDefinitionSecretMaterializer` at materialization time; carried on
+`AgentServices.SecretPlaceholderResolver`; consumed by the SDK-construction
+seams inside `AgentFactory` (see §Data flow step 6).
+
+**Members:**
+- `bool TryResolve(string placeholder, [NotNullWhen(true)] out SecretRetriever? retriever)`
+  — `true` iff `placeholder` is a `${SECRET:<useHandle>}` token registered
+  with this resolver during a still-in-scope materialization.
+
+Handle tokens are opaque (implementation: stringified `Guid`), per-materialization,
+never persisted, never logged, never reused. A stored allowed-secret record
+never carries a handle; the handle is only in-process for the lifetime of a
+single `MaterializedAgentDefinition` (see below).
+
+#### `SecureStringMarshal`
+
+**Namespace:** `Phantom.Workspaces.Llm.Secrets`
+**Kind:** `public static class`
+**Responsibility:** The one approved helper for converting a `SecureString`
+to a plaintext `string`. Bounds the plaintext lifetime to a caller-supplied
+delegate and zero-frees the native BSTR buffer in a `finally` block so a
+thrown exception still zeroes the buffer.
+
+**Members:**
+- `static T Use<T>(SecureString value, Func<string, T> body)`
+- `static Task<T> UseAsync<T>(SecureString value, Func<string, Task<T>> body)`
+
+**Implementation sketch:**
+
+```csharp
+public static T Use<T>(SecureString value, Func<string, T> body)
+{
+    IntPtr bstr = Marshal.SecureStringToBSTR(value);
+    try
+    {
+        var plain = Marshal.PtrToStringBSTR(bstr);
+        return body(plain);
+    }
+    finally
+    {
+        Marshal.ZeroFreeBSTR(bstr);
+    }
+}
+```
+
+**Documented limitation.** A managed `string` cannot be reliably zeroed by
+user code (interning, string dedup, GC copy). `SecureStringMarshal.Use`
+guarantees (a) the *native* BSTR buffer is zero-freed and (b) the plaintext
+lifetime is bounded to a single caller-supplied delegate that MUST hand the
+string directly to an SDK constructor and MUST NOT stash it. This is the
+last-second boundary invoked from `AgentFactory.CreateChatClientAsync`
+(§Data flow step 6).
 
 #### `SecretRequestFailure` + `enum SecretRequestFailureReason`
 
@@ -1004,12 +1117,17 @@ Returns `null` from `ReadAsync`, throws `PlatformNotSupportedException` from
 Selected as the fallback on macOS and Linux (until a future feature adds
 concrete backends — see §Future work).
 
-#### `IAllowedSecretsStore` / `AllowedSecretsStore`
+#### `IAllowedSecretsStore` / `AllowedSecretsStore` / `AllowedSecretsStoreConfiguration`
 
 **Namespace:** `Phantom.Workspaces.Llm.Secrets`
-**Responsibility:** Read/write the `hash → MemorizedSecret` JSON file at
-`%APPDATA%\Phantom.Workspaces\allowed-secrets.json`.
+**Responsibility:** Read/write the `hash → MemorizedSecret` JSON file whose
+path is a configurable property on `AllowedSecretsStoreConfiguration`. When
+unset the default is next to the primary `config.json`
+(`Path.Combine(dir(GetDefaultConfigurationPath()), "allowed-secrets.json")`) —
+typically `%APPDATA%\Phantom.Workspaces\allowed-secrets.json`.
+
 **Members:**
+- `AllowedSecretsStoreConfiguration.Path` — `string?` (null = default beside `config.json`).
 - `Task<MemorizedSecret?> TryGetAsync(string hash, CancellationToken ct);`
 - `Task PutAsync(string hash, MemorizedSecret record, CancellationToken ct);`
 - `Task<IReadOnlyDictionary<string, MemorizedSecret>> LoadAllAsync(CancellationToken ct);`
@@ -1017,6 +1135,12 @@ concrete backends — see §Future work).
 The JSON serializer options are **shared with** `ConfigurationPersistenceService`
 (features\Phantom.Workspaces\Configuration\ConfigurationPersistenceService.cs:20-26):
 camel-case, `WhenWritingNull`, indented, camel-case string-enum converter.
+
+**Persistence content invariant.** On-disk records contain ONLY: the `hash`
+key, `MemorizedSecret.Memory` (`Scope`, `DisplayString`, `Hash`),
+`MemorizedSecret.Source` (subclass discriminator + credential *name* / display
+string), and `MemorizedSecret.GrantedAt`. No `SecureString`-sourced material,
+no resolved API token, no placeholder-handle map is ever written (see §14).
 
 #### `CanonicalJson`
 
@@ -1029,25 +1153,44 @@ camel-case, `WhenWritingNull`, indented, camel-case string-enum converter.
 #### `SecretUsageScanner`
 
 **Namespace:** `Phantom.Workspaces.Llm.Secrets`
-**Responsibility:** Walk an `AgentDefinition` (`PromptAgent.Model.Options.AdditionalProperties`
-and every `Tool.Options` dictionary) collecting every string value that matches
-`${SECRET:Name}`. For each hit, record `(SecretName, JsonPath)`.
+**Responsibility:** Walk an `AgentDefinition` recursively and inspect **every
+string field** — not just `PromptAgent.Model.Options.AdditionalProperties`
+and each `Tool.Options`, but every string leaf in the definition tree
+(system prompts, tool sub-fields, arbitrary future string-bearing fields).
+For each hit, record `(SecretName, JsonPath)`. Implementation walks a
+`JsonElement` (or reflects over the object graph) and visits every
+`JsonValueKind.String` node.
+
 **Pattern:** `@"\$\{SECRET:([^}]+)\}"` — sibling to
 `AgentDefinitionParameterSubstitutor.SubstitutePlaceholders`
 (features\Phantom.Workspaces.Llm.Core\AgentDefinitionParameterSubstitutor.cs L133-143 per subagent report).
 
+Two syntactic forms share this pattern:
+
+| Form | Where it appears | Body |
+|---|---|---|
+| `${SECRET:<Name>}` | Author-written in manifests | Human-readable secret name (e.g. `GithubApiToken`). |
+| `${SECRET:<useHandle>}` | Machine-written by the scanner during materialization | Opaque per-materialization handle (stringified `Guid`). Round-tripped only inside this process's `ISecretPlaceholderResolver`. Never persisted. |
+
 **Members:**
 - `IReadOnlyList<SecretUsage> Scan(AgentDefinition definition);`
-- `void RewritePlaceholders(AgentDefinition definition, IReadOnlyDictionary<SecretUsage, string> resolvedValues);`
+- `void RewritePlaceholders(AgentDefinition definition, IReadOnlyDictionary<SecretUsage, string> usageToHandleToken);`
+  — **Substitutes reference tokens, never plaintext values.** Each
+  `${SECRET:<Name>}` is replaced with the caller-supplied handle-token string
+  `"${SECRET:<useHandle>}"`. No `SecureString` is awaited or marshaled during
+  the rewrite; the resolved `AgentDefinition` that flows to the rest of the
+  pipeline carries only opaque reference tokens.
 
-#### `AgentDefinitionSecretMaterializer`
+#### `AgentDefinitionSecretMaterializer` / `MaterializedAgentDefinition`
 
 **Namespace:** `Phantom.Workspaces.Llm.Secrets`
 **Responsibility:** The orchestrator (see §Data flow). Fail-closed: throws
-rather than silently dropping placeholders.
+rather than silently dropping placeholders. **Never substitutes plaintext
+into `AgentDefinition`.**
 
 **Members:**
-- `Task<AgentDefinition> MaterializeAsync(AgentManifest manifest, AgentDefinition definition, ISecretProvider secretProvider, CancellationToken ct);`
+- `sealed record MaterializedAgentDefinition(AgentDefinition Definition, ISecretPlaceholderResolver Resolver);`
+- `Task<MaterializedAgentDefinition> MaterializeAsync(AgentManifest manifest, AgentDefinition definition, ISecretProvider secretProvider, CancellationToken ct);`
   — never returns `null`. Throws:
   * `SecretMaterializationRefusedException` when the provider returns `null`
     (global refusal / policy denial).
@@ -1056,9 +1199,12 @@ rather than silently dropping placeholders.
     to a `${SECRET:...}` placeholder in the definition. The exception carries
     the full `IReadOnlyList<SecretRequestFailure>` so `AgentFactory` can
     surface an actionable error to the user (e.g. `"AWS login is not yet
-    implemented"`, `"Credential 'AwsProdKey' does not exist"`).
-  * On success, returns the definition with every `${SECRET:...}` placeholder
-    substituted with the retrieved value.
+    implemented"`, `"Credential 'AwsProdKey' does not exist"`). Exception
+    messages MUST NOT contain any secret value.
+  * On success, returns a `MaterializedAgentDefinition` whose `Definition`
+    has every `${SECRET:<Name>}` rewritten to `${SECRET:<useHandle>}`, and
+    whose `Resolver` maps each handle to the `SecretRetriever` from
+    `result.AcquiredSecrets`.
 
 The materializer uses `AgentManifestSecretUseMemoryFactory` internally to
 build the ordered candidate list for each usage; the manifest object never
@@ -1149,8 +1295,9 @@ The full end-to-end for one agent chat creation:
 
 3. **Scan for secret uses.** New call
    `AgentDefinitionSecretMaterializer.MaterializeAsync(manifest, definition, secretProvider, ct)`:
-   1. `SecretUsageScanner.Scan(definition)` returns a list of
-      `SecretUsage(SecretName, JsonPath)`.
+   1. `SecretUsageScanner.Scan(definition)` walks EVERY string field in the
+      definition tree recursively (not just Model/Tool `Options`) and returns
+      a list of `SecretUsage(SecretName, JsonPath)`.
    2. For each usage, call
       `AgentManifestSecretUseMemoryFactory.Build(manifest, secretName, useDisplayString)`
       which computes:
@@ -1194,7 +1341,8 @@ The full end-to-end for one agent chat creation:
       * `null` return from platform store → `SecretRequestFailure(Reason.DoesntExist)`.
    5. Return `new RequestSecretsResult(retrievers, failures)`.
 
-5. **Rewrite (fail-closed).** Back in `AgentDefinitionSecretMaterializer`:
+5. **Rewrite as reference tokens (fail-closed).** Back in
+   `AgentDefinitionSecretMaterializer`:
    * If `RequestSecretsAsync` returned `null` → throw
      `SecretMaterializationRefusedException`. `AgentFactory.CreateChatClientAsync`
      propagates this (surfaced to the user as a benign "operation cancelled" /
@@ -1205,16 +1353,49 @@ The full end-to-end for one agent chat creation:
      `AgentFactory.CreateChatClientAsync` propagates this so chat-client
      creation fails as a whole; the caller shows the user which secret failed
      and why (including "not yet implemented" for the AWS/Azure placeholders).
-   * Otherwise, for every `SecretUsage`, retrieve the matching `SecureString`,
-     marshal to `string` for the minimum window required, and call
-     `scanner.RewritePlaceholders` to replace the `${SECRET:Name}` substring
-     in the JSON path. Return the rewritten `AgentDefinition`.
+     Exception messages MUST NOT contain any secret value.
+   * Otherwise, for every `SecretUsage`, generate an opaque per-materialization
+     handle (`Guid.NewGuid().ToString("N")`) and register the handle in a
+     fresh `SecretPlaceholderResolver` mapping
+     `${SECRET:<useHandle>} → SecretRetriever` (the retriever from
+     `result.AcquiredSecrets` matched by `SecretName`). Build a
+     `usageToHandleToken` dictionary keyed by `SecretUsage`, valued by the
+     literal string `"${SECRET:" + useHandle + "}"`, and call
+     `scanner.RewritePlaceholders(definition, usageToHandleToken)` to
+     substitute reference tokens in place. **No `SecureString` is awaited or
+     marshaled to plaintext at this step.** Return
+     `new MaterializedAgentDefinition(definition, resolver)`.
 
-6. **Continue existing pipeline.** `AgentFactory.CreateChatClientAsync` proceeds
-   to `CreateGitHubCopilotClient` / `CreateGitHubModelsClient` /
-   `CreateOpenAiClient` / etc. Their existing `IApiKeyResolver` path
-   (features\Phantom.Workspaces.Llm.Core\EnvironmentApiKeyResolver.cs:14) now
-   sees a fully-resolved string and returns it unchanged.
+6. **Continue existing pipeline.** `AgentFactory.CreateChatClientAsync`
+   applies `services = services with { SecretPlaceholderResolver = materialized.Resolver }`,
+   then proceeds to `CreateGitHubCopilotClient` / `CreateGitHubModelsClient` /
+   `CreateOpenAiClient` / etc. At each SDK-construction seam that takes an
+   API key (currently the `IApiKeyResolver.ResolveApiKey` / `ResolveApiKeyAsync`
+   call sites — see features\Phantom.Workspaces.Llm.Core\AgentFactory.cs:207,
+   289, 403–439, 688), the seam is wrapped so that when the incoming string
+   is a `${SECRET:<useHandle>}` reference token registered with
+   `services.SecretPlaceholderResolver`, the value is fetched as `SecureString`
+   and marshaled to plaintext through `SecureStringMarshal.Use(...)`
+   immediately before the SDK constructor:
+
+   ```csharp
+   if (services.SecretPlaceholderResolver is not null
+       && services.SecretPlaceholderResolver.TryResolve(apiKeyField, out var retriever))
+   {
+       using var ss = await retriever!.Secret(ct);
+       return SecureStringMarshal.Use(ss, plain => new OpenAIClient(plain, endpoint));
+   }
+   // else legacy path — existing IApiKeyResolver behaviour is preserved.
+   ```
+
+   Plaintext exists ONLY inside the `body` delegate handed to
+   `SecureStringMarshal.Use`, which hands it straight to the SDK constructor;
+   the BSTR is zero-freed on return. Once the SDK client object holds its
+   internal copy (unavoidable — this is what the SDK is for), no
+   Phantom.Workspaces-owned field, log, or exception carries the plaintext.
+   The existing `IApiKeyResolver` path
+   (features\Phantom.Workspaces.Llm.Core\EnvironmentApiKeyResolver.cs:14)
+   is unchanged for non-`${SECRET:...}` inputs.
 
 ### Tests
 
