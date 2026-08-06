@@ -83,7 +83,9 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             }
 
             // No tunnel currently running — do not upsert a stale entity.
-            return WorkspaceToolExecutionResult.Success();
+            var noTunnelSummary = "VS Code tunnel discovery: no tunnel running.";
+            this.logger.LogInformation("{Summary}", noTunnelSummary);
+            return WorkspaceToolExecutionResult.Success() with { ResultContent = noTunnelSummary };
         }
 
         var entityName = this.BuildEntityName();
@@ -109,7 +111,12 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             },
             context.CancellationToken).ConfigureAwait(false);
 
-        return WorkspaceToolExecutionResult.Success();
+        var summary =
+            $"VS Code tunnel discovery: tunnel running "
+            + $"(Name={resolution.Status.TunnelName}, Url={resolution.Status.TunnelUrl}, "
+            + $"IsConnected={resolution.Status.IsConnected}).";
+        this.logger.LogInformation("{Summary}", summary);
+        return WorkspaceToolExecutionResult.Success() with { ResultContent = summary };
     }
 
     private EntityName BuildEntityName()
