@@ -1185,6 +1185,88 @@ public sealed class SharedStylesTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_ActionsRow_RightEdgeAlignsAcrossCards()
+    {
+        // Issue #1264: the user-visible outcome — action buttons form a consistent right-hand column
+        // across every card regardless of display-name width. Two stacked headers with very different
+        // display-name lengths must right-align their actions to the same edge at a shared viewport.
+        var styles = ReadSharedStylesText();
+        var injected = string.Concat(HeaderWrapStyleSelectors.Select(s => ExtractStyle(styles, s)));
+        var xaml = $$"""
+            <Window xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls">
+              <Window.Styles>
+                {{injected}}
+              </Window.Styles>
+              <StackPanel>
+                <controls:EntityCardHeaderPanel Classes="workspace-entity-header-wrap"
+                                                ActionsMinWidth="100" HorizontalAlignment="Stretch">
+                  <StackPanel Classes="workspace-entity-header-row" MinWidth="100" Margin="0,0,12,0">
+                    <TextBlock Classes="workspace-entity-title" Text="short" />
+                  </StackPanel>
+                  <Border Name="ActionA" Width="90" Height="24" />
+                </controls:EntityCardHeaderPanel>
+                <controls:EntityCardHeaderPanel Classes="workspace-entity-header-wrap"
+                                                ActionsMinWidth="100" HorizontalAlignment="Stretch">
+                  <StackPanel Classes="workspace-entity-header-row" MinWidth="100" Margin="0,0,12,0">
+                    <TextBlock Classes="workspace-entity-title"
+                               Text="a considerably longer system-defined display name that differs" />
+                  </StackPanel>
+                  <Border Name="ActionB" Width="90" Height="24" />
+                </controls:EntityCardHeaderPanel>
+              </StackPanel>
+            </Window>
+            """;
+        var window = (Window)AvaloniaRuntimeXamlLoader.Load(xaml);
+        window.SizeToContent = SizeToContent.Manual;
+        window.Width = 800;
+        window.Height = 400;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var actionA = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "ActionA");
+            var actionB = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "ActionB");
+
+            Assert.Equal(actionA.Bounds.Right, actionB.Bounds.Right, precision: 1);
+            Assert.Equal(800, actionA.Bounds.Right, precision: 1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_DisplayName_WrapsWithinRemainingSpaceWhenNarrow()
+    {
+        // Issue #1264: at a narrow viewport the title actually reflows onto multiple lines within
+        // the space that remains beside the right-anchored first-row action — a behavioural check,
+        // not merely TextWrapping=Wrap.
+        var (window, _, headerRow, title, action) = LayoutEntityCardHeader(width: 240, height: 400);
+        try
+        {
+            Assert.True(
+                title.TextLayout.TextLines.Count >= 2,
+                $"Expected the title to wrap; got {title.TextLayout.TextLines.Count} line(s).");
+
+            // The display column must not overlap the first-row action, and every rendered title line
+            // fits within the display column's width (PanelWidth − FirstRowActionsWidth).
+            Assert.True(
+                headerRow.Bounds.Right <= action.Bounds.X + 0.5,
+                $"Display column (right={headerRow.Bounds.Right}) must not overlap the action (X={action.Bounds.X}).");
+            Assert.True(
+                title.Bounds.Width <= headerRow.Bounds.Width + 0.5,
+                $"Title width ({title.Bounds.Width}) must stay within the display column ({headerRow.Bounds.Width}).");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardTitleTextBlock_TextWrapping_IsWrap()
     {
         // The header-row title TextBlock resolves TextWrapping=Wrap (word-level wrapping), not
