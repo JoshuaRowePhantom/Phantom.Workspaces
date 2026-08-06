@@ -43,8 +43,8 @@
                                 <DataTemplate>
                                     <Button Content="{Binding Glyph}"
                                             ToolTip.Tip="{Binding Tooltip}"
-                                             Classes="workspace-entity-badge-button"
-                                             Classes.workspace-entity-badge-active="{Binding IsActive}"
+                                             Classes="entity-card-action-button"
+                                             Classes.highlighted="{Binding IsActive}"
                                             Command="{Binding $parent[ItemsControl].DataContext.ToggleInterestCommand}"
                                             CommandParameter="{Binding}"
                                             Tapped="OnInteractiveChildTapped" />
@@ -72,7 +72,7 @@
                         </ItemsControl>
                         <Button Content="{Binding EditModeGlyph}"
                                 ToolTip.Tip="Toggle edit mode"
-                                Classes="workspace-edit-indicator-button"
+                                Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
@@ -89,7 +89,7 @@
                                     <Button Content="{Binding Shortcut.Label}"
                                             ToolTip.Tip="{Binding Shortcut.HoverText}"
                                             IsEnabled="{Binding IsEnabled}"
-                                            Classes="workspace-entity-shortcut-button"
+                                            Classes="entity-card-action-button"
                                             Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"
                                             CommandParameter="{Binding}"
                                             Tapped="OnInteractiveChildTapped" />
@@ -97,17 +97,17 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <Button Content="{Binding JsonButtonText}"
-                                Classes="workspace-edit-action-button"
+                                Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowJsonButton}"
                                 Command="{Binding ToggleJsonViewCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                         <Button Content="💾"
-                                  Classes="workspace-edit-action-button"
+                                  Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowEditActions}"
                                 Command="{Binding SaveEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                         <Button Content="✖"
-                                 Classes="workspace-entity-shortcut-button"
+                                 Classes="entity-card-action-button"
                                  IsVisible="{Binding ShowEditActions}"
                                  Command="{Binding DiscardEditModeCommand}"
                                  Tapped="OnInteractiveChildTapped" />
@@ -129,6 +129,7 @@
                            Classes.workspace-validation-error="{Binding Validation.HasError}" />
     </StackPanel>
 </UserControl>
+
 
 
 

@@ -667,6 +667,43 @@
     <Style Selector=":is(TextBlock).workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
     </Style>
+    <Style Selector="Button.entity-card-action-button">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Button.entity-card-action-button.highlighted">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="#60406040" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="#A0A060A0" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card:focus-within Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:pointerover Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:focus-within Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
     <Style Selector="Button.workspace-edit-indicator-button">
         <Setter Property="HorizontalAlignment" Value="Right" />
         <Setter Property="MinWidth" Value="28" />

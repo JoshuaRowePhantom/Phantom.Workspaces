@@ -1027,6 +1027,32 @@ public sealed class SharedStylesTests
         Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", wrap, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void EntityCardActionButton_Style_SetsUniformFootprint()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button");
+
+        Assert.Contains("<Setter Property=\"Width\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Height\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Margin\" Value=\"0\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Background\" Value=\"Transparent\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"0\" />", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_ActionButtons_UseSharedActionButtonClass()
+    {
+        var card = ReadEntityCardControlText();
+
+        Assert.Contains("Classes=\"entity-card-action-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-entity-shortcut-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-edit-indicator-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-edit-action-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-entity-badge-button\"", card, StringComparison.Ordinal);
+    }
+
     // Issue #1213 — behavioural/rendering coverage for the header wrap layout. These render the
     // shipped header styles (extracted verbatim from SharedStyles.axaml) around a header structure
     // that mirrors EntityCardControl.axaml, then run layout at narrow/wide widths and assert the
