@@ -1618,25 +1618,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
         // returns an empty array; no assistant placeholder is added here (that is handled by the
         // caller on the full snapshot).
-        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
-        {
-            if (updates.Length == 0)
-            {
-                return [];
-            }
-
-            var chatResponseUpdates = updates.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
-            var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
-
-            return chatResponse.Messages
-                .Select(message => new AgentChatHistoryItem
-                {
-                    Role = message.Role,
-                    Contents = message.Contents.ToArray(),
-                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? timeProvider.GetUtcNow(),
-                })
-                .ToArray();
-        }
+        private static Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
+            => Task.FromResult(AgentResponseUpdateCoalescer.Coalesce(updates, timeProvider));
 
         /// <summary>
         /// For each position where the new item is structurally identical to the cached previous
