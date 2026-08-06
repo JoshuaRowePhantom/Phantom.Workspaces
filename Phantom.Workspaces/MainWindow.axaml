@@ -220,6 +220,11 @@
                           Classes="entity-card-tree entity-card-tree-entity entity-card-tree-sticky"
                           HorizontalAlignment="Stretch"
                           ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
+                    <TreeView.Styles>
+                        <Style Selector="TreeViewItem" x:DataType="vm:ViewEntityViewModel">
+                            <Setter Property="IsVisible" Value="{Binding IsVisible}"/>
+                        </Style>
+                    </TreeView.Styles>
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
                                           ItemsSource="{Binding Children}">

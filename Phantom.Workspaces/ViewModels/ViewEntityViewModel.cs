@@ -112,6 +112,43 @@ public sealed class ViewEntityViewModel : ViewModelBase
 
     public EntityListNodeViewModel EntityCardNode => this.entityCardNode;
 
+    private bool isVisible = true;
+
+    public bool IsVisible
+    {
+        get => this.isVisible;
+        private set => this.SetProperty(ref this.isVisible, value);
+    }
+
+    /// <summary>
+    /// Bottom-up (post-order) recompute of <see cref="IsVisible"/> against the current toggle.
+    /// Reads per-node match state from <c>this.EntityCardNode.Card.Matches</c> (the shared spine
+    /// defined by #1257). Returns this node's post-recompute IsVisible so the caller can OR it up.
+    /// </summary>
+    internal bool RecomputeVisibility(bool hideUnmatched)
+    {
+        var selfMatches = this.EntityCardNode.Card.Matches;
+
+        var anyChildVisible = false;
+        foreach (var child in this.Children)
+        {
+            if (child.RecomputeVisibility(hideUnmatched))
+            {
+                anyChildVisible = true;
+            }
+        }
+
+        var visible = !hideUnmatched || selfMatches || anyChildVisible;
+        this.IsVisible = visible;
+
+        if (hideUnmatched && anyChildVisible && !selfMatches)
+        {
+            this.IsExpanded = true;
+        }
+
+        return visible;
+    }
+
     public bool HasShortcuts => this.entityCardNode.Card.HasShortcuts;
 
     public IBrush? ParentColorBrush

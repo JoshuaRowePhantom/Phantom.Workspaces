@@ -650,4 +650,306 @@ public sealed class FindViewModelTests
         // The property name "outer" appears only as a key, not as a value.
         Assert.False(JsonValueMatcher.MatchesJsonValues(doc.RootElement, "outer"));
     }
+
+    // -------------------- #1256: Generic-view find/hide-unmatched via ViewPopulationViewModel --------------------
+
+    private static MainWindowViewModel CreateMainWindowViewModel() =>
+        new MainWindowViewModel(new UnknownRepositorySource());
+
+    private static ViewEntityViewModel CreateViewEntity(
+        MainWindowViewModel mwvm,
+        string displayName,
+        string entityType = "entity",
+        IReadOnlyCollection<EntityFieldEditorViewModel>? fieldEditors = null,
+        bool isExpanded = true)
+    {
+        var entityId = Guid.NewGuid();
+        var fieldEditorsJson = string.Empty;
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId.ToString()),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+            Data = JsonDocument.Parse($$"""{"display-name":{"default":"{{displayName}}"},"entity-types":["entity","{{entityType}}"],"names":[["{{displayName}}"]]}""").RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        var entity = new SubscribedEntityViewModel(snapshot, deleteEntityAsync: _ => Task.CompletedTask);
+        var vm = new ViewEntityViewModel(
+            entity,
+            mwvm,
+            new ShortcutManager(),
+            indentLevel: 0,
+            isExpanded: isExpanded,
+            fieldEditorFactory: fieldEditors is not null ? null : null);
+        if (fieldEditors is not null)
+        {
+            vm.EntityCardNode.Card.SetFieldEditors(fieldEditors);
+        }
+        return vm;
+    }
+
+    private static ViewPopulationViewModel BuildPopulation(params ViewEntityViewModel[] roots)
+    {
+        var pop = new ViewPopulationViewModel();
+        foreach (var root in roots)
+        {
+            pop.Entities.Add(root);
+            pop.RootEntities.Add(root);
+            AddDescendantsToEntities(pop, root);
+        }
+        return pop;
+    }
+
+    private static void AddDescendantsToEntities(ViewPopulationViewModel pop, ViewEntityViewModel parent)
+    {
+        foreach (var child in parent.Children)
+        {
+            pop.Entities.Add(child);
+            AddDescendantsToEntities(pop, child);
+        }
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QuerySet_FansOutSearchQueryToEveryCard()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var b = CreateViewEntity(mwvm, "banana");
+        var pop = BuildPopulation(a, b);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.Query = "ap";
+
+        Assert.Equal("ap", a.EntityCardNode.Card.SearchQuery);
+        Assert.Equal("ap", b.EntityCardNode.Card.SearchQuery);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_QueryCleared_ClearsSearchQueryOnEveryCard()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var b = CreateViewEntity(mwvm, "banana");
+        var pop = BuildPopulation(a, b);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.Query = "ap";
+        Assert.Equal("ap", a.EntityCardNode.Card.SearchQuery);
+
+        find.Query = string.Empty;
+
+        Assert.Null(a.EntityCardNode.Card.SearchQuery);
+        Assert.Null(b.EntityCardNode.Card.SearchQuery);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledWithQuery_HidesUnmatchedLeaf()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var matching = CreateViewEntity(mwvm, "matchme");
+        var unrelated = CreateViewEntity(mwvm, "unrelated");
+        var pop = BuildPopulation(matching, unrelated);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "matchme";
+
+        Assert.False(unrelated.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledWithQuery_KeepsMatchingNodeVisible()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var matching = CreateViewEntity(mwvm, "matchme");
+        var unrelated = CreateViewEntity(mwvm, "unrelated");
+        var pop = BuildPopulation(matching, unrelated);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "matchme";
+
+        Assert.True(matching.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledWithQuery_KeepsAncestorsOfMatchVisible()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var parent = CreateViewEntity(mwvm, "group", entityType: "folder");
+        var matching = CreateViewEntity(mwvm, "matchme");
+        var unrelated = CreateViewEntity(mwvm, "unrelated");
+        parent.AddChild(matching);
+        parent.AddChild(unrelated);
+        var pop = BuildPopulation(parent);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "matchme";
+
+        Assert.True(parent.IsVisible);
+        Assert.True(matching.IsVisible);
+        Assert.False(unrelated.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledWithQuery_MatchOnPropertyValueOnly_KeepsNodeVisible()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var fields = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("propname", "secretval")
+        };
+        var node = CreateViewEntity(mwvm, "noname", entityType: "generic", fieldEditors: fields);
+        var pop = BuildPopulation(node);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "secretval";
+
+        Assert.True(node.EntityCardNode.Card.Matches);
+        Assert.True(node.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledWithQuery_MatchOnPropertyNameOnly_HidesNode()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var fields = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("mypropname", "othervalue")
+        };
+        var node = CreateViewEntity(mwvm, "noname", entityType: "generic", fieldEditors: fields);
+        var pop = BuildPopulation(node);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "mypropname";
+
+        Assert.False(node.EntityCardNode.Card.Matches);
+        Assert.False(node.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedDisabled_KeepsAllVisibleEvenWithQuery()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var b = CreateViewEntity(mwvm, "banana");
+        var pop = BuildPopulation(a, b);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = false;
+        find.Query = "apple";
+
+        Assert.True(a.IsVisible);
+        Assert.True(b.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedToggledOff_RestoresAllVisibility()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var b = CreateViewEntity(mwvm, "banana");
+        var pop = BuildPopulation(a, b);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "apple";
+        Assert.False(b.IsVisible);
+
+        find.HideUnmatched = false;
+
+        Assert.True(a.IsVisible);
+        Assert.True(b.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledThenQueryChanged_ReFilters()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var b = CreateViewEntity(mwvm, "banana");
+        var pop = BuildPopulation(a, b);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "apple";
+        Assert.True(a.IsVisible);
+        Assert.False(b.IsVisible);
+
+        find.Query = "banana";
+        Assert.False(a.IsVisible);
+        Assert.True(b.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledWithQuery_AutoExpandsAncestorsOfMatch()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var parent = CreateViewEntity(mwvm, "group", entityType: "folder", isExpanded: false);
+        var matching = CreateViewEntity(mwvm, "matchme");
+        parent.AddChild(matching);
+        var pop = BuildPopulation(parent);
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "matchme";
+
+        Assert.True(parent.IsExpanded);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_HideUnmatchedEnabledAndSelectedHidden_NormalizesSelection()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var b = CreateViewEntity(mwvm, "banana");
+        var pop = BuildPopulation(a, b);
+        b.EntityCardNode.Card.IsSelected = true;
+        var find = new FindViewModel(pop);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "apple";
+
+        Assert.False(b.IsVisible);
+        Assert.False(b.EntityCardNode.Card.IsSelected);
+    }
+
+    [AvaloniaFact]
+    public void FindViewModel_CurrentViewPopulationSwapped_ReAppliesFindStateToNewPopulation()
+    {
+        var mwvm = CreateMainWindowViewModel();
+        var a = CreateViewEntity(mwvm, "apple");
+        var pop1 = BuildPopulation(a);
+        var find = new FindViewModel(pop1);
+
+        find.Open();
+        find.HideUnmatched = true;
+        find.Query = "cherry";
+
+        // Now swap to a new population.
+        var b = CreateViewEntity(mwvm, "cherry");
+        var c = CreateViewEntity(mwvm, "grape");
+        var pop2 = BuildPopulation(b, c);
+        find.SetPopulation(pop2);
+
+        Assert.True(b.IsVisible);
+        Assert.False(c.IsVisible);
+        Assert.Equal("cherry", b.EntityCardNode.Card.SearchQuery);
+        Assert.Equal("cherry", c.EntityCardNode.Card.SearchQuery);
+    }
 }

@@ -234,12 +234,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand DuplicateBrowserTabCommand { get; }
 
     /// <summary>
-    /// Find (Ctrl-F) session over the active View's <see cref="EntityListViewModel"/>. The list is
-    /// replaced when the active tab changes; the same instance persists so bindings stay live.
+    /// Find (Ctrl-F) session over the active View's <see cref="ViewPopulationViewModel"/>. The population
+    /// is replaced when the active tab changes; the same FindViewModel instance persists so bindings stay live.
     /// </summary>
-    public FindViewModel Find => this.find ??= new FindViewModel(this.findList);
+    public FindViewModel Find => this.find ??= new FindViewModel(this.currentPopulation);
     private FindViewModel? find;
-    private readonly EntityListViewModel findList = new();
 
     public NotificationsViewModel? NotificationsViewModel
     {
@@ -466,6 +465,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             this.RaisePropertyChanged(nameof(this.HasStickyParentContext));
+            this.find?.SetPopulation(value);
         }
     }
 
@@ -1710,6 +1710,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
         }
+
+        population.ReapplyFindAfterAssembly();
     }
 
     private async Task AddHierarchyNodeAsync(
