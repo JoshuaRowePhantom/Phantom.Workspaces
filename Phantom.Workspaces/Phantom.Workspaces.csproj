@@ -61,6 +61,7 @@
     <PackageReference Include="Microsoft.DevTunnels.Connections" />
     <PackageReference Include="Microsoft.DevTunnels.Contracts" />
     <PackageReference Include="Microsoft.DevTunnels.Management" />
+    <PackageReference Include="Meziantou.Framework.Win32.CredentialManager" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching\Phantom.Dock.Avalonia.TabSwitching.csproj" />
