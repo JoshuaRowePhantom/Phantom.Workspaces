@@ -1,4 +1,5 @@
 using System.Security;
+using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Secrets;
 
@@ -190,6 +191,50 @@ public sealed class SecretProviderTests
 
         Assert.IsType<SecureString>(secret);
         secret.Dispose();
+    }
+
+    [Fact]
+    public async Task RequestSecretsAsync_GitHubLoginSource_RealResolverReadsEnvironmentTokenAsSecureString()
+    {
+        const string token = "github-env-token";
+        var previous = Environment.GetEnvironmentVariable(GitHubAuthTokenResolver.GitHubTokenEnvironmentVariable);
+        Environment.SetEnvironmentVariable(GitHubAuthTokenResolver.GitHubTokenEnvironmentVariable, token);
+        try
+        {
+            var request = Request("GithubApiToken", defaultSource: new GitHubLoginSecretSource(), sources: [new GitHubLoginSecretSource()]);
+            var allowedStore = new FakeAllowedSecretsStore();
+            var platformStore = new FakePlatformSecretStore();
+            var dialog = new TestDialogHost
+            {
+                Result = Accepted(Row(request, request.Memories[0], request.CandidateSecretSources[0])),
+            };
+            var provider = new SecretProvider(allowedStore, platformStore, dialog);
+
+            var result = await provider.RequestSecretsAsync([request], CancellationToken.None);
+            using var secret = await Assert.Single(result!.AcquiredSecrets).Secret(CancellationToken.None);
+
+            Assert.Equal(token, FromSecureString(secret));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(GitHubAuthTokenResolver.GitHubTokenEnvironmentVariable, previous);
+        }
+    }
+
+    [Fact]
+    public async Task RequestSecretsAsync_GitHubLoginSource_RetrieverThrowsWhenResolverReturnsNull_WithoutLeakingPlaintext()
+    {
+        const string secretValue = "secret-that-must-not-appear";
+        var request = Request("GithubApiToken", defaultSource: new GitHubLoginSecretSource(), sources: [new GitHubLoginSecretSource()]);
+        var provider = CreateProvider(gitHubTokenResolver: _ => Task.FromResult<string?>(null));
+        provider.Dialog.Result = Accepted(Row(request, request.Memories[0], request.CandidateSecretSources[0]));
+
+        var result = await provider.RequestSecretsAsync([request], CancellationToken.None);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Assert.Single(result!.AcquiredSecrets).Secret(CancellationToken.None));
+
+        Assert.DoesNotContain(secretValue, ex.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("token value", ex.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

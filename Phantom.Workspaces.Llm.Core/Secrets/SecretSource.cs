@@ -14,7 +14,12 @@ namespace Phantom.Workspaces.Llm.Secrets;
 [JsonDerivedType(typeof(CredentialStoreSecretSource), "credential-store")]
 public abstract record SecretSource;
 
-/// <summary>The secret is obtained from the current GitHub login.</summary>
+/// <summary>
+/// The secret is obtained from the current GitHub login. For new manifests,
+/// <c>${SECRET:GithubApiToken}</c> with this source is the preferred GitHub token form: the
+/// resolver yields a <see cref="System.Security.SecureString"/> retriever so plaintext is only
+/// marshalled at the last-second SDK construction seam.
+/// </summary>
 public sealed record GitHubLoginSecretSource : SecretSource;
 
 /// <summary>The secret is obtained from the current AWS login.</summary>
