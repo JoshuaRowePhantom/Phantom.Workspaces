@@ -5,6 +5,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
+using System.Security;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -13,6 +15,95 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public class AgentFactoryTests
 {
+    [Fact]
+    public async Task CreateAgentChatAsync_SecretInManifest_CallsSecretProviderAndKeepsDefinitionTokenized()
+    {
+        const string plaintext = "super-secret-token";
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot");
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentManifest = manifest,
+            AgentServices = new AgentServices { SecretProvider = provider, ChatClientOverride = new DeterministicTestChatClient() },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        Assert.Equal(1, provider.CallCount);
+        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
+        Assert.StartsWith("${SECRET:", connection.ApiKey, StringComparison.Ordinal);
+        Assert.NotEqual("${SECRET:GitHubToken}", connection.ApiKey);
+        Assert.DoesNotContain(plaintext, chat.AgentDefinition!.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_SecretProviderRefuses_ThrowsSecretMaterializationRefusedException()
+    {
+        var provider = new FakeSecretProvider { ReturnNull = true };
+        var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot");
+
+        var exception = await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() =>
+            AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentManifest = manifest,
+                AgentServices = new AgentServices { SecretProvider = provider },
+                PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+            }));
+
+        Assert.DoesNotContain("super-secret-token", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateChatClientAsync_SecretReferenceToken_ResolvesAtSdkSeamAndDisposesSecureString()
+    {
+        const string token = "${SECRET:handle}";
+        const string plaintext = "byok-secret-token";
+        var secure = ToSecureString(plaintext, makeReadOnly: false);
+        var resolver = new SecretPlaceholderResolver();
+        resolver.Register(token, new SecretRetriever
+        {
+            SecretName = "ApiKey",
+            Secret = _ => Task.FromResult(secure),
+        });
+        var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
+        {
+          "kind": "prompt",
+          "name": "byok-agent",
+          "model": {
+            "id": "gpt-test",
+            "provider": "openai",
+            "connection": { "kind": "key", "endpoint": "http://localhost:12345/", "apiKey": "{{token}}" }
+          }
+        }
+        """);
+
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { SecretPlaceholderResolver = resolver });
+
+        var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Equal(plaintext, client.ByokOptions!.ApiKey);
+        Assert.Throws<ObjectDisposedException>(() => secure.AppendChar('x'));
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_NoSecretProvider_LeavesLegacySecretPlaceholderPathIntact()
+    {
+        var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot", modelId: "test");
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentManifest = manifest,
+            AgentServices = new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
+        Assert.Equal("${SECRET:GitHubToken}", connection.ApiKey);
+    }
     [Fact]
     public void ConfigureChatOptions_SetsInstructionsAndAdditionalInstructions()
     {
@@ -1513,4 +1604,64 @@ public class AgentFactoryTests
         var result = AgentFactory.CreateChatClient(definition);
         Assert.IsType<CopilotSubAgentChatClient>(result.ChatClient);
     }
-}
+
+    private static AgentManifest LoadSecretManifest(string apiKey, string provider, string modelId = "gpt-test")
+        => AgentManifestLoader.LoadManifestFromJson($$"""
+        {
+          "name": "secret-agent",
+          "displayName": "Secret Agent",
+          "metadata": { "entity-id": "11111111-1111-1111-1111-111111111111" },
+          "template": {
+            "kind": "prompt",
+            "name": "secret-agent",
+            "model": {
+              "id": "{{modelId}}",
+              "provider": "{{provider}}",
+              "connection": { "kind": "key", "apiKey": "{{apiKey}}" }
+            }
+          }
+        }
+        """);
+
+    private static SecureString ToSecureString(string value, bool makeReadOnly = true)
+    {
+        var secure = new SecureString();
+        foreach (var ch in value)
+        {
+            secure.AppendChar(ch);
+        }
+
+        if (makeReadOnly)
+        {
+            secure.MakeReadOnly();
+        }
+
+        return secure;
+    }
+
+    private sealed class FakeSecretProvider : ISecretProvider
+    {
+        public int CallCount { get; private set; }
+        public bool ReturnNull { get; set; }
+        public Dictionary<string, SecureString> Secrets { get; } = [];
+
+        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
+        {
+            this.CallCount++;
+            if (this.ReturnNull)
+            {
+                return Task.FromResult<RequestSecretsResult?>(null);
+            }
+
+            var retrievers = requests
+                .Where(request => this.Secrets.ContainsKey(request.SecretName))
+                .Select(request => new SecretRetriever
+                {
+                    SecretName = request.SecretName,
+                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
+                })
+                .ToArray();
+
+            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
+        }
+    }}

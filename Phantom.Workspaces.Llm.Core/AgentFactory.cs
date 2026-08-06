@@ -8,6 +8,7 @@ using OllamaSharp;
 using OpenAI;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
 using System.Collections;
 using System.Collections.Generic;
 using System.ClientModel;
@@ -339,7 +340,7 @@ public static class AgentFactory
         return provider switch
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
-            "github-models" => WrapWithMiddleware(await CreateGitHubModelsClientAsync(model, resolver, cancellationToken).ConfigureAwait(false), queueManager),
+            "github-models" => WrapWithMiddleware(await CreateGitHubModelsClientAsync(model, services, resolver, cancellationToken).ConfigureAwait(false), queueManager),
             "github-copilot" => await CreateGitHubCopilotResultAsync(model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "openai" or "azure-openai" => await CreateGitHubCopilotByokResultAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
@@ -537,14 +538,27 @@ public static class AgentFactory
         var services = createAgentChatRequest.AgentServices;
         ValidateServices(services);
 
-        var requestedAgentDefinition = createAgentChatRequest.AgentManifest is { } agentManifest
+        var ct = createAgentChatRequest.CancellationToken;
+        var agentManifest = createAgentChatRequest.AgentManifest;
+        var requestedAgentDefinition = agentManifest is not null
             ? await CreateAgentDefinitionAsync(new CreateAgentDefinitionRequest
                 {
                     AgentManifest = agentManifest,
                     Parameters = createAgentChatRequest.Parameters,
                     ToolResourceFactory = createAgentChatRequest.ToolResourceFactory ?? services?.ToolResourceFactory,
-                })
+                }, ct).ConfigureAwait(false)
             : createAgentChatRequest.AgentDefinition;
+
+        if (agentManifest is not null
+            && requestedAgentDefinition is not null
+            && services?.SecretProvider is ISecretProvider secretProvider)
+        {
+            var materialized = await new AgentDefinitionSecretMaterializer()
+                .MaterializeAsync(agentManifest, requestedAgentDefinition, secretProvider, ct)
+                .ConfigureAwait(false);
+            requestedAgentDefinition = materialized.Definition;
+            services = services with { SecretPlaceholderResolver = materialized.Resolver };
+        }
 
         await EnforceTrustProfileAsync(
             requestedAgentDefinition,
@@ -552,8 +566,6 @@ public static class AgentFactory
 
         IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
             ?? new InMemoryAgentPersistenceStore();
-
-        var ct = createAgentChatRequest.CancellationToken;
 
         // Try to extract chat-history tool from agent definition (skipped if override is provided)
         if (services?.AgentPersistenceStoreOverride is null
@@ -737,7 +749,7 @@ public static class AgentFactory
     }
 
     private static async Task<(IChatClient client, string displayName)> CreateGitHubModelsClientAsync(
-        Model model, IApiKeyResolver resolver, CancellationToken cancellationToken)
+        Model model, AgentServices? services, IApiKeyResolver resolver, CancellationToken cancellationToken)
     {
         var connection = model.Connection as ApiKeyConnection
             ?? throw new InvalidOperationException("GitHub provider requires an ApiKeyConnection.");
@@ -746,29 +758,37 @@ public static class AgentFactory
             ? GitHubModelsInferenceEndpoint
             : connection.Endpoint;
 
-        var apiKey = await resolver.ResolveApiKeyAsync(connection.ApiKey, "github-models", cancellationToken).ConfigureAwait(false);
         var modelId = model.Id
             ?? throw new InvalidOperationException("GitHub provider requires a model id.");
 
-        try
-        {
-            var openAiClient = new OpenAIClient(
-                new ApiKeyCredential(apiKey),
-                new OpenAIClientOptions
+        return await WithRequiredApiKeyForSdkAsync(
+            services,
+            resolver,
+            connection.ApiKey,
+            "github-models",
+            cancellationToken,
+            apiKey =>
+            {
+                try
                 {
-                    Endpoint = new Uri(endpoint, UriKind.Absolute),
-                });
+                    var openAiClient = new OpenAIClient(
+                        new ApiKeyCredential(apiKey),
+                        new OpenAIClientOptions
+                        {
+                            Endpoint = new Uri(endpoint, UriKind.Absolute),
+                        });
 
-            IChatClient client = openAiClient.GetChatClient(modelId).AsIChatClient();
-            var displayName = $"GitHub Models ({modelId} at {endpoint})";
-            return (client, displayName);
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException(
-                $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
-                ex);
-        }
+                    IChatClient client = openAiClient.GetChatClient(modelId).AsIChatClient();
+                    var displayName = $"GitHub Models ({modelId} at {endpoint})";
+                    return (client, displayName);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        $"Failed to create GitHub Models client for model '{modelId}' at '{endpoint}': {ex.Message}",
+                        ex);
+                }
+            }).ConfigureAwait(false);
     }
 
     // Creates the built-in GitHub Copilot client. The factory resolves only model.Connection here
@@ -894,26 +914,35 @@ public static class AgentFactory
                 "openai", model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false);
         }
 
-        var gitHubToken = model.Connection switch
+        if (model.Connection is ApiKeyConnection apiKeyConn && !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey))
         {
-            ApiKeyConnection apiKeyConn when !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey)
-                => await resolver.ResolveApiKeyAsync(apiKeyConn.ApiKey, "github-copilot", cancellationToken).ConfigureAwait(false),
-            _ => null,
-        };
-        var displayName = $"GitHub Copilot ({modelId})";
+            return await WithOptionalApiKeyForSdkAsync(
+                services,
+                resolver,
+                apiKeyConn.ApiKey,
+                "github-copilot",
+                cancellationToken,
+                CreateClient).ConfigureAwait(false);
+        }
 
-        var client = new CopilotSdkChatClient(
-            modelId,
-            displayName,
-            gitHubToken,
-            services?.LoggerFactory,
-            queueManager: queueManager,
-            modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry,
-            accountUpsertService: services?.AccountUpsertService,
-            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+        return CreateClient(null);
 
-        return (client, displayName);
+        (IChatClient client, string displayName) CreateClient(string? gitHubToken)
+        {
+            var displayName = $"GitHub Copilot ({modelId})";
+            var client = new CopilotSdkChatClient(
+                modelId,
+                displayName,
+                gitHubToken,
+                services?.LoggerFactory,
+                queueManager: queueManager,
+                modelOptions: model.Options,
+                subAgentChatRegistry: subAgentChatRegistry,
+                accountUpsertService: services?.AccountUpsertService,
+                slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+
+            return (client, displayName);
+        }
     }
 
     private static async Task<(IChatClient client, string displayName)> CreateGitHubCopilotByokClientAsync(
@@ -937,31 +966,39 @@ public static class AgentFactory
             throw new InvalidOperationException($"The {provider} provider requires a connection endpoint.");
         }
 
-        var resolvedApiKey = string.IsNullOrWhiteSpace(conn.ApiKey)
-            ? null
-            : await resolver.ResolveApiKeyAsync(conn.ApiKey, provider, cancellationToken).ConfigureAwait(false);
+        return string.IsNullOrWhiteSpace(conn.ApiKey)
+            ? CreateClient(null)
+            : await WithOptionalApiKeyForSdkAsync(
+                services,
+                resolver,
+                conn.ApiKey,
+                provider,
+                cancellationToken,
+                CreateClient).ConfigureAwait(false);
 
-        var byokOptions = new CopilotByokOptions
+        (IChatClient client, string displayName) CreateClient(string? resolvedApiKey)
         {
-            Provider = provider,
-            BaseUrl = endpoint,
-            ApiKey = resolvedApiKey,
-        };
+            var byokOptions = new CopilotByokOptions
+            {
+                Provider = provider,
+                BaseUrl = endpoint,
+                ApiKey = resolvedApiKey,
+            };
 
-        var displayName = $"GitHub Copilot BYOK ({modelId} @ {endpoint})";
+            var displayName = $"GitHub Copilot BYOK ({modelId} @ {endpoint})";
+            var client = new CopilotSdkChatClient(
+                modelId,
+                displayName,
+                gitHubToken: null,
+                services?.LoggerFactory,
+                byokOptions: byokOptions,
+                queueManager: queueManager,
+                modelOptions: model.Options,
+                subAgentChatRegistry: subAgentChatRegistry,
+                slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
 
-        var client = new CopilotSdkChatClient(
-            modelId,
-            displayName,
-            gitHubToken: null,
-            services?.LoggerFactory,
-            byokOptions: byokOptions,
-            queueManager: queueManager,
-            modelOptions: model.Options,
-            subAgentChatRegistry: subAgentChatRegistry,
-            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
-
-        return (client, displayName);
+            return (client, displayName);
+        }
     }
 
     private static void ValidateServices(AgentServices? services)
@@ -990,6 +1027,41 @@ public static class AgentFactory
             throw new InvalidOperationException(
                 "The agent's trust profile does not permit local execution on this client instance.");
         }
+    }
+
+    private static Task<T> WithRequiredApiKeyForSdkAsync<T>(
+        AgentServices? services,
+        IApiKeyResolver resolver,
+        string? apiKeyValue,
+        string? serverName,
+        CancellationToken cancellationToken,
+        Func<string, T> body)
+        => WithOptionalApiKeyForSdkAsync(
+            services,
+            resolver,
+            apiKeyValue,
+            serverName,
+            cancellationToken,
+            apiKey => body(apiKey ?? throw new InvalidOperationException($"API key for '{serverName ?? "unknown"}' is required.")));
+
+    private static async Task<T> WithOptionalApiKeyForSdkAsync<T>(
+        AgentServices? services,
+        IApiKeyResolver resolver,
+        string? apiKeyValue,
+        string? serverName,
+        CancellationToken cancellationToken,
+        Func<string?, T> body)
+    {
+        if (apiKeyValue is not null
+            && services?.SecretPlaceholderResolver is ISecretPlaceholderResolver secretResolver
+            && secretResolver.TryResolve(apiKeyValue, out var retriever))
+        {
+            using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
+            return SecureStringMarshal.Use(secure, body);
+        }
+
+        var resolved = await resolver.ResolveApiKeyAsync(apiKeyValue, serverName, cancellationToken).ConfigureAwait(false);
+        return body(resolved);
     }
 
     internal static async Task<string> ResolveApiKeyAsync(
