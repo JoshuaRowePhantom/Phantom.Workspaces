@@ -417,9 +417,9 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                 }
                 """);
 
-            // Mirrors App.axaml.cs / AgentSessionShortcutContext: the production GUI's
-            // AgentServices never sets RunningAgentChatFactory, so sub-agents take the
-            // ISubAgentChatRegistry path.
+            // Mirrors App.axaml.cs / AgentSessionShortcutContext: callers leave
+            // RunningAgentChatFactory unset, but AgentChatFactory.WithSelfAsFactory injects
+            // itself unconditionally, so sub-agents use the factory/table path.
             var parentServices = new AgentServices
             {
                 LoggerFactory = loggerFactory,
@@ -461,9 +461,12 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                             $"Timed out waiting for the sub-agent slot. Diagnostics:\n{Diagnostics(server, chat, loggerFactory)}");
                     }
 
-                    // Registry-path scheduler assertion (issue #913): the child chat inherits the
-                    // parent's UI foreground scheduler instead of a private fallback pair.
-                    var childChat = (AgentChat)chat.SubAgents.Single();
+                    // Factory/table-path scheduler assertion (issue #913): the child chat inherits
+                    // the parent's UI foreground scheduler instead of a private fallback pair.
+                    var subAgent = (SubAgent)chat.SubAgents.Single();
+                    var childChat = subAgent.AgentChat
+                        ?? throw new InvalidOperationException(
+                            "Eager SubAgent wrapper should carry its AgentChat on the live tool-call path.");
                     Assert.Same(chat.ForegroundSchedulerForTesting, childChat.ForegroundSchedulerForTesting);
 
                     var slot = viewModel.SubAgentsContainer.Slots.Single();
