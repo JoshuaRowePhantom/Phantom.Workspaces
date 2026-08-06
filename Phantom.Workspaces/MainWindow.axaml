@@ -217,7 +217,7 @@
                      wrapper makes the tree's own inner scroller the single scroller (vertical
                      scroll plus below-minimum horizontal scroll), and wraps content to the viewport. -->
                 <TreeView Grid.Row="1"
-                          Classes="entity-card-tree entity-card-tree-entity"
+                          Classes="entity-card-tree entity-card-tree-entity entity-card-tree-sticky"
                           HorizontalAlignment="Stretch"
                           ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
                     <TreeView.ItemTemplate>

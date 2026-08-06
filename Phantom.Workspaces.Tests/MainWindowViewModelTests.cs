@@ -392,6 +392,22 @@ public sealed class MainWindowViewModelTests
         Assert.Contains("Classes=\"pane-collapser\"", agentChatXaml, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void MainWindowView_GenericViewTree_HasEntityCardTreeStickyClass()
+    {
+        // #1233: the generic schema-driven view TreeView (which renders views/git-workspaces) must
+        // opt into sticky scroll by carrying the entity-card-tree-sticky class alongside
+        // entity-card-tree and entity-card-tree-entity, so parent headers pin while scrolling.
+        var repoRoot = FindRepositoryRoot();
+        var mainWindowXaml = File.ReadAllText(Path.Combine(
+            repoRoot.FullName, "Phantom.Workspaces", "MainWindow.axaml"));
+
+        Assert.Contains(
+            "Classes=\"entity-card-tree entity-card-tree-entity entity-card-tree-sticky\"",
+            mainWindowXaml,
+            StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // #1172 — TryFocusExistingWebTabAsync (same-workspace, same-URL dedup for IUrlOpener).
     // ---------------------------------------------------------------------------------------------

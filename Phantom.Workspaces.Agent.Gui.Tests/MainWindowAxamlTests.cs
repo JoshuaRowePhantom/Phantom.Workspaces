@@ -337,7 +337,7 @@ public sealed class MainWindowAxamlTests
         var mainWindowContent = ReadMainAppFile("MainWindow.axaml");
 
         Assert.Contains(
-            "Classes=\"entity-card-tree entity-card-tree-entity\"",
+            "Classes=\"entity-card-tree entity-card-tree-entity entity-card-tree-sticky\"",
             mainWindowContent,
             StringComparison.Ordinal);
         Assert.DoesNotContain(
