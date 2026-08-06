@@ -72,6 +72,7 @@ public sealed class AgentSessionShortcutContext
             // Hand the resolved host context to the running-agent / Copilot path so
             // get_current_session is populated there too (issue #1236).
             CurrentSessionContext = currentSessionContext,
+            SecretProvider = mainWindowViewModel.ApplicationServices.SecretProvider,
         };
     }
 

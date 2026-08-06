@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Updates;
 
@@ -13,7 +15,9 @@ public sealed class ApplicationServices
         IUpdateController? updateController = null,
         ILoggerFactory? loggerFactory = null,
         ILogDirectoryProvider? logDirectoryProvider = null,
-        ConfigurationPersistenceService? configurationPersistence = null)
+        ConfigurationPersistenceService? configurationPersistence = null,
+        ISecretProvider? secretProvider = null,
+        ICredentialPicker? credentialPicker = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -21,6 +25,44 @@ public sealed class ApplicationServices
         this.LoggerFactory = loggerFactory;
         this.LogDirectoryProvider = logDirectoryProvider;
         this.ConfigurationPersistence = configurationPersistence;
+        if (secretProvider is null || credentialPicker is null)
+        {
+            var defaults = CreateDefaultSecretServices();
+            secretProvider ??= defaults.SecretProvider;
+            credentialPicker ??= defaults.CredentialPicker;
+        }
+
+        this.SecretProvider = secretProvider;
+        this.CredentialPicker = credentialPicker;
+    }
+
+    internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker) CreateDefaultSecretServices()
+    {
+        IPlatformSecretStore platformStore;
+        if (OperatingSystem.IsWindows())
+        {
+            platformStore = new WindowsCredentialManagerSecretStore();
+        }
+        else
+        {
+            platformStore = new NullPlatformSecretStore();
+        }
+
+        var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
+        var hwndProvider = new AvaloniaHwndProvider();
+        ICredentialPicker credentialPicker;
+        if (OperatingSystem.IsWindows())
+        {
+            credentialPicker = new WindowsCredentialPicker(hwndProvider);
+        }
+        else
+        {
+            credentialPicker = new NullCredentialPicker();
+        }
+
+        var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
+        var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
+        return (secretProvider, credentialPicker);
     }
 
     public IRunningAgentChatTable RunningAgentChats { get; }
@@ -44,6 +86,13 @@ public sealed class ApplicationServices
     /// the pinned AI-usage metric selection). Null in tests that don't exercise persistence.
     /// </summary>
     public ConfigurationPersistenceService? ConfigurationPersistence { get; }
+
+
+    /// <summary>The process-wide provider that materializes manifest secret requests.</summary>
+    public ISecretProvider SecretProvider { get; }
+
+    /// <summary>The process-wide picker for choosing or creating platform credentials.</summary>
+    public ICredentialPicker CredentialPicker { get; }
 
     /// <summary>
     /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>
