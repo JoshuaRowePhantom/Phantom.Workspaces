@@ -75,3 +75,44 @@ Persists conversation history to an external store. Backed by `AgentPersistenceS
 | `data-directory` | Host-side data directory for Docker volume (container mode only). |
 | `host-port` | Host port mapping for Docker (default 27017, container mode only). |
 | `connection-string` | Full MongoDB connection string (external mode only). |
+
+---
+
+## `github-cli-builtin-tools` (GitHub Copilot SDK tool policy)
+
+Provider-specific configuration for `github-copilot` and `github-copilot-subagent` agents. It controls the Copilot CLI SDK default tools through `SessionConfig.AvailableTools`, `SessionConfig.ExcludedTools`, and optional `CopilotClientOptions.Mode`.
+
+```jsonc
+{
+  "kind": "github-cli-builtin-tools",
+  "client-mode": "copilot-cli",
+  "available-tools": { "tools": ["read_agent", "list_agents"] },
+  "excluded-tools": { "tools": ["shell"] }
+}
+```
+
+`available-tools` and `excluded-tools` use the same selector:
+
+| Selector | Meaning |
+|---|---|
+| `{ "tools": ["*"] }` | All built-ins (`available-tools` leaves the SDK default unset; `excluded-tools` maps to `builtin:*`). |
+| `{ "tools": ["tool1", "tool2"] }` | Named tools. Bare names are rewritten to `builtin:<name>`. |
+| `{ "isolated": true }` | The SDK isolated built-in set. |
+| `{ "tools": [] }` | Empty built-in set. In `available-tools`, custom and MCP tools are still allowed. |
+
+Source-qualified entries (`builtin:*`, `mcp:*`, `custom:*`, or `mcp:<wire-name>`) pass through unchanged. For `available-tools`, bare-only lists auto-append `custom:*` and `mcp:*` so restricting built-ins does not hide the agent's own custom/MCP tools. If any entry is source-qualified, the list is treated as an exact global allow-list and nothing is auto-appended.
+
+Common recipes:
+
+```jsonc
+// Disable all Copilot built-ins; keep custom and MCP tools.
+{ "kind": "github-cli-builtin-tools", "excluded-tools": { "tools": ["*"] } }
+
+// Strict MCP-only agent; custom and built-in tools are unavailable.
+{ "kind": "github-cli-builtin-tools", "available-tools": { "tools": ["mcp:*"] } }
+
+// Locked-down MCP-only client mode.
+{ "kind": "github-cli-builtin-tools", "client-mode": "empty", "available-tools": { "tools": ["mcp:*"] } }
+```
+
+`client-mode` is `"copilot-cli"` by default. `"empty"` selects the SDK Empty client mode; it requires a present, non-empty `available-tools` selector because Empty mode exposes no tools by default.

@@ -196,6 +196,7 @@ Inline tools are specified directly in the agent definition and are always loade
 | `file_search` | — | File search built-in. |
 | `code_interpreter` | — | Code interpreter built-in. |
 | `bing_search` | — | Bing search built-in. |
+| `github-cli-builtin-tools` | CustomTool | GitHub Copilot SDK default-tool policy for `github-copilot`/`github-copilot-subagent` agents. |
 | `""` (empty) | CustomTool | Fixed built-in toolset referenced by name (resolved via the toolset factory). |
 
 ### McpTool fields
@@ -209,6 +210,20 @@ Inline tools are specified directly in the agent definition and are always loade
 | `serverDescription` | | Human-readable server description. |
 | `approvalMode` | | `{ "kind": "always" }`, `{ "kind": "never" }`, or `{ "kind": "specify", "alwaysRequireApprovalTools": [], "neverRequireApprovalTools": [] }`. |
 | `allowedTools` | | Allowlist of MCP tool names to expose. |
+
+### Locked-down GitHub Copilot agent recipe
+
+Safety-sensitive Copilot SDK agents can disable the SDK's ambient Copilot CLI tools and opt into only MCP tools:
+
+```jsonc
+{
+  "kind": "github-cli-builtin-tools",
+  "client-mode": "empty",
+  "available-tools": { "tools": ["mcp:*"] }
+}
+```
+
+`client-mode: "empty"` is a Copilot client construction option. It must be paired with a present, non-empty `available-tools` selector because the SDK exposes no tools by default in Empty mode. Use `excluded-tools: { "tools": ["*"] }` instead when you only want to remove Copilot built-ins while keeping all custom and MCP tools.
 
 ---
 

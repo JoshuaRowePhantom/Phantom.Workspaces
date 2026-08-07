@@ -1,4 +1,5 @@
 using AgentSchema;
+using GitHub.Copilot;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -147,7 +148,9 @@ public static class AgentFactory
     /// <returns>List of tools defined in the agent, or empty when tools are not applicable.</returns>
     public static IList<Tool>? ExtractTools(AgentDefinition agent)
     {
-        return (agent as PromptAgent)?.Tools ?? [];
+        return (agent as PromptAgent)?.Tools?
+            .Where(static tool => !IsGitHubCliBuiltinToolsTool(tool))
+            .ToArray() ?? [];
     }
 
     /// <summary>
@@ -272,8 +275,8 @@ public static class AgentFactory
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
             "github-models" => WrapWithMiddleware(CreateGitHubModelsClient(model, resolver), queueManager),
-            "github-copilot" => CreateGitHubCopilotResult(model, services, queueManager, resolver, subAgentChatRegistry),
-            "openai" or "azure-openai" => CreateGitHubCopilotByokResult(provider, model, services, queueManager, resolver, subAgentChatRegistry),
+            "github-copilot" => CreateGitHubCopilotResult(agent, model, services, queueManager, resolver, subAgentChatRegistry),
+            "openai" or "azure-openai" => CreateGitHubCopilotByokResult(agent, provider, model, services, queueManager, resolver, subAgentChatRegistry),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(services, dispatcherDependencies),
             _ => throw new InvalidOperationException(
@@ -347,8 +350,8 @@ public static class AgentFactory
         {
             "echo" => new ChatClientResult(new EchoChatClient(), "Echo Chat Client"),
             "github-models" => WrapWithMiddleware(await CreateGitHubModelsClientAsync(model, services, resolver, cancellationToken).ConfigureAwait(false), queueManager),
-            "github-copilot" => await CreateGitHubCopilotResultAsync(model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
-            "openai" or "azure-openai" => await CreateGitHubCopilotByokResultAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
+            "github-copilot" => await CreateGitHubCopilotResultAsync(agent, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
+            "openai" or "azure-openai" => await CreateGitHubCopilotByokResultAsync(agent, provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false),
             "ollama" => WrapWithMiddleware(CreateOllamaClient(model, services), queueManager),
             "sub-agent-dispatcher" => CreateSubAgentDispatcherResult(services, dispatcherDependencies),
             _ => throw new InvalidOperationException(
@@ -421,17 +424,20 @@ public static class AgentFactory
     }
 
     private static ChatClientResult CreateGitHubCopilotResult(
+        AgentDefinition agent,
         Model model,
         AgentServices? services,
         AgentInputQueueManager? queueManager,
         IApiKeyResolver resolver,
         ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
-        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver, subAgentChatRegistry);
+        var builtinToolPolicy = ExtractBuiltinToolPolicy(agent, services);
+        var (client, displayName) = CreateGitHubCopilotClient(model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy);
         return new ChatClientResult(client, displayName);
     }
 
     private static async Task<ChatClientResult> CreateGitHubCopilotResultAsync(
+        AgentDefinition agent,
         Model model,
         AgentServices? services,
         AgentInputQueueManager? queueManager,
@@ -439,11 +445,13 @@ public static class AgentFactory
         ISubAgentChatRegistry? subAgentChatRegistry,
         CancellationToken cancellationToken)
     {
-        var (client, displayName) = await CreateGitHubCopilotClientAsync(model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false);
+        var builtinToolPolicy = ExtractBuiltinToolPolicy(agent, services);
+        var (client, displayName) = await CreateGitHubCopilotClientAsync(model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy, cancellationToken).ConfigureAwait(false);
         return new ChatClientResult(client, displayName);
     }
 
     private static ChatClientResult CreateGitHubCopilotByokResult(
+        AgentDefinition agent,
         string provider,
         Model model,
         AgentServices? services,
@@ -451,11 +459,13 @@ public static class AgentFactory
         IApiKeyResolver resolver,
         ISubAgentChatRegistry? subAgentChatRegistry = null)
     {
-        var (client, displayName) = CreateGitHubCopilotByokClient(provider, model, services, queueManager, resolver, subAgentChatRegistry);
+        var builtinToolPolicy = ExtractBuiltinToolPolicy(agent, services);
+        var (client, displayName) = CreateGitHubCopilotByokClient(provider, model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy);
         return new ChatClientResult(client, displayName);
     }
 
     private static async Task<ChatClientResult> CreateGitHubCopilotByokResultAsync(
+        AgentDefinition agent,
         string provider,
         Model model,
         AgentServices? services,
@@ -464,7 +474,8 @@ public static class AgentFactory
         ISubAgentChatRegistry? subAgentChatRegistry,
         CancellationToken cancellationToken)
     {
-        var (client, displayName) = await CreateGitHubCopilotByokClientAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false);
+        var builtinToolPolicy = ExtractBuiltinToolPolicy(agent, services);
+        var (client, displayName) = await CreateGitHubCopilotByokClientAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy, cancellationToken).ConfigureAwait(false);
         return new ChatClientResult(client, displayName);
     }
 
@@ -806,7 +817,8 @@ public static class AgentFactory
         AgentServices? services,
         AgentInputQueueManager? queueManager = null,
         IApiKeyResolver? resolver = null,
-        ISubAgentChatRegistry? subAgentChatRegistry = null)
+        ISubAgentChatRegistry? subAgentChatRegistry = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         resolver ??= EnvironmentApiKeyResolver.Instance;
 
@@ -819,7 +831,7 @@ public static class AgentFactory
             // endpoint (e.g. local Ollama). The wire provider defaults to "openai" (matching the
             // schema's providerType default) so there is no ambiguous endpoint-presence heuristic
             // (cf. issue #896). Delegating here keeps the schema and runtime in agreement (#1106).
-            return CreateGitHubCopilotByokClient("openai", model, services, queueManager, resolver, subAgentChatRegistry);
+            return CreateGitHubCopilotByokClient("openai", model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy);
         }
 
         // Authenticate as a Copilot user, optionally with an explicit GitHub token. When no token
@@ -841,7 +853,8 @@ public static class AgentFactory
             modelOptions: model.Options,
             subAgentChatRegistry: subAgentChatRegistry,
             accountUpsertService: services?.AccountUpsertService,
-            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
+            builtinToolPolicy: builtinToolPolicy);
 
         return (client, displayName);
     }
@@ -856,7 +869,8 @@ public static class AgentFactory
         AgentServices? services,
         AgentInputQueueManager? queueManager = null,
         IApiKeyResolver? resolver = null,
-        ISubAgentChatRegistry? subAgentChatRegistry = null)
+        ISubAgentChatRegistry? subAgentChatRegistry = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         resolver ??= EnvironmentApiKeyResolver.Instance;
 
@@ -895,7 +909,8 @@ public static class AgentFactory
             queueManager: queueManager,
             modelOptions: model.Options,
             subAgentChatRegistry: subAgentChatRegistry,
-            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+            slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
+            builtinToolPolicy: builtinToolPolicy);
 
         return (client, displayName);
     }
@@ -906,6 +921,7 @@ public static class AgentFactory
         AgentInputQueueManager? queueManager,
         IApiKeyResolver resolver,
         ISubAgentChatRegistry? subAgentChatRegistry,
+        CopilotBuiltinToolPolicy? builtinToolPolicy,
         CancellationToken cancellationToken)
     {
         var modelId = model.Id
@@ -917,7 +933,7 @@ public static class AgentFactory
             // endpoint (e.g. local Ollama). Route through the BYOK client with the "openai" wire
             // provider (schema default); see #1106.
             return await CreateGitHubCopilotByokClientAsync(
-                "openai", model, services, queueManager, resolver, subAgentChatRegistry, cancellationToken).ConfigureAwait(false);
+                "openai", model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy, cancellationToken).ConfigureAwait(false);
         }
 
         if (model.Connection is ApiKeyConnection apiKeyConn && !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey))
@@ -945,7 +961,8 @@ public static class AgentFactory
                 modelOptions: model.Options,
                 subAgentChatRegistry: subAgentChatRegistry,
                 accountUpsertService: services?.AccountUpsertService,
-                slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+                slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
+                builtinToolPolicy: builtinToolPolicy);
 
             return (client, displayName);
         }
@@ -958,6 +975,7 @@ public static class AgentFactory
         AgentInputQueueManager? queueManager,
         IApiKeyResolver resolver,
         ISubAgentChatRegistry? subAgentChatRegistry,
+        CopilotBuiltinToolPolicy? builtinToolPolicy,
         CancellationToken cancellationToken)
     {
         var modelId = model.Id
@@ -1001,11 +1019,247 @@ public static class AgentFactory
                 queueManager: queueManager,
                 modelOptions: model.Options,
                 subAgentChatRegistry: subAgentChatRegistry,
-                slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry);
+                slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
+                builtinToolPolicy: builtinToolPolicy);
 
             return (client, displayName);
         }
     }
+
+    private static bool IsGitHubCliBuiltinToolsTool(Tool tool)
+        => tool is GitHubCliBuiltinToolsTool
+            || (tool is CustomTool customTool
+                && string.Equals(customTool.Kind, GitHubCliBuiltinToolsTool.KindName, StringComparison.Ordinal));
+
+    private static CopilotBuiltinToolPolicy? ExtractBuiltinToolPolicy(
+        AgentDefinition agent,
+        AgentServices? services)
+    {
+        if (agent is not PromptAgent promptAgent || promptAgent.Tools is null)
+        {
+            return null;
+        }
+
+        var matchingTools = promptAgent.Tools
+            .Where(IsGitHubCliBuiltinToolsTool)
+            .ToArray();
+        if (matchingTools.Length == 0)
+        {
+            return null;
+        }
+
+        if (matchingTools.Length > 1)
+        {
+            throw new InvalidOperationException(
+                "Agent definition may contain only one github-cli-builtin-tools entry.");
+        }
+
+        var logger = services?.LoggerFactory?.CreateLogger("github-cli-builtin-tools");
+        var tool = ToBuiltinToolsTool(matchingTools[0]);
+        ValidateClientModeInterlock(tool);
+
+        var available = ResolveBuiltinToolSet(tool.AvailableTools, "available-tools", logger);
+        var excluded = ResolveBuiltinToolSet(tool.ExcludedTools, "excluded-tools", logger);
+
+        IReadOnlyList<string>? availableList = null;
+        if (available is ResolvedToolSet.Concrete concreteAvailable)
+        {
+            if (concreteAvailable.Tools.Count == 1
+                && concreteAvailable.Tools[0] == "*"
+                && tool.ClientMode != CopilotClientMode.Empty)
+            {
+                availableList = null;
+            }
+            else
+            {
+                availableList = ToSdkAvailableList(concreteAvailable.Tools);
+            }
+        }
+
+        var excludedList = excluded is ResolvedToolSet.Concrete concreteExcluded
+            ? ToSdkBuiltinList(concreteExcluded.Tools)
+            : null;
+
+        return new CopilotBuiltinToolPolicy(availableList, excludedList, tool.ClientMode);
+    }
+
+    private static GitHubCliBuiltinToolsTool ToBuiltinToolsTool(Tool tool)
+    {
+        if (tool is GitHubCliBuiltinToolsTool typedTool)
+        {
+            return typedTool;
+        }
+
+        var customTool = (CustomTool)tool;
+        var options = customTool.Options;
+        return new GitHubCliBuiltinToolsTool
+        {
+            Kind = GitHubCliBuiltinToolsTool.KindName,
+            Name = customTool.Name,
+            Description = customTool.Description,
+            Bindings = customTool.Bindings,
+            Connection = customTool.Connection,
+            Options = customTool.Options,
+            AvailableTools = options is not null && options.TryGetValue("available-tools", out var available)
+                ? ReadBuiltinToolSet(available, "available-tools")
+                : null,
+            ExcludedTools = options is not null && options.TryGetValue("excluded-tools", out var excluded)
+                ? ReadBuiltinToolSet(excluded, "excluded-tools")
+                : null,
+            ClientMode = options is not null && options.TryGetValue("client-mode", out var mode)
+                ? ReadClientMode(mode)
+                : CopilotClientMode.CopilotCli,
+        };
+    }
+
+    private static void ValidateClientModeInterlock(GitHubCliBuiltinToolsTool tool)
+    {
+        if (tool.ClientMode != CopilotClientMode.Empty)
+        {
+            return;
+        }
+
+        var available = ResolveBuiltinToolSet(tool.AvailableTools, "available-tools", log: null);
+        if (available is not ResolvedToolSet.Concrete concrete || concrete.Tools.Count == 0)
+        {
+            throw new InvalidOperationException(
+                "'client-mode: empty' requires 'available-tools' to be present and non-empty; Empty mode exposes no tools by default so every session must opt in.");
+        }
+    }
+
+    private abstract record ResolvedToolSet
+    {
+        public sealed record Absent : ResolvedToolSet;
+        public sealed record Concrete(IReadOnlyList<string> Tools) : ResolvedToolSet;
+    }
+
+    private static ResolvedToolSet ResolveBuiltinToolSet(
+        BuiltinToolSet? selector,
+        string slotName,
+        ILogger? log)
+    {
+        if (selector is null)
+        {
+            return new ResolvedToolSet.Absent();
+        }
+
+        if (selector.Tools is { } tools && selector.Isolated)
+        {
+            log?.LogWarning(
+                "github-cli-builtin-tools {Slot}: both 'tools' and 'isolated' set; applying precedence tools > isolated.",
+                slotName);
+        }
+
+        if (selector.Tools is { } concreteTools)
+        {
+            return new ResolvedToolSet.Concrete(concreteTools);
+        }
+
+        if (selector.Isolated)
+        {
+            return new ResolvedToolSet.Concrete(BuiltInTools.Isolated.ToArray());
+        }
+
+        throw new InvalidOperationException(
+            $"github-cli-builtin-tools {slotName} selector must set either 'tools' or 'isolated'.");
+    }
+
+    private static IReadOnlyList<string> ToSdkBuiltinList(IReadOnlyList<string> names)
+    {
+        var set = new ToolSet();
+        foreach (var name in names)
+        {
+            if (name.Contains(':', StringComparison.Ordinal))
+            {
+                set.Add(name);
+            }
+            else
+            {
+                set.AddBuiltIn(name);
+            }
+        }
+
+        return set.ToArray();
+    }
+
+    private static IReadOnlyList<string> ToSdkAvailableList(IReadOnlyList<string> names)
+    {
+        var anySourceQualified = names.Any(static name => name.Contains(':', StringComparison.Ordinal));
+        var set = new ToolSet();
+        foreach (var name in names)
+        {
+            if (name.Contains(':', StringComparison.Ordinal))
+            {
+                set.Add(name);
+            }
+            else
+            {
+                set.AddBuiltIn(name);
+            }
+        }
+
+        if (!anySourceQualified)
+        {
+            set.AddCustom("*");
+            set.AddMcp("*");
+        }
+
+        return set.ToArray();
+    }
+
+    private static BuiltinToolSet ReadBuiltinToolSet(object value, string slotName)
+    {
+        if (value is not IDictionary<string, object> dictionary)
+        {
+            throw new InvalidOperationException($"github-cli-builtin-tools {slotName} must be a selector object.");
+        }
+
+        IReadOnlyList<string>? tools = null;
+        if (dictionary.TryGetValue("tools", out var toolsValue))
+        {
+            if (toolsValue is not IEnumerable enumerable || toolsValue is string)
+            {
+                throw new InvalidOperationException($"github-cli-builtin-tools {slotName}.tools must be an array of strings.");
+            }
+
+            var names = new List<string>();
+            var index = 0;
+            foreach (var item in enumerable)
+            {
+                if (item is not string name)
+                {
+                    throw new InvalidOperationException(
+                        $"github-cli-builtin-tools {slotName}.tools[{index}] must be a string.");
+                }
+
+                names.Add(name);
+                index++;
+            }
+
+            tools = names;
+        }
+
+        var isolated = false;
+        if (dictionary.TryGetValue("isolated", out var isolatedValue))
+        {
+            isolated = isolatedValue is bool b
+                ? b
+                : throw new InvalidOperationException($"github-cli-builtin-tools {slotName}.isolated must be a boolean.");
+        }
+
+        return new BuiltinToolSet(tools, isolated);
+    }
+
+    private static CopilotClientMode ReadClientMode(object value)
+        => value is string mode
+            ? mode.ToLowerInvariant() switch
+            {
+                "empty" => CopilotClientMode.Empty,
+                "copilot-cli" => CopilotClientMode.CopilotCli,
+                _ => throw new InvalidOperationException(
+                    $"'client-mode' must be one of \"empty\" or \"copilot-cli\"; got {mode}."),
+            }
+            : throw new InvalidOperationException("'client-mode' must be one of \"empty\" or \"copilot-cli\".");
 
     private static void ValidateServices(AgentServices? services)
     {

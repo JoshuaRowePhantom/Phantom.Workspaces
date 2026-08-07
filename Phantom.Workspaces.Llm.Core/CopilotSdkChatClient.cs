@@ -38,6 +38,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly CopilotByokOptions? byokOptions;
     private readonly string? cliPath;
     private readonly ModelOptions? modelOptions;
+    private readonly CopilotBuiltinToolPolicy? builtinToolPolicy;
     private readonly AgentInputQueueManager? queueManager;
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly IGitHubAccountUpsertService? accountUpsertService;
@@ -125,6 +126,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     internal ModelOptions? ModelOptions => this.modelOptions;
 
+    internal CopilotBuiltinToolPolicy? BuiltinToolPolicyForTest => this.builtinToolPolicy;
+
     /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
     /// </summary>
@@ -175,7 +178,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ModelOptions? modelOptions = null,
         ISubAgentChatRegistry? subAgentChatRegistry = null,
         IGitHubAccountUpsertService? accountUpsertService = null,
-        SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null)
+        SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -186,6 +190,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.loggerFactory = loggerFactory;
         this.byokOptions = byokOptions;
         this.modelOptions = modelOptions;
+        this.builtinToolPolicy = builtinToolPolicy;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
@@ -261,7 +266,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         string modelId,
         CopilotByokOptions? byokOptions,
         ChatOptions? options,
-        ModelOptions? modelOptions = null)
+        ModelOptions? modelOptions = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
@@ -302,6 +308,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.Tools = tools;
         }
 
+        ApplyBuiltinToolPolicy(sessionConfig, builtinToolPolicy);
+
         return sessionConfig;
     }
 
@@ -315,7 +323,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         string modelId,
         CopilotByokOptions? byokOptions,
         ChatOptions? options,
-        ModelOptions? modelOptions = null)
+        ModelOptions? modelOptions = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
@@ -356,7 +365,35 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             resumeConfig.Tools = tools;
         }
 
+        ApplyBuiltinToolPolicy(resumeConfig, builtinToolPolicy);
+
         return resumeConfig;
+    }
+
+    private static void ApplyBuiltinToolPolicy(SessionConfig config, CopilotBuiltinToolPolicy? policy)
+    {
+        if (policy?.AvailableTools is { } available)
+        {
+            config.AvailableTools = available.ToList();
+        }
+
+        if (policy?.ExcludedTools is { } excluded)
+        {
+            config.ExcludedTools = excluded.ToList();
+        }
+    }
+
+    private static void ApplyBuiltinToolPolicy(ResumeSessionConfig config, CopilotBuiltinToolPolicy? policy)
+    {
+        if (policy?.AvailableTools is { } available)
+        {
+            config.AvailableTools = available.ToList();
+        }
+
+        if (policy?.ExcludedTools is { } excluded)
+        {
+            config.ExcludedTools = excluded.ToList();
+        }
     }
 
     /// <summary>
@@ -433,7 +470,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 GitHubToken = this.gitHubToken,
                 Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
             };
+
+            if (clientOptions.Mode == CopilotClientMode.Empty)
+            {
+                clientOptions.BaseDirectory = Directory.GetCurrentDirectory();
+            }
 
             if (!string.IsNullOrWhiteSpace(this.cliPath))
             {
@@ -1115,6 +1158,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     GitHubToken = this.gitHubToken,
                     Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                    Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
                 };
 
                 if (!string.IsNullOrWhiteSpace(this.cliPath))
@@ -1126,6 +1170,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 if (!string.IsNullOrWhiteSpace(workingDirectory))
                 {
                     clientOptions.WorkingDirectory = workingDirectory;
+                }
+
+                if (clientOptions.Mode == CopilotClientMode.Empty)
+                {
+                    clientOptions.BaseDirectory = !string.IsNullOrWhiteSpace(workingDirectory)
+                        ? workingDirectory
+                        : Directory.GetCurrentDirectory();
                 }
 
                 var client = new CopilotClient(clientOptions);
@@ -1181,7 +1232,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             try
             {
-                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions);
+                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions, this.builtinToolPolicy);
                 if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
                 {
                     resumeConfig.WorkingDirectory = this.workingDirectoryOverride;
@@ -1199,7 +1250,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
         }
 
-        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions);
+        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions, this.builtinToolPolicy);
         if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
         {
             sessionConfig.WorkingDirectory = this.workingDirectoryOverride;

@@ -427,6 +427,77 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public void BuildSessionConfig_NoPolicy_LeavesFieldsUnset()
+    {
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: null);
+
+        Assert.Null(config.AvailableTools);
+        Assert.Null(config.ExcludedTools);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_AvailablePolicyList_SetsAvailableTools()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            ["builtin:a", "builtin:b", "custom:*", "mcp:*"],
+            ExcludedTools: null,
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Equal(["builtin:a", "builtin:b", "custom:*", "mcp:*"], config.AvailableTools);
+        Assert.Null(config.ExcludedTools);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_ExcludedPolicyStar_SetsExcludedToolsToBuiltinStar()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            AvailableTools: null,
+            ["builtin:*"],
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Null(config.AvailableTools);
+        Assert.Equal(["builtin:*"], config.ExcludedTools);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_BothSlotsSet_AppliesBoth()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            ["builtin:a", "custom:*", "mcp:*"],
+            ["builtin:b"],
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Equal(["builtin:a", "custom:*", "mcp:*"], config.AvailableTools);
+        Assert.Equal(["builtin:b"], config.ExcludedTools);
+    }
+
+    [Fact]
     public void BuildResumeSessionConfig_ForwardsFunctionToolsInstructionsAndModel()
     {
         var tool = AIFunctionFactory.Create(
@@ -454,6 +525,25 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.Equal("gpt-test", config.Model);
         Assert.True(config.Tools is null || config.Tools.Count == 0);
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_AppliesSamePolicy()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            ["builtin:a", "custom:*", "mcp:*"],
+            ["builtin:b"],
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Equal(["builtin:a", "custom:*", "mcp:*"], config.AvailableTools);
+        Assert.Equal(["builtin:b"], config.ExcludedTools);
     }
 
     [Fact]

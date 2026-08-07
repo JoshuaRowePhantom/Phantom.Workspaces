@@ -1,4 +1,5 @@
 using AgentSchema;
+using GitHub.Copilot;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -533,6 +534,245 @@ public class AgentFactoryTests
         Assert.NotNull(client);
         Assert.IsType<CopilotSdkChatClient>(client);
         Assert.Equal("GitHub Copilot (gpt-4.1-mini)", displayName);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsList_SetsAvailableTools()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["read_agent", "list_agents"] }
+            """);
+
+        Assert.Equal(
+            ["builtin:read_agent", "builtin:list_agents", "custom:*", "mcp:*"],
+            client.BuiltinToolPolicyForTest!.AvailableTools);
+        Assert.Null(client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsWildcard_LeavesAvailableToolsUnset()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["*"] }
+            """);
+
+        Assert.Null(client.BuiltinToolPolicyForTest!.AvailableTools);
+        Assert.Null(client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsMcpStar_MapsToMcpStarWithNoAutoAppend()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["mcp:*"] }
+            """);
+
+        Assert.Equal(["mcp:*"], client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsMixedBareAndSourceQualified_PrefixesBareOnly()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["read_agent", "mcp:*"] }
+            """);
+
+        Assert.Equal(["builtin:read_agent", "mcp:*"], client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsEmpty_SetsAvailableToolsToCustomAndMcpOnly()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": [] }
+            """);
+
+        Assert.Equal(["custom:*", "mcp:*"], client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsIsolated_SetsAvailableToolsToIsolatedSet()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "isolated": true }
+            """);
+
+        var expected = new ToolSet()
+            .AddBuiltIn(BuiltInTools.Isolated)
+            .AddCustom("*")
+            .AddMcp("*")
+            .ToArray();
+        Assert.Equal(expected, client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_ExcludedToolsWildcard_SetsExcludedToolsToBuiltinStar()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "excluded-tools": { "tools": ["*"] }
+            """);
+
+        Assert.Null(client.BuiltinToolPolicyForTest!.AvailableTools);
+        Assert.Equal(["builtin:*"], client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_ExcludedToolsBuiltinStar_MapsToBuiltinStarVerbatim()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "excluded-tools": { "tools": ["builtin:*"] }
+            """);
+
+        Assert.Equal(["builtin:*"], client.BuiltinToolPolicyForTest!.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_ExcludedToolsIsolated_SetsExcludedToolsToIsolatedSet()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "excluded-tools": { "isolated": true }
+            """);
+
+        var expected = new ToolSet().AddBuiltIn(BuiltInTools.Isolated).ToArray();
+        Assert.Equal(expected, client.BuiltinToolPolicyForTest!.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableAndExcludedCombined_AppliesBoth()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "isolated": true },
+            "excluded-tools": { "tools": ["exit_plan_mode"] }
+            """);
+
+        Assert.Equal("builtin:ask_user", client.BuiltinToolPolicyForTest!.AvailableTools![0]);
+        Assert.Contains("custom:*", client.BuiltinToolPolicyForTest.AvailableTools);
+        Assert.Contains("mcp:*", client.BuiltinToolPolicyForTest.AvailableTools);
+        Assert.Equal(["builtin:exit_plan_mode"], client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_NoBuiltinToolsEntry_LeavesDefaults()
+    {
+        var agent = LoadCopilotAgent("[]");
+
+        var result = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+
+        var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Null(client.BuiltinToolPolicyForTest);
+    }
+
+    [Fact]
+    public void AgentFactory_BuiltinToolsEntry_IsNotForwardedToToolsetFactory()
+    {
+        var agent = LoadCopilotAgent(
+            """
+            [
+              {
+                "kind": "github-cli-builtin-tools",
+                "available-tools": { "tools": ["read_agent"] }
+              },
+              {
+                "kind": "web_request",
+                "name": "web_request"
+              }
+            ]
+            """);
+
+        var tools = AgentFactory.ExtractTools(agent);
+
+        Assert.Collection(
+            tools!,
+            tool => Assert.Equal("web_request", Assert.IsType<CustomTool>(tool).Kind));
+    }
+
+    [Fact]
+    public void AgentFactory_ClientModeEmpty_WithAvailableTools_ConstructsClientWithEmptyMode()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "client-mode": "empty",
+            "available-tools": { "tools": ["mcp:*"] }
+            """);
+
+        Assert.Equal(CopilotClientMode.Empty, client.BuiltinToolPolicyForTest!.ClientMode);
+    }
+
+    [Fact]
+    public void AgentFactory_ClientModeCopilotCli_IsDefault()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["mcp:*"] }
+            """);
+
+        Assert.Equal(CopilotClientMode.CopilotCli, client.BuiltinToolPolicyForTest!.ClientMode);
+    }
+
+    [Fact]
+    public void AgentFactory_ClientModeEmpty_WithoutAvailableTools_Throws()
+    {
+        var agent = new PromptAgent
+        {
+            Name = "github-copilot-agent",
+            Model = new Model
+            {
+                Id = "gpt-5",
+                Provider = "github-copilot",
+                ApiType = "OpenAI",
+                Connection = new ApiKeyConnection { ApiKey = "${GITHUB_TOKEN}" },
+            },
+            Tools =
+            [
+                new GitHubCliBuiltinToolsTool
+                {
+                    Kind = GitHubCliBuiltinToolsTool.KindName,
+                    ClientMode = CopilotClientMode.Empty,
+                },
+            ],
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token")));
+        Assert.Contains("client-mode: empty", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("available-tools", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentDefinitionLoader_GithubCliBuiltinToolsEntry_IsExtractedAsTypedSubclass()
+    {
+        var agent = LoadCopilotAgent(
+            """
+            [
+              {
+                "kind": "github-cli-builtin-tools",
+                "client-mode": "empty",
+                "available-tools": { "tools": ["mcp:*"] },
+                "excluded-tools": { "tools": ["shell"] }
+              }
+            ]
+            """);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        var tool = Assert.IsType<GitHubCliBuiltinToolsTool>(Assert.Single(promptAgent.Tools!));
+        Assert.Equal(CopilotClientMode.Empty, tool.ClientMode);
+        Assert.Equal(["mcp:*"], tool.AvailableTools!.Tools);
+        Assert.Equal(["shell"], tool.ExcludedTools!.Tools);
     }
 
     private sealed class RecordingAccountUpsertService : IGitHubAccountUpsertService
@@ -1556,6 +1796,45 @@ public class AgentFactoryTests
         public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
             => ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(Array.Empty<AgentSessionId>());
     }
+
+    private static CopilotSdkChatClient CreateCopilotClientWithBuiltinTools(string builtinToolProperties)
+    {
+        var agent = LoadCopilotAgent(
+            $$"""
+            [
+              {
+                "kind": "github-cli-builtin-tools",
+                {{builtinToolProperties}}
+              }
+            ]
+            """);
+
+        var result = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+
+        return Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+    }
+
+    private static AgentDefinition LoadCopilotAgent(string toolsJson)
+        => AgentDefinitionLoader.LoadAgentFromJson(
+            $$"""
+            {
+              "kind": "prompt",
+              "name": "github-copilot-agent",
+              "model": {
+                "id": "gpt-5",
+                "provider": "github-copilot",
+                "apiType": "OpenAI",
+                "connection": {
+                  "kind": "key",
+                  "apiKey": "${GITHUB_TOKEN}"
+                }
+              },
+              "tools": {{toolsJson}}
+            }
+            """);
 
     private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
     {

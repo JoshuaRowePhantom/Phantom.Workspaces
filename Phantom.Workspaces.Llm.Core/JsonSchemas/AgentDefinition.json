@@ -92,7 +92,9 @@
             "headers": {
               "type": "object",
               "description": "Extra request headers forwarded to the custom endpoint.",
-              "additionalProperties": { "type": "string" }
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           }
         },
@@ -134,6 +136,9 @@
             "$ref": "#/$defs/mcpTool"
           },
           {
+            "$ref": "#/$defs/githubCliBuiltinToolsTool"
+          },
+          {
             "$ref": "#/$defs/tool"
           },
           {
@@ -156,7 +161,8 @@
           "type": "string"
         },
         "kind": {
-          "type": "string"
+          "type": "string",
+          "description": "Tool kind. Recognized provider-specific kinds include mcp, agent-definition, and github-cli-builtin-tools."
         },
         "description": {
           "type": "string"
@@ -168,6 +174,16 @@
             "additionalProperties": true
           }
         }
+      },
+      "not": {
+        "properties": {
+          "kind": {
+            "const": "github-cli-builtin-tools"
+          }
+        },
+        "required": [
+          "kind"
+        ]
       }
     },
     "mcpTool": {
@@ -320,6 +336,104 @@
             "type": "string"
           },
           "minItems": 1
+        }
+      ]
+    },
+    "builtinToolSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "tools"
+          ]
+        },
+        {
+          "required": [
+            "isolated"
+          ]
+        }
+      ],
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|[a-zA-Z0-9_-]+|(builtin|custom|mcp):(\\*|[a-zA-Z0-9_-]+))$"
+          }
+        },
+        "isolated": {
+          "const": true
+        }
+      }
+    },
+    "githubCliBuiltinToolsTool": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "github-cli-builtin-tools"
+        },
+        "description": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "available-tools": {
+          "$ref": "#/$defs/builtinToolSet"
+        },
+        "excluded-tools": {
+          "$ref": "#/$defs/builtinToolSet"
+        },
+        "client-mode": {
+          "enum": [
+            "empty",
+            "copilot-cli"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "client-mode": {
+                "const": "empty"
+              }
+            },
+            "required": [
+              "client-mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "available-tools"
+            ],
+            "properties": {
+              "available-tools": {
+                "not": {
+                  "properties": {
+                    "tools": {
+                      "maxItems": 0
+                    }
+                  },
+                  "required": [
+                    "tools"
+                  ]
+                }
+              }
+            }
+          }
         }
       ]
     }
