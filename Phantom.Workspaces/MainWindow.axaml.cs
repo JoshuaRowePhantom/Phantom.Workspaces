@@ -15,6 +15,9 @@ namespace Phantom.Workspaces;
 
 public partial class MainWindow : Window
 {
+    private bool ctrlIsDown;
+    private bool navStackIntentSeenWhileCtrlDown;
+
     public MainWindow()
         : this(new MainWindowViewModel(new UnknownRepositorySource()))
     {
@@ -62,8 +65,21 @@ public partial class MainWindow : Window
 
         if (e.Key is Key.LeftCtrl or Key.RightCtrl)
         {
-            viewModel.NavStackPopup.OpenAtCurrentPosition();
+            this.ctrlIsDown = true;
+            this.navStackIntentSeenWhileCtrlDown = false;
             return;
+        }
+
+        if (this.ctrlIsDown
+            && (e.Key is Key.Tab or Key.Up or Key.Down)
+            && (e.KeyModifiers & KeyModifiers.Control) != 0)
+        {
+            if (!viewModel.NavStackPopup.IsOpen)
+            {
+                viewModel.NavStackPopup.OpenAtCurrentPosition();
+            }
+
+            this.navStackIntentSeenWhileCtrlDown = true;
         }
 
         // Ctrl+Up / Ctrl+Down: move the nav-stack popup selection without navigating.
@@ -259,11 +275,17 @@ public partial class MainWindow : Window
 
         if (e.Key is Key.LeftCtrl or Key.RightCtrl)
         {
-            var historyIndex = viewModel.NavStackPopup.CommitAndBeginFade();
-            if (historyIndex >= 0)
+            this.ctrlIsDown = false;
+            if (this.navStackIntentSeenWhileCtrlDown)
             {
-                viewModel.NavigateToHistoryEntry(historyIndex);
+                var historyIndex = viewModel.NavStackPopup.CommitAndBeginFade();
+                if (historyIndex >= 0)
+                {
+                    viewModel.NavigateToHistoryEntry(historyIndex);
+                }
             }
+
+            this.navStackIntentSeenWhileCtrlDown = false;
             return;
         }
 
