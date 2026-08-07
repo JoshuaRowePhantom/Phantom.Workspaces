@@ -4930,12 +4930,375 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal("My Docs", restoredDoc.EffectiveTabHeader.Title);
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceDocument_ExplicitTitleOverride_SurvivesPersistAndRestoreForBrowserTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("12651265-1001-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Explicit Browser Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(pane);
+        await CloseDefaultPaneTabsAsync(viewModel, pane);
+
+        var browserTab = new WebViewModel("https://explicit-browser.example.com")
+        {
+            Id = "explicit-browser-tab",
+            Title = "Initial Browser",
+        };
+        browserTab.SetTitleExplicit("Pinned Browser");
+        await viewModel.OpenTabAsync(browserTab);
+
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "explicit-browser-tab");
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(restoredPane);
+        var restored = Assert.IsType<WebViewModel>(Assert.Single(restoredPane.Tabs));
+        Assert.Equal("Pinned Browser", restored.Title);
+        Assert.True(restored.IsTitleExplicit);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceDocument_ExplicitTitleOverride_SurvivesPersistAndRestoreForNonBrowserTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("12651265-1002-4000-8000-000000000001");
+        var entity = await UpsertEntityAndLoadAsync(entityBroker, entityId, $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "note"],
+              "display-name": { "default": "Entity Display" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "body" } }
+            }
+            """);
+        var workspaceId = new EntityId("12651265-1002-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Explicit Entity Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(pane);
+        await CloseDefaultPaneTabsAsync(viewModel, pane);
+
+        var entityTab = new EntityWorkspaceTabViewModel
+        {
+            Id = "explicit-entity-tab",
+            Title = "Initial Entity",
+            Entity = entity,
+            DockRegion = "full",
+        };
+        entityTab.SetTitleExplicit("Pinned Entity");
+        await viewModel.OpenTabAsync(entityTab);
+
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "explicit-entity-tab");
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(restoredPane);
+        var restored = Assert.Single(restoredPane.Tabs);
+        Assert.Equal("Pinned Entity", restored.Title);
+        Assert.True(restored.IsTitleExplicit);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceDocument_ExplicitTitleOverride_NotClobberedByContentDerivedTitleAfterRestore()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("12651265-1003-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Explicit Browser Not Clobbered" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(pane);
+        await CloseDefaultPaneTabsAsync(viewModel, pane);
+
+        var browserTab = new WebViewModel("https://not-clobbered.example.com")
+        {
+            Id = "not-clobbered-browser-tab",
+            Title = "Initial",
+        };
+        browserTab.SetTitleExplicit("Pinned After Restore");
+        await viewModel.OpenTabAsync(browserTab);
+
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await WaitForWorkspaceTabAsync(contentDock!, "not-clobbered-browser-tab");
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(restoredPane);
+        var restored = Assert.IsType<WebViewModel>(Assert.Single(restoredPane.Tabs));
+
+        restored.SetPageTitle("Browser Derived Title");
+
+        Assert.True(restored.IsTitleExplicit);
+        Assert.Equal("Pinned After Restore", restored.Title);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceRestore_DockLayoutWithDescriptorTitle_RestoresTitle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("12651265-1004-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Descriptor Title Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(pane);
+        await CloseDefaultPaneTabsAsync(viewModel, pane);
+
+        var tab = new WebViewModel("https://descriptor-title.example.com")
+        {
+            Id = "descriptor-title-tab",
+            Title = "Descriptor Browser Title",
+        };
+        await viewModel.OpenTabAsync(tab);
+        await WaitForWorkspaceTabAsync(FindDocumentDockIn(pane.ContentLayout!)!, "descriptor-title-tab");
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(restoredPane);
+        Assert.Equal("Descriptor Browser Title", Assert.Single(restoredPane.Tabs).Title);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceRestore_DockLayoutWithDescriptorTitle_WinsOverEmptyDisplayName()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("12651265-1005-4000-8000-000000000001");
+        var entity = await UpsertEntityAndLoadAsync(entityBroker, entityId, $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "note"],
+              "display-name": { "default": "" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "body" } }
+            }
+            """);
+        var workspaceId = new EntityId("12651265-1005-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Descriptor Empty Display Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(pane);
+        await CloseDefaultPaneTabsAsync(viewModel, pane);
+
+        var tab = new EntityWorkspaceTabViewModel
+        {
+            Id = "descriptor-empty-display-tab",
+            Title = "Descriptor Entity Title",
+            Entity = entity,
+            DockRegion = "full",
+        };
+        await viewModel.OpenTabAsync(tab);
+        await WaitForWorkspaceTabAsync(FindDocumentDockIn(pane.ContentLayout!)!, "descriptor-empty-display-tab");
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(restoredPane);
+        Assert.Equal("Descriptor Entity Title", Assert.Single(restoredPane.Tabs).Title);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspaceDocument_TryRestoreFromDockLayout_EffectiveTabHeaderTitleMatchesDescriptorTitle()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("12651265-1006-4000-8000-0000000000f1");
+        await UpsertEntityAndLoadAsync(entityBroker, workspaceId, $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Header Descriptor Workspace" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(pane);
+        await CloseDefaultPaneTabsAsync(viewModel, pane);
+
+        var tab = new WebViewModel("https://header-descriptor.example.com")
+        {
+            Id = "header-descriptor-tab",
+            Title = "Header Descriptor Title",
+        };
+        await viewModel.OpenTabAsync(tab);
+        await WaitForWorkspaceTabAsync(FindDocumentDockIn(pane.ContentLayout!)!, "header-descriptor-tab");
+
+        await viewModel.WriteBackWorkspaceTabs(pane);
+        await viewModel.CloseWorkspacePaneAsync(pane);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var restoredPane = viewModel.WorkspacePanes.First(p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        await WaitForPanePopulatedAsync(restoredPane);
+        var restoredDoc = MainWindowViewModel.EnumerateAllDocuments(restoredPane.ContentLayout!)
+            .Single(d => d.Id == "header-descriptor-tab");
+        Assert.Equal("Header Descriptor Title", restoredDoc.EffectiveTabHeader.Title);
+        Assert.False(string.IsNullOrEmpty(restoredDoc.EffectiveTabHeader.Title));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenAgentSessionShortcutHandler_RestoreWithEmptyPersistedTitle_FallsBackThroughDisplayNameThenEntityId()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityId = new EntityId("12651265-1007-4000-8000-000000000001");
+        using var document = JsonDocument.Parse($$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "agent-session"],
+              "display-name": { "default": "" },
+              "agent-session-id": "restore-empty-title-session"
+            }
+            """);
+        var agentSessionEntity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = entityId,
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+        var handler = new OpenAgentSessionShortcutHandler(
+            new AgentSessionShortcutContext(),
+            CreateLocalTrustedExecutorSelector(),
+            CreateTestRunningAgentChatTable());
+
+        var tab = await handler.TryCreateAgentSessionTabForRestoreAsync(
+            viewModel, agentSessionEntity, "agent-empty-title-tab", title: "", dockRegion: "full");
+        try
+        {
+            Assert.NotNull(tab);
+            Assert.Equal(entityId.ToString(), tab!.Title);
+        }
+        finally
+        {
+            if (tab is not null)
+            {
+                await tab.DisposeAsync();
+            }
+        }
+    }
+
     private static T GetDockFactoryAs<T>(MainWindowViewModel viewModel)
     {
         var field = typeof(MainWindowViewModel)
             .GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(field);
         return Assert.IsAssignableFrom<T>(field!.GetValue(viewModel));
+    }
+
+    private static async Task<WorkspacePaneViewModel> CreateWorkspacePaneFromJsonAsync(
+        MainWindowViewModel viewModel,
+        EntityId workspaceId,
+        string workspaceJson)
+    {
+        using var document = JsonDocument.Parse(workspaceJson);
+        var workspaceEntity = new SubscribedEntityViewModel(
+            new EntitySnapshot
+            {
+                EntityId = workspaceId,
+                ConcurrencyTag = new ConcurrencyTag("1"),
+                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
+                Data = document.RootElement.Clone(),
+                Relationships = Array.Empty<EntitySnapshot>(),
+            });
+
+        var createWorkspacePane = typeof(MainWindowViewModel).GetMethod(
+            "CreateWorkspacePaneAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(createWorkspacePane);
+        var task = (Task<WorkspacePaneViewModel>?)createWorkspacePane!.Invoke(
+            viewModel,
+            [workspaceEntity, document.RootElement.Clone()]);
+        Assert.NotNull(task);
+        var pane = await task!;
+        return pane;
+    }
+
+    private static async Task<WorkspaceTabViewModel?> TryFetchWorkspaceTabFromJsonAsync(
+        MainWindowViewModel viewModel,
+        string tabJson)
+    {
+        using var document = JsonDocument.Parse(tabJson);
+        var tryFetch = typeof(MainWindowViewModel).GetMethod(
+            "TryFetchWorkspaceTabAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(tryFetch);
+        var task = (Task<WorkspaceTabViewModel?>?)tryFetch!.Invoke(
+            viewModel,
+            [document.RootElement.Clone()]);
+        Assert.NotNull(task);
+        return await task!;
     }
 
     private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)    {
@@ -9128,6 +9491,98 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceRestore_TabsArrayWithEmptyTitle_FallsBackToDisplayName()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("12651265-0001-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["tests", "1265", "tabs-empty-title"]],
+              "display-name": { "default": "Non Blank Display" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "body" } }
+            }
+            """);
+        var tabJson = $$"""
+            {
+              "tab-id": "tabs-empty-title",
+              "title": "",
+              "content": { "target-entity-name": ["tests", "1265", "tabs-empty-title"] }
+            }
+            """;
+
+        var tab = await TryFetchWorkspaceTabFromJsonAsync(viewModel, tabJson);
+        Assert.NotNull(tab);
+        Assert.Equal("Non Blank Display", tab!.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceRestore_TabsArrayWithTitle_WinsOverDisplayName()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var entityId = new EntityId("12651265-0002-4000-8000-000000000001");
+        await UpsertEntityAndLoadAsync(entityBroker, entityId, $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "note"],
+              "names": [["tests", "1265", "tabs-title-wins"]],
+              "display-name": { "default": "Display Name" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "body" } }
+            }
+            """);
+        var tabJson = $$"""
+            {
+              "tab-id": "tabs-title-wins",
+              "title": "Persisted Title",
+              "content": { "target-entity-name": ["tests", "1265", "tabs-title-wins"] }
+            }
+            """;
+
+        var tab = await TryFetchWorkspaceTabFromJsonAsync(viewModel, tabJson);
+        Assert.NotNull(tab);
+        Assert.Equal("Persisted Title", tab!.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceRestore_LegacyRegionsWithEmptyTitle_FallsBackToUrl()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("12651265-0003-4000-8000-0000000000f1");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "{{workspaceId}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "Legacy Empty Title Workspace" },
+              "regions": [
+                {
+                  "tabs": [
+                    {
+                      "tab-id": "legacy-empty-title",
+                      "title": "",
+                      "content": { "url": "https://legacy-empty.example.com" }
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        var workspacePane = await CreateWorkspacePaneFromJsonAsync(viewModel, workspaceId, workspaceJson);
+        var tab = Assert.IsType<WebViewModel>(Assert.Single(workspacePane.Tabs));
+        Assert.Equal("https://legacy-empty.example.com", tab.Title);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenWorkspaceAsync_WithNoTabsAndNoRegions_OpensDefaultEntityTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -10675,4 +11130,6 @@ public sealed class MainWindowIntegrationTests
     }
 
 }
+
+
 

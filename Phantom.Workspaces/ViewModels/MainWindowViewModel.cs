@@ -3436,7 +3436,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         var agentTab = await this.openAgentSessionShortcutHandler
                             .TryCreateAgentSessionTabForRestoreAsync(
                                 this, entity, tabId, title: restoredAgentTitle, dockRegion: null);
-                        if (agentTab is not null) return agentTab;
+                        if (agentTab is not null)
+                        {
+                            agentTab.IsTitleExplicit = agentDesc.IsTitleExplicit;
+                            return agentTab;
+                        }
                     }
                 }
                 break;
@@ -3461,6 +3465,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         {
                             Id = tabId,
                             Title = restoredTitle,
+                            IsTitleExplicit = entityDesc.IsTitleExplicit,
                             Entity = entity,
                             DockRegion = "full",
                         };
@@ -3471,7 +3476,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             case BrowserDockTabDescriptor browserDesc:
                 if (!string.IsNullOrWhiteSpace(browserDesc.Url))
                 {
-                    return new WebViewModel(browserDesc.Url)
+                    return new WebViewModel(browserDesc.Url, titleFixed: browserDesc.IsTitleExplicit)
                     {
                         Id = tabId,
                         Title = !string.IsNullOrEmpty(browserDesc.Title) ? browserDesc.Title : browserDesc.Url,
@@ -3851,7 +3856,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return null;
         }
 
-        return property.GetString();
+        var value = property.GetString();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     private static string? ReadPrimaryName(

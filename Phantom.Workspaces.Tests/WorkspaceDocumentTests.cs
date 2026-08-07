@@ -118,6 +118,21 @@ public sealed class WorkspaceDocumentTests
         Assert.Equal("Page Title", tab.Title);
     }
 
+    [Fact]
+    public void WorkspaceDocument_InitializeWithBrowserDescriptor_UsesWebTabHeaderVariant()
+    {
+        var tab = new WebViewModel("https://browser-header.example.com")
+        {
+            Id = "browser-header",
+            Title = "Browser Header",
+        };
+
+        var doc = new WorkspaceDocument(tab);
+
+        Assert.IsType<WebTabHeaderViewModel>(doc.EffectiveTabHeader);
+        Assert.Equal("Browser Header", doc.EffectiveTabHeader.Title);
+    }
+
     private static SubscribedEntityViewModel CreateWorkspaceEntity()
     {
         using var document = JsonDocument.Parse(

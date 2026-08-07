@@ -110,6 +110,26 @@ public sealed class SessionTabSlashCommandHandlerTests
     }
 
     [Fact]
+    public async Task SlashCommandContext_SetTabTitleAsync_FlipsIsTitleExplicit()
+    {
+        var isTitleExplicit = false;
+        string? titleSetTo = null;
+        var handler = new TitleSlashCommandHandler();
+        var context = await CreateContextAsync(setTabTitleAsync: (title, ct) =>
+        {
+            isTitleExplicit = true;
+            titleSetTo = title;
+            return Task.CompletedTask;
+        });
+
+        var result = await handler.ExecuteAsync(context, "Pinned Tab", CancellationToken.None);
+
+        Assert.True(isTitleExplicit);
+        Assert.Equal("Pinned Tab", titleSetTo);
+        Assert.Equal("Tab title set to \"Pinned Tab\".", result.StatusMessage);
+    }
+
+    [Fact]
     public async Task TitleSlashCommandHandler_Execute_EmptyArguments_ReturnsError()
     {
         var handler = new TitleSlashCommandHandler();
@@ -146,4 +166,5 @@ public sealed class SessionTabSlashCommandHandlerTests
           "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
         }
         """);
+
 }

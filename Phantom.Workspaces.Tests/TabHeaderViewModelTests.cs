@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Media;
 using global::Dock.Model.Controls;
 using global::Dock.Model.Core;
 using global::Dock.Model.Mvvm.Controls;
@@ -279,6 +280,18 @@ public sealed class TabHeaderViewModelTests
             t => t.Match(new TabHeaderViewModel { Title = "T" }));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_IsDefinedInApplicationResources()
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "WebTabHeaderTemplate", null, out var resource);
+
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new WebTabHeaderViewModel { Title = "T" }));
+    }
+
     private static IDataTemplate ResolveTabHeaderTemplate()
     {
         // #1196: the single-source header body lives in App.Resources as the
@@ -286,6 +299,14 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(Avalonia.Application.Current);
         Assert.True(Avalonia.Application.Current!.TryFindResource(
             "TabHeaderTemplate", null, out var resource));
+        return Assert.IsAssignableFrom<IDataTemplate>(resource);
+    }
+
+    private static IDataTemplate ResolveWebTabHeaderTemplate()
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "WebTabHeaderTemplate", null, out var resource));
         return Assert.IsAssignableFrom<IDataTemplate>(resource);
     }
 
@@ -321,9 +342,29 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal("Renamed", ToolTip.GetTip(titleTextBlock));
     }
 
-    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModel_WebTabHeaderTemplate_UsesCharacterEllipsisTrimming()
     {
-        var template = ResolveTabHeaderTemplate();
+        var viewModel = new WebTabHeaderViewModel { Title = "Web Tab" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel, ResolveWebTabHeaderTemplate());
+
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModel_DefaultTemplate_DoesNotTrim()
+    {
+        var viewModel = new TabHeaderViewModel { Title = "Default Tab" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+
+        Assert.NotEqual(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+    }
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
+        => InflateTabHeaderTitleTextBlock(viewModel, ResolveTabHeaderTemplate());
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel, IDataTemplate template)
+    {
         var control = template.Build(viewModel);
         Assert.NotNull(control);
         control!.DataContext = viewModel;

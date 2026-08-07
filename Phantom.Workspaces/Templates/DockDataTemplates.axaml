@@ -53,8 +53,11 @@
         <dock:DocumentControl>
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspaceDocument">
-                    <ContentControl Content="{Binding EffectiveTabHeader}"
-                                    ContentTemplate="{StaticResource TabHeaderTemplate}">
+                    <ContentControl Content="{Binding EffectiveTabHeader}">
+                        <ContentControl.DataTemplates>
+                            <StaticResource ResourceKey="WebTabHeaderTemplate" />
+                            <StaticResource ResourceKey="TabHeaderTemplate" />
+                        </ContentControl.DataTemplates>
                         <ToolTip.Tip>
                             <templates:TabTooltipView DataContext="{Binding TabViewModel}" />
                         </ToolTip.Tip>
@@ -76,8 +79,12 @@
         <dock:DocumentControl>
             <dock:DocumentControl.HeaderTemplate>
                 <DataTemplate x:DataType="vm:WorkspacePaneDocument">
-                    <ContentControl Content="{Binding EffectiveTabHeader}"
-                                    ContentTemplate="{StaticResource TabHeaderTemplate}" />
+                    <ContentControl Content="{Binding EffectiveTabHeader}">
+                        <ContentControl.DataTemplates>
+                            <StaticResource ResourceKey="WebTabHeaderTemplate" />
+                            <StaticResource ResourceKey="TabHeaderTemplate" />
+                        </ContentControl.DataTemplates>
+                    </ContentControl>
                 </DataTemplate>
             </dock:DocumentControl.HeaderTemplate>
         </dock:DocumentControl>

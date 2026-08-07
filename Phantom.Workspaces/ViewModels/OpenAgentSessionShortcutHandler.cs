@@ -158,7 +158,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var loadingTab = new AgentSessionWorkspaceTabViewModel
         {
             Id = tabId ?? agentSessionEntity.EntityId.ToString(),
-            Title = title ?? agentSessionEntity.DisplayName,
+            Title = !string.IsNullOrEmpty(title)
+                ? title
+                : !string.IsNullOrEmpty(agentSessionEntity.DisplayName)
+                    ? agentSessionEntity.DisplayName
+                    : agentSessionEntity.EntityId.ToString(),
             DockRegion = dockRegion ?? "full",
             Entity = agentSessionEntity,
             NotificationService = mainWindowViewModel.NotificationService,

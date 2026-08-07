@@ -181,6 +181,22 @@ public sealed class WebViewModelTests
     }
 
     [Fact]
+    public void WebViewModel_ExplicitTitleSet_StopsFollowingPageTitle()
+    {
+        var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: false)
+        {
+            Id = "test-tab-explicit",
+            Title = "Initial",
+        };
+
+        vm.SetTitleExplicit("Pinned");
+        vm.SetPageTitle("Page Title From Browser");
+
+        Assert.True(vm.IsTitleExplicit);
+        Assert.Equal("Pinned", vm.Title);
+    }
+
+    [Fact]
     public void SetPageTitle_WhenTitleFixed_TooltipStillReflectsPageTitle()
     {
         var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: true)
