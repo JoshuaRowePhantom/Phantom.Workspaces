@@ -2421,6 +2421,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.SelectedWorkspacePane = targetPane;
         }
 
+        var previousActiveDockable = focus ? null : documentDock.ActiveDockable;
+        var previousSelectedTab = focus ? null : targetPane.SelectedTab;
+
         // Add to the pane's Tabs membership set. The ItemsSource generator on the
         // pane's WorkspaceContentDock creates a WorkspaceDocument and appends it to
         // that dock's VisibleDockables.
@@ -2479,6 +2482,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (!this.navigatingViaHistory)
             {
                 this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
+            }
+        }
+        else
+        {
+            if (previousActiveDockable is not null)
+            {
+                if (!ReferenceEquals(documentDock.ActiveDockable, previousActiveDockable))
+                {
+                    this.dockFactory.SetActiveDockable(previousActiveDockable);
+                }
+            }
+            else if (newDocument is not null && ReferenceEquals(documentDock.ActiveDockable, newDocument))
+            {
+                documentDock.ActiveDockable = null;
+            }
+
+            if (!ReferenceEquals(targetPane.SelectedTab, previousSelectedTab))
+            {
+                targetPane.SelectedTab = previousSelectedTab;
             }
         }
     }

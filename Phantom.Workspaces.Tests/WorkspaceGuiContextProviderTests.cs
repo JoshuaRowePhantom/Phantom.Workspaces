@@ -1074,6 +1074,100 @@ public sealed class WorkspaceGuiContextProviderTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabTool_Url_FocusFalse_EmptyDock_DoesNotActivateNewTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+        ClearSelectedPaneTabs(viewModel);
+
+        var tool = await GetToolAsync(viewModel, "open_tab");
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["target"] = JsonDocument.Parse("\"url\"").RootElement.Clone(),
+                ["url"] = JsonDocument.Parse("\"https://empty-background.example.com\"").RootElement.Clone(),
+                ["focus"] = JsonDocument.Parse("false").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        var newTabId = resultJson.GetProperty("tab_id").GetString();
+
+        Assert.Null(viewModel.ActiveTabId);
+        Assert.Contains(GetWorkspaceDocumentIds(viewModel), id => string.Equals(id, newTabId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabTool_Url_FocusFalse_WithExistingActiveTab_PreservesActiveTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+        ClearSelectedPaneTabs(viewModel);
+
+        var anchorTab = new WebViewModel("https://anchor.example.com") { Id = "background-anchor-tab", Title = "Anchor" };
+        await viewModel.OpenTabAsync(anchorTab);
+        Assert.Equal(anchorTab.Id, viewModel.ActiveTabId);
+
+        var tool = await GetToolAsync(viewModel, "open_tab");
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["target"] = JsonDocument.Parse("\"url\"").RootElement.Clone(),
+                ["url"] = JsonDocument.Parse("\"https://preserve-background.example.com\"").RootElement.Clone(),
+                ["focus"] = JsonDocument.Parse("false").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        var newTabId = resultJson.GetProperty("tab_id").GetString();
+
+        Assert.Equal(anchorTab.Id, viewModel.ActiveTabId);
+        Assert.Contains(GetWorkspaceDocumentIds(viewModel), id => string.Equals(id, newTabId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabTool_Url_FocusTrue_ActivatesNewTab()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+        ClearSelectedPaneTabs(viewModel);
+
+        var tool = await GetToolAsync(viewModel, "open_tab");
+        var result = await tool.InvokeAsync(
+            new AIFunctionArguments(new Dictionary<string, object?>
+            {
+                ["target"] = JsonDocument.Parse("\"url\"").RootElement.Clone(),
+                ["url"] = JsonDocument.Parse("\"https://foreground.example.com\"").RootElement.Clone(),
+                ["focus"] = JsonDocument.Parse("true").RootElement.Clone(),
+            }),
+            CancellationToken.None);
+
+        var resultJson = Assert.IsType<JsonElement>(result);
+        var newTabId = resultJson.GetProperty("tab_id").GetString();
+
+        Assert.Equal(newTabId, viewModel.ActiveTabId);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenTabAsync_FocusFalse_PreservesSelectedTabOnTargetPane()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+        ClearSelectedPaneTabs(viewModel);
+
+        var anchorTab = new WebViewModel("https://selected-anchor.example.com") { Id = "selected-anchor-tab", Title = "Anchor" };
+        await viewModel.OpenTabAsync(anchorTab);
+        var selectedPane = viewModel.SelectedWorkspacePane!;
+        Assert.Same(anchorTab, selectedPane.SelectedTab);
+
+        var backgroundTab = new WebViewModel("https://selected-background.example.com") { Id = "selected-background-tab", Title = "Background" };
+        await viewModel.OpenTabAsync(backgroundTab, focus: false);
+
+        Assert.Same(anchorTab, selectedPane.SelectedTab);
+        Assert.Equal(anchorTab.Id, viewModel.ActiveTabId);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenTabTool_Shell_OpensShellTab()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
@@ -1263,6 +1357,30 @@ public sealed class WorkspaceGuiContextProviderTests
     {
         var contentLayout = viewModel.SelectedWorkspacePane?.ContentLayout;
         return contentLayout is null ? null : FindDocumentDockIn(contentLayout);
+    }
+
+    private static void ClearSelectedPaneTabs(MainWindowViewModel viewModel)
+    {
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+
+        pane!.Tabs.Clear();
+        pane.SelectedTab = null;
+
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        documentDock!.VisibleDockables?.Clear();
+        documentDock.ActiveDockable = null;
+    }
+
+    private static IReadOnlyList<string?> GetWorkspaceDocumentIds(MainWindowViewModel viewModel)
+    {
+        var documentDock = GetDocumentDock(viewModel);
+        Assert.NotNull(documentDock);
+        return documentDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .Select(doc => doc.Id)
+            .ToList();
     }
 
     private static IDocumentDock? FindDocumentDockIn(IDockable dockable)
