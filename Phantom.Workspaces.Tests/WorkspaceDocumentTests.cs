@@ -71,6 +71,53 @@ public sealed class WorkspaceDocumentTests
         Assert.Equal(1, tab.DisposeCount);
     }
 
+    [Fact]
+    public void WorkspaceDocument_InitializeWithLongTitle_KeepsFullTitleInEffectiveTabHeader()
+    {
+        const string longTitle = "GitHub Copilot Workspace Assistant session";
+        var tab = new DisposeSpyTab("long-title") { Title = longTitle };
+
+        var doc = new WorkspaceDocument(tab);
+
+        Assert.Equal(longTitle, doc.Title);
+        Assert.Equal(longTitle, doc.EffectiveTabHeader.Title);
+        Assert.False(doc.EffectiveTabHeader.Title.EndsWith("...", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WorkspaceTabViewModel_SetTitleExplicit_MarksIsTitleExplicitTrue()
+    {
+        var tab = new DisposeSpyTab("explicit-title");
+
+        tab.SetTitleExplicit("User Title");
+
+        Assert.True(tab.IsTitleExplicit);
+        Assert.Equal("User Title", tab.Title);
+    }
+
+    [Fact]
+    public void WorkspaceTabViewModel_SetTitleFromContent_IsIgnoredWhenIsTitleExplicit()
+    {
+        var tab = new DisposeSpyTab("explicit-content");
+        tab.SetTitleExplicit("User Title");
+
+        tab.SetTitleFromContent("Page Title");
+
+        Assert.True(tab.IsTitleExplicit);
+        Assert.Equal("User Title", tab.Title);
+    }
+
+    [Fact]
+    public void WorkspaceTabViewModel_SetTitleFromContent_UpdatesTitleWhenNotExplicit()
+    {
+        var tab = new DisposeSpyTab("content-title");
+
+        tab.SetTitleFromContent("Page Title");
+
+        Assert.False(tab.IsTitleExplicit);
+        Assert.Equal("Page Title", tab.Title);
+    }
+
     private static SubscribedEntityViewModel CreateWorkspaceEntity()
     {
         using var document = JsonDocument.Parse(

@@ -82,6 +82,13 @@ internal sealed class WorkspaceDockTypeInfoResolver : DefaultJsonTypeInfoResolve
         for (var i = jsonTypeInfo.Properties.Count - 1; i >= 0; i--)
         {
             var property = jsonTypeInfo.Properties[i];
+            if (jsonTypeInfo.Type == typeof(WorkspaceDocument)
+                && string.Equals(property.Name, nameof(WorkspaceDocument.Title), StringComparison.Ordinal))
+            {
+                property.ShouldSerialize = static (_, _) => false;
+                continue;
+            }
+
             if (property.AttributeProvider?.IsDefined(typeof(IgnoreDataMemberAttribute), true) == true
                 || typeof(ICommand).IsAssignableFrom(property.PropertyType)
                 || property.PropertyType == typeof(Type)

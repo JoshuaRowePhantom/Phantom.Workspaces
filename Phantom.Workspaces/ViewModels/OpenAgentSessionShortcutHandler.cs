@@ -380,11 +380,11 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 RenameSessionAsync = async (newName, ct) =>
                 {
                     await agentSessionEntity.SaveDisplayNameAsync(newName);
-                    tab.Title = newName;
+                    tab.SetTitleExplicit(newName);
                 },
                 SetTabTitleAsync = (newTitle, ct) =>
                 {
-                    tab.Title = newTitle;
+                    tab.SetTitleExplicit(newTitle);
                     return Task.CompletedTask;
                 },
                 ReplaceWithCloneAsync = async ct =>

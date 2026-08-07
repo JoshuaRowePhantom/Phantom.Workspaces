@@ -100,3 +100,7 @@ public class TabHeaderViewModel : ViewModelBase
         return vm;
     }
 }
+
+public sealed class WebTabHeaderViewModel : TabHeaderViewModel
+{
+}
