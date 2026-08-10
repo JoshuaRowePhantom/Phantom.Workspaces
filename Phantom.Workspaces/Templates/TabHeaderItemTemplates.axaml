@@ -52,7 +52,8 @@
             <StackPanel Orientation="Horizontal" Spacing="4">
                 <TextBlock Text="{Binding Title}"
                            ToolTip.Tip="{Binding Title}"
-                           TextTrimming="CharacterEllipsis" />
+                           TextTrimming="CharacterEllipsis"
+                           MaxWidth="240" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>

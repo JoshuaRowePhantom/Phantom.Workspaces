@@ -352,6 +352,31 @@ public sealed class TabHeaderViewModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_LongTitle_TextBlockIsTrimmedToConfiguredMaxWidth()
+    {
+        var viewModel = new WebTabHeaderViewModel
+        {
+            Title = "Bug: \"Microsoft.Extensions.AI.UsageContent\" leaks as literal text in assistant replies on tool-only turns",
+        };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel, ResolveWebTabHeaderTemplate());
+
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        Assert.Equal(240, titleTextBlock.MaxWidth);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_LongTitle_ToolTipStillExposesFullTitle()
+    {
+        const string longTitle = "Bug: Web tab titles are not length-limited and full page titles overflow the tab strip";
+        var viewModel = new WebTabHeaderViewModel { Title = longTitle };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel, ResolveWebTabHeaderTemplate());
+
+        Assert.Equal(longTitle, ToolTip.GetTip(titleTextBlock));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void TabHeaderViewModel_DefaultTemplate_DoesNotTrim()
     {
         var viewModel = new TabHeaderViewModel { Title = "Default Tab" };
