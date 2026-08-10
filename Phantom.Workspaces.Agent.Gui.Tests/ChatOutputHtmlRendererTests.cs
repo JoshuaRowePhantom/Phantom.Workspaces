@@ -289,10 +289,25 @@ public sealed class ChatOutputHtmlRendererTests
         var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("class=\"chat-usage-marker\"", html, StringComparison.Ordinal);
+        Assert.StartsWith("<div ", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"chat-content chat-usage\"", html, StringComparison.Ordinal);
         Assert.Contains("data-usage-inspect-target", html, StringComparison.Ordinal);
         Assert.Contains("data-details-target=", html, StringComparison.Ordinal);
         Assert.Contains("id=\"c0\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-usage-marker", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_EmitsVisibleUsageRowNotDisplayNoneSpan()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("<div class=\"chat-content chat-usage\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<span class=\"chat-usage-marker\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("display: none", html, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -342,6 +357,24 @@ public sealed class ChatOutputHtmlRendererTests
         Assert.NotNull(html);
         Assert.DoesNotContain("chat-usage-marker", html, StringComparison.Ordinal);
         Assert.DoesNotContain("data-usage-inspect-target", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallGroup_WithUsagePostGroupContent_UsageRowIsOutsideClosedGroupDetails()
+    {
+        const string usageRow = "<div class=\"chat-content chat-usage\" data-usage-inspect-target id=\"usage-0\"></div>";
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup(
+            "grp-0",
+            new[] { "my_tool" },
+            1,
+            "<details class=\"chat-content chat-tool-group-item\"><summary>tool</summary></details>",
+            postGroupContent: usageRow);
+
+        var closeDetailsIndex = html.IndexOf("</div></details>", StringComparison.Ordinal);
+        var usageIndex = html.IndexOf("id=\"usage-0\"", StringComparison.Ordinal);
+        Assert.True(closeDetailsIndex >= 0);
+        Assert.True(usageIndex > closeDetailsIndex);
     }
 
     [Fact]

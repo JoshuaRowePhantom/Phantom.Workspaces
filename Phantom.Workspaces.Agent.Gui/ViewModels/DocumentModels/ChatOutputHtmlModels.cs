@@ -24,7 +24,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
 /// </summary>
 internal sealed class ChatMessageHtmlModel
 {
-    private sealed record ContentBinding(string Key, string ElementId, string Html);
+    private sealed record ContentBinding(string Key, string ElementId, string Html, bool IsUsageInspect = false);
 
     private readonly IChatOutputHtmlSink sink;
     private readonly Func<bool> isReasoningVisible;
@@ -186,7 +186,14 @@ internal sealed class ChatMessageHtmlModel
     /// (issue #1225).
     /// </summary>
     public string BuildGroupedMemberHtml()
-        => string.Concat(this.bindings.Select(b => b.Html));
+        => string.Concat(this.bindings.Where(b => !b.IsUsageInspect).Select(b => b.Html));
+
+    /// <summary>
+    /// Returns usage-inspect bindings that must remain outside closed message-level tool groups so
+    /// their gutter affordances are visible even when tool details stay collapsed.
+    /// </summary>
+    public string BuildGroupedMemberPostGroupHtml()
+        => string.Concat(this.bindings.Where(b => b.IsUsageInspect).Select(b => b.Html));
 
     public void Update(AgentChatHistoryItem newSource)
     {
@@ -329,7 +336,7 @@ internal sealed class ChatMessageHtmlModel
             if (html is not null)
             {
                 var key = ChatOutputHtmlRenderer.ComputeContentKey(content, isDiagnostic);
-                newBindings.Add(new ContentBinding(key, contentId, html));
+                newBindings.Add(new ContentBinding(key, contentId, html, content is UsageContent));
             }
 
             contentIndex++;
@@ -464,23 +471,37 @@ internal sealed class ToolCallGroupHtmlModel
     /// The group owns the single <c>&lt;div class="chat-message assistant"&gt;</c> frame and header
     /// so grouped members contribute only their binding HTML (issue #1225).
     /// </summary>
-    public string BuildHtml(string firstMessageHtml)
+    public string BuildHtml(string firstMessageHtml, string? postGroupHtml = null)
         => ChatOutputHtmlRenderer.RenderToolCallGroup(
             this.GroupId,
             this.DistinctToolNames,
             this.CallCount,
             firstMessageHtml,
-            this.members[0].Source.Timestamp);
+            this.members[0].Source.Timestamp,
+            postGroupHtml ?? this.members[0].BuildGroupedMemberPostGroupHtml());
 
     /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model)
     {
         this.members.Add(model);
 
-        this.sink.UpdateContent(
-            ChatOutputHtmlRenderer.ToolGroupBodyId(this.GroupId),
-            ChatOutputUpdateLocation.Append,
-            model.BuildGroupedMemberHtml());
+        var groupedMemberHtml = model.BuildGroupedMemberHtml();
+        if (!string.IsNullOrEmpty(groupedMemberHtml))
+        {
+            this.sink.UpdateContent(
+                ChatOutputHtmlRenderer.ToolGroupBodyId(this.GroupId),
+                ChatOutputUpdateLocation.Append,
+                groupedMemberHtml);
+        }
+
+        var postGroupHtml = model.BuildGroupedMemberPostGroupHtml();
+        if (!string.IsNullOrEmpty(postGroupHtml))
+        {
+            this.sink.UpdateContent(
+                ChatOutputHtmlRenderer.ContentsContainerId(this.GroupId),
+                ChatOutputUpdateLocation.Append,
+                postGroupHtml);
+        }
         model.IsInserted = true;
 
         this.EmitSummaryUpdate();
@@ -878,6 +899,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             first.Model);
         first.Model.SetIsInsideMessageLevelToolGroup(true, emit: false);
         var body = new StringBuilder(first.Model.BuildGroupedMemberHtml());
+        var postGroup = new StringBuilder(first.Model.BuildGroupedMemberPostGroupHtml());
         first.Group = rebuiltGroup;
         first.IsTopLevelFirstGroupMember = true;
 
@@ -889,9 +911,10 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             member.Group = rebuiltGroup;
             member.IsTopLevelFirstGroupMember = false;
             body.Append(member.Model.BuildGroupedMemberHtml());
+            postGroup.Append(member.Model.BuildGroupedMemberPostGroupHtml());
         }
 
-        this.sink.UpdateContent(group.GroupId, ChatOutputUpdateLocation.Replace, rebuiltGroup.BuildHtml(body.ToString()));
+        this.sink.UpdateContent(group.GroupId, ChatOutputUpdateLocation.Replace, rebuiltGroup.BuildHtml(body.ToString(), postGroup.ToString()));
     }
 
     private void RebuildForReplace(int index, RenderSlot slot, AgentChatHistoryItem newItem)
@@ -1740,11 +1763,13 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 }
 
                 var body = new StringBuilder();
+                var postGroup = new StringBuilder();
                 for (var j = i; j < plan.Slots.Length; j++)
                 {
                     if (ReferenceEquals(plan.Slots[j].Group, group))
                     {
                         body.Append(plan.Slots[j].Model.BuildGroupedMemberHtml());
+                        postGroup.Append(plan.Slots[j].Model.BuildGroupedMemberPostGroupHtml());
                         plan.Slots[j].Model.IsInserted = true;
                     }
                     else if (plan.Slots[j].HasDomElement)
@@ -1753,7 +1778,7 @@ public sealed class ChatOutputHtmlModel : IDisposable
                     }
                 }
 
-                builder.Append(group.BuildHtml(body.ToString()));
+                builder.Append(group.BuildHtml(body.ToString(), postGroup.ToString()));
             }
             else
             {

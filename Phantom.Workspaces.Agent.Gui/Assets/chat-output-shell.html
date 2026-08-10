@@ -434,7 +434,10 @@
 
     .chat-content-row:hover .usage-gutter-btn { opacity: 0.6; }
     .usage-gutter-btn:hover { opacity: 1; }
-    .chat-usage-marker { display: none; }
+    .chat-content.chat-usage {
+      position: relative;
+      min-height: 1.6em;
+    }
 
     /* Running sub-agents panel styles */
     .running-subagents-panel {
@@ -683,7 +686,29 @@
       function attach(marker) {
         if (marker._usageGutterAttached) { return; }
         marker._usageGutterAttached = true;
+        marker.classList.add("chat-content-row");
 
+        marker.appendChild(makeButton(marker));
+
+        var prev = marker.previousElementSibling;
+        if (!prev || !prev.hasAttribute || !prev.hasAttribute("data-inspect-target")) {
+          return;
+        }
+
+        var host = null;
+        for (var i = 0; i < prev.children.length; i++) {
+          if (prev.children[i].classList && prev.children[i].classList.contains("inspect-gutter-btn")) {
+            host = prev.children[i];
+            break;
+          }
+        }
+
+        if (host && host.parentNode) {
+          host.parentNode.insertBefore(makeButton(marker), host.nextSibling);
+        }
+      }
+
+      function makeButton(marker) {
         var btn = document.createElement("button");
         btn.className = "usage-gutter-btn";
         btn.setAttribute("aria-label", "Open token usage details");
@@ -698,17 +723,7 @@
           });
         });
 
-        var prev = marker.previousElementSibling;
-        var host = prev && prev.querySelector(".inspect-gutter-btn");
-        if (host && host.parentNode) {
-          host.parentNode.insertBefore(btn, host.nextSibling);
-        } else if (prev) {
-          prev.classList.add("chat-content-row");
-          prev.appendChild(btn);
-        } else {
-          marker.classList.add("chat-content-row");
-          marker.appendChild(btn);
-        }
+        return btn;
       }
 
       return { init: init };

@@ -85,7 +85,13 @@ internal static class ChatOutputHtmlRenderer
     /// <paramref name="toolNames"/> is the deduped, first-seen-order list of tool names in the group.
     /// <paramref name="timestamp"/> is the first member's timestamp for the shared header.
     /// </summary>
-    public static string RenderToolCallGroup(string groupId, IReadOnlyList<string> toolNames, int callCount, string bodyContent, DateTimeOffset? timestamp = null)
+    public static string RenderToolCallGroup(
+        string groupId,
+        IReadOnlyList<string> toolNames,
+        int callCount,
+        string bodyContent,
+        DateTimeOffset? timestamp = null,
+        string? postGroupContent = null)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass("assistant")).Append("\" id=\"")
@@ -97,6 +103,11 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
+        if (!string.IsNullOrEmpty(postGroupContent))
+        {
+            builder.Append(postGroupContent);
+        }
+
         builder.Append("</div></div>");
         return builder.ToString();
     }
@@ -845,7 +856,7 @@ internal static class ChatOutputHtmlRenderer
         => !string.IsNullOrWhiteSpace(mediaType) && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
 
     private static string UsageMarker(string contentId, string detailsJson)
-        => $"<span class=\"chat-usage-marker\" data-usage-inspect-target data-details-target=\"{HtmlEscape(detailsJson)}\" id=\"{contentId}\"></span>";
+        => $"<div class=\"chat-content chat-usage\" data-usage-inspect-target data-details-target=\"{HtmlEscape(detailsJson)}\" id=\"{contentId}\"></div>";
 
     private static string SerializeContentJson(AIContent content)
     {

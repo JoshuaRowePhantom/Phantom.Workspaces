@@ -59,6 +59,27 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Fact]
+    public void ChatOutputShellHtml_UsageInspectGutter_AlwaysAttachesHashToUsageRow()
+    {
+        var html = ReadShellHtml();
+
+        Assert.Contains("marker.appendChild(makeButton(marker));", html, StringComparison.Ordinal);
+        Assert.Contains("marker.classList.add(\"chat-content-row\");", html, StringComparison.Ordinal);
+        Assert.Contains(".chat-content.chat-usage", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(".chat-usage-marker { display: none; }", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_UsageInspectGutter_DoesNotQueryDescendantInspectButtons()
+    {
+        var html = ReadShellHtml();
+
+        Assert.DoesNotContain("prev.querySelector(\".inspect-gutter-btn\")", html, StringComparison.Ordinal);
+        Assert.Contains("prev.hasAttribute(\"data-inspect-target\")", html, StringComparison.Ordinal);
+        Assert.Contains("prev.children[i].classList.contains(\"inspect-gutter-btn\")", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ChatOutputShellHtml_DetailsGutterInit_IsNotInvoked()
     {
         // #1038: the bootstrap must no longer call DetailsGutter.init.
