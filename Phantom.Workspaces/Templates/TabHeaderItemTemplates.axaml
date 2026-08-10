@@ -28,9 +28,12 @@
     <DataTemplate x:Key="TabHeaderTemplate"
                    DataType="vm:TabHeaderViewModel">
         <Grid HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
                 <TextBlock Text="{Binding Title}"
-                           ToolTip.Tip="{Binding Title}" />
+                           ToolTip.Tip="{Binding Title}"
+                           TextTrimming="CharacterEllipsis"
+                           TextWrapping="NoWrap"
+                           Width="240" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -49,11 +52,12 @@
     <DataTemplate x:Key="WebTabHeaderTemplate"
                   DataType="vm:WebTabHeaderViewModel">
         <Grid HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
                 <TextBlock Text="{Binding Title}"
                            ToolTip.Tip="{Binding Title}"
                            TextTrimming="CharacterEllipsis"
-                           MaxWidth="240" />
+                           TextWrapping="NoWrap"
+                           Width="240" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>

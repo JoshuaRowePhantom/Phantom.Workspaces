@@ -352,17 +352,24 @@ public sealed class TabHeaderViewModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void WebTabHeaderTemplate_LongTitle_TextBlockIsTrimmedToConfiguredMaxWidth()
+    public void WebTabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsTrimmedToWidth()
     {
         var viewModel = new WebTabHeaderViewModel
         {
             Title = "Bug: \"Microsoft.Extensions.AI.UsageContent\" leaks as literal text in assistant replies on tool-only turns",
         };
 
-        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel, ResolveWebTabHeaderTemplate());
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveWebTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
 
         Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
-        Assert.Equal(240, titleTextBlock.MaxWidth);
+        Assert.Equal(TextWrapping.NoWrap, titleTextBlock.TextWrapping);
+        Assert.Equal(240, titleTextBlock.Width);
+        titleTextBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+        Assert.Equal(240, titleTextBlock.DesiredSize.Width);
+        Assert.True(double.IsPositiveInfinity(titleTextBlock.MaxWidth));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -377,26 +384,58 @@ public sealed class TabHeaderViewModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void TabHeaderViewModel_DefaultTemplate_DoesNotTrim()
+    public void WebTabHeaderTemplate_ShortTitle_TextBlockKeepsFullTitle()
     {
-        var viewModel = new TabHeaderViewModel { Title = "Default Tab" };
-        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel);
+        const string title = "Open Issues";
+        var viewModel = new WebTabHeaderViewModel { Title = title };
 
-        Assert.NotEqual(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveWebTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(title, titleTextBlock.Text);
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        Assert.Equal(240, titleTextBlock.Width);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsTrimmedToWidth()
+    {
+        var viewModel = new TabHeaderViewModel
+        {
+            Title = "Long non-web tab title that should be bounded by the shared tab header template",
+        };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        Assert.Equal(TextWrapping.NoWrap, titleTextBlock.TextWrapping);
+        Assert.Equal(240, titleTextBlock.Width);
+        titleTextBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+        Assert.Equal(240, titleTextBlock.DesiredSize.Width);
     }
 
     private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
         => InflateTabHeaderTitleTextBlock(viewModel, ResolveTabHeaderTemplate());
 
     private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel, IDataTemplate template)
+        => InflateTabHeaderTitleTextBlock(viewModel, template, new Avalonia.Size(1000, 600));
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel, IDataTemplate template, Avalonia.Size measureSize)
     {
         var control = template.Build(viewModel);
         Assert.NotNull(control);
         control!.DataContext = viewModel;
 
         var host = new ContentControl { Content = control };
-        host.Measure(new Avalonia.Size(1000, 600));
-        host.Arrange(new Avalonia.Rect(0, 0, 1000, 600));
+        host.Measure(measureSize);
+        var arrangeWidth = double.IsPositiveInfinity(measureSize.Width) ? host.DesiredSize.Width : measureSize.Width;
+        var arrangeHeight = double.IsPositiveInfinity(measureSize.Height) ? host.DesiredSize.Height : measureSize.Height;
+        host.Arrange(new Avalonia.Rect(0, 0, arrangeWidth, arrangeHeight));
 
         return control.GetLogicalDescendants()
             .OfType<TextBlock>()
