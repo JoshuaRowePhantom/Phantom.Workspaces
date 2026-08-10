@@ -29,6 +29,9 @@ public sealed class WindowsCredentialManagerSecretStoreTests
     private const string SemaphoreName =
         @"Global\Phantom.Workspaces.Tests.WindowsCredentialManagerSecretStore";
 
+    private static WindowsCredentialManagerSecretStore CreateEmptyRandomPrefixStore()
+        => new("Phantom.Workspaces.Tests.Empty-" + Guid.NewGuid().ToString("N") + ":");
+
     private static SecureString MakeSecureString(string value)
     {
         var secure = new SecureString();
@@ -124,6 +127,14 @@ public sealed class WindowsCredentialManagerSecretStoreTests
     }
 
     [WindowsFact]
+    public async Task DeleteAsync_UnknownName_IsNoOp()
+    {
+        var store = CreateEmptyRandomPrefixStore();
+
+        await store.DeleteAsync("never-written", CancellationToken.None);
+    }
+
+    [WindowsFact]
     public async Task EnumerateNamesAsync_WithPrefix_ReturnsMatchingNames()
     {
         await WithExclusiveStoreAsync(async store =>
@@ -137,5 +148,15 @@ public sealed class WindowsCredentialManagerSecretStoreTests
             Assert.Contains(SecondConstantName, names);
             Assert.All(names, name => Assert.StartsWith(ConstantName, name));
         });
+    }
+
+    [WindowsFact]
+    public async Task EnumerateNamesAsync_NoMatchingCredentials_ReturnsEmpty()
+    {
+        var store = CreateEmptyRandomPrefixStore();
+
+        var names = await store.EnumerateNamesAsync(string.Empty, CancellationToken.None);
+
+        Assert.Empty(names);
     }
 }

@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Runtime.Versioning;
 using System.Security;
 using Meziantou.Framework.Win32;
@@ -16,6 +17,8 @@ public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
 {
     /// <summary>The default target-name prefix for all Phantom.Workspaces credentials.</summary>
     public const string DefaultTargetPrefix = "Phantom.Workspaces:";
+
+    private const int ErrorNotFound = 1168;
 
     private readonly string targetPrefix;
 
@@ -77,7 +80,14 @@ public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
         ct.ThrowIfCancellationRequested();
 
 #pragma warning disable CA1416
-        CredentialManager.DeleteCredential(this.targetPrefix + name);
+        try
+        {
+            CredentialManager.DeleteCredential(this.targetPrefix + name);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorNotFound)
+        {
+            return Task.CompletedTask;
+        }
 #pragma warning restore CA1416
         return Task.CompletedTask;
     }
@@ -90,14 +100,21 @@ public sealed class WindowsCredentialManagerSecretStore : IPlatformSecretStore
 
         var filter = this.targetPrefix + prefix + "*";
 #pragma warning disable CA1416
-        var names = CredentialManager.EnumerateCredentials(filter)
-#pragma warning restore CA1416
-            .Select(credential => credential.ApplicationName)
-            .Where(applicationName => applicationName.StartsWith(this.targetPrefix, StringComparison.Ordinal))
-            .Select(applicationName => applicationName[this.targetPrefix.Length..])
-            .ToArray();
+        try
+        {
+            var names = CredentialManager.EnumerateCredentials(filter)
+                .Select(credential => credential.ApplicationName)
+                .Where(applicationName => applicationName.StartsWith(this.targetPrefix, StringComparison.Ordinal))
+                .Select(applicationName => applicationName[this.targetPrefix.Length..])
+                .ToArray();
 
-        return Task.FromResult<IReadOnlyList<string>>(names);
+            return Task.FromResult<IReadOnlyList<string>>(names);
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorNotFound)
+        {
+            return Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+        }
+#pragma warning restore CA1416
     }
 
     private static SecureString ToSecureString(string value)
