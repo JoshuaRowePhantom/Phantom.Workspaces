@@ -5840,6 +5840,56 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WebTab_LongPageTitle_TabStripItemWidthIsBounded()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var before = new WebViewModel("https://before.example.com") { Id = "long-title-before", Title = "Open Issues" };
+        var longTitleTab = new WebViewModel("https://long-title.example.com") { Id = "long-title-web-tab", Title = "Initial" };
+        var after = new WebViewModel("https://after.example.com") { Id = "long-title-after", Title = "Settings" };
+        longTitleTab.SetPageTitle(
+            "Consolidate duplicated JSON serializer options + default config-path logic " +
+            "(AllowedSecretsStore vs ConfigurationPersistenceService) and keep adjacent tabs visible");
+
+        await viewModel.OpenTabAsync(before);
+        await viewModel.OpenTabAsync(longTitleTab);
+        await viewModel.OpenTabAsync(after);
+
+        var window = new MainWindow(viewModel)
+        {
+            Width = 900,
+            Height = 600,
+        };
+        window.Show();
+        try
+        {
+            await WaitForDocumentTabStripAsync(window);
+            await WaitForLayoutAsync(window);
+            Dispatcher.UIThread.RunJobs();
+
+            var contentTabStrip = window.GetVisualDescendants()
+                .OfType<DocumentTabStrip>()
+                .FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
+            Assert.NotNull(contentTabStrip);
+
+            var tabStripItems = contentTabStrip!.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+            Assert.True(tabStripItems.Count >= 3, $"Expected at least three tab-strip items, found {tabStripItems.Count}.");
+
+            var longTitleItem = tabStripItems.FirstOrDefault(item => item.DataContext is WorkspaceDocument { Id: "long-title-web-tab" });
+            Assert.NotNull(longTitleItem);
+            Assert.InRange(longTitleItem!.Bounds.Width, 1, 400);
+
+            Assert.Contains(tabStripItems, item => item.DataContext is WorkspaceDocument { Id: "long-title-before" } && item.Bounds.Width > 0);
+            Assert.Contains(tabStripItems, item => item.DataContext is WorkspaceDocument { Id: "long-title-after" } && item.Bounds.Width > 0);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
     // ---------------------------------------------------------------------------------------------
     // #1172 — Usage tracker end-to-end via IUrlOpener.
     // ---------------------------------------------------------------------------------------------

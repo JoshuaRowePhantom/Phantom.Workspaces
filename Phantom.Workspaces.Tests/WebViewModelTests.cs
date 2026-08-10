@@ -211,6 +211,23 @@ public sealed class WebViewModelTests
         Assert.Contains("https://example.com", vm.TabTooltip);
     }
 
+    [Fact]
+    public void SetPageTitle_WithLongTitle_RetainsFullTitleAndTooltip()
+    {
+        const string longTitle = "Consolidate duplicated JSON serializer options + default config-path logic (AllowedSecretsStore vs ConfigurationPersistenceService)";
+        var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: false)
+        {
+            Id = "test-tab-long-title",
+            Title = "Initial",
+        };
+
+        vm.SetPageTitle(longTitle);
+
+        Assert.Equal(longTitle, vm.Title);
+        Assert.Contains(longTitle, vm.TabTooltip);
+        Assert.Contains("https://example.com", vm.TabTooltip);
+    }
+
     // --- OpenExternalEntityShortcutHandler: default key → display name, title not fixed ---
 
     [AvaloniaFact(Timeout = 15_000)]

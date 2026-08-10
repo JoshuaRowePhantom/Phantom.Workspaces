@@ -184,6 +184,29 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.Equal("https://roundtrip.example.com", restoredDesc.Url);
     }
 
+    [Fact]
+    public void WorkspaceDocument_Descriptor_BrowserKind_LongTitleRoundTripsLosslessly()
+    {
+        const string longTitle = "Consolidate duplicated JSON serializer options + default config-path logic (AllowedSecretsStore vs ConfigurationPersistenceService)";
+        var descriptor = new BrowserDockTabDescriptor("https://roundtrip.example.com/long-title")
+        {
+            Title = longTitle,
+            IsTitleExplicit = false,
+        };
+        var tab = new StubWorkspaceTab("tab-rt-browser-long-title", "Browser Round-trip");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("https://roundtrip.example.com/long-title", restoredDesc.Url);
+        Assert.Equal(longTitle, restoredDesc.Title);
+        Assert.False(restoredDesc.IsTitleExplicit);
+    }
+
     // ── ContextLocator wires tab view model after deserialization ─────────────
 
     [Fact]

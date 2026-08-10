@@ -354,10 +354,8 @@ public sealed class TabHeaderViewModelTests
     [AvaloniaFact(Timeout = 15_000)]
     public void WebTabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsTrimmedToWidth()
     {
-        var viewModel = new WebTabHeaderViewModel
-        {
-            Title = "Bug: \"Microsoft.Extensions.AI.UsageContent\" leaks as literal text in assistant replies on tool-only turns",
-        };
+        const string longTitle = "Bug: \"Microsoft.Extensions.AI.UsageContent\" leaks as literal text in assistant replies on tool-only turns";
+        var viewModel = new WebTabHeaderViewModel { Title = longTitle };
 
         var titleTextBlock = InflateTabHeaderTitleTextBlock(
             viewModel,
@@ -370,6 +368,7 @@ public sealed class TabHeaderViewModelTests
         titleTextBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
         Assert.Equal(240, titleTextBlock.DesiredSize.Width);
         Assert.True(double.IsPositiveInfinity(titleTextBlock.MaxWidth));
+        AssertTextLayoutTrimmedToSingleEllipsizedLine(titleTextBlock, longTitle);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -440,6 +439,15 @@ public sealed class TabHeaderViewModelTests
         return control.GetLogicalDescendants()
             .OfType<TextBlock>()
             .First(tb => tb.Text == viewModel.Title);
+    }
+
+    private static void AssertTextLayoutTrimmedToSingleEllipsizedLine(TextBlock titleTextBlock, string fullTitle)
+    {
+        var lines = titleTextBlock.TextLayout.TextLines;
+        var line = Assert.Single(lines);
+        Assert.True(
+            line.Length > fullTitle.Length,
+            $"Expected the trimmed layout line to include an ellipsis marker; line length was {line.Length}, title length was {fullTitle.Length}.");
     }
 
     // ── #1196: Indicator DataTemplates are keyed resources in App.Resources ────
