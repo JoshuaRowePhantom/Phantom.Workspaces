@@ -46,6 +46,57 @@ public abstract class AgentPersistenceStoreContractTests
     }
 
     [Fact]
+    public async Task StoreAsync_ThenReadMessagesAsync_PreservesUsageContentWithTokenDetails()
+    {
+        await this.ResetStoreAsync();
+        var store = await this.CreateStoreAsync();
+        var persistedAgent = CreatePersistedAgent("session-contract-usage-content", "contract-agent-usage-content");
+        var usageDetails = new UsageDetails
+        {
+            InputTokenCount = 10,
+            OutputTokenCount = 5,
+            TotalTokenCount = 15,
+            AdditionalCounts = new()
+            {
+                ["copilot.sdk.reasoning_tokens"] = 2,
+                ["copilot.sdk.cache_read_tokens"] = 3,
+                ["copilot.sdk.cache_write_tokens"] = 4,
+                ["copilot.sdk.cost_micro_usd"] = 5,
+            },
+        };
+        var messages = new[]
+        {
+            new ChatMessage(ChatRole.Assistant, [new TextContent("done"), new UsageContent(usageDetails)]),
+        };
+
+        await store.StoreAsync(
+            new StoreRequestAgent
+            {
+                Agent = persistedAgent,
+                NewMessages = messages,
+            },
+            CancellationToken.None);
+
+        var restoredMessages = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = persistedAgent.AgentSessionId },
+            CancellationToken.None);
+
+        var restoredMessage = Assert.Single(restoredMessages);
+        Assert.Equal(ChatRole.Assistant, restoredMessage.Role);
+        Assert.Equal("done", Assert.Single(restoredMessage.Contents.OfType<TextContent>()).Text);
+        var restoredUsage = Assert.Single(restoredMessage.Contents.OfType<UsageContent>());
+        Assert.Equal(10, restoredUsage.Details.InputTokenCount);
+        Assert.Equal(5, restoredUsage.Details.OutputTokenCount);
+        Assert.Equal(15, restoredUsage.Details.TotalTokenCount);
+        var additionalCounts = restoredUsage.Details.AdditionalCounts;
+        Assert.NotNull(additionalCounts);
+        Assert.Equal(2, additionalCounts!["copilot.sdk.reasoning_tokens"]);
+        Assert.Equal(3, additionalCounts["copilot.sdk.cache_read_tokens"]);
+        Assert.Equal(4, additionalCounts["copilot.sdk.cache_write_tokens"]);
+        Assert.Equal(5, additionalCounts["copilot.sdk.cost_micro_usd"]);
+    }
+
+    [Fact]
     public async Task StoreAsync_CalledTwice_AppendsMessages()
     {
         await this.ResetStoreAsync();
