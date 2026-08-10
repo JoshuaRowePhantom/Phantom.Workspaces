@@ -44,6 +44,26 @@ public class AgentResponseUpdateCoalescerTests
     }
 
     [Fact]
+    public void Coalesce_AssistantToolCallThenUsage_PreservesUsageAsLastContent()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+        var updates = new[]
+        {
+            Update(ChatRole.Assistant, [new FunctionCallContent("c1", "tool", null)]),
+            Update(ChatRole.Assistant, [usage]),
+        };
+
+        var result = AgentResponseUpdateCoalescer.Coalesce(updates, Time);
+
+        var item = Assert.Single(result);
+        Assert.Equal(ChatRole.Assistant, item.Role);
+        Assert.Collection(
+            item.Contents,
+            c => Assert.Equal("c1", Assert.IsType<FunctionCallContent>(c).CallId),
+            c => Assert.Same(usage, Assert.IsType<UsageContent>(c)));
+    }
+
+    [Fact]
     public void Coalesce_MultipleAssistantTextDeltas_ConcatenatesIntoSingleTextContent()
     {
         var updates = new[]

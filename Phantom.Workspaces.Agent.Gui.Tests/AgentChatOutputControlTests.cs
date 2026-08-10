@@ -51,7 +51,9 @@ public sealed class AgentChatOutputControlTests
 
         Assert.Contains("CopyGutter.init(document);", html, StringComparison.Ordinal);
         Assert.Contains("InspectGutter.init(document);", html, StringComparison.Ordinal);
+        Assert.Contains("UsageInspectGutter.init(document);", html, StringComparison.Ordinal);
         Assert.Contains("inspect-gutter-btn", html, StringComparison.Ordinal);
+        Assert.Contains("usage-gutter-btn", html, StringComparison.Ordinal);
         // The inspect gutter still relies on the co-located data-details-target attribute.
         Assert.Contains("data-details-target", html, StringComparison.Ordinal);
     }

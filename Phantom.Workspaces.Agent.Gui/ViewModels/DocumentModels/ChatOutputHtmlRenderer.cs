@@ -511,8 +511,10 @@ internal static class ChatOutputHtmlRenderer
                 return TextBlock(contentId, "chat-error", error.Message ?? string.Empty, SerializeContentJson(error));
             case UriContent uri:
                 return TextBlock(contentId, "chat-uri", uri.Uri.ToString(), SerializeContentJson(uri));
+            case UsageContent usage:
+                return UsageMarker(contentId, SerializeContentJson(usage));
             default:
-                return TextBlock(contentId, "chat-text", content.ToString() ?? string.Empty, SerializeContentJson(content));
+                return TextBlock(contentId, "chat-meta", $"[{content.GetType().Name}]", SerializeContentJson(content));
         }
     }
 
@@ -532,7 +534,8 @@ internal static class ChatOutputHtmlRenderer
             DataContent data => $"data:{data.MediaType}\u0001{data.Data.Length}",
             ErrorContent error => "error:" + error.Message,
             UriContent uri => "uri:" + uri.Uri,
-            _ => $"other:{content.GetType().FullName}\u0001{content}",
+            UsageContent usage => $"usage:{usage.Details.InputTokenCount}\u0001{usage.Details.OutputTokenCount}\u0001{usage.Details.TotalTokenCount}",
+            _ => $"other:{content.GetType().FullName}",
         };
     }
 
@@ -840,6 +843,9 @@ internal static class ChatOutputHtmlRenderer
 
     private static bool IsImageMediaType(string? mediaType)
         => !string.IsNullOrWhiteSpace(mediaType) && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private static string UsageMarker(string contentId, string detailsJson)
+        => $"<span class=\"chat-usage-marker\" data-usage-inspect-target data-details-target=\"{HtmlEscape(detailsJson)}\" id=\"{contentId}\"></span>";
 
     private static string SerializeContentJson(AIContent content)
     {

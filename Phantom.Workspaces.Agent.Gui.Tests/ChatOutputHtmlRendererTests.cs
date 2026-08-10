@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -270,6 +271,100 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
+    public void RenderContent_UsageContent_DoesNotLeakTypeName()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("Microsoft.Extensions.AI.UsageContent", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_EmitsUsageMarkerWithInspectAttributes()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("class=\"chat-usage-marker\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-usage-inspect-target", html, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"c0\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_DetailsPayloadContainsTokenCounts()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5, TotalTokenCount = 15 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        var payload = ExtractDataDetailsTarget(html);
+        Assert.Contains("\"InputTokenCount\": 10", payload, StringComparison.Ordinal);
+        Assert.Contains("\"OutputTokenCount\": 5", payload, StringComparison.Ordinal);
+        Assert.Contains("\"TotalTokenCount\": 15", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_CarriesAdditionalCounts()
+    {
+        var usage = new UsageContent(new UsageDetails
+        {
+            InputTokenCount = 10,
+            OutputTokenCount = 5,
+            TotalTokenCount = 15,
+            AdditionalCounts = new()
+            {
+                ["copilot.sdk.reasoning_tokens"] = 2,
+                ["copilot.sdk.cache_read_tokens"] = 3,
+                ["copilot.sdk.cache_write_tokens"] = 4,
+                ["copilot.sdk.cost_micro_usd"] = 5,
+            },
+        });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        var payload = ExtractDataDetailsTarget(html);
+        Assert.Contains("copilot.sdk.reasoning_tokens", payload, StringComparison.Ordinal);
+        Assert.Contains("copilot.sdk.cache_read_tokens", payload, StringComparison.Ordinal);
+        Assert.Contains("copilot.sdk.cache_write_tokens", payload, StringComparison.Ordinal);
+        Assert.Contains("copilot.sdk.cost_micro_usd", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_TextContent_DoesNotEmitUsageMarker()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("hello"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("chat-usage-marker", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-usage-inspect-target", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UnknownAIContentSubtype_DoesNotLeakTypeName()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new UnknownAIContent(), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains(">[UnknownAIContent]</div>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($">{typeof(UnknownAIContent).FullName}</div>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeContentKey_UsageContent_DoesNotCallToString()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var key = ChatOutputHtmlRenderer.ComputeContentKey(usage, isDiagnostic: false);
+
+        Assert.DoesNotContain("Microsoft.Extensions.AI.UsageContent", key, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RenderContent_TextReasoningContent_DataDetailsTargetIsJsonNotRawText()
     {
         const string text = "thinking about this";
@@ -291,6 +386,20 @@ public sealed class ChatOutputHtmlRendererTests
         // The attribute should be the full content JSON, not just the arguments body
         Assert.DoesNotContain("data-details-target=\"{\n  &quot;arg&quot;", html, StringComparison.Ordinal);
     }
+
+    private static string ExtractDataDetailsTarget(string? html)
+    {
+        Assert.NotNull(html);
+        const string marker = "data-details-target=\"";
+        var start = html!.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected data-details-target attribute.");
+        start += marker.Length;
+        var end = html.IndexOf('"', start);
+        Assert.True(end > start, "Expected non-empty data-details-target attribute.");
+        return WebUtility.HtmlDecode(html[start..end]);
+    }
+
+    private sealed class UnknownAIContent : AIContent;
 
     [Fact]
     public void RenderContent_ErrorContent_DataDetailsTargetIsJsonNotRawText()
