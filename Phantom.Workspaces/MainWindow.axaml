@@ -177,7 +177,7 @@
                 <TextBox x:Name="FindTextBox"
                          Classes="entity-find-input"
                          Text="{Binding Find.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         Watermark="Find entities…">
+                         PlaceholderText="Find entities…">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter"        Command="{Binding Find.NextCommand}" />
                         <KeyBinding Gesture="Shift+Enter"  Command="{Binding Find.PreviousCommand}" />
