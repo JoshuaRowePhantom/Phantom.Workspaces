@@ -12,6 +12,7 @@ public sealed class ShellSession : IAsyncDisposable
     private readonly Task relayErrorTask;
     private readonly Task exitWatcher;
     private int disposed;
+    private int transportCompleted;  // atomic gate for completing the transport stream
 
     internal ShellSession(Process process, Stream transportStream, CancellationToken cancellationToken)
     {
@@ -51,7 +52,13 @@ public sealed class ShellSession : IAsyncDisposable
         await SuppressAsync(this.relayOutputTask).ConfigureAwait(false);
         await SuppressAsync(this.relayErrorTask).ConfigureAwait(false);
         await SuppressAsync(this.exitWatcher).ConfigureAwait(false);
-        await this.transportStream.DisposeAsync().ConfigureAwait(false);
+
+        // Atomically complete the transport if not already done by the watcher
+        if (Interlocked.Exchange(ref this.transportCompleted, 1) == 0)
+        {
+            await this.transportStream.DisposeAsync().ConfigureAwait(false);
+        }
+
         this.process.Dispose();
         this.cts.Dispose();
     }
@@ -60,13 +67,15 @@ public sealed class ShellSession : IAsyncDisposable
     {
         try
         {
+            // Wait for stdout and stderr relays to complete (drain output before completing transport)
             await Task.WhenAll(this.relayOutputTask, this.relayErrorTask).ConfigureAwait(false);
         }
         catch
         {
         }
 
-        if (this.disposed == 0)
+        // Atomically complete the transport only if DisposeAsync has not already done so
+        if (Interlocked.Exchange(ref this.transportCompleted, 1) == 0)
         {
             try
             {

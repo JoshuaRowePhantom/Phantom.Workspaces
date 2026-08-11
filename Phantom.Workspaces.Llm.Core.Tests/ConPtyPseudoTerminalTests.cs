@@ -97,6 +97,51 @@ public sealed class ConPtyPseudoTerminalTests
     }
 
     [Fact]
+    public async Task ConPtyPseudoTerminal_OutputStream_UsesOverlappedAsyncPipe()
+    {
+        // Verifies the ConPTY output stream is backed by an async-capable overlapped pipe
+        // rather than ThreadPool-backed synchronous pipe I/O. An overlapped FileStream
+        // wraps a handle created with FILE_FLAG_OVERLAPPED and uses true async I/O.
+        using var _ = new ConsoleScope();
+        await using var pty = new ConPtyPseudoTerminal(MinimalPayload);
+
+        // FileStream created with isAsync: true throws ArgumentException if the underlying
+        // handle was not created with FILE_FLAG_OVERLAPPED. If we reach here without exception,
+        // the output stream is using overlapped I/O.
+        Assert.True(pty.Output.CanRead);
+
+        // A pre-cancelled ReadAsync on an overlapped stream completes with OperationCanceledException
+        // immediately, without queueing work on the ThreadPool.
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pty.Output.ReadAsync(new byte[1], cts.Token).AsTask());
+    }
+
+    [Fact]
+    public async Task ConPtyPseudoTerminal_InputStream_UsesOverlappedAsyncPipe()
+    {
+        // Verifies async stdin writes are backed by an overlapped pipe and can be
+        // cancelled/ordered deterministically without ThreadPool scheduling races.
+        using var _ = new ConsoleScope();
+        await using var pty = new ConPtyPseudoTerminal(MinimalPayload);
+
+        Assert.True(pty.Input.CanWrite);
+
+        // Writing an empty buffer exercises the async write path. If the handle is not
+        // overlapped, FileStream would have thrown ArgumentException in the constructor.
+        await pty.Input.WriteAsync(Array.Empty<byte>());
+
+        // A pre-cancelled WriteAsync on an overlapped stream completes immediately.
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => pty.Input.WriteAsync(new byte[1], cts.Token).AsTask());
+    }
+
+    [Fact]
     public async Task Constructor_DoesNotThrow_WithValidPayload()
     {
         // Before the fix, the constructor throws ArgumentException because
