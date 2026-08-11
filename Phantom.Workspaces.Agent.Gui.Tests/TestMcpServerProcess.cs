@@ -101,6 +101,8 @@ internal sealed class TestMcpServerProcess : IAsyncDisposable
         return null;
     }
 
+    internal static string GetMcpExecutablePathForTests() => GetMcpExecutablePath();
+
     private static string GetMcpExecutablePath()
     {
         var copiedExecutable = Path.Combine(AppContext.BaseDirectory, "Phantom.Workspaces.Llm.Test.Mcp.exe");
@@ -122,7 +124,14 @@ internal sealed class TestMcpServerProcess : IAsyncDisposable
             return fallbackExecutable;
         }
 
-        throw new InvalidOperationException($"Could not locate Phantom.Workspaces.Llm.Test.Mcp.exe from '{AppContext.BaseDirectory}'.");
+        throw new InvalidOperationException($"""
+            Could not locate Phantom.Workspaces.Llm.Test.Mcp.exe.
+            Checked:
+            - {copiedExecutable}
+            - {fallbackExecutable}
+            Base directory: {AppContext.BaseDirectory}
+            Current directory: {Environment.CurrentDirectory}
+            """);
     }
 
     private static string FindRepositoryRoot()
