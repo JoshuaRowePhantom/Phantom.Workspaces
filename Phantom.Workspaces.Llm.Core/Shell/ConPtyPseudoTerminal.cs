@@ -291,25 +291,37 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         waitHandle.SafeWaitHandle = new SafeWaitHandle(_hProcess.DangerousGetHandle(), ownsHandle: false);
 
         RegisteredWaitHandle? registration = null;
+        CancellationTokenRegistration cancellationRegistration = default;
+        int completed = 0;
+
+        void Complete(Action completeTask)
+        {
+            if (Interlocked.Exchange(ref completed, 1) != 0)
+            {
+                return;
+            }
+
+            registration?.Unregister(null);
+            cancellationRegistration.Dispose();
+            waitHandle.Dispose();
+            completeTask();
+        }
+
         registration = ThreadPool.RegisterWaitForSingleObject(
             waitHandle,
             (_, timedOut) =>
             {
-                registration?.Unregister(null);
-                waitHandle.Dispose();
                 GetExitCodeProcess(_hProcess, out uint code);
                 GC.KeepAlive(_hProcess);
-                tcs.TrySetResult((int)code);
+                Complete(() => tcs.TrySetResult((int)code));
             },
             state: null,
             millisecondsTimeOutInterval: -1,
             executeOnlyOnce: true);
 
-        ct.Register(() =>
+        cancellationRegistration = ct.Register(() =>
         {
-            registration?.Unregister(null);
-            waitHandle.Dispose();
-            tcs.TrySetCanceled(ct);
+            Complete(() => tcs.TrySetCanceled(ct));
         });
 
         return tcs.Task;

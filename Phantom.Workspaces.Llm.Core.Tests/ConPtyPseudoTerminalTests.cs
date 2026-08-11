@@ -163,19 +163,16 @@ public sealed class ConPtyPseudoTerminalTests
         await using var pty = new ConPtyPseudoTerminal(payload);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        // Start reading BEFORE writing — the output pipe is drained continuously so ConPTY
-        // never wedges on its stdout write and can consume our stdin writes.
         var readTask = ReadUntilAsync(pty, "hello", cts.Token);
+        byte[] echoCommand = Encoding.ASCII.GetBytes("echo hello\r\n");
+        await pty.Input.WriteAsync(echoCommand, cts.Token);
+        await pty.Input.FlushAsync(cts.Token);
 
-        var writeTask = Task.Run(async () =>
-        {
-            byte[] commands = Encoding.ASCII.GetBytes("echo hello\r\nexit\r\n");
-            await pty.Input.WriteAsync(commands, cts.Token);
-            await pty.Input.FlushAsync(cts.Token);
-        }, cts.Token);
-
-        await Task.WhenAll(writeTask, readTask);
-        Assert.Contains("hello", await readTask, StringComparison.Ordinal);
+        Assert.Contains("hello", await readTask, StringComparison.OrdinalIgnoreCase);
+        byte[] exitCommand = Encoding.ASCII.GetBytes("exit\r\n");
+        await pty.Input.WriteAsync(exitCommand, cts.Token);
+        await pty.Input.FlushAsync(cts.Token);
+        Assert.Equal(0, await pty.WaitForExitAsync(cts.Token));
     }
 
     [Fact]
@@ -281,19 +278,16 @@ public sealed class ConPtyPseudoTerminalTests
         await using var pty = new ConPtyPseudoTerminal(payload);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
-        // Start reading BEFORE writing — the output pipe is drained continuously so ConPTY
-        // never wedges on its stdout write and can consume our stdin writes.
         var readTask = ReadUntilAsync(pty, "hello", cts.Token);
+        byte[] echoCommand = Encoding.ASCII.GetBytes("echo hello\r\n");
+        await pty.Input.WriteAsync(echoCommand, cts.Token);
+        await pty.Input.FlushAsync(cts.Token);
 
-        var writeTask = Task.Run(async () =>
-        {
-            byte[] commands = Encoding.ASCII.GetBytes("echo hello\r\nexit\r\n");
-            await pty.Input.WriteAsync(commands, cts.Token);
-            await pty.Input.FlushAsync(cts.Token);
-        }, cts.Token);
-
-        await Task.WhenAll(writeTask, readTask);
-        Assert.Contains("hello", await readTask, StringComparison.Ordinal);
+        Assert.Contains("hello", await readTask, StringComparison.OrdinalIgnoreCase);
+        byte[] exitCommand = Encoding.ASCII.GetBytes("exit\r\n");
+        await pty.Input.WriteAsync(exitCommand, cts.Token);
+        await pty.Input.FlushAsync(cts.Token);
+        Assert.Equal(0, await pty.WaitForExitAsync(cts.Token));
     }
 
     /// <summary>
@@ -335,7 +329,7 @@ public sealed class ConPtyPseudoTerminalTests
         var payload = new ShellOpenPayload
         {
             Command = "cmd.exe",
-            CommandArguments = [],
+            CommandArguments = ["/d", "/q", "/k", "prompt $"],
             Columns = 80,
             Rows = 24,
         };
@@ -493,10 +487,13 @@ public sealed class ConPtyPseudoTerminalTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var drain = DrainOutputAsync(pty, cts.Token);
 
-        using var waitCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        using var waitCts = new CancellationTokenSource();
+        var waitTask = pty.WaitForExitAsync(waitCts.Token);
+        Assert.False(waitTask.IsCompleted);
+        waitCts.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => pty.WaitForExitAsync(waitCts.Token));
+            () => waitTask);
 
         cts.Cancel();
         await drain;
