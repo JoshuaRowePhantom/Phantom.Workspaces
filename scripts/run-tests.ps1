@@ -75,7 +75,12 @@ if ($Mode -eq 'fast')
 {
     if (-not $TestNames -or $TestNames.Count -eq 0)
     {
-        $filterClauses += 'Category!=SlowDocker & Category!=SlowGit & Category!=Integration & Category!=WebView & Category!=SlowLayout'
+        # RequiresLocalConsole: tests that assert on captured cmd.exe/pwsh output content
+        # via the ConPTY output pipe. On GitHub-hosted windows-latest the ConPTY output
+        # renders zero bytes (input works, child runs, but no output is emitted), so these
+        # tests deterministically fail there. They still run under -Mode full locally and
+        # in local stability, where ConPTY renders normally. Tracked by #1283.
+        $filterClauses += 'Category!=SlowDocker & Category!=SlowGit & Category!=Integration & Category!=WebView & Category!=SlowLayout & Category!=RequiresLocalConsole'
     }
     else
     {

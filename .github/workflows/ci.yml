@@ -36,7 +36,7 @@ jobs:
       - name: Run fast test suite
         shell: pwsh
         run: |
-          Write-Host 'Fast filter: Category!=SlowDocker & Category!=SlowGit & Category!=Integration & Category!=WebView & Category!=SlowLayout'
+          Write-Host 'Fast filter: Category!=SlowDocker & Category!=SlowGit & Category!=Integration & Category!=WebView & Category!=SlowLayout & Category!=RequiresLocalConsole'
           .\scripts\run-tests.ps1 -Mode fast
 
       - name: Upload test results log

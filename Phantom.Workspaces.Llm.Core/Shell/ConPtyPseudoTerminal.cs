@@ -171,10 +171,6 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private readonly SafePseudoConsoleHandle _hPC;
     private readonly SafeProcessHandle _hProcess;
     private readonly SafeWaitHandle _hThread;
-    private readonly FileStream _rawOutput;
-    private readonly FileStream _rawInput;
-    private readonly CancellationTokenSource _readyCts = new();
-    private readonly Task<byte[]> _firstOutputReady;
     private bool _disposed;
 
     public Stream Output { get; }
@@ -297,55 +293,8 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
         // Caller-side pipe handles are created with FILE_FLAG_OVERLAPPED. Use isAsync: true
         // so FileStream uses true async I/O with deterministic cancellation and ordering.
-        _rawOutput = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
-        _rawInput = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
-
-        // Deterministic startup barrier for issue #1282:
-        //
-        // CreatePseudoConsole and CreateProcessW both return synchronously, but the ConPTY
-        // pipeline (conhost/openconsole server thread, and the child's console-input reader)
-        // reaches steady state asynchronously. On slow/headless CI runners the window between
-        // "constructor returned" and "child is actually reading CONIN$" is long enough that
-        // the caller's first writes to Input can be dropped before anything is attached to
-        // consume them, and the child then sits idle forever.
-        //
-        // We issue a single overlapped read on the caller-side output pipe here. Its completion
-        // is the definitive signal that the ConPTY pipeline is running end-to-end (conhost is
-        // producing output, and — for interactive shells like cmd.exe — the child has attached
-        // and started emitting a banner/prompt). Input.WriteAsync waits on this task before
-        // touching the input pipe. The bytes we prefetch are surfaced to the caller as the
-        // first bytes of Output so nothing is lost.
-        //
-        // No Task.Delay / Thread.Sleep: the barrier is purely event-driven.
-        _firstOutputReady = ReadFirstOutputAsync(_readyCts.Token);
-
-        Output = new PrependingReadStream(this);
-        Input = new GatedWriteStream(this);
-    }
-
-    private async Task<byte[]> ReadFirstOutputAsync(CancellationToken ct)
-    {
-        var buf = new byte[4096];
-        try
-        {
-            int n = await _rawOutput.ReadAsync(buf.AsMemory(), ct).ConfigureAwait(false);
-            if (n <= 0)
-                return Array.Empty<byte>();
-            var trimmed = new byte[n];
-            Buffer.BlockCopy(buf, 0, trimmed, 0, n);
-            return trimmed;
-        }
-        catch (OperationCanceledException)
-        {
-            return Array.Empty<byte>();
-        }
-        catch
-        {
-            // If the read fails (e.g. pipe already broken because the child died), we still
-            // release the barrier so callers see the actual downstream error rather than
-            // deadlocking on the readiness wait.
-            return Array.Empty<byte>();
-        }
+        Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
+        Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
     }
 
     // ── IPseudoTerminal ─────────────────────────────────────────────────────
@@ -407,18 +356,12 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
 
         _disposed = true;
 
-        // Release the readiness barrier so any pending Input.WriteAsync callers unblock
-        // instead of waiting forever for output that will never arrive.
-        _readyCts.Cancel();
-        try { await _firstOutputReady.ConfigureAwait(false); } catch { }
-
         await Input.DisposeAsync().ConfigureAwait(false);
         await Output.DisposeAsync().ConfigureAwait(false);
 
         _hPC.Dispose();
         _hThread.Dispose();
         _hProcess.Dispose();
-        _readyCts.Dispose();
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
@@ -566,122 +509,5 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             }
             sb.Append('"');
         }
-    }
-
-    // ── Startup-race gating streams (issue #1282) ───────────────────────────
-
-    /// <summary>
-    /// Wraps the raw ConPTY output <see cref="FileStream"/> and prepends the bytes read by the
-    /// startup-readiness probe (see <see cref="ReadFirstOutputAsync"/>) so callers observe the
-    /// output stream as if no bytes had been consumed. Subsequent reads delegate to the
-    /// underlying overlapped <see cref="FileStream"/>.
-    /// </summary>
-    private sealed class PrependingReadStream : Stream
-    {
-        private readonly ConPtyPseudoTerminal _owner;
-        private byte[]? _prepend;
-        private int _prependOffset;
-        private bool _prependConsumed;
-
-        public PrependingReadStream(ConPtyPseudoTerminal owner) { _owner = owner; }
-
-        public override bool CanRead => _owner._rawOutput.CanRead;
-        public override bool CanSeek => false;
-        public override bool CanWrite => false;
-        public override long Length => throw new NotSupportedException();
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush() { }
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-
-        public override int Read(byte[] buffer, int offset, int count) =>
-            ReadAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
-
-        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
-
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            if (!_prependConsumed)
-            {
-                _prepend ??= await _owner._firstOutputReady.WaitAsync(cancellationToken).ConfigureAwait(false);
-                int remaining = _prepend.Length - _prependOffset;
-                if (remaining > 0)
-                {
-                    int take = Math.Min(buffer.Length, remaining);
-                    _prepend.AsSpan(_prependOffset, take).CopyTo(buffer.Span);
-                    _prependOffset += take;
-                    return take;
-                }
-                _prependConsumed = true;
-            }
-            return await _owner._rawOutput.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) _owner._rawOutput.Dispose();
-            base.Dispose(disposing);
-        }
-
-        public override ValueTask DisposeAsync() => _owner._rawOutput.DisposeAsync();
-    }
-
-    /// <summary>
-    /// Wraps the raw ConPTY input <see cref="FileStream"/> and gates every write on the
-    /// startup-readiness signal. Once the ConPTY pipeline has produced its first output byte
-    /// (proving the server thread and — for interactive shells — the child are attached and
-    /// ready) writes pass straight through to the underlying overlapped <see cref="FileStream"/>.
-    /// This eliminates the observable "first keystrokes dropped" race on slow runners.
-    /// </summary>
-    private sealed class GatedWriteStream : Stream
-    {
-        private readonly ConPtyPseudoTerminal _owner;
-
-        public GatedWriteStream(ConPtyPseudoTerminal owner) { _owner = owner; }
-
-        public override bool CanRead => false;
-        public override bool CanSeek => false;
-        public override bool CanWrite => _owner._rawInput.CanWrite;
-        public override long Length => throw new NotSupportedException();
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
-        public override void SetLength(long value) => throw new NotSupportedException();
-
-        public override void Flush() => _owner._rawInput.Flush();
-        public override Task FlushAsync(CancellationToken cancellationToken) =>
-            _owner._rawInput.FlushAsync(cancellationToken);
-
-        public override void Write(byte[] buffer, int offset, int count) =>
-            WriteAsync(buffer.AsMemory(offset, count), CancellationToken.None).AsTask().GetAwaiter().GetResult();
-
-        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) =>
-            WriteAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
-
-        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            await _owner._firstOutputReady.WaitAsync(cancellationToken).ConfigureAwait(false);
-            await _owner._rawInput.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing) _owner._rawInput.Dispose();
-            base.Dispose(disposing);
-        }
-
-        public override ValueTask DisposeAsync() => _owner._rawInput.DisposeAsync();
     }
 }

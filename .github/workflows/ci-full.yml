@@ -39,12 +39,16 @@ jobs:
         run: dotnet build Phantom.Workspaces.slnx -c Release --no-restore
 
       # windows-latest cannot start the Linux MongoDB container, so exclude the
-      # SlowDocker tests here; they run in the ubuntu-latest job below.
-      - name: Run Windows suite (excluding SlowDocker)
+      # SlowDocker tests here; they run in the ubuntu-latest job below. Also exclude
+      # RequiresLocalConsole: the hosted windows-latest ConPTY renders no cmd.exe/pwsh
+      # output bytes even though input and process exit work, so tests that assert on
+      # captured shell output cannot pass on the hosted runner. They still run under
+      # local -Mode full and local stability. Tracked by #1283.
+      - name: Run Windows suite (excluding SlowDocker and RequiresLocalConsole)
         shell: pwsh
         run: |
           dotnet test Phantom.Workspaces.slnx --no-restore --nologo -v minimal `
-            --filter "Category!=SlowDocker"
+            --filter "Category!=SlowDocker & Category!=RequiresLocalConsole"
 
       - name: Upload Windows test logs
         if: always()
