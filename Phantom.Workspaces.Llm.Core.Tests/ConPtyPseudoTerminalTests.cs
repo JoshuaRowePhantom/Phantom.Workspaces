@@ -336,6 +336,45 @@ public sealed class ConPtyPseudoTerminalTests
     }
 
     /// <summary>
+    /// Regression test for issue #1282: writing to <see cref="ConPtyPseudoTerminal.Input"/>
+    /// immediately after construction — without any warm-up — must deterministically deliver
+    /// the bytes to the child. Before the fix, on slow/headless CI runners the ConPTY server
+    /// and the child's console-input reader had not yet attached when the constructor
+    /// returned, so the initial keystrokes were silently dropped and cmd.exe stayed idle
+    /// for the entire 30 s timeout with zero output. The fix gates every input write on the
+    /// ConPTY pipeline having produced its first output byte (proving the server thread is
+    /// running end-to-end and the child is emitting a banner/prompt), so first writes cannot
+    /// race the pipeline startup.
+    /// </summary>
+    [Fact]
+    public async Task Input_WriteAsync_ImmediatelyAfterConstruction_IsDeliveredToChild()
+    {
+        using var _ = new ConsoleScope();
+        var payload = new ShellOpenPayload
+        {
+            Command = "cmd.exe",
+            CommandArguments = [],
+            Columns = 80,
+            Rows = 24,
+        };
+
+        await using var pty = new ConPtyPseudoTerminal(payload);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // No warm-up, no pre-read: the very first thing we do after construction is issue
+        // a write. This is the exact pattern that dropped keystrokes on CI before the fix.
+        var readTask = ReadUntilAsync(pty, "startupraceok", cts.Token);
+        await pty.Input.WriteAsync(Encoding.ASCII.GetBytes("echo startupraceok\r\n"), cts.Token);
+        await pty.Input.FlushAsync(cts.Token);
+
+        Assert.Contains("startupraceok", await readTask, StringComparison.OrdinalIgnoreCase);
+
+        await pty.Input.WriteAsync(Encoding.ASCII.GetBytes("exit\r\n"), cts.Token);
+        await pty.Input.FlushAsync(cts.Token);
+        Assert.Equal(0, await pty.WaitForExitAsync(cts.Token));
+    }
+
+    /// <summary>
     /// Verifies that the child process does not inheritan excessive number of handles from the
     /// parent. Before the fix, all inheritable handles in the parent leaked into the child,
     /// causing handle counts to grow with each Avalonia socket, pipe, etc. opened by the host.
