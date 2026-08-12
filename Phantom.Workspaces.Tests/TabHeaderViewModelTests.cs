@@ -351,8 +351,11 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
     }
 
+    // #1287: long titles are capped at MaxWidth=180 (0.75 * previous 240 fixed
+    // Width) under the tab strip's infinite-width measure pass, so trimming
+    // still engages while short titles are free to shrink to content.
     [AvaloniaFact(Timeout = 15_000)]
-    public void WebTabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsTrimmedToWidth()
+    public void WebTabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsCappedAtMaxWidth()
     {
         const string longTitle = "Bug: \"Microsoft.Extensions.AI.UsageContent\" leaks as literal text in assistant replies on tool-only turns";
         var viewModel = new WebTabHeaderViewModel { Title = longTitle };
@@ -364,10 +367,12 @@ public sealed class TabHeaderViewModelTests
 
         Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
         Assert.Equal(TextWrapping.NoWrap, titleTextBlock.TextWrapping);
-        Assert.Equal(240, titleTextBlock.Width);
-        titleTextBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
-        Assert.Equal(240, titleTextBlock.DesiredSize.Width);
-        Assert.True(double.IsPositiveInfinity(titleTextBlock.MaxWidth));
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.InRange(desired.Width, 150, 180);
+        Assert.InRange(titleTextBlock.Bounds.Width, 150, 180);
         AssertTextLayoutTrimmedToSingleEllipsizedLine(titleTextBlock, longTitle);
     }
 
@@ -382,10 +387,11 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal(longTitle, ToolTip.GetTip(titleTextBlock));
     }
 
+    // #1287: short titles size to content — bounds width strictly < MaxWidth=180.
     [AvaloniaFact(Timeout = 15_000)]
-    public void WebTabHeaderTemplate_ShortTitle_TextBlockKeepsFullTitle()
+    public void WebTabHeaderTemplate_ShortTitleUnderInfiniteAvailableWidth_TextBlockShrinksBelowMaxWidth()
     {
-        const string title = "Open Issues";
+        const string title = "Design 6";
         var viewModel = new WebTabHeaderViewModel { Title = title };
 
         var titleTextBlock = InflateTabHeaderTitleTextBlock(
@@ -395,11 +401,20 @@ public sealed class TabHeaderViewModelTests
 
         Assert.Equal(title, titleTextBlock.Text);
         Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
-        Assert.Equal(240, titleTextBlock.Width);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.True(
+            desired.Width < 180,
+            $"Expected short title desired width < 180 but was {desired.Width}.");
+        Assert.True(
+            titleTextBlock.Bounds.Width < 180 && titleTextBlock.Bounds.Width > 0,
+            $"Expected short title bounds width in (0, 180) but was {titleTextBlock.Bounds.Width}.");
     }
 
+    // #1287: long non-web titles are also capped at MaxWidth=180.
     [AvaloniaFact(Timeout = 15_000)]
-    public void TabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsTrimmedToWidth()
+    public void TabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsCappedAtMaxWidth()
     {
         var viewModel = new TabHeaderViewModel
         {
@@ -413,9 +428,47 @@ public sealed class TabHeaderViewModelTests
 
         Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
         Assert.Equal(TextWrapping.NoWrap, titleTextBlock.TextWrapping);
-        Assert.Equal(240, titleTextBlock.Width);
-        titleTextBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
-        Assert.Equal(240, titleTextBlock.DesiredSize.Width);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.InRange(desired.Width, 150, 180);
+        Assert.InRange(titleTextBlock.Bounds.Width, 150, 180);
+    }
+
+    // #1287: short non-web titles size to content — bounds width strictly < MaxWidth=180.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplate_ShortTitleUnderInfiniteAvailableWidth_TextBlockShrinksBelowMaxWidth()
+    {
+        const string title = "Design 6";
+        var viewModel = new TabHeaderViewModel { Title = title };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(title, titleTextBlock.Text);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.True(
+            desired.Width < 180,
+            $"Expected short title desired width < 180 but was {desired.Width}.");
+        Assert.True(
+            titleTextBlock.Bounds.Width < 180 && titleTextBlock.Bounds.Width > 0,
+            $"Expected short title bounds width in (0, 180) but was {titleTextBlock.Bounds.Width}.");
+    }
+
+    // #1287: directly measure/arrange a title TextBlock under infinite available
+    // width so Bounds reflects the arranged size (the InflateTabHeaderTitleTextBlock
+    // ContentControl host has no theme applied in these unit tests, so its
+    // DesiredSize is 0 and it cannot arrange the child TextBlock itself).
+    private static Avalonia.Size MeasureAndArrangeTextBlockUnderInfiniteWidth(TextBlock textBlock)
+    {
+        textBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var desired = textBlock.DesiredSize;
+        textBlock.Arrange(new Avalonia.Rect(0, 0, desired.Width, desired.Height));
+        return desired;
     }
 
     private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)

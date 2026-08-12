@@ -33,7 +33,7 @@
                            ToolTip.Tip="{Binding Title}"
                            TextTrimming="CharacterEllipsis"
                            TextWrapping="NoWrap"
-                           Width="240" />
+                           MaxWidth="180" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -57,7 +57,7 @@
                            ToolTip.Tip="{Binding Title}"
                            TextTrimming="CharacterEllipsis"
                            TextWrapping="NoWrap"
-                           Width="240" />
+                           MaxWidth="180" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>

@@ -5879,10 +5879,67 @@ public sealed class MainWindowIntegrationTests
 
             var longTitleItem = tabStripItems.FirstOrDefault(item => item.DataContext is WorkspaceDocument { Id: "long-title-web-tab" });
             Assert.NotNull(longTitleItem);
-            Assert.InRange(longTitleItem!.Bounds.Width, 1, 400);
+            // #1287: MaxWidth on the title TextBlock tightened from Width=240 to
+            // MaxWidth=180, so the whole tab-strip item (title + trailing chrome)
+            // must fit within 180 + a modest trailing-chrome budget.
+            Assert.InRange(longTitleItem!.Bounds.Width, 1, 280);
 
             Assert.Contains(tabStripItems, item => item.DataContext is WorkspaceDocument { Id: "long-title-before" } && item.Bounds.Width > 0);
             Assert.Contains(tabStripItems, item => item.DataContext is WorkspaceDocument { Id: "long-title-after" } && item.Bounds.Width > 0);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    // #1287: short-titled document tabs must size to their content, not be
+    // padded out to the pre-fix 240px baseline. Open a short-title tab and a
+    // long-title tab side by side and verify the short tab's DocumentTabStripItem
+    // is strictly narrower than the long tab's AND strictly narrower than 240.
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TabHeaderTemplate_ShortTitle_TabStripItemNotPaddedToFixedWidth()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var shortTab = new WebViewModel("https://short.example.com") { Id = "size-to-content-short", Title = "Design 6" };
+        var longTab = new WebViewModel("https://long.example.com") { Id = "size-to-content-long", Title = "Initial" };
+        longTab.SetPageTitle(
+            "A very long document tab title that must exercise the MaxWidth=180 cap on the title TextBlock");
+
+        await viewModel.OpenTabAsync(shortTab);
+        await viewModel.OpenTabAsync(longTab);
+
+        var window = new MainWindow(viewModel)
+        {
+            Width = 900,
+            Height = 600,
+        };
+        window.Show();
+        try
+        {
+            await WaitForDocumentTabStripAsync(window);
+            await WaitForLayoutAsync(window);
+            Dispatcher.UIThread.RunJobs();
+
+            var contentTabStrip = window.GetVisualDescendants()
+                .OfType<DocumentTabStrip>()
+                .FirstOrDefault(ts => ts.DataContext is WorkspaceContentDock);
+            Assert.NotNull(contentTabStrip);
+
+            var tabStripItems = contentTabStrip!.GetVisualDescendants().OfType<DocumentTabStripItem>().ToList();
+            var shortItem = tabStripItems.FirstOrDefault(item => item.DataContext is WorkspaceDocument { Id: "size-to-content-short" });
+            var longItem = tabStripItems.FirstOrDefault(item => item.DataContext is WorkspaceDocument { Id: "size-to-content-long" });
+            Assert.NotNull(shortItem);
+            Assert.NotNull(longItem);
+
+            Assert.True(
+                shortItem!.Bounds.Width < longItem!.Bounds.Width,
+                $"Expected short tab ({shortItem.Bounds.Width}) to be narrower than long tab ({longItem.Bounds.Width}).");
+            Assert.True(
+                shortItem.Bounds.Width < 240,
+                $"Expected short tab strictly narrower than the pre-fix 240px baseline but was {shortItem.Bounds.Width}.");
         }
         finally
         {
