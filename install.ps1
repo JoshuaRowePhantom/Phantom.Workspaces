@@ -41,6 +41,51 @@ function Resolve-RuntimeIdentifier
     }
 }
 
+function Get-Sha256DigestFromChecksumContent
+{
+    <#
+    .SYNOPSIS
+        Extracts a lowercased 64-hex SHA256 digest from the raw body of a `.sha256` asset.
+
+    .DESCRIPTION
+        Accepts either a [byte[]] (as returned by Invoke-WebRequest against an asset served with
+        Content-Type: application/octet-stream) or a [string]. Handles common layouts:
+        `hash`, `hash  file` (sha256sum), `hash *file` (BSD binary), with optional BOM/CRLF/
+        leading/trailing whitespace. Throws a descriptive error if no 64-hex digest is present.
+    #>
+    param(
+        [Parameter(Mandatory)] $Content,
+        [string] $SourceName = 'checksum content'
+    )
+
+    if ($null -eq $Content)
+    {
+        throw "Could not locate SHA256 digest in $SourceName."
+    }
+
+    $text = if ($Content -is [byte[]])
+    {
+        [System.Text.Encoding]::ASCII.GetString($Content)
+    }
+    else
+    {
+        [string] $Content
+    }
+
+    if ($text -notmatch '[A-Fa-f0-9]{64}')
+    {
+        throw "Could not locate SHA256 digest in $SourceName."
+    }
+
+    return $Matches[0].ToLowerInvariant()
+}
+
+if ($MyInvocation.InvocationName -eq '.')
+{
+    # Dot-sourced (e.g. by Pester tests) — expose the helper functions but skip the installer flow.
+    return
+}
+
 $assetPrefix = 'Phantom.Workspaces'
 $rid = Resolve-RuntimeIdentifier
 
@@ -82,7 +127,8 @@ try
     if ($checksumAsset)
     {
         Write-Host 'Verifying SHA256 ...'
-        $expected = ((Invoke-WebRequest -Uri $checksumAsset.browser_download_url -Headers $headers).Content -split '\s+')[0].ToLowerInvariant()
+        $checksumResponse = Invoke-WebRequest -Uri $checksumAsset.browser_download_url -Headers $headers
+        $expected = Get-Sha256DigestFromChecksumContent -Content $checksumResponse.Content -SourceName $checksumAsset.name
         $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($expected -ne $actual)
         {
