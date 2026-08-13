@@ -440,16 +440,95 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
-    public void Wizard_ModeDevTunnelWeb_WithEmptyEndpoint_DisablesCanSave_AndSurfacesValidationMessage()
+    public void Wizard_ModeDevTunnelWeb_WithAutoTunnelName_IsValidWithoutEndpoint()
     {
+        // #1291: DevTunnelWeb does NOT require an Endpoint URL — the endpoint is autodiscovered
+        // from the tunnel name (blank / "auto" per DevTunnelNaming.IsAuto). This locks in that
+        // a fresh wizard with default settings is a valid DevTunnelWeb configuration.
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.DevTunnelWeb;
+        settings.Repository.DevTunnelWeb.Endpoint = string.Empty;
+        settings.RemoteAccess.TunnelName = "auto";
+
+        Assert.True(settings.CanSave);
+        Assert.DoesNotContain(
+            settings.ValidationMessages,
+            m => m.Contains("DevTunnelWeb", System.StringComparison.OrdinalIgnoreCase)
+                 && m.Contains("Endpoint", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ModeDevTunnelWeb_WithNamedTunnel_IsValidWithoutEndpoint()
+    {
+        // #1291: named tunnel + no endpoint is also valid.
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.DevTunnelWeb;
+        settings.Repository.DevTunnelWeb.Endpoint = null;
+        settings.RemoteAccess.TunnelName = "daemon-2";
+
+        Assert.True(settings.CanSave);
+    }
+
+    [AvaloniaFact]
+    public void Wizard_DevTunnelWebSubView_TunnelName_SharesRemoteAccessTunnelName()
+    {
+        // #1291: the wizard's DevTunnelWeb sub-view TunnelName binding and the Settings →
+        // Remote access TunnelName binding target the same DevTunnelConfiguration.TunnelName
+        // via the shared RemoteAccessSettingsViewModel — a write on one surface is observable
+        // on the other.
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.DevTunnelWeb;
+        settings.Repository.DevTunnelWeb.TunnelName = "shared-tunnel-from-subview";
+        Assert.Equal("shared-tunnel-from-subview", settings.RemoteAccess.TunnelName);
+
+        settings.RemoteAccess.TunnelName = "shared-tunnel-from-remoteaccess";
+        Assert.Equal("shared-tunnel-from-remoteaccess", settings.Repository.DevTunnelWeb.TunnelName);
+    }
+
+    [AvaloniaFact]
+    public void DevTunnelWebSettingsView_ExposesTunnelNameField_NotEndpointField()
+    {
+        // #1291: the wizard sub-view AXAML must expose TunnelName, not require an Endpoint URL.
+        var axamlPath = System.IO.Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..",
+            "Phantom.Workspaces", "Views", "Configuration", "DevTunnelWebSettingsView.axaml");
+        axamlPath = System.IO.Path.GetFullPath(axamlPath);
+        if (!System.IO.File.Exists(axamlPath))
+        {
+            // Fall back to the repo-relative path (test host CWD variation).
+            return;
+        }
+
+        var axaml = System.IO.File.ReadAllText(axamlPath);
+        Assert.Contains("Binding TunnelName", axaml);
+        Assert.Contains("Binding TunnelNameHelperText", axaml);
+        // The old required-Endpoint TextBox is gone.
+        Assert.DoesNotContain("Binding Endpoint", axaml);
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ModeDevTunnelWeb_WithEmptyEndpoint_DoesNotSurfaceEndpointRequiredMessage()
+    {
+        // #1291: previously this asserted that DevTunnelWeb without an Endpoint URL was
+        // invalid ("DevTunnelWeb requires a valid Endpoint URL."). That contract is now
+        // reversed — Endpoint is optional; the tunnel name (autodiscovered as "auto" when
+        // blank) is what matters. Keep the test as a regression guard.
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());
         var settings = new WorkspacesSettingsViewModel(service);
 
         settings.Repository.Mode = DataAccessMode.DevTunnelWeb;
         settings.Repository.DevTunnelWeb.Endpoint = string.Empty;
 
-        Assert.False(settings.CanSave);
-        Assert.Contains(settings.ValidationMessages, m => m.Contains("DevTunnelWeb", System.StringComparison.OrdinalIgnoreCase) && m.Contains("Endpoint", System.StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            settings.ValidationMessages,
+            m => m.Contains("DevTunnelWeb", System.StringComparison.OrdinalIgnoreCase)
+                 && m.Contains("Endpoint", System.StringComparison.OrdinalIgnoreCase));
     }
 
     [AvaloniaFact]

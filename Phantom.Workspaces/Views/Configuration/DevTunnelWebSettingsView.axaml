@@ -8,10 +8,16 @@
              x:DataType="vm:DevTunnelWebSettingsViewModel">
     <StackPanel Spacing="8">
         <StackPanel Spacing="4">
-            <TextBlock Text="Dev tunnel endpoint" />
-            <TextBox PlaceholderText="https://host.devtunnels.ms/" Text="{Binding Endpoint}" />
+            <TextBlock Text="Dev tunnel name" />
+            <TextBox x:Name="DevTunnelWebTunnelNameTextBox"
+                     PlaceholderText="my-workspace-tunnel or auto"
+                     Text="{Binding TunnelName}" />
+            <TextBlock x:Name="DevTunnelWebTunnelNameHelperText"
+                       Text="{Binding TunnelNameHelperText}"
+                       TextWrapping="Wrap"
+                       Opacity="0.7" />
         </StackPanel>
-        <TextBlock Text="Authorizes automatically with your GitHub auth token (GITHUB_TOKEN or 'gh auth token')."
+        <TextBlock Text="The dev tunnel endpoint is autodiscovered from the tunnel name. Authorizes automatically with your GitHub auth token (GITHUB_TOKEN or 'gh auth token')."
                    TextWrapping="Wrap" />
     </StackPanel>
 </UserControl>

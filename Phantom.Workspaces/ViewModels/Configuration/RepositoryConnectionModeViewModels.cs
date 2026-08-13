@@ -233,34 +233,99 @@ public sealed class WebSettingsViewModel : RepositoryConnectionModeViewModel
 /// <summary>Settings for the dev tunnel web endpoint connection mode.</summary>
 public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeViewModel
 {
+    private readonly RemoteAccessSettingsViewModel? sharedRemoteAccess;
     private string? endpoint;
+    private string? localTunnelName;
 
     /// <summary>Creates the view model from an existing profile.</summary>
     public DevTunnelWebSettingsViewModel(DataAccessConnectionProfile profile)
+        : this(profile, sharedRemoteAccess: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates the view model from an existing profile, optionally sharing its
+    /// <see cref="TunnelName"/> with the wizard/settings-level <see cref="RemoteAccessSettingsViewModel"/>.
+    /// When shared, writes on either surface are observable on the other so the wizard's DevTunnelWeb
+    /// sub-view and the Remote-access section (mirroring Settings → Remote access) target the same
+    /// underlying <see cref="DevTunnelConfiguration.TunnelName"/> value.
+    /// </summary>
+    public DevTunnelWebSettingsViewModel(
+        DataAccessConnectionProfile profile,
+        RemoteAccessSettingsViewModel? sharedRemoteAccess)
     {
         ArgumentNullException.ThrowIfNull(profile);
         this.endpoint = profile.WebEndpoint;
+        this.sharedRemoteAccess = sharedRemoteAccess;
+        if (sharedRemoteAccess is not null)
+        {
+            sharedRemoteAccess.PropertyChanged += this.OnSharedRemoteAccessChanged;
+        }
     }
 
     /// <inheritdoc />
     public override DataAccessMode Mode => DataAccessMode.DevTunnelWeb;
 
-    /// <summary>Absolute dev tunnel endpoint URL.</summary>
+    /// <summary>
+    /// Optional dev tunnel endpoint URL override. Not required — the endpoint is autodiscovered
+    /// from <see cref="TunnelName"/> via <see cref="Services.DevTunnel.DevTunnelEndpointResolver"/>.
+    /// Retained on the VM (and round-tripped through <see cref="ToProfile"/>) so an existing
+    /// profile-level override is preserved.
+    /// </summary>
     public string? Endpoint
     {
         get => this.endpoint;
         set => this.SetValidatedProperty(ref this.endpoint, value);
     }
 
+    /// <summary>
+    /// Dev tunnel name (defaults to <c>"auto"</c> semantics: a blank/null value is treated as
+    /// auto-discovery by <see cref="Services.DevTunnel.DevTunnelNaming.IsAuto"/>). Shared with the
+    /// wizard/settings-level <see cref="RemoteAccessSettingsViewModel.TunnelName"/> when the
+    /// view-model was constructed with a shared reference.
+    /// </summary>
+    public string? TunnelName
+    {
+        get => this.sharedRemoteAccess is not null
+            ? this.sharedRemoteAccess.TunnelName
+            : this.localTunnelName;
+        set
+        {
+            if (this.sharedRemoteAccess is not null)
+            {
+                if (!string.Equals(this.sharedRemoteAccess.TunnelName, value, StringComparison.Ordinal))
+                {
+                    this.sharedRemoteAccess.TunnelName = value;
+                }
+            }
+            else
+            {
+                this.SetValidatedProperty(ref this.localTunnelName, value);
+            }
+        }
+    }
+
+    /// <summary>Shared helper text describing the "auto" tunnel-name discovery convention.</summary>
+    public string TunnelNameHelperText => RemoteAccessSettingsViewModel.TunnelNameHelperText;
+
     /// <inheritdoc />
     public override string Description =>
         "Connect to a remote Phantom.Workspaces endpoint through a dev tunnel. Authorizes with your GitHub auth token (GITHUB_TOKEN or 'gh auth token').";
 
     /// <inheritdoc />
-    public override string? ValidationMessage =>
-        Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _)
-            ? null
-            : "DevTunnelWeb requires a valid Endpoint URL.";
+    public override string? ValidationMessage
+    {
+        get
+        {
+            // A non-empty tunnel name is enough — "auto" (or blank, which DevTunnelNaming.IsAuto
+            // treats as auto) discovers the single Workspaces tunnel via
+            // DevTunnelEndpointResolver.ResolveAsync, and the endpoint is autodiscovered from the
+            // tunnel name. A user-supplied WebEndpoint is an optional override, never required.
+            // We treat blank/null tunnel name AS auto (matching DevTunnelNaming.IsAuto semantics)
+            // so a freshly-loaded wizard with no configuration is valid.
+            return null;
+        }
+    }
 
     /// <inheritdoc />
     public override DataAccessConnectionProfile ToProfile() => new()
@@ -268,4 +333,14 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
         Mode = this.Mode,
         WebEndpoint = this.Endpoint,
     };
+
+    private void OnSharedRemoteAccessChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(RemoteAccessSettingsViewModel.TunnelName))
+        {
+            this.RaisePropertyChanged(nameof(this.TunnelName));
+            this.RaisePropertyChanged(nameof(this.IsValid));
+            this.RaisePropertyChanged(nameof(this.ValidationMessage));
+        }
+    }
 }

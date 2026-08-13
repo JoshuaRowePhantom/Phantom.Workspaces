@@ -41,11 +41,11 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         ArgumentNullException.ThrowIfNull(configuration);
         this.persistenceService = persistenceService;
         this.baseConfiguration = configuration;
-        this.Repository = new RepositoryConnectionSettingsViewModel(configuration.DataAccess);
         this.RemoteAccess = new RemoteAccessSettingsViewModel(
             configuration.RemoteHosting,
             configuration.DevTunnel,
             configuration.UserComputerProfileOverride);
+        this.Repository = new RepositoryConnectionSettingsViewModel(configuration.DataAccess, this.RemoteAccess);
 
         this.Repository.PropertyChanged += this.OnSectionChanged;
         this.RemoteAccess.PropertyChanged += this.OnSectionChanged;
