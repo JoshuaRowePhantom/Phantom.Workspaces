@@ -331,6 +331,7 @@ public partial class App : Application
             // RestoreSubAgentsAsync (the reported #1186 cause) left it stuck in
             // front indefinitely.
             var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+                loggerFactory: loggerFactory,
                 initializeAsync: () => viewModel.InitializeAsync(),
                 setStatus: msg => loadingViewModel.StatusText = msg,
                 onFaultDelay: () => Task.Delay(5000), // Give user time to read the error

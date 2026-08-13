@@ -6107,6 +6107,7 @@ public sealed class MainWindowIntegrationTests
         await using var viewModel = CreateTestMainWindowViewModel();
 
         var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             initializeAsync: () => viewModel.InitializeAsync(),
             setStatus: _ => { },
             onFaultDelay: () => Task.CompletedTask,
@@ -6127,6 +6128,7 @@ public sealed class MainWindowIntegrationTests
         var postInitializeRan = false;
 
         var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             initializeAsync: () => Task.FromException(new InvalidOperationException("boom")),
             setStatus: _ => { },
             onFaultDelay: () => Task.CompletedTask,
@@ -6150,6 +6152,7 @@ public sealed class MainWindowIntegrationTests
         var statusMessages = new List<string>();
 
         var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: Microsoft.Extensions.Logging.Abstractions.NullLoggerFactory.Instance,
             initializeAsync: () => Task.FromException(
                 new InvalidOperationException("Agent definition does not specify a model.")),
             setStatus: msg => statusMessages.Add(msg),
@@ -6161,6 +6164,121 @@ public sealed class MainWindowIntegrationTests
         Assert.False(succeeded);
         Assert.True(closed, "Restore-time sub-agent throw must not leave the splash visible.");
         Assert.Contains(statusMessages, m => m.Contains("Agent definition does not specify a model.", StringComparison.Ordinal));
+    }
+
+    // ── Issue #1294: startup connect failures must be written to the rolling log file ──
+
+    private sealed class RecordingStartupLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
+    {
+        public List<TestLogger<StartupSplashRunner>.LogEntry> Entries { get; } = [];
+        private readonly TestLogger<StartupSplashRunner> logger;
+
+        public RecordingStartupLoggerFactory()
+        {
+            this.logger = new TestLogger<StartupSplashRunner>();
+        }
+
+        public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider) { }
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName) => this.logger;
+        public void Dispose() { }
+
+        public IReadOnlyList<TestLogger<StartupSplashRunner>.LogEntry> Snapshot() => this.logger.Entries;
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task StartupSplashRunner_WhenInitializeThrows_LogsError()
+    {
+        var factory = new RecordingStartupLoggerFactory();
+        var boom = new InvalidOperationException("boom-1294");
+
+        await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: factory,
+            initializeAsync: () => Task.FromException(boom),
+            setStatus: _ => { },
+            onFaultDelay: () => Task.CompletedTask,
+            shutdown: () => { },
+            postInitialize: () => { },
+            closeSplash: () => { });
+
+        var errors = factory.Snapshot()
+            .Where(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error)
+            .ToList();
+        Assert.Single(errors);
+        Assert.Same(boom, errors[0].Exception);
+        Assert.Contains("Startup connect failed", errors[0].Message, StringComparison.Ordinal);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task StartupSplashRunner_WhenInitializeThrows_SetsSplashStatus()
+    {
+        var factory = new RecordingStartupLoggerFactory();
+        var statusMessages = new List<string>();
+
+        await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: factory,
+            initializeAsync: () => Task.FromException(new InvalidOperationException("boom-status")),
+            setStatus: msg => statusMessages.Add(msg),
+            onFaultDelay: () => Task.CompletedTask,
+            shutdown: () => { },
+            postInitialize: () => { },
+            closeSplash: () => { });
+
+        Assert.Contains("Failed to connect: boom-status", statusMessages);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task StartupSplashRunner_WhenInitializeSucceeds_DoesNotLogError()
+    {
+        var factory = new RecordingStartupLoggerFactory();
+
+        await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: factory,
+            initializeAsync: () => Task.CompletedTask,
+            setStatus: _ => { },
+            onFaultDelay: () => Task.CompletedTask,
+            shutdown: () => { },
+            postInitialize: () => { },
+            closeSplash: () => { });
+
+        Assert.DoesNotContain(factory.Snapshot(), e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task StartupSplashRunner_WhenInitializeThrows_LogsBeforeShutdown()
+    {
+        var factory = new RecordingStartupLoggerFactory();
+        var events = new List<string>();
+
+        // TestLogger records to factory.Snapshot() synchronously; we also snapshot ordering
+        // via events for the shutdown/onFaultDelay callbacks so we can assert LogError fired
+        // strictly before either.
+        await StartupSplashRunner.RunWithSplashDismissAsync(
+            loggerFactory: factory,
+            initializeAsync: () => Task.FromException(new InvalidOperationException("order-check")),
+            setStatus: _ => events.Add("setStatus"),
+            onFaultDelay: () =>
+            {
+                events.Add("onFaultDelay");
+                return Task.CompletedTask;
+            },
+            shutdown: () => events.Add("shutdown"),
+            postInitialize: () => events.Add("postInitialize"),
+            closeSplash: () => events.Add("closeSplash"));
+
+        // Snapshot the error entry — the RecordingStartupLoggerFactory records synchronously
+        // inside LogError, so its presence at snapshot time means LogError has returned.
+        var errorEntry = factory.Snapshot()
+            .Single(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Error);
+        Assert.Contains("Startup connect failed", errorEntry.Message, StringComparison.Ordinal);
+
+        // Ordering: shutdown and onFaultDelay both follow the LogError call, which happens
+        // before setStatus in the catch block. shutdown must not precede either.
+        var shutdownIndex = events.IndexOf("shutdown");
+        var onFaultDelayIndex = events.IndexOf("onFaultDelay");
+        var setStatusIndex = events.IndexOf("setStatus");
+        Assert.True(setStatusIndex >= 0);
+        Assert.True(onFaultDelayIndex > setStatusIndex, "onFaultDelay must run after setStatus (and after LogError).");
+        Assert.True(shutdownIndex > onFaultDelayIndex, "shutdown must run after onFaultDelay (and after LogError).");
     }
 
     private static RepositorySource CreateInMemoryRepositorySource()
