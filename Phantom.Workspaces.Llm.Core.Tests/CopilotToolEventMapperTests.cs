@@ -104,6 +104,56 @@ public sealed class CopilotToolEventMapperTests
         Assert.Equal("the result text", result.Result);
     }
 
+    // ── Issue #1280: prefer DetailedContent (SDK-full text) for UI/timeline rendering ────
+
+    [Fact]
+    public void MapToolComplete_WhenDetailedContentPresent_UsesDetailedContentAsResult()
+    {
+        // #1280: DetailedContent is documented by the SDK as the UI-oriented full text; Content
+        // is potentially truncated for LLM token efficiency. For the chat surface we want the
+        // full text — mapper prefers DetailedContent when both are present.
+        var completeEvent = new ToolExecutionCompleteEvent
+        {
+            Data = new ToolExecutionCompleteData
+            {
+                ToolCallId = "call-2",
+                Success = true,
+                Result = new ToolExecutionCompleteResult
+                {
+                    Content = "truncated-for-model",
+                    DetailedContent = "FULL UNTRUNCATED DETAIL FOR UI",
+                },
+            },
+        };
+
+        var result = CopilotToolEventMapper.MapToolComplete(completeEvent);
+
+        Assert.Equal("FULL UNTRUNCATED DETAIL FOR UI", result.Result);
+    }
+
+    [Fact]
+    public void MapToolComplete_WhenOnlyContentPresent_FallsBackToContent()
+    {
+        // Fallback path: no DetailedContent — use Content.
+        var completeEvent = new ToolExecutionCompleteEvent
+        {
+            Data = new ToolExecutionCompleteData
+            {
+                ToolCallId = "call-3",
+                Success = true,
+                Result = new ToolExecutionCompleteResult
+                {
+                    Content = "content-only",
+                    DetailedContent = null,
+                },
+            },
+        };
+
+        var result = CopilotToolEventMapper.MapToolComplete(completeEvent);
+
+        Assert.Equal("content-only", result.Result);
+    }
+
     [Fact]
     public void MapToolComplete_FallsBackToTextContent_WhenNoSummaryContent()
     {

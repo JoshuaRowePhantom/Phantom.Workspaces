@@ -830,13 +830,15 @@ internal static class ChatOutputHtmlRenderer
             ? ToolResultOverflowSummary(resultJson)
             : FirstLine(resultJson);
 
-    // Body for the tool RESULT block. Small results render in full; oversized results render only
-    // the short "(N lines)" / "(N characters)" summary instead of the fully-expanded payload tree
-    // (issue #1069). The full payload stays available via data-details-target.
+    // Body for the tool RESULT block. #1280: always render the full escaped payload inside the
+    // <details> body so the user can inspect the actual returned text; the compact "(N lines)" /
+    // "(N characters)" header lives in the collapsed <summary>. The full payload remains
+    // available via data-details-target for the modal inspector as well.
     private static (string Html, bool Overflowed) RenderToolResultBody(string resultJson)
-        => ToolResultOverflows(resultJson)
-            ? (HtmlEscape(ToolResultOverflowSummary(resultJson)), true)
-            : (RenderToolPayload(resultJson), false);
+    {
+        var overflowed = ToolResultOverflows(resultJson);
+        return (RenderToolPayload(resultJson), overflowed);
+    }
 
     private static string DiagnosticHeader(string text)
     {

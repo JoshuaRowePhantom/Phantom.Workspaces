@@ -1077,8 +1077,11 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void RenderToolCallPair_WithLargeResultJson_BodyDoesNotContainFullPayload()
+    public void RenderToolCallPair_WithLargeResultJson_BodyContainsFullPayload()
     {
+        // #1280: the <details> body now renders the FULL escaped payload so the user can inspect
+        // the actual returned text; the compact "(N lines)" header stays in <summary>. Replaces
+        // the earlier wrong-behavior test that asserted the body did NOT contain the payload.
         var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
         var lines = Enumerable.Range(0, lineCount).Select(i => $"line-{i}").ToList();
         lines[10] = "UNIQUE_PAYLOAD_MARKER_XYZ";
@@ -1086,7 +1089,9 @@ public sealed class ChatOutputHtmlRendererTests
 
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
 
-        Assert.DoesNotContain("UNIQUE_PAYLOAD_MARKER_XYZ", html, StringComparison.Ordinal);
+        Assert.Contains("UNIQUE_PAYLOAD_MARKER_XYZ", html, StringComparison.Ordinal);
+        // Summary line still shows the compact "(N lines)" header for the collapsed state.
+        Assert.Contains($"result  ({lineCount} lines)", html, StringComparison.Ordinal);
     }
 
     [Fact]
