@@ -91,12 +91,13 @@ internal static class ChatOutputHtmlRenderer
         int callCount,
         string bodyContent,
         DateTimeOffset? timestamp = null,
-        string? postGroupContent = null)
+        string? postGroupContent = null,
+        bool suppressRoleHeader = false)
     {
         var builder = new StringBuilder();
         builder.Append("<div class=\"chat-message ").Append(RoleClass("assistant")).Append("\" id=\"")
             .Append(groupId).Append("\" data-sticky-base-level=\"1\">");
-        builder.Append(RenderHeader(groupId, "assistant", timestamp));
+        builder.Append(RenderHeader(groupId, "assistant", timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(groupId)).Append("\">");
         builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(ToolGroupDetailsId(groupId)).Append("\">");
         builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount));
@@ -334,13 +335,14 @@ internal static class ChatOutputHtmlRenderer
         string roleLabel,
         IReadOnlyList<(string ElementId, string Html)> contents,
         DateTimeOffset? timestamp = null,
-        string? jumpLinkHtml = null)
+        string? jumpLinkHtml = null,
+        bool suppressRoleHeader = false)
     {
         var builder = new StringBuilder();
         var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\">");
-        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
+        builder.Append(RenderHeader(messageId, roleLabel, timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -415,12 +417,20 @@ internal static class ChatOutputHtmlRenderer
     /// <summary>
     /// Returns an empty string for the <c>tool</c> role — results are bundled into the assistant
     /// message's tool-group hierarchy and need no separate role header.
+    /// When <paramref name="suppressed"/> is true (this message is a non-leader member of a role run
+    /// — see #1222) an empty placeholder <c>div.chat-header</c> is emitted preserving the stable id
+    /// so <see cref="HeaderId"/>-anchored Replace ops can flip it back on later.
     /// </summary>
-    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
+    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null, bool suppressed = false)
     {
         if (string.Equals(roleLabel, "tool", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
+        }
+
+        if (suppressed)
+        {
+            return $"<div class=\"chat-header chat-header-suppressed\" id=\"{HeaderId(messageId)}\" hidden></div>";
         }
 
         var builder = new StringBuilder();

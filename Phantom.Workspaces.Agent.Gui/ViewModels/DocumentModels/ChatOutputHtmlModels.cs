@@ -104,6 +104,34 @@ internal sealed class ChatMessageHtmlModel
     }
 
     /// <summary>
+    /// True when this message is a non-leader member of a consecutive same-role run and the DOM
+    /// should render an empty placeholder in place of the role header (#1222). The transformer's
+    /// <c>ReconcileRoleHeaders</c> pass owns this flag; models never toggle it themselves.
+    /// </summary>
+    public bool SuppressRoleHeader { get; private set; }
+
+    /// <summary>
+    /// Sets <see cref="SuppressRoleHeader"/>. When <paramref name="emit"/> is true and the flag
+    /// changes for a message already in the DOM, replaces the header element in place.
+    /// </summary>
+    internal void SetSuppressRoleHeader(bool value, bool emit)
+    {
+        if (this.SuppressRoleHeader == value)
+        {
+            return;
+        }
+
+        this.SuppressRoleHeader = value;
+        if (emit)
+        {
+            this.sink.UpdateContent(
+                ChatOutputHtmlRenderer.HeaderId(this.ElementId),
+                ChatOutputUpdateLocation.Replace,
+                ChatOutputHtmlRenderer.RenderHeader(this.ElementId, this.source.Role.Value, this.source.Timestamp, value));
+        }
+    }
+
+    /// <summary>
     /// True when the message has been rendered and produced no visible content bindings (an empty
     /// message, a whitespace-only message, or a message whose contents were all filtered out — e.g.
     /// reasoning while reasoning is hidden). Such messages render no visible DOM element and must be
@@ -176,7 +204,8 @@ internal sealed class ChatMessageHtmlModel
             roleLabel,
             this.bindings.Select(binding => (binding.ElementId, binding.Html)).ToList(),
             this.source.Timestamp,
-            jumpLinkHtml);
+            jumpLinkHtml,
+            this.SuppressRoleHeader);
     }
 
     /// <summary>
@@ -361,7 +390,7 @@ internal sealed class ChatMessageHtmlModel
             this.sink.UpdateContent(
                 ChatOutputHtmlRenderer.HeaderId(this.ElementId),
                 ChatOutputUpdateLocation.Replace,
-                ChatOutputHtmlRenderer.RenderHeader(this.ElementId, roleLabel));
+                ChatOutputHtmlRenderer.RenderHeader(this.ElementId, roleLabel, this.source.Timestamp, this.SuppressRoleHeader));
         }
 
         for (var index = 0; index < newBindings.Count; index++)
@@ -417,6 +446,28 @@ internal sealed class ToolCallGroupHtmlModel
     public int FirstHistoryIndex { get; }
 
     public string GroupId { get; }
+
+    /// <summary>See <see cref="ChatMessageHtmlModel.SuppressRoleHeader"/> — the tool-group's outer
+    /// message frame renders the assistant role header, and role-run reconciliation may hide it
+    /// (#1222).</summary>
+    public bool SuppressRoleHeader { get; private set; }
+
+    internal void SetSuppressRoleHeader(bool value, bool emit)
+    {
+        if (this.SuppressRoleHeader == value)
+        {
+            return;
+        }
+
+        this.SuppressRoleHeader = value;
+        if (emit)
+        {
+            this.sink.UpdateContent(
+                ChatOutputHtmlRenderer.HeaderId(this.GroupId),
+                ChatOutputUpdateLocation.Replace,
+                ChatOutputHtmlRenderer.RenderHeader(this.GroupId, "assistant", this.members[0].Source.Timestamp, value));
+        }
+    }
 
     /// <summary>The distinct tool names in the group, in first-seen (encounter) order across all
     /// members' <see cref="FunctionCallContent"/> items.</summary>
@@ -478,7 +529,8 @@ internal sealed class ToolCallGroupHtmlModel
             this.CallCount,
             firstMessageHtml,
             this.members[0].Source.Timestamp,
-            postGroupHtml ?? this.members[0].BuildGroupedMemberPostGroupHtml());
+            postGroupHtml ?? this.members[0].BuildGroupedMemberPostGroupHtml(),
+            this.SuppressRoleHeader);
 
     /// <summary>Appends <paramref name="model"/> to the group body in the DOM and updates the summary badge.</summary>
     public void AppendItem(ChatMessageHtmlModel model)
@@ -690,6 +742,13 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
                 this.TryInjectResults(sourceItem);
             }
 
+            // The message's role label may have flipped in-place (Update path); reconcile role runs
+            // so any header suppression state on either side of this slot stays consistent (#1222).
+            if (!string.Equals(oldSource.Role.Value, sourceItem.Role.Value, StringComparison.OrdinalIgnoreCase))
+            {
+                this.ReconcileRoleHeaders();
+            }
+
             return;
         }
 
@@ -702,6 +761,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
     {
         this.AddCallIdsToIndex(slot.Model.Source, slot);
         this.ClassifyAndInsert(index, slot);
+        this.ReconcileRoleHeaders();
     }
 
     protected override void OnRemoveAt(int index, RenderSlot slot)
@@ -716,10 +776,12 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         if (slot.Group is { } group)
         {
             this.RebuildGroupAfterRemoval(group, slot);
+            this.ReconcileRoleHeaders();
             return;
         }
 
         this.sink.RemoveContent(slot.Model.ElementId);
+        this.ReconcileRoleHeaders();
     }
 
     protected override void OnMove(int oldIndex, int newIndex, RenderSlot slot)
@@ -754,6 +816,8 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         {
             this.ClassifyAndInsert(index, this.Target[index]);
         }
+
+        this.ReconcileRoleHeaders();
     }
 
     public override void Dispose()
@@ -946,6 +1010,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
 
         this.AddCallIdsToIndex(newItem, fresh);
         this.ClassifyAndInsert(index, fresh);
+        this.ReconcileRoleHeaders();
     }
 
     /// <summary>
@@ -1021,6 +1086,7 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
             this.ClassifyAndInsert(i, this.Target[i]);
         }
 
+        this.ReconcileRoleHeaders();
         return true;
     }
 
@@ -1226,6 +1292,76 @@ internal sealed class ChatMessageHtmlTransformer : CollectionTransformer<AgentCh
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Walks the target list once and folds consecutive same-role DOM-owning slots into a single
+    /// role run: the first (leader) slot keeps its role header visible; every subsequent same-role
+    /// slot has its role header suppressed via <see cref="ChatMessageHtmlModel.SetSuppressRoleHeader"/>
+    /// or <see cref="ToolCallGroupHtmlModel.SetSuppressRoleHeader"/>. The run breaks whenever the
+    /// effective role changes. Header operations are emitted in-place for slots already inserted
+    /// into the DOM so streaming inserts, removals, moves, and replacements always leave the DOM
+    /// consistent with the invariant. Non-DOM slots (result-only injections, no-visible-content
+    /// messages) and grouped non-leader slots are skipped (they never own a role header). See #1222.
+    /// </summary>
+    private void ReconcileRoleHeaders()
+    {
+        string? previousRole = null;
+        ToolCallGroupHtmlModel? previousGroupOwner = null;
+        for (var i = 0; i < this.Target.Count; i++)
+        {
+            var slot = this.Target[i];
+            if (!slot.HasDomElement)
+            {
+                continue;
+            }
+
+            string effectiveRole;
+            bool isGroupOwner;
+            ToolCallGroupHtmlModel? group;
+            if (slot.Group is { } g)
+            {
+                if (!slot.IsTopLevelFirstGroupMember || ReferenceEquals(g, previousGroupOwner))
+                {
+                    // Non-leader group members don't emit their own header — they're already part
+                    // of the group body. Skip them without breaking the run.
+                    continue;
+                }
+
+                group = g;
+                effectiveRole = "assistant";
+                isGroupOwner = true;
+            }
+            else
+            {
+                group = null;
+                effectiveRole = slot.Model.Source.Role.Value;
+                isGroupOwner = false;
+            }
+
+            // The "tool" role never emits a header (see RenderHeader) — leave it transparent so a
+            // stray tool slot with a DOM element doesn't split a surrounding assistant run.
+            if (string.Equals(effectiveRole, "tool", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var isLeader = !string.Equals(previousRole, effectiveRole, StringComparison.OrdinalIgnoreCase);
+            var suppress = !isLeader;
+
+            if (isGroupOwner)
+            {
+                group!.SetSuppressRoleHeader(suppress, emit: slot.Model.IsInserted);
+                previousGroupOwner = group;
+            }
+            else
+            {
+                slot.Model.SetSuppressRoleHeader(suppress, emit: slot.Model.IsInserted);
+                previousGroupOwner = null;
+            }
+
+            previousRole = effectiveRole;
+        }
     }
 
     internal static string GetLastToolName(AgentChatHistoryItem item)
@@ -1727,6 +1863,45 @@ public sealed class ChatOutputHtmlModel : IDisposable
                 group.AppendItemStateOnly(slots[i].Model);
                 slots[i].Group = group;
             }
+        }
+
+        // Pass 4: collapse consecutive same-role runs into a single header (#1222). Mirrors
+        // ChatMessageHtmlTransformer.ReconcileRoleHeaders but operates on the plan before chunk
+        // HTML is generated; runs off the UI thread and never emits sink operations.
+        string? previousRole = null;
+        for (var i = 0; i < slots.Length; i++)
+        {
+            var slot = slots[i];
+            if (!slot.HasDomElement)
+            {
+                continue;
+            }
+
+            string effectiveRole;
+            if (slot.Group is { } g)
+            {
+                if (!slot.IsTopLevelFirstGroupMember)
+                {
+                    continue;
+                }
+
+                effectiveRole = "assistant";
+                var suppress = string.Equals(previousRole, effectiveRole, StringComparison.OrdinalIgnoreCase);
+                g.SetSuppressRoleHeader(suppress, emit: false);
+            }
+            else
+            {
+                effectiveRole = snapshot[i].Role.Value;
+                if (string.Equals(effectiveRole, "tool", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var suppress = string.Equals(previousRole, effectiveRole, StringComparison.OrdinalIgnoreCase);
+                slot.Model.SetSuppressRoleHeader(suppress, emit: false);
+            }
+
+            previousRole = effectiveRole;
         }
 
         return new HistoryRenderPlan

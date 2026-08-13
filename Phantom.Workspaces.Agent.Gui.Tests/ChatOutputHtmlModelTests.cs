@@ -566,10 +566,17 @@ public sealed class ChatOutputHtmlModelTests
 
         history.Add(TextMessage(ChatRole.Assistant, "done"));
 
-        var op = Assert.Single(sink.ContentOperations);
+        // Two ops: the insert After, plus the #1222 header-suppression Replace on the new element
+        // (same role as the predecessor assistant tool-call group).
+        Assert.Equal(2, sink.ContentOperations.Count);
+        var op = sink.ContentOperations[0];
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(0), op.Path);
         Assert.Contains(">done<", op.Content);
+        var suppression = sink.ContentOperations[1];
+        Assert.Equal(ChatOutputUpdateLocation.Replace, suppression.Location);
+        Assert.Equal(ChatOutputHtmlRenderer.HeaderId(ChatOutputHtmlRenderer.MessageId(1)), suppression.Path);
+        Assert.Contains("chat-header-suppressed", suppression.Content);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -1568,10 +1575,15 @@ public sealed class ChatOutputHtmlModelTests
 
         // The last top-level element is the group wrapping items 1-2, so the live item inserts
         // after the group element, not after a nested member.
-        var op = Assert.Single(sink.ContentOperations);
+        // Two ops: the insert After, plus the #1222 header-suppression Replace on the new element
+        // (same assistant role as the tool-call group predecessor).
+        Assert.Equal(2, sink.ContentOperations.Count);
+        var op = sink.ContentOperations[0];
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
         Assert.Equal(ChatOutputHtmlRenderer.ToolGroupId(1), op.Path);
         Assert.Contains("new-live", op.Content);
+        Assert.Equal(ChatOutputUpdateLocation.Replace, sink.ContentOperations[1].Location);
+        Assert.Contains("chat-header-suppressed", sink.ContentOperations[1].Content);
     }
 
     [Fact]
@@ -2238,10 +2250,14 @@ public sealed class ChatOutputHtmlModelTests
         runningItem.Items.Add(TextMessage(ChatRole.Assistant, "second"));
 
         var runId = ChatOutputHtmlRenderer.RunningItemId(0);
-        var op = Assert.Single(sink.ContentOperations);
+        // Two ops: the insert After, plus the #1222 header-suppression Replace on the new element.
+        Assert.Equal(2, sink.ContentOperations.Count);
+        var op = sink.ContentOperations[0];
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
         Assert.Equal(ChatOutputHtmlRenderer.RunningMessageId(runId, 0), op.Path);
         Assert.Contains(">second<", op.Content);
+        Assert.Equal(ChatOutputUpdateLocation.Replace, sink.ContentOperations[1].Location);
+        Assert.Contains("chat-header-suppressed", sink.ContentOperations[1].Content);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -2748,10 +2764,15 @@ public sealed class ChatOutputHtmlModelTests
 
         history.Add(TextMessage(ChatRole.User, "latest question"));
 
-        var op = Assert.Single(sink.ContentOperations);
+        // Two ops: the insert After, plus the #1222 header-suppression Replace on the new element
+        // (same user role as the predecessor history-2).
+        Assert.Equal(2, sink.ContentOperations.Count);
+        var op = sink.ContentOperations[0];
         Assert.Equal(ChatOutputUpdateLocation.After, op.Location);
         Assert.Equal(ChatOutputHtmlRenderer.MessageId(2), op.Path);
         Assert.Contains("latest question", op.Content);
+        Assert.Equal(ChatOutputUpdateLocation.Replace, sink.ContentOperations[1].Location);
+        Assert.Contains("chat-header-suppressed", sink.ContentOperations[1].Content);
     }
 
     [Fact]
@@ -3385,5 +3406,132 @@ public sealed class ChatOutputHtmlModelTests
         // Group header is "assistant".
         var groupId = ChatOutputHtmlRenderer.ToolGroupId(1);
         Assert.Contains($"id=\"{groupId}\"", html);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // #1222 — consecutive same-role items collapse under a single role header.
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void BuildHistoryRenderPlan_WhenConsecutiveAssistantItems_OnlyFirstEmitsVisibleRoleHeader()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "one"),
+            TextMessage(ChatRole.Assistant, "two"),
+            TextMessage(ChatRole.Assistant, "three"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Exactly one visible role header, plus two suppressed placeholders (hidden, no <span>).
+        var visibleHeaders = System.Text.RegularExpressions.Regex.Matches(html, "<div class=\"chat-header\"").Count;
+        var suppressedHeaders = System.Text.RegularExpressions.Regex.Matches(html, "chat-header-suppressed").Count;
+        Assert.Equal(1, visibleHeaders);
+        Assert.Equal(2, suppressedHeaders);
+    }
+
+    [Fact]
+    public void BuildHistoryRenderPlan_WhenRolesAlternate_EachItemEmitsItsOwnRoleHeader()
+    {
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "u1"),
+            TextMessage(ChatRole.Assistant, "a1"),
+            TextMessage(ChatRole.User, "u2"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "<div class=\"chat-header\"").Count);
+        Assert.DoesNotContain("chat-header-suppressed", html);
+    }
+
+    [Fact]
+    public void BuildHistoryRenderPlan_WhenConsecutiveToolCallGroupsAndTextAllAssistant_OneAssistantHeaderWrapsRun()
+    {
+        // Screenshot scenario: user question then several tool-call-only assistant messages then
+        // an assistant text summary. The run of assistant items must show one assistant header.
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.User, "please investigate"),
+            ToolCallMessage("read_file", "c1"),
+            TextMessage(ChatRole.Assistant, "summary"),
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // One user header + one assistant header + one suppressed assistant header (for "summary").
+        var userHeader = System.Text.RegularExpressions.Regex.Matches(html, "<span>user</span>").Count;
+        var assistantHeader = System.Text.RegularExpressions.Regex.Matches(html, "<span>assistant</span>").Count;
+        Assert.Equal(1, userHeader);
+        Assert.Equal(1, assistantHeader);
+        Assert.Contains("chat-header-suppressed", html);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task LiveInsert_WhenPredecessorSameRole_EmitsHeaderSuppressionOnNewSlot()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "first"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.Assistant, "second"));
+
+        // The reconciliation pass fires a Replace op on the new element's -header placeholder.
+        var suppression = sink.ContentOperations
+            .SingleOrDefault(op => op.Location == ChatOutputUpdateLocation.Replace
+                && op.Path == ChatOutputHtmlRenderer.HeaderId(ChatOutputHtmlRenderer.MessageId(1)));
+        Assert.NotNull(suppression);
+        Assert.Contains("chat-header-suppressed", suppression!.Content);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task LiveInsert_WhenPredecessorDifferentRole_DoesNotEmitHeaderSuppression()
+    {
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            TextMessage(ChatRole.Assistant, "first"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+        sink.Clear();
+
+        history.Add(TextMessage(ChatRole.User, "second"));
+
+        Assert.DoesNotContain(sink.ContentOperations, op =>
+            op.Location == ChatOutputUpdateLocation.Replace && op.Content.Contains("chat-header-suppressed"));
+    }
+
+    [Fact]
+    public void RenderHeader_WhenSuppressedTrue_EmitsHiddenPlaceholderWithStableId()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-1", "assistant", timestamp: null, suppressed: true);
+
+        Assert.Contains("id=\"msg-1-header\"", html);
+        Assert.Contains("chat-header-suppressed", html);
+        Assert.Contains("hidden", html);
+        Assert.DoesNotContain("<span>assistant</span>", html);
+    }
+
+    [Fact]
+    public void RenderHeader_WhenSuppressedFalse_EmitsFullHeaderAsBefore()
+    {
+        var html = ChatOutputHtmlRenderer.RenderHeader("msg-1", "assistant");
+
+        Assert.Contains("<span>assistant</span>", html);
+        Assert.DoesNotContain("chat-header-suppressed", html);
     }
 }
