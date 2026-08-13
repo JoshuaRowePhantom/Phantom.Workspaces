@@ -12,8 +12,13 @@ public abstract class RepositoryConnectionModeViewModel : ViewModelBase
     /// <summary>The data-access mode this sub-view-model represents.</summary>
     public abstract DataAccessMode Mode { get; }
 
-    /// <summary>Whether the current settings are complete and valid for this mode.</summary>
-    public abstract bool IsValid { get; }
+    /// <summary>
+    /// Whether the current settings are complete and valid for this mode. Derived from
+    /// <see cref="ValidationMessage"/> so the message and the gate share a single predicate:
+    /// a mode is valid iff it has no validation message. Subclasses only implement
+    /// <see cref="ValidationMessage"/> — do NOT override this property.
+    /// </summary>
+    public bool IsValid => this.ValidationMessage is null;
 
     /// <summary>
     /// Short human-readable description of this mode for the setup wizard. Rendered under the

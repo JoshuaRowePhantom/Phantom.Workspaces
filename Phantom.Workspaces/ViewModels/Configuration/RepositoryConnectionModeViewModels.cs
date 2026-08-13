@@ -94,12 +94,6 @@ public sealed class LocalMongoContainerSettingsViewModel : RepositoryConnectionM
     }
 
     /// <inheritdoc />
-    public override bool IsValid =>
-        !string.IsNullOrWhiteSpace(this.ContainerName)
-        && !string.IsNullOrWhiteSpace(this.DataDirectory)
-        && !string.IsNullOrWhiteSpace(this.RootCollectionName);
-
-    /// <inheritdoc />
     public override string Description =>
         "Recommended for first-time and offline use. Runs MongoDB locally in Docker Desktop. Nothing to configure remotely.";
 
@@ -177,9 +171,6 @@ public sealed class RemoteMongoSettingsViewModel : RepositoryConnectionModeViewM
     }
 
     /// <inheritdoc />
-    public override bool IsValid => !string.IsNullOrWhiteSpace(this.ConnectionStringSource);
-
-    /// <inheritdoc />
     public override string Description =>
         "Connect to an existing MongoDB you host. Requires a connection string.";
 
@@ -222,9 +213,6 @@ public sealed class WebSettingsViewModel : RepositoryConnectionModeViewModel
     }
 
     /// <inheritdoc />
-    public override bool IsValid => Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _);
-
-    /// <inheritdoc />
     public override string Description =>
         "Connect to a remote Phantom.Workspaces data-access endpoint via HTTPS.";
 
@@ -263,9 +251,6 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
         get => this.endpoint;
         set => this.SetValidatedProperty(ref this.endpoint, value);
     }
-
-    /// <inheritdoc />
-    public override bool IsValid => Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _);
 
     /// <inheritdoc />
     public override string Description =>

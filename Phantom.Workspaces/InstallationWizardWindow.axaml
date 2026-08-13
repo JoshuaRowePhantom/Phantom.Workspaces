@@ -68,7 +68,8 @@
 
                 <StackPanel Spacing="4">
                     <TextBlock Text="Listen URL" />
-                    <TextBox PlaceholderText="http://localhost:5280"
+                    <TextBox x:Name="WizardListenUrlTextBox"
+                             PlaceholderText="http://localhost:5280"
                              Text="{Binding RemoteAccess.ListenUrl}"
                              IsEnabled="{Binding RemoteAccess.HostingEnabled}" />
                     <TextBlock Text="URL this instance listens on when hosting the data-access endpoint. Default http://localhost:5280 is fine for local development."
@@ -79,7 +80,8 @@
                 <StackPanel Spacing="4">
                     <TextBlock Text="Dev tunnel name" />
                     <TextBox PlaceholderText="my-workspace-tunnel or auto" Text="{Binding RemoteAccess.TunnelName}" />
-                    <TextBlock Text="Name of the dev tunnel to host/connect by; the forwarded port is discovered automatically. When connecting, use &quot;auto&quot; to discover the single Workspaces tunnel without naming it."
+                    <TextBlock x:Name="WizardTunnelNameHelperText"
+                               Text="{Binding RemoteAccess.TunnelNameHelperTextValue}"
                                Opacity="0.7"
                                TextWrapping="Wrap" />
                 </StackPanel>

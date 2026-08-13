@@ -114,6 +114,13 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         "Name of the dev tunnel to host/connect by; the forwarded port is discovered automatically. When connecting, use \"auto\" to discover the single Workspaces tunnel without naming it.";
 
     /// <summary>
+    /// Instance-property projection of <see cref="TunnelNameHelperText"/> so AXAML can bind to the
+    /// single source of truth without repeating the literal string. Both the setup wizard and the
+    /// Settings dialog helper TextBlock bind to this property.
+    /// </summary>
+    public string TunnelNameHelperTextValue => TunnelNameHelperText;
+
+    /// <summary>
     /// Human-readable message naming which remote-access field is invalid when
     /// <see cref="IsValid"/> is <see langword="false"/>; <see langword="null"/> otherwise.
     /// </summary>
@@ -122,19 +129,12 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
             ? "Listen URL must be a valid absolute URL when hosting is enabled."
             : null;
 
-    /// <summary>Whether the current settings are valid.</summary>
-    public bool IsValid
-    {
-        get
-        {
-            if (this.HostingEnabled && !Uri.TryCreate(this.ListenUrl, UriKind.Absolute, out _))
-            {
-                return false;
-            }
-
-            return true;
-        }
-    }
+    /// <summary>
+    /// Whether the current settings are valid. Derived from <see cref="ValidationMessage"/> so
+    /// the gate and the message share a single predicate: settings are valid iff there is no
+    /// validation message.
+    /// </summary>
+    public bool IsValid => this.ValidationMessage is null;
 
     /// <summary>Projects the current settings into a <see cref="RemoteHostingSettings"/>.</summary>
     public RemoteHostingSettings ToRemoteHostingSettings() => new()
