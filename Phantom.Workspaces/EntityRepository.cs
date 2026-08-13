@@ -133,14 +133,14 @@ public sealed class EntityRepository
                 cancellationToken),
             buildDataAccessLayer: resolution =>
             {
-                // Private connect is identity-derived (design #19, issue #1082): when the Management
-                // API returns no Connect token, authorize with the GitHub identity token plus a
-                // 401-refresh resolver, mirroring the WebRepositorySource UseGitHubAuthToken path.
+                // Issue #1293: For Private access, only a Microsoft Connect-scope tunnel access
+                // token is acceptable to the *.devtunnels.ms relay; a GitHub OAuth token is always
+                // rejected with 401. If the Management API did not mint a Connect token, Resolve
+                // throws an actionable error rather than silently sending the wrong token.
                 // Anonymous access sends no tunnel-authorization header.
                 var authorization = Services.DevTunnel.DevTunnelClientAuthorization.Resolve(
                     resolution,
-                    repositorySource.AccessMode,
-                    () => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve());
+                    repositorySource.AccessMode);
 
                 return new WebClientDataAccessLayer(
                     resolution.BaseUri.ToString(),

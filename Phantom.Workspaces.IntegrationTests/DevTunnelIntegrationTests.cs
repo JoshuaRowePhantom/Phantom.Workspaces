@@ -42,15 +42,12 @@ public sealed class DevTunnelIntegrationTests : IClassFixture<InProcessDevTunnel
         Assert.Equal(this.fixture.RelayBaseUri, resolution.BaseUri);
         Assert.Null(resolution.TunnelAuthToken);
 
-        // The identity-derived client path authorizes with the GitHub identity token (and a
-        // 401-refresh resolver) rather than sending no X-Tunnel-Authorization header.
-        var authorization = DevTunnelClientAuthorization.Resolve(
-            resolution,
-            DevTunnelAccessMode.Private,
-            identityTokenResolver: () => githubToken);
-
-        Assert.Equal(githubToken, authorization.Token);
-        Assert.NotNull(authorization.RefreshResolver);
+        // Issue #1293 reversed design #19: the dev-tunnels relay rejects the GitHub identity
+        // token, so Resolve must fail fast when no Connect-scope token is available rather than
+        // silently emitting a token guaranteed to 401.
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Private));
+        Assert.Contains("Connect-scope", ex.Message, StringComparison.Ordinal);
 
         // Companion assertion: Anonymous mode still returns a null token (no header), so the fix does
         // not regress anonymous tunnels.

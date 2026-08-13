@@ -6,57 +6,84 @@ using Xunit;
 namespace Phantom.Workspaces.Tests;
 
 /// <summary>
-/// Verifies how the dev-tunnel-name client path (issue #1082, Fix A wiring) selects the
-/// <c>X-Tunnel-Authorization</c> token: Private connect is identity-derived (design #19), so a null
-/// Connect token must fall back to the GitHub identity token and a 401-refresh resolver rather than
-/// sending no header.
+/// Issue #1293: The dev-tunnels relay (<c>*.devtunnels.ms</c>) only accepts a Microsoft-issued
+/// Connect-scope tunnel access token; a GitHub OAuth identity token is always rejected with
+/// 401 (empty body). These tests pin the fixed behaviour of <see cref="DevTunnelClientAuthorization.Resolve"/>:
+/// Connect token verbatim, no header for Anonymous, actionable throw for Private + no Connect
+/// token (no silent GitHub-token fallback).
 /// </summary>
 public sealed class DevTunnelClientAuthorizationTests
 {
-    [Fact]
-    public void CreateDevTunnelNameDataAccessLayer_PrivateMode_WithNullToken_UsesGitHubIdentityHeader()
-    {
-        var resolution = new DevTunnelEndpointResolution(new Uri("https://tunnel-abc-5280.usw2.devtunnels.ms/"), TunnelAuthToken: null);
-
-        var authorization = DevTunnelClientAuthorization.Resolve(
-            resolution,
-            DevTunnelAccessMode.Private,
-            identityTokenResolver: () => "github-identity-token");
-
-        Assert.Equal("github-identity-token", authorization.Token);
-        Assert.NotNull(authorization.RefreshResolver);
-        Assert.Equal("github-identity-token", authorization.RefreshResolver!());
-    }
+    private static DevTunnelEndpointResolution CreateResolution(string? tunnelAuthToken)
+        => new(new Uri("https://tunnel-abc-5280.usw2.devtunnels.ms/"), tunnelAuthToken);
 
     [Fact]
-    public void Resolve_PrivateMode_WithExplicitConnectToken_UsesTokenVerbatim_NoIdentityFallback()
+    public void Resolve_PrivateMode_WithExplicitConnectToken_UsesTokenVerbatim()
     {
-        var resolution = new DevTunnelEndpointResolution(new Uri("https://tunnel-abc-5280.usw2.devtunnels.ms/"), TunnelAuthToken: "api-connect-token");
-        var identityResolverInvoked = false;
+        var resolution = CreateResolution("api-connect-token");
 
-        var authorization = DevTunnelClientAuthorization.Resolve(
-            resolution,
-            DevTunnelAccessMode.Private,
-            identityTokenResolver: () => { identityResolverInvoked = true; return "github-identity-token"; });
+        var authorization = DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Private);
 
         Assert.Equal("api-connect-token", authorization.Token);
         Assert.Null(authorization.RefreshResolver);
-        Assert.False(identityResolverInvoked);
     }
 
     [Fact]
-    public void Resolve_AnonymousMode_WithNullToken_SendsNoAuthorization()
+    public void Resolve_AnonymousMode_WithNoConnectToken_SendsNoAuthorization()
     {
-        var resolution = new DevTunnelEndpointResolution(new Uri("https://tunnel-abc-5280.usw2.devtunnels.ms/"), TunnelAuthToken: null);
-        var identityResolverInvoked = false;
+        var resolution = CreateResolution(tunnelAuthToken: null);
 
-        var authorization = DevTunnelClientAuthorization.Resolve(
-            resolution,
-            DevTunnelAccessMode.Anonymous,
-            identityTokenResolver: () => { identityResolverInvoked = true; return "github-identity-token"; });
+        var authorization = DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Anonymous);
 
         Assert.Null(authorization.Token);
         Assert.Null(authorization.RefreshResolver);
-        Assert.False(identityResolverInvoked);
+    }
+
+    [Fact]
+    public void Resolve_AnonymousMode_WithConnectToken_UsesTokenVerbatim()
+    {
+        // Documents that Connect-token-present precedes access-mode dispatch, so even Anonymous
+        // dispatch uses an explicit token if the Management API happened to mint one.
+        var resolution = CreateResolution("api-connect-token");
+
+        var authorization = DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Anonymous);
+
+        Assert.Equal("api-connect-token", authorization.Token);
+    }
+
+    [Fact]
+    public void Resolve_PrivateMode_WithNoConnectToken_ThrowsActionableError()
+    {
+        var resolution = CreateResolution(tunnelAuthToken: null);
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Private));
+
+        // Actionable message: names the relay host and calls out the missing Connect-scope token
+        // plus the ownership/label root cause the maintainer must check.
+        Assert.Contains("Connect-scope", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("tunnel-abc-5280.usw2.devtunnels.ms", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("label", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Resolve_PrivateMode_WithNoConnectToken_DoesNotSendGitHubIdentityToken()
+    {
+        // Structural guarantee for the #1293 fix: the Resolve API has no identity-token input at
+        // all, so no caller can accidentally reintroduce the buggy X-Tunnel-Authorization fallback.
+        // Combined with the throw, this proves the GitHub token can never appear on the wire.
+        var resolution = CreateResolution(tunnelAuthToken: null);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Private));
+
+        var resolveMethod = typeof(DevTunnelClientAuthorization).GetMethod(nameof(DevTunnelClientAuthorization.Resolve));
+        Assert.NotNull(resolveMethod);
+        Assert.DoesNotContain(
+            resolveMethod!.GetParameters(),
+            p => p.Name is not null && p.Name.Contains("identity", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            resolveMethod.GetParameters(),
+            p => p.Name is not null && p.Name.Contains("github", StringComparison.OrdinalIgnoreCase));
     }
 }
