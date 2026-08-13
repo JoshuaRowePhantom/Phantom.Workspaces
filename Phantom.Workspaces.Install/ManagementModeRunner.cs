@@ -79,10 +79,35 @@ public sealed class ManagementModeRunner
             return ExitCode.BootstrapFailure;
         }
 
-        if (!options.Silent)
+        // Register the per-user logon task pointing at app\current\Phantom.Workspaces.exe so the
+        // app auto-runs on future logins. Best-effort — a failure here should not fail the install
+        // (bits are already on disk; the user can enable startup from Settings later). Applies to
+        // both silent and interactive installs — --silent means "no interactive installer UI", not
+        // "don't register startup" (#1289).
+        try
         {
-            // Interactive install: launch the freshly-installed managed app.
-            this.processLauncher.Start(new ProcessStartRequest { FileName = this.layout.CurrentExecutablePath });
+            this.startupTaskService.Enable();
+        }
+        catch (Exception)
+        {
+            // Swallow: install still succeeded.
+        }
+
+        // Launch the freshly-installed managed app. Use --startup so the app honors the same
+        // launch-mode semantics the logon task will use every day thereafter. Applies to both
+        // silent and interactive installs (#1289). Best-effort — a launch failure does not fail
+        // the install; the payload is already installed.
+        try
+        {
+            this.processLauncher.Start(new ProcessStartRequest
+            {
+                FileName = this.layout.CurrentExecutablePath,
+                Arguments = new[] { StartupTaskService.StartupArgument },
+            });
+        }
+        catch (Exception)
+        {
+            // Swallow: install still succeeded.
         }
 
         return ExitCode.Success;
