@@ -100,6 +100,31 @@ public sealed class LocalMongoContainerSettingsViewModel : RepositoryConnectionM
         && !string.IsNullOrWhiteSpace(this.RootCollectionName);
 
     /// <inheritdoc />
+    public override string Description =>
+        "Recommended for first-time and offline use. Runs MongoDB locally in Docker Desktop. Nothing to configure remotely.";
+
+    /// <inheritdoc />
+    public override string? ValidationMessage
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(this.ContainerName))
+            {
+                return "LocalMongoContainer requires a container name.";
+            }
+            if (string.IsNullOrWhiteSpace(this.DataDirectory))
+            {
+                return "LocalMongoContainer requires a data directory.";
+            }
+            if (string.IsNullOrWhiteSpace(this.RootCollectionName))
+            {
+                return "LocalMongoContainer requires a root collection name.";
+            }
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
     public override DataAccessConnectionProfile ToProfile() => new()
     {
         Mode = this.Mode,
@@ -155,6 +180,16 @@ public sealed class RemoteMongoSettingsViewModel : RepositoryConnectionModeViewM
     public override bool IsValid => !string.IsNullOrWhiteSpace(this.ConnectionStringSource);
 
     /// <inheritdoc />
+    public override string Description =>
+        "Connect to an existing MongoDB you host. Requires a connection string.";
+
+    /// <inheritdoc />
+    public override string? ValidationMessage =>
+        string.IsNullOrWhiteSpace(this.ConnectionStringSource)
+            ? "RemoteMongo requires a connection string."
+            : null;
+
+    /// <inheritdoc />
     public override DataAccessConnectionProfile ToProfile() => new()
     {
         Mode = this.Mode,
@@ -190,6 +225,16 @@ public sealed class WebSettingsViewModel : RepositoryConnectionModeViewModel
     public override bool IsValid => Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _);
 
     /// <inheritdoc />
+    public override string Description =>
+        "Connect to a remote Phantom.Workspaces data-access endpoint via HTTPS.";
+
+    /// <inheritdoc />
+    public override string? ValidationMessage =>
+        Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _)
+            ? null
+            : "Web requires a valid Endpoint URL.";
+
+    /// <inheritdoc />
     public override DataAccessConnectionProfile ToProfile() => new()
     {
         Mode = this.Mode,
@@ -221,6 +266,16 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
 
     /// <inheritdoc />
     public override bool IsValid => Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _);
+
+    /// <inheritdoc />
+    public override string Description =>
+        "Connect to a remote Phantom.Workspaces endpoint through a dev tunnel. Authorizes with your GitHub auth token (GITHUB_TOKEN or 'gh auth token').";
+
+    /// <inheritdoc />
+    public override string? ValidationMessage =>
+        Uri.TryCreate(this.Endpoint, UriKind.Absolute, out _)
+            ? null
+            : "DevTunnelWeb requires a valid Endpoint URL.";
 
     /// <inheritdoc />
     public override DataAccessConnectionProfile ToProfile() => new()

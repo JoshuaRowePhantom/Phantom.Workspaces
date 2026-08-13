@@ -415,6 +415,223 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Same(settings.Logs, settings.SelectedSection.Content);
     }
 
+    [AvaloniaFact]
+    public void Wizard_FreshProfile_DefaultsToLocalMongoContainer_AndCanSaveIsTrue()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        Assert.Equal(DataAccessMode.LocalMongoContainer, settings.Repository.Mode);
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.LocalMongoContainer.ContainerName));
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.LocalMongoContainer.DataDirectory));
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.LocalMongoContainer.RootCollectionName));
+
+        // ListenUrl is prefilled to the http://localhost:5280 default so it is valid whenever
+        // hosting is later enabled.
+        Assert.Equal("http://localhost:5280", settings.RemoteAccess.ListenUrl);
+
+        Assert.True(settings.CanSave);
+        Assert.Empty(settings.ValidationMessages);
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ModeDevTunnelWeb_WithEmptyEndpoint_DisablesCanSave_AndSurfacesValidationMessage()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.DevTunnelWeb;
+        settings.Repository.DevTunnelWeb.Endpoint = string.Empty;
+
+        Assert.False(settings.CanSave);
+        Assert.Contains(settings.ValidationMessages, m => m.Contains("DevTunnelWeb", System.StringComparison.OrdinalIgnoreCase) && m.Contains("Endpoint", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ModeRemoteMongo_WithEmptyConnectionString_DisablesCanSave_AndSurfacesValidationMessage()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.RemoteMongo;
+        settings.Repository.RemoteMongo.ConnectionStringSource = string.Empty;
+
+        Assert.False(settings.CanSave);
+        Assert.Contains(settings.ValidationMessages, m => m.Contains("RemoteMongo", System.StringComparison.OrdinalIgnoreCase) && m.Contains("connection string", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ModeWeb_WithInvalidEndpoint_DisablesCanSave_AndSurfacesValidationMessage()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.Web;
+        settings.Repository.Web.Endpoint = "not-a-url";
+
+        Assert.False(settings.CanSave);
+        Assert.Contains(settings.ValidationMessages, m => m.Contains("Web", System.StringComparison.OrdinalIgnoreCase) && m.Contains("Endpoint", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ModeSelection_SurfacesCorrectRequiredFieldsAndDescription()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.Repository.Mode = DataAccessMode.LocalMongoContainer;
+        Assert.IsType<LocalMongoContainerSettingsViewModel>(settings.Repository.ActiveSettings);
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.ActiveSettings.Description));
+
+        settings.Repository.Mode = DataAccessMode.RemoteMongo;
+        Assert.IsType<RemoteMongoSettingsViewModel>(settings.Repository.ActiveSettings);
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.ActiveSettings.Description));
+
+        settings.Repository.Mode = DataAccessMode.Web;
+        Assert.IsType<WebSettingsViewModel>(settings.Repository.ActiveSettings);
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.ActiveSettings.Description));
+
+        settings.Repository.Mode = DataAccessMode.DevTunnelWeb;
+        Assert.IsType<DevTunnelWebSettingsViewModel>(settings.Repository.ActiveSettings);
+        Assert.False(string.IsNullOrWhiteSpace(settings.Repository.ActiveSettings.Description));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_HostingDisabled_ListenUrlFieldIsDisabled_AndValidationIgnoresListenUrl()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.RemoteAccess.HostingEnabled = false;
+        settings.RemoteAccess.ListenUrl = "not-a-url";
+
+        // The wizard binds the Listen URL TextBox's IsEnabled to HostingEnabled, so it is
+        // disabled here; the VM-level check is that validation ignores ListenUrl.
+        Assert.True(settings.RemoteAccess.IsValid);
+        Assert.True(settings.CanSave);
+        Assert.DoesNotContain(settings.ValidationMessages, m => m.Contains("Listen URL", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_HostingEnabled_ListenUrlInvalid_DisablesCanSave_AndSurfacesListenUrlMessage()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        settings.RemoteAccess.HostingEnabled = true;
+        settings.RemoteAccess.ListenUrl = "not-a-url";
+
+        Assert.False(settings.CanSave);
+        Assert.Contains(settings.ValidationMessages, m => m.Contains("Listen URL", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [AvaloniaFact]
+    public void Wizard_TunnelName_DefaultsToAuto_AndHelperTextExposed()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        // A blank tunnel name is interpreted as "auto" by DevTunnelNaming.IsAuto.
+        Assert.True(Phantom.Workspaces.Services.DevTunnel.DevTunnelNaming.IsAuto(settings.RemoteAccess.TunnelName));
+
+        // The wizard exposes the same "auto" helper-text string as the Settings pane so users
+        // see the same explanation in both surfaces.
+        Assert.False(string.IsNullOrWhiteSpace(RemoteAccessSettingsViewModel.TunnelNameHelperText));
+        Assert.Contains("auto", RemoteAccessSettingsViewModel.TunnelNameHelperText, System.StringComparison.OrdinalIgnoreCase);
+
+        // And the wizard AXAML file embeds the exact same phrase, ensuring the two surfaces stay aligned.
+        var wizardAxaml = File.ReadAllText(FindRepoFile("Phantom.Workspaces/InstallationWizardWindow.axaml"));
+        Assert.Contains("Name of the dev tunnel to host/connect by", wizardAxaml);
+    }
+
+    [AvaloniaFact]
+    public void Wizard_AnonymousAccessMode_ShowsWarning_MatchingSettingsPane()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        Assert.False(settings.RemoteAccess.IsAnonymousAccessWarningVisible);
+
+        settings.RemoteAccess.DevTunnelAccessMode = DevTunnelAccessMode.Anonymous;
+        Assert.True(settings.RemoteAccess.IsAnonymousAccessWarningVisible);
+
+        settings.RemoteAccess.DevTunnelAccessMode = DevTunnelAccessMode.Private;
+        Assert.False(settings.RemoteAccess.IsAnonymousAccessWarningVisible);
+    }
+
+    [AvaloniaFact]
+    public void Wizard_And_Settings_BindSameRemoteAccessInstance_ForSharedFields()
+    {
+        // Both the wizard and the settings dialog receive the same WorkspacesSettingsViewModel
+        // and therefore the same RemoteAccessSettingsViewModel — a change through one path is
+        // observed on the other.
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        var wizard = new InstallationWizardWindow(settings);
+        var dialog = new SettingsDialogWindow(settings);
+
+        var wizardVm = Assert.IsType<WorkspacesSettingsViewModel>(wizard.DataContext);
+        var dialogVm = Assert.IsType<WorkspacesSettingsViewModel>(dialog.DataContext);
+        Assert.Same(wizardVm.RemoteAccess, dialogVm.RemoteAccess);
+
+        wizardVm.RemoteAccess.HostingEnabled = true;
+        wizardVm.RemoteAccess.ListenUrl = "http://localhost:6001";
+        wizardVm.RemoteAccess.TunnelName = "shared-tunnel";
+        wizardVm.RemoteAccess.DevTunnelAccessMode = DevTunnelAccessMode.Anonymous;
+        wizardVm.RemoteAccess.AcceptReverseExecution = true;
+
+        Assert.True(dialogVm.RemoteAccess.HostingEnabled);
+        Assert.Equal("http://localhost:6001", dialogVm.RemoteAccess.ListenUrl);
+        Assert.Equal("shared-tunnel", dialogVm.RemoteAccess.TunnelName);
+        Assert.Equal(DevTunnelAccessMode.Anonymous, dialogVm.RemoteAccess.DevTunnelAccessMode);
+        Assert.True(dialogVm.RemoteAccess.AcceptReverseExecution);
+    }
+
+    [AvaloniaFact]
+    public void Wizard_ExposesSameFieldSetAsSettings_ForRemoteAccess()
+    {
+        // Verify both fields the wizard historically omitted (TunnelName, AcceptReverseExecution)
+        // exist on the shared RemoteAccessSettingsViewModel and are writable from the wizard side.
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+        _ = new InstallationWizardWindow(settings);
+
+        var vmType = typeof(RemoteAccessSettingsViewModel);
+        foreach (var name in new[] { nameof(RemoteAccessSettingsViewModel.HostingEnabled),
+                                     nameof(RemoteAccessSettingsViewModel.ListenUrl),
+                                     nameof(RemoteAccessSettingsViewModel.TunnelName),
+                                     nameof(RemoteAccessSettingsViewModel.DevTunnelAccessMode),
+                                     nameof(RemoteAccessSettingsViewModel.AcceptReverseExecution) })
+        {
+            var prop = vmType.GetProperty(name);
+            Assert.NotNull(prop);
+            Assert.True(prop!.CanRead);
+            Assert.NotNull(prop.SetMethod);
+        }
+
+        // And both new wizard bindings appear in the wizard AXAML file.
+        var wizardAxaml = File.ReadAllText(FindRepoFile("Phantom.Workspaces/InstallationWizardWindow.axaml"));
+        Assert.Contains("RemoteAccess.TunnelName", wizardAxaml);
+        Assert.Contains("RemoteAccess.AcceptReverseExecution", wizardAxaml);
+    }
+
+    private static string FindRepoFile(string relativePath)
+    {
+        // Walk up from the test binary directory until we find the requested repo-relative path.
+        var directory = new DirectoryInfo(System.AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(directory.FullName, relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+            directory = directory.Parent;
+        }
+        throw new FileNotFoundException($"Could not locate {relativePath} from {System.AppContext.BaseDirectory}.");
+    }
+
     private sealed class FakeLogDirectoryProvider : ILogDirectoryProvider
     {
         public FakeLogDirectoryProvider(string logDirectory)

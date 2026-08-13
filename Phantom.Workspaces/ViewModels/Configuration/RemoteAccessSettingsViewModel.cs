@@ -104,6 +104,24 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     /// </summary>
     public bool IsAnonymousAccessWarningVisible => this.DevTunnelAccessMode == DevTunnelAccessMode.Anonymous;
 
+    /// <summary>
+    /// Helper text describing the "auto" tunnel-name discovery convention used by
+    /// <see cref="Services.DevTunnel.DevTunnelNaming.IsAuto"/>. Rendered under the
+    /// Dev tunnel name field in both the setup wizard and Settings dialog so both
+    /// surfaces present the same explanation of the "auto" selector.
+    /// </summary>
+    public const string TunnelNameHelperText =
+        "Name of the dev tunnel to host/connect by; the forwarded port is discovered automatically. When connecting, use \"auto\" to discover the single Workspaces tunnel without naming it.";
+
+    /// <summary>
+    /// Human-readable message naming which remote-access field is invalid when
+    /// <see cref="IsValid"/> is <see langword="false"/>; <see langword="null"/> otherwise.
+    /// </summary>
+    public string? ValidationMessage =>
+        this.HostingEnabled && !Uri.TryCreate(this.ListenUrl, UriKind.Absolute, out _)
+            ? "Listen URL must be a valid absolute URL when hosting is enabled."
+            : null;
+
     /// <summary>Whether the current settings are valid.</summary>
     public bool IsValid
     {
@@ -138,6 +156,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         if (this.SetProperty(ref field, value, propertyName))
         {
             this.RaisePropertyChanged(nameof(this.IsValid));
+            this.RaisePropertyChanged(nameof(this.ValidationMessage));
             this.RaisePropertyChanged(nameof(this.IsAnonymousAccessWarningVisible));
         }
     }

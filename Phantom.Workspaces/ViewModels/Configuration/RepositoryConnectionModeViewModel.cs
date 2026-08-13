@@ -15,6 +15,19 @@ public abstract class RepositoryConnectionModeViewModel : ViewModelBase
     /// <summary>Whether the current settings are complete and valid for this mode.</summary>
     public abstract bool IsValid { get; }
 
+    /// <summary>
+    /// Short human-readable description of this mode for the setup wizard. Rendered under the
+    /// mode selector so users can understand what each mode does before choosing.
+    /// </summary>
+    public abstract string Description { get; }
+
+    /// <summary>
+    /// Human-readable message naming the missing required field for this mode when
+    /// <see cref="IsValid"/> is <see langword="false"/>; <see langword="null"/> otherwise.
+    /// Used by both the wizard and Settings dialog to explain why saving is disabled.
+    /// </summary>
+    public abstract string? ValidationMessage { get; }
+
     /// <summary>Projects the current settings into a <see cref="DataAccessConnectionProfile"/>.</summary>
     public abstract DataAccessConnectionProfile ToProfile();
 
@@ -24,6 +37,7 @@ public abstract class RepositoryConnectionModeViewModel : ViewModelBase
         if (this.SetProperty(ref field, value, propertyName))
         {
             this.RaisePropertyChanged(nameof(this.IsValid));
+            this.RaisePropertyChanged(nameof(this.ValidationMessage));
         }
     }
 }
