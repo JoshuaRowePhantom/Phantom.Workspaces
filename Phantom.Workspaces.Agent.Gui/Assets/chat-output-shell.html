@@ -439,25 +439,22 @@
       min-height: 1.6em;
     }
 
-    /* Running sub-agents panel styles */
-    .running-subagents-panel {
-      margin: 1em 0;
-    }
-    
-    .running-subagents-header {
-      margin: 0 0 0.5em 0;
-      font-size: 1em;
-      font-weight: 600;
-    }
-
-    /* Parent agent panel styles */
+    /* Running sub-agents panel styles (#1274): compact divider from content above; participate
+       in normal page flow by default; self-scroll only when content would exceed 1/4 of the chat
+       view height. */
+    .running-subagents-panel,
     .running-parent-agent-panel {
-      margin: 1em 0;
+      margin: 0.5em 0 0 0;
+      padding-top: 0.35em;
+      border-top: 1px solid var(--chat-meta);
+      max-height: 25vh;
+      overflow-y: auto;
     }
 
+    .running-subagents-header,
     .running-parent-agent-header {
-      margin: 0 0 0.5em 0;
-      font-size: 1em;
+      margin: 0 0 0.25em 0;
+      font-size: 0.9em;
       font-weight: 600;
     }
     

@@ -1205,4 +1205,54 @@ public sealed class ChatOutputHtmlRendererTests
 
         Assert.Contains("data-sticky-level=\"2\">$ ", html, StringComparison.Ordinal);
     }
+
+    // ── Issue #1274: sub-agent panel CSS — compact divider + max-height:25vh ────────
+
+    private static string LoadEmbeddedChatOutputShell()
+    {
+        var assembly = typeof(ChatOutputHtmlRenderer).Assembly;
+        var resourceName = Array.Find(
+            assembly.GetManifestResourceNames(),
+            name => name.EndsWith("chat-output-shell.html", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("Embedded chat-output-shell.html resource was not found.");
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("Could not open the chat-output-shell.html resource stream.");
+        using var reader = new System.IO.StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    [Fact]
+    public void ShellCss_RunningSubagentsPanel_HasMaxHeight25VhAndOverflowAuto()
+    {
+        var shell = LoadEmbeddedChatOutputShell();
+
+        Assert.Contains(".running-subagents-panel", shell, StringComparison.Ordinal);
+        // A combined selector rule containing both max-height:25vh and overflow-y:auto and border-top.
+        // The exact whitespace doesn't matter as long as all three declarations appear inside a rule
+        // that names .running-subagents-panel.
+        Assert.Contains("max-height: 25vh", shell, StringComparison.Ordinal);
+        Assert.Contains("overflow-y: auto", shell, StringComparison.Ordinal);
+        Assert.Contains("border-top:", shell, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShellCss_RunningParentAgentPanel_HasSameCompactDividerAndHeightCap()
+    {
+        var shell = LoadEmbeddedChatOutputShell();
+
+        Assert.Contains(".running-parent-agent-panel", shell, StringComparison.Ordinal);
+
+        // Locate the rule that includes .running-parent-agent-panel and assert the three key
+        // declarations appear before the closing brace of that rule.
+        var selectorIndex = shell.IndexOf(".running-parent-agent-panel", StringComparison.Ordinal);
+        Assert.True(selectorIndex >= 0);
+        var openBraceIndex = shell.IndexOf('{', selectorIndex);
+        Assert.True(openBraceIndex > selectorIndex);
+        var closeBraceIndex = shell.IndexOf('}', openBraceIndex);
+        Assert.True(closeBraceIndex > openBraceIndex);
+        var block = shell.Substring(openBraceIndex, closeBraceIndex - openBraceIndex);
+        Assert.Contains("max-height: 25vh", block, StringComparison.Ordinal);
+        Assert.Contains("overflow-y: auto", block, StringComparison.Ordinal);
+        Assert.Contains("border-top:", block, StringComparison.Ordinal);
+    }
 }
