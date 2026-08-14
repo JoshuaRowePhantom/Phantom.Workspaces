@@ -103,6 +103,7 @@ public sealed class ManagementModeRunner
             {
                 FileName = this.layout.CurrentExecutablePath,
                 Arguments = new[] { StartupTaskService.StartupArgument },
+                Detached = true,
             });
         }
         catch (Exception)

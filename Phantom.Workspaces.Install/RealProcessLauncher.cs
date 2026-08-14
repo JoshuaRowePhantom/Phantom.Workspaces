@@ -21,8 +21,15 @@ public sealed class RealProcessLauncher : IProcessLauncher
 
         var startInfo = new ProcessStartInfo(request.FileName)
         {
-            UseShellExecute = false,
+            UseShellExecute = request.Detached,
         };
+        if (request.Detached)
+        {
+            // Fire-and-forget: don't inherit the parent's console handles, so a console-attached
+            // parent (e.g. install.ps1 under -NoNewWindow, or an irm|iex pipeline) can return
+            // control immediately without waiting on stdout to close.
+            startInfo.CreateNoWindow = false;
+        }
         foreach (var argument in request.Arguments)
         {
             startInfo.ArgumentList.Add(argument);

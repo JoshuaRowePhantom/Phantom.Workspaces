@@ -156,7 +156,10 @@ try
     }
 
     Write-Host 'Installing into the per-user managed layout ...'
-    $process = Start-Process -FilePath $executable -ArgumentList $installArguments -Wait -PassThru -NoNewWindow
+    # Do not pass -NoNewWindow: sharing the caller's console with the installer means the launched
+    # fire-and-forget GUI would inherit those handles and keep the irm|iex pipeline blocked even
+    # after the installer exe exits. See issue #1302.
+    $process = Start-Process -FilePath $executable -ArgumentList $installArguments -Wait -PassThru
     if ($process.ExitCode -ne 0)
     {
         throw "Installation failed with exit code $($process.ExitCode)."

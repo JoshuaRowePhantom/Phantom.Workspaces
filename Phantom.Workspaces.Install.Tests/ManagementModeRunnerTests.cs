@@ -123,6 +123,23 @@ public sealed class ManagementModeRunnerTests
         Assert.Equal(harness.Layout.CurrentExecutablePath, request.FileName);
         Assert.NotNull(request.Arguments);
         Assert.Contains(StartupTaskService.StartupArgument, request.Arguments!);
+        // #1302: fire-and-forget GUI launch must not inherit parent console handles.
+        Assert.True(request.Detached);
+    }
+
+    [Fact]
+    public async Task RunAsync_InstallInteractive_LaunchesGuiDetached()
+    {
+        // Same detached guarantee for the interactive --install path.
+        var harness = new Harness();
+        var payload = harness.SeedPayload();
+        var options = CommandLineOptions.Parse("--install");
+
+        var exitCode = await harness.Runner.RunAsync(options, payload, "0.1.0");
+
+        Assert.Equal(ExitCode.Success, exitCode);
+        var request = Assert.Single(harness.ProcessLauncher.Requests);
+        Assert.True(request.Detached);
     }
 
     [Fact]

@@ -11,6 +11,16 @@ public sealed record ProcessStartRequest
 
     /// <summary>The working directory, or <c>null</c> to inherit the current one.</summary>
     public string? WorkingDirectory { get; init; }
+
+    /// <summary>
+    /// When <see langword="true"/>, launches the process in a truly-detached mode that does not
+    /// inherit the parent's standard console handles. This is required for fire-and-forget GUI
+    /// launches from a console-attached parent (e.g. <c>install.ps1</c> under <c>-NoNewWindow</c>);
+    /// otherwise the launched GUI would keep the parent's stdout/stderr/stdin open for its whole
+    /// lifetime, hanging the caller. Default is <see langword="false"/> so existing callers keep
+    /// today's <c>UseShellExecute=false</c> semantics.
+    /// </summary>
+    public bool Detached { get; init; }
 }
 
 /// <summary>A handle to a launched process whose exit can be awaited for its <see cref="ExitCode"/>.</summary>
