@@ -43,7 +43,7 @@
                                 <DataTemplate>
                                     <Button Content="{Binding Glyph}"
                                             ToolTip.Tip="{Binding Tooltip}"
-                                             Classes="entity-card-action-button"
+                                             Classes="entity-card-action-button entity-card-interest-button"
                                              Classes.highlighted="{Binding IsActive}"
                                             Command="{Binding $parent[ItemsControl].DataContext.ToggleInterestCommand}"
                                             CommandParameter="{Binding}"

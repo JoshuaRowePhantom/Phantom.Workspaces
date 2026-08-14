@@ -685,6 +685,18 @@
             </Transitions>
         </Setter>
     </Style>
+    <!--
+      Interest badge buttons (issue #1300): the shared entity-card-action-button style above pins
+      Width=28/MinWidth=28/Padding=0, which clips multi-character interest labels (Glyph is bound
+      to the interest type's short indicator label from the schema, not a single-char icon).
+      This companion selector releases the width clamp so Interest buttons grow to their content
+      while keeping the 28-px min tap target, without touching the base action-button footprint.
+    -->
+    <Style Selector="Button.entity-card-action-button.entity-card-interest-button">
+        <Setter Property="Width" Value="NaN" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="Padding" Value="6,0" />
+    </Style>
     <Style Selector="Button.entity-card-action-button.highlighted">
         <Setter Property="Opacity" Value="1" />
         <Setter Property="FontWeight" Value="SemiBold" />

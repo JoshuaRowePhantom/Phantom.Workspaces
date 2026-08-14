@@ -1053,6 +1053,59 @@ public sealed class SharedStylesTests
         Assert.DoesNotContain("Classes=\"workspace-entity-badge-button\"", card, StringComparison.Ordinal);
     }
 
+    // ── Issue #1300: Interest badge buttons expand to their content ─────────────
+
+    [Fact]
+    public void EntityCardInterestButton_Style_DoesNotClampWidth()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button.entity-card-interest-button");
+
+        Assert.Contains("<Setter Property=\"Width\" Value=\"NaN\" />", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxWidth", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardInterestButton_Style_HasHorizontalPadding()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button.entity-card-interest-button");
+
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"6,0\" />", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_InterestBadgeButtons_CarryInterestButtonClass()
+    {
+        var card = ReadEntityCardControlText();
+
+        Assert.Contains("Classes=\"entity-card-action-button entity-card-interest-button\"", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_InterestBadgeButtons_ContentBindingUnchanged()
+    {
+        // Guardrail: issue #1300 must be width-only — the Interest button's Content and Tooltip
+        // bindings stay exactly as they were.
+        var card = ReadEntityCardControlText();
+
+        Assert.Contains("Content=\"{Binding Glyph}\"", card, StringComparison.Ordinal);
+        Assert.Contains("ToolTip.Tip=\"{Binding Tooltip}\"", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardActionButton_NonInterestButtons_StillUseUniformFootprint()
+    {
+        // Regression guard: the base entity-card-action-button style keeps its 28×28 footprint
+        // (only the added .entity-card-interest-button style releases the width clamp).
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button");
+
+        Assert.Contains("<Setter Property=\"Width\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", style, StringComparison.Ordinal);
+    }
+
     // Issue #1213 — behavioural/rendering coverage for the header wrap layout. These render the
     // shipped header styles (extracted verbatim from SharedStyles.axaml) around a header structure
     // that mirrors EntityCardControl.axaml, then run layout at narrow/wide widths and assert the
