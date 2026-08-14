@@ -10662,6 +10662,45 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspacePaneDockControl_AltDigitBinding_UsesAllSwitchableScope()
+    {
+        // #1311: the inner WorkspacePaneDocument DockControl's Alt+Digit binding must use
+        // AllSwitchable scope so tab numbers form one continuous sequence across every
+        // DocumentDock region in the workspace pane instead of restarting per region.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await OpenTwoWorkspacesForTabSwitchAsync(viewModel, "13111311");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            var topLevel = GetTopLevelDockControl(window);
+            var innerDock = window.GetVisualDescendants()
+                .OfType<DockControl>()
+                .FirstOrDefault(d => !ReferenceEquals(d, topLevel));
+            Assert.NotNull(innerDock);
+
+            var bindings = Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetBindings(innerDock!);
+            Assert.NotNull(bindings);
+            var gesture = Assert.Single(bindings!);
+            Assert.Equal(KeyModifiers.Alt, gesture.Modifiers);
+            Assert.Equal(
+                Phantom.Dock.Avalonia.TabSwitching.DockTabSwitchKeys.Digits,
+                gesture.Keys);
+            Assert.Equal(
+                Phantom.Dock.Avalonia.TabSwitching.DockTabSwitchScope.AllSwitchable,
+                gesture.Scope);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_AltShiftDigitWithFocusOutsideDock_SwitchesTopLevelDockTab()
     {
         // #1124 adoption: with the event source on the left-pane TreeView (outside the

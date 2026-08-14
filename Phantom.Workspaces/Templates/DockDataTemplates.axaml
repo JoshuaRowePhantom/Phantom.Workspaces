@@ -116,7 +116,7 @@
                 <ts:DockTabSwitchBindings>
                     <ts:DockTabSwitchGestures Modifiers="Alt"
                                               Keys="Digits"
-                                              Scope="FocusedDockOnly" />
+                                              Scope="AllSwitchable" />
                 </ts:DockTabSwitchBindings>
             </ts:DockTabSwitch.Bindings>
             <dock:DockControl.DataTemplates>
