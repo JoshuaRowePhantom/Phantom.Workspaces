@@ -1975,7 +1975,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
+        // #1310: prefer the focused document dock so Ctrl+W in a right-region web tab does
+        // not close the depth-first "first" DocumentDock's active tab (which is in the LEFT
+        // region). Fall back to the first-DFS DocumentDock only when no dock currently has
+        // focus tracked (fresh layout / no click yet).
+        var documentDock = this.FindFocusedDocumentDock(this.selectedWorkspacePane.ContentLayout)
+            ?? this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
         if (documentDock?.ActiveDockable is not WorkspaceDocument activeDoc)
         {
             return;
@@ -2993,6 +2998,35 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     return result;
                 }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// #1310: resolve the currently focused <see cref="IDocumentDock"/> under a pane's
+    /// content layout. Walks the dock-focus tracking maintained by
+    /// <see cref="IFactory.SetFocusedDockable"/> (which writes <see cref="IDock.FocusedDockable"/>
+    /// on the affected roots) down from the given root and then walks the resulting
+    /// dockable's <see cref="IDockable.Owner"/> chain to the enclosing document dock.
+    /// Returns <c>null</c> when no focus is tracked, so callers can fall back to the
+    /// depth-first behaviour used before focus tracking existed.
+    /// </summary>
+    private IDocumentDock? FindFocusedDocumentDock(IDockable dockable)
+    {
+        IDockable? focused = dockable;
+        while (focused is IDock currentDock && currentDock.FocusedDockable is { } childFocus
+               && !ReferenceEquals(childFocus, currentDock))
+        {
+            focused = childFocus;
+        }
+
+        for (IDockable? cursor = focused; cursor is not null; cursor = cursor.Owner)
+        {
+            if (cursor is IDocumentDock documentDock)
+            {
+                return documentDock;
             }
         }
 

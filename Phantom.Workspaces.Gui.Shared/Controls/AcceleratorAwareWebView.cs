@@ -39,8 +39,10 @@ public abstract class AcceleratorAwareWebView : NativeWebView, IBrowserAccelerat
     /// <summary>Raised on the UI thread when Alt+Shift+N is pressed inside this WebView. Argument is 0-based workspace pane index.</summary>
     public event EventHandler<int>? GoToWorkspacePaneAtIndexRequested;
 
-    /// <summary>Raised on the UI thread when Ctrl+W is pressed inside this WebView.</summary>
-    public event EventHandler? CloseTabRequested;
+    // #1310: The legacy CloseTabRequested event was removed. Ctrl+W is handled exclusively
+    // by the generic AcceleratorKeyPressed forwarder, which invokes the top-level
+    // CloseActiveTabCommand KeyBinding via BrowserAcceleratorBehavior. Having a separate
+    // typed event caused the accelerator to close two tabs (one per path) for a single key.
 
     /// <inheritdoc/>
     public event EventHandler<AcceleratorKeyEventArgs>? AcceleratorKeyPressed;
@@ -120,11 +122,11 @@ public abstract class AcceleratorAwareWebView : NativeWebView, IBrowserAccelerat
             return;
         }
 
-        if (args.KeyEventKind == CoreWebView2KeyEventKind.KeyDown && vk == VkW
-            && WebView2AcceleratorInterop.IsKeyDown(VkControl))
-        {
-            Dispatcher.UIThread.Post(() => this.CloseTabRequested?.Invoke(this, EventArgs.Empty));
-        }
+        // #1310: Ctrl+W is intentionally NOT fanned out as a legacy typed event. The generic
+        // AcceleratorKeyPressed subscriber already forwards Ctrl+W to the top-level
+        // CloseActiveTabCommand KeyBinding via BrowserAcceleratorBehavior; posting an
+        // additional CloseTabRequested here would double-close (one tab per path, in two
+        // different dock regions).
     }
 
     /// <summary>Reverse of <see cref="VirtualKeyMap.ToKey"/> restricted to the subset used by the legacy typed fan-out.</summary>

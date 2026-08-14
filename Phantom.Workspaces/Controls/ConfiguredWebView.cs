@@ -94,7 +94,9 @@ public class ConfiguredWebView : AcceleratorAwareWebView
         this.AltKeyStateChanged += (_, held) => this.ViewModel?.RaiseAltKeyStateChanged(held);
         this.GoToTabAtIndexRequested += (_, idx) => this.ViewModel?.RaiseGoToTabAtIndex(idx);
         this.GoToWorkspacePaneAtIndexRequested += (_, idx) => this.ViewModel?.RaiseGoToWorkspacePaneAtIndex(idx);
-        this.CloseTabRequested += (_, _) => this.ViewModel?.RaiseCloseTab();
+        // #1310: Ctrl+W is handled exclusively by the top-level CloseActiveTabCommand
+        // KeyBinding via BrowserAcceleratorBehavior. Subscribing to CloseTabRequested here
+        // would double-close the tab.
     }
 
     private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)

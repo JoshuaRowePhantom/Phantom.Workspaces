@@ -467,6 +467,72 @@ public sealed class MainWindowDockTemplateTests
         Assert.Contains(docOther, splitDoc.VisibleDockables!);
     }
 
+    // ── Regression tests for #1310 ────────────────────────────────────────────
+    // Ctrl+W / CloseActiveTabCommand must close the tab of the currently focused
+    // DocumentDock, not the depth-first "first" DocumentDock in the layout.
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenFocusedInRightSplitRegion_ClosesOnlyRightRegionActiveTab_AndLeavesLeftRegionActiveTabOpen()
+    {
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        var (root, _, leftDock, _, _, rightDock) = BuildSplitLayout(factory);
+        var leftTab = new WebViewModel("about:blank") { Id = "focus-left", Title = "Left" };
+        var rightTab = new WebViewModel("about:blank") { Id = "focus-right", Title = "Right" };
+        var leftDoc = new WorkspaceDocument(leftTab) { Owner = leftDock };
+        var rightDoc = new WorkspaceDocument(rightTab) { Owner = rightDock };
+        leftDock.VisibleDockables = factory.CreateList<IDockable>(leftDoc);
+        leftDock.ActiveDockable = leftDoc;
+        rightDock.VisibleDockables = factory.CreateList<IDockable>(rightDoc);
+        rightDock.ActiveDockable = rightDoc;
+        pane!.ContentLayout = root;
+
+        // Focus the RIGHT region; without #1310's fix, FindDocumentDock's depth-first
+        // walk would return the LEFT region (index 0 in the ProportionalDock).
+        factory.SetFocusedDockable(rightDock, rightDoc);
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+
+        Assert.Contains(leftDoc, leftDock.VisibleDockables!);
+        Assert.NotNull(rightDock.VisibleDockables);
+        Assert.DoesNotContain(rightDoc, rightDock.VisibleDockables!);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task CloseActiveTabCommand_WhenFocusedInLeftSplitRegion_ClosesOnlyLeftRegionActiveTab_AndLeavesRightRegionActiveTabOpen()
+    {
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        var (root, _, leftDock, _, _, rightDock) = BuildSplitLayout(factory);
+        var leftTab = new WebViewModel("about:blank") { Id = "focus-left-2", Title = "Left" };
+        var rightTab = new WebViewModel("about:blank") { Id = "focus-right-2", Title = "Right" };
+        var leftDoc = new WorkspaceDocument(leftTab) { Owner = leftDock };
+        var rightDoc = new WorkspaceDocument(rightTab) { Owner = rightDock };
+        leftDock.VisibleDockables = factory.CreateList<IDockable>(leftDoc);
+        leftDock.ActiveDockable = leftDoc;
+        rightDock.VisibleDockables = factory.CreateList<IDockable>(rightDoc);
+        rightDock.ActiveDockable = rightDoc;
+        pane!.ContentLayout = root;
+
+        factory.SetFocusedDockable(leftDock, leftDoc);
+
+        viewModel.CloseActiveTabCommand.Execute(null);
+
+        Assert.NotNull(leftDock.VisibleDockables);
+        Assert.DoesNotContain(leftDoc, leftDock.VisibleDockables!);
+        Assert.Contains(rightDoc, rightDock.VisibleDockables!);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task RootAndWorkspacesPaneDock_WhenLastChildClosed_AreNotRemoved()
     {
