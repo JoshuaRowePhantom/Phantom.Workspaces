@@ -43,7 +43,7 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
             new UpdateModeOption(AutomaticUpdateMode.DownloadAndInstall, "Download and install automatically"),
         ];
         this.selectedMode = this.Modes.First(option => option.Mode == settings.Mode);
-        this.runAtStartup = controller.IsRunAtStartupEnabled;
+        this.runAtStartup = settings.RunAtStartup;
         this.latestVersion = controller.LatestAvailableVersion;
         this.isUpdateAvailable = controller.LatestAvailableVersion is not null;
 
@@ -90,8 +90,32 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            this.controller.SetRunAtStartup(value);
+            try
+            {
+                this.controller.SetRunAtStartup(value);
+            }
+            catch (Exception exception)
+            {
+                // Surface the failure and revert the checkbox: without this, Avalonia's binding
+                // pipeline swallows the exception and the user sees the box appear checked but no
+                // task is created. Reverting the field + raising PropertyChanged flips the visual.
+                this.StatusText = value
+                    ? $"Enabling run-at-startup failed: {exception.Message}"
+                    : $"Disabling run-at-startup failed: {exception.Message}";
+                this.runAtStartup = !value;
+                this.RaisePropertyChanged(nameof(this.RunAtStartup));
+            }
         }
+    }
+
+    /// <summary>
+    /// Reconciles the actual scheduled-task state with the persisted setting. Called from the
+    /// settings dialog Save path so that whatever the user saved is what runs at logon, even if
+    /// the task was deleted out-of-band (via <c>schtasks.exe</c>, group policy, etc.).
+    /// </summary>
+    public void ApplyToController()
+    {
+        this.controller.SetRunAtStartup(this.runAtStartup);
     }
 
     /// <summary>The latest known available version, or <c>null</c> when none/unknown.</summary>

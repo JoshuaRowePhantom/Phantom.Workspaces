@@ -45,8 +45,11 @@ public sealed class RealScheduledTasks : IScheduledTasks
             commandLine);
         if (result.ExitCode != 0)
         {
+            var details = string.IsNullOrWhiteSpace(result.StandardError)
+                ? string.IsNullOrWhiteSpace(result.StandardOut) ? string.Empty : $": {result.StandardOut.Trim()}"
+                : $": {result.StandardError.Trim()}";
             throw new InvalidOperationException(
-                $"schtasks failed (exit {result.ExitCode}) registering '{definition.TaskName}'.");
+                $"schtasks failed (exit {result.ExitCode}) registering '{definition.TaskName}'{details}");
         }
     }
 

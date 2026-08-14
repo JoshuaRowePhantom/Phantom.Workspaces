@@ -178,6 +178,10 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
 
         var configuration = this.BuildConfiguration();
         await this.persistenceService.SaveAsync(configuration, path, cancellationToken).ConfigureAwait(false);
+        // Reconcile the persisted run-at-startup intent with the actual scheduled task so what
+        // was saved matches what runs at logon, even if the task was deleted out-of-band. See
+        // issue #1298: without this, the checkbox and the scheduled task can disagree.
+        this.Updates?.ApplyToController();
         return configuration;
     }
 

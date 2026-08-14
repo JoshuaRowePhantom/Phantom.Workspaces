@@ -882,6 +882,59 @@ public sealed class WorkspacesSettingsViewModelTests
         throw new FileNotFoundException($"Could not locate {relativePath} from {System.AppContext.BaseDirectory}.");
     }
 
+    [AvaloniaFact]
+    public async Task Save_RunAtStartup_ReconcilesScheduledTaskWithPersistedFlag()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var controller = new RecordingUpdateController();
+        var configuration = new WorkspacesConfiguration();
+
+        var settings = new WorkspacesSettingsViewModel(
+            service,
+            configuration,
+            profileAppearance: null,
+            updateController: controller,
+            updateDispatch: null);
+
+        settings.Updates!.RunAtStartup = true;
+        controller.SetRunAtStartupCalls.Clear();
+        await settings.SaveAsync();
+
+        // Save must call SetRunAtStartup with the persisted flag so the actual scheduled task
+        // matches the saved configuration even if it was deleted out-of-band. #1298 Defect 2.
+        Assert.Contains(true, controller.SetRunAtStartupCalls);
+    }
+
+    private sealed class RecordingUpdateController : Phantom.Workspaces.Services.Updates.IUpdateController
+    {
+        public string RunningVersion { get; } = "1.0.0";
+
+        public Phantom.Workspaces.Configuration.AutomaticUpdateMode Mode { get; set; }
+            = Phantom.Workspaces.Configuration.AutomaticUpdateMode.Off;
+
+        public string? LatestAvailableVersion => null;
+
+        public bool IsRunAtStartupEnabled { get; private set; }
+
+        public List<bool> SetRunAtStartupCalls { get; } = new();
+
+        public event System.EventHandler<Phantom.Workspaces.Services.Updates.UpdateAvailability>? UpdateAvailabilityChanged;
+
+        public Task<Phantom.Workspaces.Services.Updates.UpdateAvailability> CheckForUpdatesAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            _ = this.UpdateAvailabilityChanged;
+            return Task.FromResult(Phantom.Workspaces.Services.Updates.UpdateAvailability.None);
+        }
+
+        public Task DownloadInstallAndRelaunchAsync(System.Threading.CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public void SetRunAtStartup(bool enabled)
+        {
+            this.SetRunAtStartupCalls.Add(enabled);
+            this.IsRunAtStartupEnabled = enabled;
+        }
+    }
+
     private sealed class FakeLogDirectoryProvider : ILogDirectoryProvider
     {
         public FakeLogDirectoryProvider(string logDirectory)

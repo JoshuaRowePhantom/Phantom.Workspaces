@@ -13,7 +13,9 @@ public sealed class UpdateSettingsViewModelTests
     public void Constructor_SeedsStateFromControllerAndSettings()
     {
         var controller = new FakeUpdateController { RunningVersion = "1.0.0", RunAtStartup = true };
-        var viewModel = new UpdateSettingsViewModel(controller, new UpdateSettings { Mode = AutomaticUpdateMode.DownloadAndInstall });
+        var viewModel = new UpdateSettingsViewModel(
+            controller,
+            new UpdateSettings { Mode = AutomaticUpdateMode.DownloadAndInstall, RunAtStartup = true });
 
         Assert.Equal("1.0.0", viewModel.RunningVersion);
         Assert.True(viewModel.RunAtStartup);
@@ -71,6 +73,50 @@ public sealed class UpdateSettingsViewModelTests
         Assert.Equal("3.0.0", viewModel.LatestVersion);
     }
 
+    [Fact]
+    public void Constructor_SeedsRunAtStartupFromPersistedSettings_NotFromController()
+    {
+        // Defect 2 regression: on reopen, the checkbox must reflect what was saved, not the live
+        // scheduled-task state. Live and persisted disagree here to prove the ctor reads settings.
+        var controller = new FakeUpdateController { RunAtStartup = false };
+        var viewModel = new UpdateSettingsViewModel(controller, new UpdateSettings { RunAtStartup = true });
+
+        Assert.True(viewModel.RunAtStartup);
+    }
+
+    [Fact]
+    public void TogglingRunAtStartup_WhenControllerThrows_SurfacesErrorAndRevertsCheckbox()
+    {
+        var controller = new FakeUpdateController
+        {
+            RunAtStartup = false,
+            SetRunAtStartupError = new InvalidOperationException("schtasks failed"),
+        };
+        var viewModel = new UpdateSettingsViewModel(controller, new UpdateSettings { RunAtStartup = false });
+
+        var propertyChanges = new List<string?>();
+        viewModel.PropertyChanged += (_, e) => propertyChanges.Add(e.PropertyName);
+
+        viewModel.RunAtStartup = true;
+
+        Assert.False(viewModel.RunAtStartup);
+        Assert.Contains("schtasks failed", viewModel.StatusText);
+        // Two PropertyChanged events for RunAtStartup: the initial set, and the revert.
+        Assert.True(propertyChanges.Count(p => p == nameof(viewModel.RunAtStartup)) >= 2);
+    }
+
+    [Fact]
+    public async Task SaveViaApplyToController_InvokesSetRunAtStartupWithPersistedValue()
+    {
+        var controller = new FakeUpdateController { RunAtStartup = false };
+        var viewModel = new UpdateSettingsViewModel(controller, new UpdateSettings { RunAtStartup = true });
+        // Simulate save-time reconciliation.
+        viewModel.ApplyToController();
+        await Task.Yield();
+
+        Assert.True(controller.RunAtStartup);
+    }
+
     private sealed class FakeUpdateController : IUpdateController
     {
         private readonly TaskCompletionSource checkCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -84,6 +130,8 @@ public sealed class UpdateSettingsViewModelTests
         public bool RunAtStartup { get; set; }
 
         public bool IsRunAtStartupEnabled => this.RunAtStartup;
+
+        public Exception? SetRunAtStartupError { get; set; }
 
         public UpdateAvailability NextAvailability { get; set; } = UpdateAvailability.None;
 
@@ -100,7 +148,15 @@ public sealed class UpdateSettingsViewModelTests
         public Task DownloadInstallAndRelaunchAsync(CancellationToken cancellationToken = default)
             => Task.CompletedTask;
 
-        public void SetRunAtStartup(bool enabled) => this.RunAtStartup = enabled;
+        public void SetRunAtStartup(bool enabled)
+        {
+            if (this.SetRunAtStartupError is not null)
+            {
+                throw this.SetRunAtStartupError;
+            }
+
+            this.RunAtStartup = enabled;
+        }
 
         public void RaiseAvailability(UpdateAvailability availability)
         {
