@@ -108,6 +108,24 @@ public class WorkspaceDockFactory : Factory
     }
 
     /// <summary>
+    /// #1307: split-created docks (via Dock's ``NewHorizontalDocumentDock`` /
+    /// ``NewVerticalDocumentDock`` paths) must be ``WorkspaceContentDock`` so tabs
+    /// they host match the rich header template in ``DockDataTemplates.axaml``
+    /// (favicon + ``MaxWidth=180`` + ``CharacterEllipsis``). A plain ``DocumentDock``
+    /// would fall through to the generic ``IDocumentDock`` template, which has no
+    /// ``HeaderTemplate`` and would render an unbounded, icon-less tab title.
+    /// A fresh ``Id`` is assigned to prevent ``FactoryBase`` from copying the source
+    /// dock's ``Id`` on split (which would create duplicate ids in the layout).
+    /// </summary>
+    public override IDocumentDock CreateDocumentDock()
+    {
+        return new WorkspaceContentDock
+        {
+            Id = Guid.NewGuid().ToString(),
+        };
+    }
+
+    /// <summary>
     /// Creates a dock layout for workspace content (entity tabs, agent sessions, etc.)
     /// Uses ItemsSource wired to <see cref="WorkspacePaneViewModel.Tabs"/> so that
     /// adding/removing tabs automatically creates/destroys dock documents via

@@ -268,6 +268,62 @@ public sealed class MainWindowDockTemplateTests
         Assert.NotNull(matching);
     }
 
+    // ── Regression tests for #1307 ────────────────────────────────────────────
+    // Split-created document docks (via NewHorizontalDocumentDock / NewVerticalDocumentDock)
+    // must be WorkspaceContentDock so tabs they host match the rich header template
+    // (favicon + MaxWidth=180 + CharacterEllipsis) instead of the bare IDocumentDock fallback.
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceDockFactory_CreateDocumentDock_ReturnsWorkspaceContentDock()
+    {
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var factory = GetDockFactory(viewModel);
+
+        var created = factory.CreateDocumentDock();
+
+        Assert.IsType<WorkspaceContentDock>(created);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceDockFactory_CreateDocumentDock_AssignsFreshUniqueId()
+    {
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var factory = GetDockFactory(viewModel);
+
+        var a = factory.CreateDocumentDock();
+        var b = factory.CreateDocumentDock();
+
+        Assert.False(string.IsNullOrEmpty(a.Id));
+        Assert.False(string.IsNullOrEmpty(b.Id));
+        Assert.NotEqual(a.Id, b.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspaceDockFactory_CreateDocumentDock_MatchesRichHeaderTemplate_InInnerPaneDockControl()
+    {
+        // #1307: the split-created dock must be picked up by the rich WorkspaceContentDock
+        // template ahead of the generic IDocumentDock fallback in the inner workspace-pane
+        // DockControl.DataTemplates scope.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var factory = GetDockFactory(viewModel);
+
+        var splitCreated = factory.CreateDocumentDock();
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+
+        var matching = innerDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(splitCreated));
+
+        Assert.NotNull(matching);
+        // Ensure it is the WorkspaceContentDock-specific template (matches WorkspaceContentDock
+        // but does NOT match a plain DocumentDock), not the generic IDocumentDock fallback.
+        Assert.True(matching!.Match(new WorkspaceContentDock()));
+        Assert.False(matching!.Match(new DocumentDock()));
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public void DockDataTemplates_ProportionalDockSplitter_ResolvesProportionalStackPanelSplitter()
     {
