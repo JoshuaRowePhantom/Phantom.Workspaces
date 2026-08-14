@@ -46,6 +46,13 @@ public sealed class AgentSessionShortcutContext
                 MainWindowViewModel = mainWindowViewModel,
                 ShortcutManager = mainWindowViewModel.ShortcutManager,
             });
+        // #1306: Register agent-session as a first-class named toolset factory in the root chain
+        // so a manifest declaring { "kind": "agent-session" } on a root chat resolves the
+        // agent_session_* tools by name — symmetric with web_search / workspace-entity /
+        // workspace-gui / current-session. The named closure resolves runtime deps
+        // (IRunningAgentChatFactory, CurrentSessionContext, AgentChatRef) from AgentServices;
+        // AgentChatFactory.WithSelfAsFactory injects a late-bound AgentChatRef which is
+        // populated after AgentChat.CreateAsync returns.
         var toolsetFactory = ToolsetFactory.CreateWorkspaceEntityToolsetFactory(
             dataAccessLayer,
             ToolsetFactory.CreateWorkspaceGuiToolsetFactory(
@@ -53,7 +60,8 @@ public sealed class AgentSessionShortcutContext
                 ToolsetFactory.CreateCurrentSessionToolsetFactory(
                     dataAccessLayer,
                     currentSessionContext,
-                    ToolsetFactory.CreateDefaultToolsetFactory())));
+                    ToolsetFactory.CreateAgentSessionToolsetFactory(
+                        ToolsetFactory.CreateDefaultToolsetFactory()))));
 
         // Materialize a user-account entity the first time a Copilot session resolves a GitHub
         // token (issue #1047). Without this the upsert service is orphaned and no account entity

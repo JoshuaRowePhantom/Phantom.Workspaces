@@ -133,6 +133,102 @@ public sealed class ToolsetFactoryTests
     }
 
     [Fact]
+    public async Task CreateAgentSessionToolsetFactory_WhenKindMatches_ReturnsAgentSessionToolset()
+    {
+        var runningFactory = new StubRunningAgentChatFactory();
+        var sessionContext = new CurrentSessionContext { AgentSessionId = "test-session" };
+        var chatRef = new AgentChatRef();
+        var agentServices = new AgentServices
+        {
+            RunningAgentChatFactory = runningFactory,
+            CurrentSessionContext = sessionContext,
+            CurrentAgentChatRef = chatRef,
+        };
+        var factory = ToolsetFactory.CreateAgentSessionToolsetFactory();
+
+        var toolset = await factory.CreateToolsetAsync(CreateCustomTool("agent-session"), agentServices);
+
+        Assert.IsType<AgentSessionToolset>(toolset);
+    }
+
+    [Fact]
+    public async Task CreateAgentSessionToolsetFactory_WhenKindDiffers_DefersToUnderlying()
+    {
+        var underlyingCalled = false;
+        var underlying = CreateMockToolsetFactory((tool, _) =>
+        {
+            underlyingCalled = true;
+            Assert.Equal("other_kind", tool.Kind);
+            return Task.FromResult<AIContextProvider?>(ToolsetFactory.CreateFixedToolset(new WebRequestTool()));
+        });
+        var factory = ToolsetFactory.CreateAgentSessionToolsetFactory(underlying.Object);
+
+        var toolset = await factory.CreateToolsetAsync(CreateCustomTool("other_kind"), new AgentServices());
+
+        Assert.True(underlyingCalled);
+        Assert.NotNull(toolset);
+    }
+
+    [Fact]
+    public async Task CreateAgentSessionToolsetFactory_WhenRunningAgentChatFactoryMissing_Throws()
+    {
+        var factory = ToolsetFactory.CreateAgentSessionToolsetFactory();
+        var agentServices = new AgentServices
+        {
+            CurrentSessionContext = new CurrentSessionContext { AgentSessionId = "test-session" },
+            CurrentAgentChatRef = new AgentChatRef(),
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            factory.CreateToolsetAsync(CreateCustomTool("agent-session"), agentServices));
+        Assert.Contains("RunningAgentChatFactory", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateAgentSessionToolsetFactory_WhenCurrentSessionContextMissing_Throws()
+    {
+        var factory = ToolsetFactory.CreateAgentSessionToolsetFactory();
+        var agentServices = new AgentServices
+        {
+            RunningAgentChatFactory = new StubRunningAgentChatFactory(),
+            CurrentAgentChatRef = new AgentChatRef(),
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            factory.CreateToolsetAsync(CreateCustomTool("agent-session"), agentServices));
+        Assert.Contains("CurrentSessionContext", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateAgentSessionToolsetFactory_WhenCurrentAgentChatRefMissing_Throws()
+    {
+        var factory = ToolsetFactory.CreateAgentSessionToolsetFactory();
+        var agentServices = new AgentServices
+        {
+            RunningAgentChatFactory = new StubRunningAgentChatFactory(),
+            CurrentSessionContext = new CurrentSessionContext { AgentSessionId = "test-session" },
+        };
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            factory.CreateToolsetAsync(CreateCustomTool("agent-session"), agentServices));
+        Assert.Contains("CurrentAgentChatRef", ex.Message);
+    }
+
+    private sealed class StubRunningAgentChatFactory : IRunningAgentChatFactory
+    {
+        public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
+
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<RunningAgentChatLease> CreateAsync(AgentDefinition definition, AgentSessionId sessionId, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, string? nameOverride = null, CancellationToken ct = default)
+            => throw new NotImplementedException();
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(AgentSessionId sessionId, AgentDefinition? definition = null, AgentServices? services = null, string? displayNameOverride = null, string? descriptionOverride = null, bool registerAsRunningAgent = true, CancellationToken ct = default)
+            => throw new NotImplementedException();
+    }
+
+    [Fact]
     public async Task Combine_UsesFirstMatchingFactory()
     {
         var first = CreateMockToolsetFactory((tool, _) =>

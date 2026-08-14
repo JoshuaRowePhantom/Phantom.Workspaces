@@ -79,6 +79,16 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? SecretPlaceholderResolver { get; init; }
 
+    /// <summary>
+    /// Late-bound reference to the current <see cref="AgentChat"/> being constructed, used by the
+    /// named <c>agent-session</c> toolset factory (see <see cref="ToolsetFactory.CreateAgentSessionToolsetFactory(IToolsetFactory?)"/>)
+    /// to resolve the parent chat when its <c>agent_session_*</c> tools are invoked. Typed as
+    /// <see langword="object"/> for the same layering reason as <see cref="CurrentSessionContext"/>;
+    /// consuming code casts to <c>AgentChatRef</c>. Populated by <see cref="AgentChatFactory"/> /
+    /// <see cref="AgentFactory"/> during <c>AgentChat.CreateAsync</c> wiring. Introduced by #1306.
+    /// </summary>
+    public object? CurrentAgentChatRef { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

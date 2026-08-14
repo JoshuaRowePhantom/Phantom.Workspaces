@@ -135,6 +135,46 @@ public sealed class ToolsetFactory : IToolsetFactory
         return new AgentSessionToolsetFactory(parentChatRef, currentSessionContext, factory, underlyingToolsetFactory);
     }
 
+    /// <summary>
+    /// #1306: Registers <c>agent-session</c> as a first-class named toolset kind, symmetric with
+    /// <see cref="CreateWebSearchToolsetFactory"/>, <see cref="CreateWorkspaceEntityToolsetFactory"/>,
+    /// etc. The closure resolves its runtime dependencies from <see cref="AgentServices"/>:
+    /// <see cref="AgentServices.RunningAgentChatFactory"/>, <see cref="AgentServices.CurrentSessionContext"/>
+    /// (as <see cref="CurrentSessionContext"/>), and <see cref="AgentServices.CurrentAgentChatRef"/>
+    /// (as <see cref="AgentChatRef"/>). The chat ref is populated by
+    /// <see cref="AgentChatFactory"/> / <see cref="AgentFactory"/> after
+    /// <see cref="AgentChat.CreateAsync"/> returns.
+    /// </summary>
+    public static IToolsetFactory CreateAgentSessionToolsetFactory(
+        IToolsetFactory? underlyingToolsetFactory = null)
+    {
+        return CreateNamedToolsetFactory(
+            "agent-session",
+            CreateAgentSessionToolsetAsync,
+            underlyingToolsetFactory);
+    }
+
+    private static Task<AIContextProvider?> CreateAgentSessionToolsetAsync(
+        AgentSchema.Tool tool,
+        AgentServices agentServices)
+    {
+        _ = tool;
+        // AgentServices.RunningAgentChatFactory is typed as the Interfaces marker interface;
+        // downcast to the Core interface used by AgentSessionToolset. GetService(typeof(...))
+        // would not match because the type identity differs across layers.
+        var runningFactory = agentServices.RunningAgentChatFactory as IRunningAgentChatFactory
+            ?? throw new InvalidOperationException(
+                "agent-session tool requires AgentServices.RunningAgentChatFactory.");
+        var sessionContext = agentServices.CurrentSessionContext as CurrentSessionContext
+            ?? throw new InvalidOperationException(
+                "agent-session tool requires AgentServices.CurrentSessionContext.");
+        var chatRef = agentServices.CurrentAgentChatRef as AgentChatRef
+            ?? throw new InvalidOperationException(
+                "agent-session tool requires AgentServices.CurrentAgentChatRef to be populated by the chat factory.");
+        return Task.FromResult<AIContextProvider?>(
+            new AgentSessionToolset(chatRef, sessionContext, runningFactory));
+    }
+
     public static IToolsetFactory CreateCurrentSessionToolsetFactory(
         IDataAccessLayer dataAccessLayer,
         CurrentSessionContext currentSessionContext,

@@ -103,6 +103,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                         ForegroundScheduler = _foregroundScheduler,
                         CancellationToken = ct,
                     }, ct);
+                    PopulateAgentChatRef(effectiveServices, chat);
                     _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
                     newChat = chat;
                 }
@@ -169,6 +170,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                         ForegroundScheduler = _foregroundScheduler,
                         CancellationToken = ct,
                     }, ct);
+                    PopulateAgentChatRef(effectiveServices, chat);
                     _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
                     newChat = chat;
                 }
@@ -237,6 +239,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 ForegroundScheduler = _foregroundScheduler,
                 CancellationToken = ct,
             }, ct);
+            PopulateAgentChatRef(effectiveServices, chat);
             _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
             newChat = chat;
         }
@@ -258,8 +261,23 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     // "preserve intentional override" branch is gone because a null override was the same silent
     // misroute (issue #1110) as no factory at all, and an intentional non-null override that
     // wasn't the outer factory would be wired past our sub-agent lifecycle bookkeeping.
+    //
+    // #1306: Also inject a fresh <see cref="AgentChatRef"/> as
+    // <see cref="AgentServices.CurrentAgentChatRef"/> so the named
+    // <c>agent-session</c> toolset registered via
+    // <see cref="ToolsetFactory.CreateAgentSessionToolsetFactory(IToolsetFactory?)"/> can resolve
+    // the parent chat when its tools are invoked. The caller populates <c>chatRef.Chat</c>
+    // after <see cref="AgentChat.CreateAsync"/> returns.
     private AgentServices WithSelfAsFactory(AgentServices baseServices)
-        => baseServices with { RunningAgentChatFactory = this };
+        => baseServices with { RunningAgentChatFactory = this, CurrentAgentChatRef = new AgentChatRef() };
+
+    private static void PopulateAgentChatRef(AgentServices effectiveServices, AgentChat chat)
+    {
+        if (effectiveServices.CurrentAgentChatRef is AgentChatRef chatRef)
+        {
+            chatRef.Chat = chat;
+        }
+    }
 
     private async ValueTask ReleaseAsync(AgentSessionId sessionId)
     {
