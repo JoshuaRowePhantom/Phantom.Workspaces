@@ -99,6 +99,11 @@ public sealed class DevTunnelHostService : IDevTunnelHostService
 
     public async ValueTask DisposeAsync()
     {
+        // StopAsync tears down any in-flight SDK relay host via TunnelRelayDevTunnelHost.StopAsync,
+        // which now routes through the safe-dispose helper that consumes the terminal shutdown
+        // exceptions the SDK produces from its fire-and-forget background work (issue #1301).
+        // DisposeAsync on the wrapper is a no-op once StopAsync has torn the SDK host down, but we
+        // still call it to transfer ownership cleanly.
         await this.StopAsync().ConfigureAwait(false);
         await this.relayHost.DisposeAsync().ConfigureAwait(false);
     }

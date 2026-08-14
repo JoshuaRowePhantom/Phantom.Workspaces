@@ -145,6 +145,24 @@ public sealed class DevTunnelHostServiceTests
         Assert.False(relayHost.IsRunning);
     }
 
+    [Fact]
+    public async Task DisposeAsync_DoesNotDoubleDisposeRelayHost()
+    {
+        // Regression test for issue #1301: DevTunnelHostService's DisposeAsync must not re-enter
+        // the SDK shutdown path once StopAsync has already torn it down. The outer wrapper's
+        // DisposeAsync is safe to call twice — StopAsync is a no-op once relayHost has been
+        // released — but the SDK-owning inner path must only run once.
+        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"));
+        var relayHost = new FakeRelayHost();
+        var service = new DevTunnelHostService(managementClient, relayHost);
+
+        await service.StartAsync(localPort: 5280, protocol: "https", new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Private }, TestContext.Current.CancellationToken);
+        await service.DisposeAsync();
+
+        Assert.Equal(1, relayHost.StopCount);
+        Assert.Equal(1, relayHost.DisposeCount);
+    }
+
     private sealed class FakeManagementClient(DevTunnelDescriptor descriptor) : IDevTunnelManagementClient
     {
         public Exception? EnsureTunnelException { get; init; }
@@ -196,6 +214,8 @@ public sealed class DevTunnelHostServiceTests
 
         public int StopCount { get; private set; }
 
+        public int DisposeCount { get; private set; }
+
         public Task StartAsync(string tunnelId, int localPort, CancellationToken cancellationToken = default)
         {
             this.IsRunning = true;
@@ -212,6 +232,7 @@ public sealed class DevTunnelHostServiceTests
         public ValueTask DisposeAsync()
         {
             this.IsRunning = false;
+            this.DisposeCount++;
             return ValueTask.CompletedTask;
         }
     }
