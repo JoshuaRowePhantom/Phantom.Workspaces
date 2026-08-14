@@ -408,6 +408,25 @@ public sealed class MainWindowViewModelTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void MainWindow_ToolbarBrainProgressBar_BindsIsIndeterminateToIsAnyAgentPulsating()
+    {
+        // #1305: the toolbar brain's animation must be driven by the aggregated per-agent
+        // thinking state (IsAnyAgentPulsating), not by session presence (IsAnyRunning).
+        var repoRoot = FindRepositoryRoot();
+        var mainWindowXaml = File.ReadAllText(Path.Combine(
+            repoRoot.FullName, "Phantom.Workspaces", "MainWindow.axaml"));
+
+        Assert.Contains(
+            "IsIndeterminate=\"{Binding RunningAgentBrain.IsAnyAgentPulsating",
+            mainWindowXaml,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "IsIndeterminate=\"{Binding RunningAgentBrain.IsAnyRunning",
+            mainWindowXaml,
+            StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------------------------------------
     // #1172 — TryFocusExistingWebTabAsync (same-workspace, same-URL dedup for IUrlOpener).
     // ---------------------------------------------------------------------------------------------

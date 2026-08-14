@@ -103,7 +103,7 @@
                                 ToolTip.Tip="Running agents"
                                 Command="{Binding RunningAgentBrain.ToggleOpenCommand}">
                             <ProgressBar Classes="glyph-indicator pulsating-brain"
-                                         IsIndeterminate="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False}" />
+                                         IsIndeterminate="{Binding RunningAgentBrain.IsAnyAgentPulsating, FallbackValue=False}" />
                         </Button>
                         <Popup IsOpen="{Binding RunningAgentBrain.IsOpen, Mode=TwoWay}"
                                PlacementTarget="{Binding #RunningAgentBrainButton}"

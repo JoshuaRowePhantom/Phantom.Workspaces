@@ -1128,4 +1128,173 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.Equal("orphan-top", row.SessionKey);
         Assert.False(row.HasOpenTab);
     }
+
+    // ── Issue #1305: IsAnyAgentPulsating tracks per-row IsThinking ─────────────
+
+    [Fact]
+    public void RunningAgents_WhenNoSessions_BrainDoesNotPulsate()
+    {
+        var table = new FakeRunningAgentChatTable();
+        var vm = CreateBrainVm(table, []);
+
+        Assert.False(vm.IsAnyAgentPulsating);
+    }
+
+    [Fact]
+    public async Task RunningAgents_WhenAllAgentsIdle_BrainDoesNotPulsate()
+    {
+        var chatA = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        var chatB = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "tab-A", Title = "A", AgentSessionId = "session-A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "tab-B", Title = "B", AgentSessionId = "session-B" };
+        tabA.SetReady(agentVmA, new ObservableLoggerFactory());
+        tabB.SetReady(agentVmB, new ObservableLoggerFactory());
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-A", "A");
+        table.AddSession("session-B", "B");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tabA), new AgentTabInfo("pane-1", "Workspace", tabB)],
+            navigator: new FakeTabNavigator(),
+            dispatch: action => action());
+
+        Assert.True(vm.IsAnyRunning);
+        Assert.False(vm.IsAnyAgentPulsating);
+
+        vm.Dispose();
+    }
+
+    [AvaloniaFact]
+    public async Task RunningAgents_WhenAnyAgentPulsating_BrainPulsates()
+    {
+        var chatA = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        var chatB = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVmA = new AgentViewModel(chatA, "session-A", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        await using var agentVmB = new AgentViewModel(chatB, "session-B", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        var tabA = new AgentSessionWorkspaceTabViewModel { Id = "tab-A", Title = "A", AgentSessionId = "session-A" };
+        var tabB = new AgentSessionWorkspaceTabViewModel { Id = "tab-B", Title = "B", AgentSessionId = "session-B" };
+        tabA.SetReady(agentVmA, new ObservableLoggerFactory());
+        tabB.SetReady(agentVmB, new ObservableLoggerFactory());
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-A", "A");
+        table.AddSession("session-B", "B");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tabA), new AgentTabInfo("pane-1", "Workspace", tabB)],
+            navigator: new FakeTabNavigator(),
+            dispatch: action => action());
+
+        Assert.False(vm.IsAnyAgentPulsating);
+
+        chatA.CreateRunningItem(MakeRunningItem());
+
+        Assert.True(vm.IsAnyAgentPulsating);
+
+        vm.Dispose();
+    }
+
+    [AvaloniaFact]
+    public async Task RunningAgents_WhenLastPulsatingAgentBecomesIdle_BrainStopsPulsating()
+    {
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest { AgentDefinition = LoadEchoAgentDefinition() });
+        await using var agentVm = new AgentViewModel(chat, "session-1", "", new ObservableLoggerFactory(), TaskScheduler.Default);
+        var tab = new AgentSessionWorkspaceTabViewModel { Id = "tab-1", Title = "A", AgentSessionId = "session-1" };
+        tab.SetReady(agentVm, new ObservableLoggerFactory());
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "A");
+
+        var vm = new RunningAgentBrainViewModel(
+            table: table,
+            getAllAgentTabs: () => [new AgentTabInfo("pane-1", "Workspace", tab)],
+            navigator: new FakeTabNavigator(),
+            dispatch: action => action());
+
+        var running = chat.CreateRunningItem(MakeRunningItem());
+        Assert.True(vm.IsAnyAgentPulsating);
+
+        // Completing the running item flips IsChatRunning → false.
+        chat.CompleteRunningItem(running, writeToHistory: false);
+
+        Assert.False(vm.IsAnyAgentPulsating);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_WhenPulsatingRowRemoved_BrainStopsPulsating()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "A");
+        var vm = CreateBrainVm(table, []);
+        var row = Assert.Single(vm.Rows);
+        row.IsThinking = true;
+        Assert.True(vm.IsAnyAgentPulsating);
+
+        table.RemoveSession("session-1");
+
+        Assert.False(vm.IsAnyAgentPulsating);
+        Assert.Empty(vm.Rows);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_WhenFallbackRowSessionRunning_BrainDoesNotPulsate()
+    {
+        // Fallback rows (no tab / no agent) have no thinking signal and never contribute.
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("orphan", "Orphan");
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.Single(vm.Rows);
+        Assert.False(vm.IsAnyAgentPulsating);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_WhenOnlySubAgentSessionsPulsating_BrainDoesNotPulsate()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("sub-1", "Sub", isSubAgent: true);
+
+        var vm = CreateBrainVm(table, []);
+
+        Assert.False(vm.IsAnyRunning);
+        Assert.False(vm.IsAnyAgentPulsating);
+
+        vm.Dispose();
+    }
+
+    [Fact]
+    public void RunningAgents_IsAnyAgentPulsating_RaisesPropertyChangedWhenTransitioning()
+    {
+        var table = new FakeRunningAgentChatTable();
+        table.AddSession("session-1", "A");
+        var vm = CreateBrainVm(table, []);
+        var row = Assert.Single(vm.Rows);
+        var changes = 0;
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RunningAgentBrainViewModel.IsAnyAgentPulsating))
+            {
+                changes++;
+            }
+        };
+
+        row.IsThinking = true;
+        Assert.Equal(1, changes);
+        Assert.True(vm.IsAnyAgentPulsating);
+
+        row.IsThinking = false;
+        Assert.Equal(2, changes);
+        Assert.False(vm.IsAnyAgentPulsating);
+
+        vm.Dispose();
+    }
 }
