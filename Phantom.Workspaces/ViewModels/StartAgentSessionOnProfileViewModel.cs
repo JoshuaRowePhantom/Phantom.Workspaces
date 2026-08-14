@@ -9,6 +9,8 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -215,29 +217,46 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
         var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(this.mainWindowViewModel);
 
-        var agentChat = await AgentFactory.CreateAgentChatAsync(
-            new CreateAgentChatRequest
-            {
-                AgentDefinition = agentDefinition,
-                AgentServices = agentServices,
-            });
+        // #1309: Route through IRunningAgentChatTable → AgentChatFactory.GetOrCreateAsync so
+        // the newly-created root chat is registered in _entries[sessionId] and
+        // WithSelfAsFactory injects the AgentChatFactory as AgentServices.RunningAgentChatFactory.
+        // The old direct AgentFactory.CreateAgentChatAsync call bypassed the factory, leaving
+        // the root chat unregistered so a later IRunningAgentChatFactory.GetAsync(sessionId)
+        // would load a duplicate AgentChat from persistence instead of returning the live
+        // in-memory instance. Mirrors the definition branch of AgentManifestLaunchpadViewModel
+        // (fix for #1180) and is a prerequisite for #1306.
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
 
         var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
             this.mainWindowViewModel,
             definitionEntity,
-            agentChat.AgentSessionId,
+            agentSessionId,
             hostProfileEntityId: this.profileEntity.EntityId);
 
         if (createdAgentSessionEntity is null)
         {
-            await agentChat.DisposeAsync();
             return;
         }
+
+        var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId(agentSessionId),
+                AgentDefinition = agentDefinition,
+                AgentServices = agentServices,
+                ToolResourceFactory = agentServices.ToolResourceFactory,
+                ForegroundScheduler = foregroundScheduler,
+                EntityName = createdAgentSessionEntity.DisplayName,
+                EntityId = createdAgentSessionEntity.EntityId.ToString(),
+                WorkspaceId = this.mainWindowViewModel.SelectedWorkspacePane?.Id,
+            });
 
         var agentSessionTab = await this.openAgentSessionShortcutHandler.CreateAgentSessionTabAsync(
             this.mainWindowViewModel,
             createdAgentSessionEntity,
-            agentChat);
+            lease.AgentChat);
+        agentSessionTab.SetLease(lease);
 
         await this.tabService.ReplaceTabAsync(this, agentSessionTab);
     }
