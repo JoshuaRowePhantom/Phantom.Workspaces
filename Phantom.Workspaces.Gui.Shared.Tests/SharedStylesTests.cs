@@ -1106,7 +1106,87 @@ public sealed class SharedStylesTests
         Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", style, StringComparison.Ordinal);
     }
 
-    // Issue #1213 — behavioural/rendering coverage for the header wrap layout. These render the
+    // Issue #1300 (verification retry): realized-control rendering assertion — realizes a Button
+    // with the SHIPPED entity-card-action-button + entity-card-interest-button styles applied and
+    // asserts the resulting Button width (not the raw AXAML text) fits multi-character glyph
+    // content without clipping. Mirrors the LayoutEntityCardHeader realized-control pattern below.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardInterestButton_WithMultiCharGlyph_RendersFullTextWithoutClipping()
+    {
+        var sharedStyles = LoadSharedStyles();
+        var baseStyle = sharedStyles
+            .OfType<Style>()
+            .First(s => s.Selector?.ToString() == "Button.entity-card-action-button");
+        var interestStyle = sharedStyles
+            .OfType<Style>()
+            .First(s => s.Selector?.ToString() == "Button.entity-card-action-button.entity-card-interest-button");
+        const string multiCharGlyph = "WIP";
+
+        var interestButton = new Button
+        {
+            Name = "InterestButton",
+            Content = multiCharGlyph,
+        };
+        interestButton.Classes.Add("entity-card-action-button");
+        interestButton.Classes.Add("entity-card-interest-button");
+        var plainButton = new Button
+        {
+            Name = "PlainActionButton",
+            Content = "X",
+        };
+        plainButton.Classes.Add("entity-card-action-button");
+        var stack = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+        };
+        stack.Children.Add(interestButton);
+        stack.Children.Add(plainButton);
+
+        var window = new Window
+        {
+            SizeToContent = SizeToContent.WidthAndHeight,
+            Content = stack,
+        };
+        window.Styles.Add(baseStyle);
+        window.Styles.Add(interestStyle);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            // Measure the desired text width so we can assert the button is wide enough to
+            // show the full multi-character glyph without clipping.
+            var textBlock = new TextBlock
+            {
+                Text = multiCharGlyph,
+                FontFamily = interestButton.FontFamily,
+                FontSize = interestButton.FontSize,
+                FontWeight = interestButton.FontWeight,
+                FontStyle = interestButton.FontStyle,
+            };
+            textBlock.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var desiredTextWidth = textBlock.DesiredSize.Width;
+
+            // The interest button must grow past the 28-px clamp and comfortably fit the text.
+            Assert.True(
+                interestButton.Bounds.Width > 28,
+                $"Interest button width ({interestButton.Bounds.Width}) must exceed the 28-px "
+                + $"action-button clamp when rendering multi-character glyph '{multiCharGlyph}'.");
+            Assert.True(
+                interestButton.Bounds.Width >= desiredTextWidth,
+                $"Interest button width ({interestButton.Bounds.Width}) must fit the text's "
+                + $"desired width ({desiredTextWidth}) so glyph '{multiCharGlyph}' is not clipped.");
+
+            // Regression guard: the neighboring non-interest action button on the same style
+            // still resolves to the uniform 28-px footprint.
+            Assert.Equal(28, plainButton.Bounds.Width, precision: 1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1213 — behavioural/rendering coverage for the header wrap layout.These render the
     // shipped header styles (extracted verbatim from SharedStyles.axaml) around a header structure
     // that mirrors EntityCardControl.axaml, then run layout at narrow/wide widths and assert the
     // actual reflow behaviour, not merely the static style declarations.
