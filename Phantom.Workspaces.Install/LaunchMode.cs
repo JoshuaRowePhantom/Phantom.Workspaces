@@ -24,6 +24,9 @@ public enum LaunchMode
     /// <summary>Remove shortcuts, startup task, and the managed tree (<c>--uninstall</c>).</summary>
     Uninstall,
 
+    /// <summary>Check for and apply an update headlessly from the CLI (<c>update</c>).</summary>
+    Update,
+
     /// <summary>Show usage (<c>--help</c>/<c>-h</c>).</summary>
     Help,
 }

@@ -20,6 +20,25 @@ public static class CommandLineOptions
     };
 
     /// <summary>
+    /// Tokens that trigger a headless management mode (routed through <see cref="ManagementModeDispatcher"/>)
+    /// rather than the GUI. They must not be misinterpreted as a configuration-file path.
+    /// </summary>
+    private static readonly HashSet<string> ManagementTokens = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "--install",
+        "--apply-update",
+        "--uninstall",
+        "--startup",
+        "--minimized",
+        "--silent",
+        "--relaunch",
+        "--purge",
+        "--install-root",
+        "--update",
+        "update",
+    };
+
+    /// <summary>
     /// Returns <see langword="true"/> if any argument requests the help screen (for example
     /// <c>/?</c>, <c>-h</c>, or <c>--help</c>).
     /// </summary>
@@ -49,12 +68,18 @@ public static class CommandLineOptions
 
         foreach (var argument in arguments)
         {
-            if (string.IsNullOrWhiteSpace(argument) || HelpFlags.Contains(argument.Trim()))
+            if (string.IsNullOrWhiteSpace(argument))
             {
                 continue;
             }
 
-            configurationFilePath = argument.Trim();
+            var trimmed = argument.Trim();
+            if (HelpFlags.Contains(trimmed) || ManagementTokens.Contains(trimmed))
+            {
+                continue;
+            }
+
+            configurationFilePath = trimmed;
             return true;
         }
 
@@ -73,11 +98,19 @@ public static class CommandLineOptions
             "Phantom.Workspaces",
             string.Empty,
             "Usage:",
-            "  Phantom.Workspaces                         Start using the saved configuration, or run",
-            "                                             the first-run setup wizard if none exists.",
-            "  Phantom.Workspaces <config-file>           Start using the configuration file at the",
-            "                                             given path.",
-            "  Phantom.Workspaces /?                       Show this help.",
+            "  Phantom.Workspaces                              Start using the saved configuration, or run",
+            "                                                  the first-run setup wizard if none exists.",
+            "  Phantom.Workspaces <config-file>                Start using the configuration file at the",
+            "                                                  given path.",
+            "  Phantom.Workspaces update                       Check for and apply an update headlessly.",
+            "  Phantom.Workspaces --install [--silent]         Bootstrap into the managed layout and launch.",
+            "                     [--install-root <path>]",
+            "  Phantom.Workspaces --apply-update <dir>         Repoint 'current' at a staged version.",
+            "                     [--relaunch]",
+            "  Phantom.Workspaces --uninstall [--purge]        Remove shortcuts, startup task, and tree.",
+            "  Phantom.Workspaces --startup                    Normal launch honoring startup preferences.",
+            "  Phantom.Workspaces --minimized                  Start minimized to the tray.",
+            "  Phantom.Workspaces /?                           Show this help.",
             string.Empty,
             "Repository and remote-access settings (data store, MongoDB container, endpoints, tokens,",
             "etc.) are configured only through the configuration file or the first-run setup wizard,",

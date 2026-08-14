@@ -14,6 +14,8 @@ public sealed class ManagementModeRunner
     private readonly IProcessLauncher processLauncher;
     private readonly StartupTaskService startupTaskService;
     private readonly ApplyUpdateRunner applyUpdateRunner;
+    private readonly UpdateService? updateService;
+    private readonly string? installRootOverride;
 
     /// <summary>Creates the runner over its collaborators.</summary>
     public ManagementModeRunner(
@@ -22,7 +24,9 @@ public sealed class ManagementModeRunner
         IClock clock,
         IProcessLauncher processLauncher,
         StartupTaskService startupTaskService,
-        ApplyUpdateRunner applyUpdateRunner)
+        ApplyUpdateRunner applyUpdateRunner,
+        UpdateService? updateService = null,
+        string? installRootOverride = null)
     {
         ArgumentNullException.ThrowIfNull(layout);
         ArgumentNullException.ThrowIfNull(fileSystem);
@@ -36,11 +40,13 @@ public sealed class ManagementModeRunner
         this.processLauncher = processLauncher;
         this.startupTaskService = startupTaskService;
         this.applyUpdateRunner = applyUpdateRunner;
+        this.updateService = updateService;
+        this.installRootOverride = installRootOverride;
     }
 
     /// <summary>Whether <paramref name="mode"/> is a headless management mode this runner handles.</summary>
     public static bool IsManagementMode(LaunchMode mode)
-        => mode is LaunchMode.Install or LaunchMode.ApplyUpdate or LaunchMode.Uninstall;
+        => mode is LaunchMode.Install or LaunchMode.ApplyUpdate or LaunchMode.Uninstall or LaunchMode.Update;
 
     /// <summary>
     /// Runs the management mode described by <paramref name="options"/>. <paramref name="payloadDirectory"/>
@@ -64,8 +70,69 @@ public sealed class ManagementModeRunner
             LaunchMode.Install => this.RunInstall(options, payloadDirectory, version),
             LaunchMode.ApplyUpdate => await this.RunApplyUpdateAsync(options, cancellationToken).ConfigureAwait(false),
             LaunchMode.Uninstall => this.RunUninstall(),
+            LaunchMode.Update => await this.RunUpdateAsync(cancellationToken).ConfigureAwait(false),
             _ => throw new InvalidOperationException($"{options.Mode} is not a management mode."),
         };
+    }
+
+    private async Task<ExitCode> RunUpdateAsync(CancellationToken cancellationToken)
+    {
+        if (this.updateService is null)
+        {
+            Console.Error.WriteLine("Update service is not available in this build.");
+            return ExitCode.GeneralFailure;
+        }
+
+        UpdateCheckResult check;
+        try
+        {
+            check = await this.updateService.CheckAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Update check failed: {exception.Message}");
+            return ExitCode.GeneralFailure;
+        }
+
+        if (!check.IsUpdateAvailable || check.LatestRelease is null)
+        {
+            Console.Error.WriteLine("You are up to date; no newer release is available.");
+            return ExitCode.Success;
+        }
+
+        string stagedVersion;
+        try
+        {
+            stagedVersion = await this.updateService
+                .DownloadAndStageAsync(check.LatestRelease, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"Update download/stage failed: {exception.Message}");
+            return ExitCode.UpdateApplyFailure;
+        }
+
+        var arguments = new List<string>
+        {
+            "--apply-update",
+            this.layout.GetVersionDirectory(stagedVersion),
+        };
+        if (!string.IsNullOrWhiteSpace(this.installRootOverride))
+        {
+            arguments.Add("--install-root");
+            arguments.Add(this.installRootOverride!);
+        }
+
+        this.processLauncher.Start(new ProcessStartRequest
+        {
+            FileName = this.layout.GetVersionExecutablePath(stagedVersion),
+            Arguments = arguments,
+            Detached = true,
+        });
+
+        Console.Error.WriteLine($"Update staged: version {stagedVersion}.");
+        return ExitCode.Success;
     }
 
     private ExitCode RunInstall(CommandLineOptions options, string payloadDirectory, string version)

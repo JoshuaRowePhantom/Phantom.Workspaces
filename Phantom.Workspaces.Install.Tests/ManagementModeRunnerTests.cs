@@ -34,7 +34,8 @@ public sealed class ManagementModeRunnerTests
 
         public Harness(
             IProcessLauncher? processLauncher = null,
-            IScheduledTasks? scheduledTasks = null)
+            IScheduledTasks? scheduledTasks = null,
+            UpdateService? updateService = null)
         {
             this.ProcessLauncherImpl = processLauncher ?? new FakeProcessLauncher();
             this.ScheduledTasksImpl = scheduledTasks ?? new FakeScheduledTasks();
@@ -55,7 +56,8 @@ public sealed class ManagementModeRunnerTests
                 this.Clock,
                 this.ProcessLauncherImpl,
                 startupTaskService,
-                applyUpdateRunner);
+                applyUpdateRunner,
+                updateService);
         }
 
         public string SeedPayload()
@@ -72,6 +74,7 @@ public sealed class ManagementModeRunnerTests
     [InlineData(LaunchMode.Install, true)]
     [InlineData(LaunchMode.ApplyUpdate, true)]
     [InlineData(LaunchMode.Uninstall, true)]
+    [InlineData(LaunchMode.Update, true)]
     [InlineData(LaunchMode.Gui, false)]
     [InlineData(LaunchMode.Startup, false)]
     [InlineData(LaunchMode.Minimized, false)]
@@ -248,6 +251,99 @@ public sealed class ManagementModeRunnerTests
         var exitCode = await harness.Runner.RunAsync(options, PayloadDirectory, "0.1.0");
 
         Assert.Equal(ExitCode.Success, exitCode);
+    }
+
+    [Fact]
+    public async Task RunAsync_Update_WhenNewerReleaseAvailable_StagesAndSpawnsApplyUpdate()
+    {
+        var release = new ReleaseInfo
+        {
+            TagName = "v0.2.0",
+            Assets =
+            [
+                new ReleaseAsset
+                {
+                    Name = "Phantom.Workspaces-win-x64.zip",
+                    DownloadUrl = "https://example/win-x64.zip",
+                },
+            ],
+        };
+        var fs = new InMemoryFileSystem();
+        var layout = new InstallLayout(fs, AppRoot);
+        // Seed initial current so ResolveCurrentVersion works.
+        fs.CreateDirectory(layout.GetVersionDirectory("0.1.0"));
+        layout.RepointCurrent("0.1.0");
+        var updateService = new UpdateService(
+            new FakeReleaseSource(release),
+            new FakeUpdateDownloader(fs, new byte[] { 1, 2 }),
+            new FakeArchiveExtractor(fs),
+            fs,
+            layout,
+            runningVersion: "0.1.0",
+            assetMoniker: "win-x64");
+
+        var launcher = new FakeProcessLauncher();
+        var startupTaskService = new StartupTaskService(new FakeScheduledTasks(), layout.CurrentExecutablePath);
+        var applyUpdateRunner = new ApplyUpdateRunner(
+            layout, new FakeInstanceReleaseWaiter(released: true), new HealthGate(fs, layout), launcher);
+        var runner = new ManagementModeRunner(
+            layout, fs, new ManualClock(FixedInstant), launcher, startupTaskService, applyUpdateRunner, updateService);
+
+        var exitCode = await runner.RunAsync(CommandLineOptions.Parse("update"), PayloadDirectory, "0.1.0");
+
+        Assert.Equal(ExitCode.Success, exitCode);
+        var request = Assert.Single(launcher.Requests);
+        Assert.Equal(layout.GetVersionExecutablePath("0.2.0"), request.FileName);
+        Assert.Contains("--apply-update", request.Arguments);
+        Assert.True(request.Detached);
+    }
+
+    [Fact]
+    public async Task RunAsync_Update_WhenNoNewerRelease_ReturnsSuccessWithoutStaging()
+    {
+        var release = new ReleaseInfo
+        {
+            TagName = "v0.1.0",
+            Assets =
+            [
+                new ReleaseAsset
+                {
+                    Name = "Phantom.Workspaces-win-x64.zip",
+                    DownloadUrl = "https://example/win-x64.zip",
+                },
+            ],
+        };
+        var fs = new InMemoryFileSystem();
+        var layout = new InstallLayout(fs, AppRoot);
+        fs.CreateDirectory(layout.GetVersionDirectory("0.1.0"));
+        layout.RepointCurrent("0.1.0");
+        var downloader = new FakeUpdateDownloader(fs, new byte[] { 1, 2 });
+        var updateService = new UpdateService(
+            new FakeReleaseSource(release), downloader, new FakeArchiveExtractor(fs),
+            fs, layout, runningVersion: "0.1.0", assetMoniker: "win-x64");
+
+        var launcher = new FakeProcessLauncher();
+        var startupTaskService = new StartupTaskService(new FakeScheduledTasks(), layout.CurrentExecutablePath);
+        var applyUpdateRunner = new ApplyUpdateRunner(
+            layout, new FakeInstanceReleaseWaiter(released: true), new HealthGate(fs, layout), launcher);
+        var runner = new ManagementModeRunner(
+            layout, fs, new ManualClock(FixedInstant), launcher, startupTaskService, applyUpdateRunner, updateService);
+
+        var exitCode = await runner.RunAsync(CommandLineOptions.Parse("update"), PayloadDirectory, "0.1.0");
+
+        Assert.Equal(ExitCode.Success, exitCode);
+        Assert.Empty(downloader.DownloadedTo);
+        Assert.Empty(launcher.Requests);
+    }
+
+    [Fact]
+    public async Task RunAsync_Update_WhenUpdateServiceMissing_ReturnsFailure()
+    {
+        var harness = new Harness();
+
+        var exitCode = await harness.Runner.RunAsync(CommandLineOptions.Parse("update"), PayloadDirectory, "0.1.0");
+
+        Assert.Equal(ExitCode.GeneralFailure, exitCode);
     }
 
     [Fact]

@@ -57,4 +57,43 @@ public sealed class CommandLineOptionsTests
         Assert.False(CommandLineOptions.TryGetConfigurationFilePath([], out var none));
         Assert.Null(none);
     }
+
+    [Fact]
+    public void TryGetConfigurationFilePath_DoesNotTreatUpdateVerbAsConfigPath()
+    {
+        Assert.False(CommandLineOptions.TryGetConfigurationFilePath(["update"], out var updatePositional));
+        Assert.Null(updatePositional);
+        Assert.False(CommandLineOptions.TryGetConfigurationFilePath(["--install"], out var install));
+        Assert.Null(install);
+        Assert.False(CommandLineOptions.TryGetConfigurationFilePath(["--uninstall"], out var uninstall));
+        Assert.Null(uninstall);
+    }
+
+    [Fact]
+    public void GetHelpText_ListsAllVerbs()
+    {
+        var helpText = CommandLineOptions.GetHelpText();
+
+        Assert.Contains("update", helpText);
+        Assert.Contains("--install", helpText);
+        Assert.Contains("--apply-update", helpText);
+        Assert.Contains("--uninstall", helpText);
+        Assert.Contains("--startup", helpText);
+        Assert.Contains("--minimized", helpText);
+        Assert.Contains("--silent", helpText);
+        Assert.Contains("--install-root", helpText);
+    }
+
+    [Fact]
+    public void GetHelpText_ListsAllHelpFlags()
+    {
+        var helpText = CommandLineOptions.GetHelpText();
+
+        Assert.Contains("/?", helpText);
+        Assert.Contains("-?", helpText);
+        Assert.Contains("/h", helpText);
+        Assert.Contains("-h", helpText);
+        Assert.Contains("/help", helpText);
+        Assert.Contains("--help", helpText);
+    }
 }

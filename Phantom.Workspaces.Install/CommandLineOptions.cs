@@ -128,6 +128,15 @@ public sealed class CommandLineOptions
                     purge = true;
                     break;
 
+                case "update":
+                case "--update":
+                    if (!TrySetMode(ref mode, LaunchMode.Update, out var updateError))
+                    {
+                        return Invalid(updateError);
+                    }
+
+                    break;
+
                 case "--install-root":
                     if (index + 1 >= arguments.Length)
                     {

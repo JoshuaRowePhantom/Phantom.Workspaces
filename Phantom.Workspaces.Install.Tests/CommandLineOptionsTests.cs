@@ -139,4 +139,22 @@ public sealed class CommandLineOptionsTests
         Assert.False(options.IsValid);
         Assert.Equal(ExitCode.BadArguments, options.ExitCode);
     }
+
+    [Fact]
+    public void Parse_UpdatePositional_SelectsUpdateMode()
+    {
+        var options = CommandLineOptions.Parse("update");
+
+        Assert.True(options.IsValid);
+        Assert.Equal(LaunchMode.Update, options.Mode);
+    }
+
+    [Fact]
+    public void Parse_UpdateFlag_SelectsUpdateMode()
+    {
+        var options = CommandLineOptions.Parse("--update");
+
+        Assert.True(options.IsValid);
+        Assert.Equal(LaunchMode.Update, options.Mode);
+    }
 }
