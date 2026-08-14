@@ -10,6 +10,9 @@ public sealed class MongoDbConnectionBroker
 
     private readonly ContainerEngine _containerEngine;
     private readonly MongoDbContainerDefinitionGenerator _containerDefinitionGenerator;
+    private readonly IDockerDesktopLauncher _dockerDesktopLauncher;
+    private readonly TimeSpan _dockerReadinessTimeout;
+    private readonly TimeSpan _dockerReadinessPollInterval;
     private readonly int _connectVerificationAttempts;
     private readonly TimeSpan _connectRetryDelay;
     private readonly TimeProvider _timeProvider;
@@ -19,7 +22,10 @@ public sealed class MongoDbConnectionBroker
         MongoDbContainerDefinitionGenerator? containerDefinitionGenerator = null,
         int connectVerificationAttempts = 20,
         TimeSpan? connectRetryDelay = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IDockerDesktopLauncher? dockerDesktopLauncher = null,
+        TimeSpan? dockerReadinessTimeout = null,
+        TimeSpan? dockerReadinessPollInterval = null)
     {
         if (connectVerificationAttempts <= 0)
         {
@@ -34,6 +40,9 @@ public sealed class MongoDbConnectionBroker
         // number of additional retries covers transient heartbeat drops while mongod stabilizes.
         _connectRetryDelay = connectRetryDelay ?? TimeSpan.FromSeconds(1);
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _dockerDesktopLauncher = dockerDesktopLauncher ?? new DockerDesktopLauncher();
+        _dockerReadinessTimeout = dockerReadinessTimeout ?? TimeSpan.FromSeconds(120);
+        _dockerReadinessPollInterval = dockerReadinessPollInterval ?? TimeSpan.FromSeconds(2);
     }
 
     public async ValueTask<IMongoClient> GetClientAsync(
@@ -145,6 +154,8 @@ public sealed class MongoDbConnectionBroker
         MongoDbContainerConnectionDefinition connectionDefinition,
         CancellationToken cancellationToken)
     {
+        await EnsureDockerEngineReadyAsync(cancellationToken).ConfigureAwait(false);
+
         try
         {
             await _containerEngine.StartAsync(connectionDefinition.ContainerName, cancellationToken).ConfigureAwait(false);
@@ -154,6 +165,51 @@ public sealed class MongoDbConnectionBroker
             var containerDefinition = _containerDefinitionGenerator.Generate(connectionDefinition);
             await _containerEngine.CreateAsync(containerDefinition, cancellationToken).ConfigureAwait(false);
             await _containerEngine.StartAsync(connectionDefinition.ContainerName, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Ensures the container engine is usable before we shell out to <c>docker</c> commands
+    /// (issue #1299). If Docker Desktop is installed but not running, launches it and polls
+    /// <see cref="ContainerEngine.UsableAsync"/> on <see cref="_dockerReadinessPollInterval"/>
+    /// until it succeeds or <see cref="_dockerReadinessTimeout"/> elapses. Surfaces actionable
+    /// errors when Docker Desktop is not installed or never becomes ready.
+    /// </summary>
+    private async ValueTask EnsureDockerEngineReadyAsync(CancellationToken cancellationToken)
+    {
+        if (await _containerEngine.UsableAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        if (_dockerDesktopLauncher.InstalledExecutablePath is null)
+        {
+            throw new InvalidOperationException(
+                "Docker Desktop is not installed. Install Docker Desktop (%ProgramFiles%\\Docker\\Docker\\Docker Desktop.exe) "
+                + "or configure an external MongoDB connection to use the local Mongo container.");
+        }
+
+        _dockerDesktopLauncher.LaunchDockerDesktop();
+
+        var deadline = _timeProvider.GetUtcNow() + _dockerReadinessTimeout;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            await Task.Delay(_dockerReadinessPollInterval, _timeProvider, cancellationToken).ConfigureAwait(false);
+
+            if (await _containerEngine.UsableAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            if (_timeProvider.GetUtcNow() >= deadline)
+            {
+                throw new InvalidOperationException(
+                    $"Docker Desktop was launched but the Docker engine did not become ready within "
+                    + $"{_dockerReadinessTimeout.TotalSeconds:0} seconds. Ensure Docker Desktop finishes starting, "
+                    + "then retry.");
+            }
         }
     }
 
