@@ -26,6 +26,14 @@ public sealed record TrustedExecutionRequest
 
     /// <summary>Optional service integrations.</summary>
     public AgentServices? AgentServices { get; init; }
+
+    /// <summary>
+    /// When true, preserves the source's <see cref="IAgentPersistenceStore"/> instead of
+    /// overriding with <see cref="NullAgentPersistenceStore"/>. Used for router-local +
+    /// chat-client-remote topology where persistence lives on the source. Default false
+    /// (full-remote-executor behavior).
+    /// </summary>
+    public bool PreserveSourcePersistence { get; init; }
 }
 
 /// <summary>
