@@ -698,4 +698,70 @@ public sealed class CopilotSdkStreamAdapterTests
         var texts = updates.Select(u => ((TextContent)u.Contents.Single()).Text).ToList();
         Assert.Equal(["one", "two", "three"], texts);
     }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolExecutionStartEventRootAgentId_EmitsUpdateWithoutParentToolCallIdProperty()
+    {
+        // Fix #1318: a ToolExecutionStartEvent with AgentId == null must map to a
+        // ChatResponseUpdate whose FunctionCallContent does NOT carry
+        // ParentToolCallIdPropertyName, so CopilotSubAgentRouter routes it to the root/session
+        // sink where it renders as a child of the SDK session node in AgentChat history.
+        var updates = await TranslateAsync(new ToolExecutionStartEvent
+        {
+            AgentId = null,
+            Data = new ToolExecutionStartData { ToolCallId = "sh-1", ToolName = "powershell" },
+        });
+
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Null(CopilotSdkStreamAdapter.GetParentToolCallId(call));
+        Assert.Equal("powershell", call.Name);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolExecutionCompleteEventRootAgentId_EmitsUpdateWithoutParentToolCallIdProperty()
+    {
+        // Fix #1318: mirror of the above for ToolExecutionCompleteEvent — root-AgentId completes
+        // land on the root/session sink.
+        var updates = await TranslateAsync(new ToolExecutionCompleteEvent
+        {
+            AgentId = null,
+            Data = new ToolExecutionCompleteData
+            {
+                ToolCallId = "sh-1",
+                Success = true,
+                Result = new ToolExecutionCompleteResult { Content = "ok" },
+            },
+        });
+
+        var result = Assert.IsType<FunctionResultContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Null(CopilotSdkStreamAdapter.GetParentToolCallId(result));
+        Assert.Equal("sh-1", result.CallId);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolExecutionEventsWithAgentId_SetParentToolCallIdProperty()
+    {
+        // Fix #1318 regression guard: sub-agent-tagged tool events must still carry
+        // ParentToolCallIdPropertyName so the router forwards them to the correct sub-agent sink.
+        var updates = await TranslateAsync(
+            new ToolExecutionStartEvent
+            {
+                AgentId = "agent-77",
+                Data = new ToolExecutionStartData { ToolCallId = "call-77", ToolName = "my_tool" },
+            },
+            new ToolExecutionCompleteEvent
+            {
+                AgentId = "agent-77",
+                Data = new ToolExecutionCompleteData
+                {
+                    ToolCallId = "call-77",
+                    Success = true,
+                    Result = new ToolExecutionCompleteResult { Content = "ok" },
+                },
+            });
+
+        Assert.Equal(2, updates.Count);
+        Assert.Equal("agent-77", CopilotSdkStreamAdapter.GetParentToolCallId(Assert.Single(updates[0].Contents)));
+        Assert.Equal("agent-77", CopilotSdkStreamAdapter.GetParentToolCallId(Assert.Single(updates[1].Contents)));
+    }
 }
