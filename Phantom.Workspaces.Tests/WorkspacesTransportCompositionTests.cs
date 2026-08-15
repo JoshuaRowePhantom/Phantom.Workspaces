@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Chat;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -60,6 +61,55 @@ public sealed class WorkspacesTransportCompositionTests
         Assert.NotNull(composition.ConnectionStatusRegistry);
         Assert.NotNull(composition.LocalListeners);
         Assert.Empty(composition.HubFactories);
+    }
+
+    [Fact]
+    public async Task Composition_LocalListeners_ServesChatClientChannelInProduction()
+    {
+        // Issue #1314: the production WorkspacesTransportComposition must register a
+        // ChatClientTransportListener on LocalListeners so that an incoming `chat-client`
+        // channel carrying an `agent-definition` is dispatched to a listener that builds
+        // the executor IChatClient via AgentFactory. Without this, LocalListeners is empty
+        // and remote chat-client channels have no listener in production.
+        await using var composition = CreateComposition();
+
+        var agentDef = new AgentSchema.PromptAgent
+        {
+            Name = "echo-agent",
+            Instructions = "",
+            Model = new AgentSchema.Model { Provider = "echo", Id = "echo-model" },
+        };
+        var agentDefJson = agentDef.ToJson();
+        var openRequest = JsonSerializer.SerializeToDocument(new Dictionary<string, object>
+        {
+            ["type"] = "chat-client",
+            ["agent-definition"] = agentDefJson,
+        }).RootElement.Clone();
+
+        var channel = new StubMessageChannel();
+        var handle = await composition.LocalListeners.OnChannelOpenAsync(openRequest, channel, Ct());
+
+        Assert.NotNull(handle);
+        await handle!.DisposeAsync();
+    }
+
+    private sealed class StubMessageChannel : IMessageChannel
+    {
+        private readonly System.Threading.Channels.Channel<JsonElement> reader
+            = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+        private readonly System.Threading.Channels.Channel<JsonElement> writer
+            = System.Threading.Channels.Channel.CreateUnbounded<JsonElement>();
+
+        public System.Threading.Channels.ChannelReader<JsonElement> Reader => this.reader.Reader;
+
+        public System.Threading.Channels.ChannelWriter<JsonElement> Writer => this.writer.Writer;
+
+        public ValueTask DisposeAsync()
+        {
+            this.reader.Writer.TryComplete();
+            this.writer.Writer.TryComplete();
+            return ValueTask.CompletedTask;
+        }
     }
 
     [Fact]
