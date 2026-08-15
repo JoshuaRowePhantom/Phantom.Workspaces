@@ -57,6 +57,45 @@ public static class ExecutorTargetResolver
         return ForKind(tool.Kind);
     }
 
+    /// <summary>
+    /// Resolves the execution class for a tool <paramref name="kind"/> discriminator, considering
+    /// whether the target session equals the source session. When an <c>agent-session</c> or
+    /// <c>workspace-agent-session</c> tool targets the same session it originates from, it is
+    /// classified as <see cref="ExecutorTarget.GuiLocal"/> (local to the initiating agent)
+    /// instead of <see cref="ExecutorTarget.HostingInstance"/>.
+    /// </summary>
+    public static ExecutorTarget ForKindWithTargetSession(
+        string? kind,
+        string? sourceAgentSessionId,
+        string? targetAgentSessionId)
+    {
+        var basic = ForKind(kind);
+        if (basic == ExecutorTarget.HostingInstance
+            && !string.IsNullOrEmpty(sourceAgentSessionId)
+            && !string.IsNullOrEmpty(targetAgentSessionId)
+            && string.Equals(sourceAgentSessionId, targetAgentSessionId, StringComparison.Ordinal))
+        {
+            return ExecutorTarget.GuiLocal;
+        }
+        return basic;
+    }
+
+    /// <summary>
+    /// Resolves the execution class for a constructed <paramref name="tool"/>, considering
+    /// whether the target session equals the source session. When an <c>agent-session</c> or
+    /// <c>workspace-agent-session</c> tool targets the same session it originates from, it is
+    /// classified as <see cref="ExecutorTarget.GuiLocal"/> (local to the initiating agent)
+    /// instead of <see cref="ExecutorTarget.HostingInstance"/>.
+    /// </summary>
+    public static ExecutorTarget ForToolWithTargetSession(
+        Tool tool,
+        string? sourceAgentSessionId,
+        string? targetAgentSessionId)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        return ForKindWithTargetSession(tool.Kind, sourceAgentSessionId, targetAgentSessionId);
+    }
+
     private static bool Matches(string kind, string expected)
         => string.Equals(kind, expected, StringComparison.OrdinalIgnoreCase);
 }
