@@ -28,6 +28,37 @@ See also:
 
 **Session behavior:** A single `CopilotClient` and `CopilotSession` are created lazily on first use and reused across turns. Changing the tool set, working directory, or the call-time `ChatOptions.ModelId` after the first turn requires a new session (detected via `ComputeSessionSignature`).
 
+### Remote hosting
+
+`github-copilot` (and its BYOK cousins `openai` / `azure-openai`) support the `[remote-copilot-sdk]` topology: the router and persistence stay on the source instance while `CopilotSdkChatClient` runs on a remote `user-computer-profile` reached over the reverse-tunnel transport.
+
+**How a session becomes remote-hosted.** The wrapping agent-manifest declares a `trust-profile` parameter (see `["documentation", "agent-options", "parameters"]`). At launch, the resolver composes the referenced `llm-trust-profile` entity and reads `TrustProfile.HostingWorkspacesClientInstances` (`Phantom.Workspaces.Llm.Core/Trust/TrustProfile.cs:137`). Any value other than `TrustProfile.LocalClientInstance` (`"."`, line 131) opts the session into remote hosting; the resolver populates `ExecutorTopology.AgentExecutorClientInstance` with that value. `TrustProfile.DefaultExecutionTarget` (line 143) supplies the connection descriptor used to reach the remote instance. `TrustProfile.WildcardClientInstance` (`"*"`, line 134) matches any client instance and is used only in permissive base profiles — it is not a valid concrete host selection.
+
+**Persisted host record.** `AgentFactory` writes the selected host onto the resulting `agent-session` entity's `host-profile-entity-id` field (`Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json:24`). On resume the router reads that field to reconstruct the topology; per `docs/design/session-context-tools.md` the field is a hint, not the runtime source of truth — the live host context wins if the two disagree.
+
+**What runs where.**
+
+| Component | Source (local) | Remote user-computer-profile |
+|---|---|---|
+| `AgentChat` router, steering middleware, persistence | ✔ | |
+| `CopilotSdkChatClient` + Copilot CLI process | | ✔ |
+| Copilot SDK built-in tools (shell, filesystem) | | ✔ (SDK self-invokes) |
+| `workspace-gui` / `workspace-entity` tool calls | ✔ (`ExecutorTarget.GuiLocal`) | |
+| Source-targeted `agent-session` / `current-session` (target session id == source session id) | ✔ (reclassified to `GuiLocal`) | |
+| Non-source-targeted `agent-session` / `current-session` | | ✔ (`ExecutorTarget.HostingInstance` → the remote host of the target session) |
+| Other `mcp` / `function` / `filesystem` / `web_request` / `github-cli-builtin-tools` | | ✔ (`ExecutorTarget.AgentExecutor`) |
+
+Split topology source: `Phantom.Workspaces.Llm.Core/Transport/ExecutorTarget.cs`, `Phantom.Workspaces.Llm.Core/Transport/ExecutorTopology.cs`, `Phantom.Workspaces.Llm.Core/Transport/ExecutorTargetResolver.cs` (including `ForKindWithTargetSession`, which reclassifies source-targeted agent-session calls as `GuiLocal`).
+
+**BYOK variant.** `openai` and `azure-openai` follow the same rules; `CopilotByokOptions` fields (`Provider`, `BaseUrl`, `ApiKey`) come from the model connection and are honored on the remote host. See `["documentation", "agent-options", "connections"]`.
+
+**See also:**
+- Example manifest: `docs/examples/github-copilot-remote-chat.json` (registered in `docs/examples/README.md`).
+- Master design: `docs/design/remote-chat-client-session.md`.
+- Split topology reference: `["documentation", "agent-options", "tools"]` § "Execution target of tool kinds".
+- `trust-profile` parameter: `["documentation", "agent-options", "parameters"]`.
+- Worked `agent-session` example: `["documentation", "agent-configuration"]` § "Remote-hosted `agent-session`".
+
 ---
 
 ## `openai` and `azure-openai` (BYOK via the Copilot SDK)

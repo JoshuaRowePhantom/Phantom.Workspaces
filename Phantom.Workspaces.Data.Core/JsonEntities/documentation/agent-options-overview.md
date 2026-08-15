@@ -45,3 +45,14 @@ Setting `model.id` to `"test"` (case-insensitive) bypasses provider dispatch ent
 ## GitHub Copilot built-in tool policy
 
 `github-copilot` and `github-copilot-subagent` agents can include a `tools[]` entry with `kind: "github-cli-builtin-tools"` to allow or exclude Copilot CLI SDK default tools. The same entry can set `client-mode: "empty"`, which selects the SDK's Empty client mode at client construction time (not per session). See `["documentation", "agent-options", "tools"]` for selectors and examples.
+
+## Remote hosting (`[remote-copilot-sdk]` topology)
+
+`github-copilot` (and BYOK `openai` / `azure-openai`) can run their `CopilotSdkChatClient` on a remote `user-computer-profile` while the source instance retains the `AgentChat` router, persistence, and GUI. A manifest opts into this topology by declaring a `trust-profile` parameter whose resolved `llm-trust-profile` populates `TrustProfile.HostingWorkspacesClientInstances` with a non-`"."` client-instance id.
+
+- Provider details: `["documentation", "agent-options", "providers"]` § "Remote hosting".
+- Split executor mapping (which tool `kind` runs where): `["documentation", "agent-options", "tools"]` § "Execution target of tool kinds".
+- Trust-profile-driven host selection: `["documentation", "agent-options", "parameters"]` § `trust-profile`.
+- `agent-session` `host-profile-entity-id` worked example: `["documentation", "agent-configuration"]` § "Remote-hosted `agent-session`".
+- Master design: `docs/design/remote-chat-client-session.md`.
+- Example manifest: `docs/examples/github-copilot-remote-chat.json`.

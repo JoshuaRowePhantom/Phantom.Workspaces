@@ -267,6 +267,29 @@ An `agent-session` entity is created when a session is launched from a manifest 
 | `agent-definition-reference` | | Entity-name path to the `agent-definition` used to reconstruct the session on resume. |
 | `parameter-values` | | Parameter values supplied at launch (string key → string value). |
 
+### Remote-hosted `agent-session`
+
+When the wrapping manifest opts into the `[remote-copilot-sdk]` topology by declaring a `trust-profile` parameter whose resolved `llm-trust-profile` names a non-`"."` client instance (`TrustProfile.HostingWorkspacesClientInstances`), the launcher records the selected host on the resulting `agent-session` entity's `host-profile-entity-id`. The `agent-definition-reference` still resolves against the source workspace so the same manifest reconstructs the session on resume; the topology is rebuilt from the trust-profile resolution, not from the persisted host id (which is a hint, not the source of truth — see `docs/design/session-context-tools.md`).
+
+```json
+{
+  "entity-types": ["entity", "agent-session"],
+  "agent-session-id": "sess-42",
+  "host-profile-entity-id": "d3b07384-d113-4f45-9d6f-2b6a1c7d9e01",
+  "agent-definition-reference": ["user", "agent-definitions", "github-copilot-remote-chat"],
+  "parameter-values": {
+    "working-directory": "/home/agent/projects/phantom",
+    "trust-profile": "remote-copilot"
+  }
+}
+```
+
+- `host-profile-entity-id` — entity id of the remote `user-computer-profile` (see `["documentation", "user-computer-profile-schema"]`).
+- `parameter-values["trust-profile"]` — the parameter value the launcher used to look up the `llm-trust-profile` entity that populated `HostingWorkspacesClientInstances` with the remote client-instance id.
+- `parameter-values["working-directory"]` — the CWD the Copilot CLI process should use on the remote host.
+
+See `docs/examples/github-copilot-remote-chat.json` for the wrapping AgentDefinition and `docs/design/remote-chat-client-session.md` for the full topology.
+
 ---
 
 ## Typical Configuration Patterns

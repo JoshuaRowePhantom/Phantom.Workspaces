@@ -9,6 +9,37 @@ See also: `["documentation", "agent-options", "connections"]` for connection kin
 
 ---
 
+## Execution target of tool kinds
+
+Every tool constructed from an AgentDefinition is tagged at construction time with an `ExecutorTarget` (`Phantom.Workspaces.Llm.Core/Transport/ExecutorTarget.cs`) that selects the client instance it runs on via `ExecutorTopology` (`Phantom.Workspaces.Llm.Core/Transport/ExecutorTopology.cs`). Mapping from tool `kind` to target is done by `ExecutorTargetResolver.ForKind` / `ExecutorTargetResolver.ForTool` (`Phantom.Workspaces.Llm.Core/Transport/ExecutorTargetResolver.cs`).
+
+In the single-machine topology all three targets resolve to `TrustProfile.LocalClientInstance` (`"."`) and every call runs on the source. In the `[remote-copilot-sdk]` topology the router remains on the source (G / H) but the `AgentExecutor` target resolves to a remote `user-computer-profile` client instance selected by the `trust-profile` parameter.
+
+| Tool `kind` | `ExecutorTarget` | Single-machine | Remote-hosted (`[remote-copilot-sdk]`) |
+|---|---|---|---|
+| `workspace-gui` | `GuiLocal` | source | source (initiating machine) |
+| `workspace-entity` | `GuiLocal` | source | source |
+| `agent-session` / `workspace-agent-session` — target session id equals **source** session id | `GuiLocal` (via `ExecutorTargetResolver.ForKindWithTargetSession`) | source | source |
+| `agent-session` / `workspace-agent-session` — target session id is a **different** session | `HostingInstance` | source | remote host of the target session |
+| `current-session` — resolved against the source session id | `GuiLocal` (source-targeted rule) | source | source |
+| `mcp` (McpTool) | `AgentExecutor` | source | remote profile |
+| `function` (FunctionTool) | `AgentExecutor` | source | remote profile |
+| `filesystem` | `AgentExecutor` | source | remote profile |
+| `web_request` / `web_search` / `web` | `AgentExecutor` | source | remote profile |
+| `chat-history` | `AgentExecutor` | source | remote profile |
+| `github-cli-builtin-tools` | `AgentExecutor` | source | remote profile |
+| Any unknown / provider-specific kind | `AgentExecutor` (default) | source | remote profile |
+| Copilot SDK built-in tools (shell, filesystem, …) invoked by the CLI itself | — (SDK self-invokes) | source | remote profile — wherever `CopilotSdkChatClient` runs |
+
+Notes:
+- The `agent-session` / `current-session` reclassification to `GuiLocal` when target == source is implemented by `ExecutorTargetResolver.ForKindWithTargetSession` / `ForToolWithTargetSession`; use those overloads whenever a source session id is available at call time.
+- `workspace-agent-session` is the pre-cutover alias for `agent-session` and maps identically.
+- The `AgentExecutor` row for BYOK Copilot providers (`openai`, `azure-openai`) applies too — the BYOK `CopilotSdkChatClient` runs on the remote profile in the split topology.
+
+See `docs/design/remote-chat-client-session.md` for the full topology narrative and the `["documentation", "agent-options", "providers"]` "Remote hosting" subsection for how a session becomes remote-hosted.
+
+---
+
 ## `filesystem` (built-in toolset)
 
 Provides file-read, file-write, and directory-listing MCP tools backed by the `FilesystemServiceContextProvider`. The filesystem MCP server is spawned as a child process from `Phantom.Workspaces.Llm.Core.exe` (or via `dotnet` on non-Windows).

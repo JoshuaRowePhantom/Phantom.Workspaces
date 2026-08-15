@@ -1,0 +1,96 @@
+{
+  "kind": "prompt",
+  "name": "github-copilot-remote-chat",
+  "displayName": "GitHub Copilot Chat (remote host)",
+  "description": "GitHub Copilot SDK chat client hosted on a remote user-computer-profile. The AgentChat router and persistence stay on the source instance; the CopilotSdkChatClient and its built-in tools run on the remote profile reached over the reverse transport.",
+  "model": {
+    "id": "gpt-5",
+    "provider": "github-copilot",
+    "apiType": "OpenAI",
+    "connection": {
+      "kind": "key",
+      "apiKey": "${GITHUB_TOKEN}"
+    },
+    "options": {
+      "temperature": 0.2,
+      "maxOutputTokens": 2048,
+      "additionalProperties": {
+        "working-directory": "${working-directory}",
+        "trust-profile": "${trust-profile}"
+      }
+    }
+  },
+  "instructions": "You are a helpful assistant running behind a Phantom.Workspaces remote agent session. The router and persistence live on the source instance; your Copilot CLI process and its built-in shell/filesystem tools run on the remote user-computer-profile named by the resolved trust profile.",
+  "tools": [
+    {
+      "kind": "workspace-gui",
+      "description": "Open/close panes and tabs and invoke entity shortcuts. Classified as ExecutorTarget.GuiLocal; always runs on the source (initiating) instance."
+    },
+    {
+      "kind": "workspace-entity",
+      "description": "Read and write workspace entities via the data-access-layer. Classified as ExecutorTarget.GuiLocal; always runs on the source instance."
+    },
+    {
+      "kind": "current-session",
+      "description": "Access the source-side agent-session that initiated this run. Classified as ExecutorTarget.HostingInstance; when the target session id equals the source session id ExecutorTargetResolver.ForKindWithTargetSession reclassifies it as ExecutorTarget.GuiLocal so it runs locally on the source."
+    },
+    {
+      "kind": "filesystem",
+      "description": "Filesystem MCP built-in. Defaults to ExecutorTarget.AgentExecutor; in a remote-hosted session the agent executor resolves to the remote user-computer-profile so this runs on the remote host."
+    },
+    {
+      "kind": "github-cli-builtin-tools",
+      "description": "GitHub Copilot SDK built-in tool policy. The Copilot CLI self-invokes these tools wherever CopilotSdkChatClient runs \u2014 the remote profile in this topology.",
+      "available-tools": {
+        "tools": ["shell", "read", "write"]
+      }
+    },
+    {
+      "name": "github",
+      "kind": "mcp",
+      "description": "Optional GitHub MCP server. Defaults to ExecutorTarget.AgentExecutor and runs on the remote host in this topology.",
+      "connection": {
+        "kind": "key",
+        "endpoint": "https://api.githubcopilot.com/mcp/",
+        "apiKey": "${GITHUB_TOKEN}"
+      },
+      "serverName": "github",
+      "approvalMode": {
+        "kind": "never"
+      }
+    }
+  ],
+  "metadata": {
+    "version": "1.0",
+    "author": "Phantom Workspaces",
+    "tags": [
+      "github-copilot",
+      "copilot-sdk",
+      "remote",
+      "split-executor",
+      "user-computer-profile"
+    ],
+    "prerequisites": [
+      "The remote user-computer-profile is enrolled and reachable via the reverse-tunnel transport.",
+      "An llm-trust-profile exists whose HostingWorkspacesClientInstances contains the remote profile's client-instance id (see Phantom.Workspaces.Llm.Core/Trust/TrustProfile.cs).",
+      "GITHUB_TOKEN with Copilot access is available on the remote host, or the remote user is signed in to the Copilot CLI."
+    ],
+    "parameters": {
+      "note": "When wrapped as an agent-manifest, declare these two parameters on the manifest (not on the AgentDefinition itself). The Launchpad UI collects values and AgentDefinitionParameterSubstitutor substitutes them into model.options.additionalProperties.",
+      "properties": [
+        {
+          "name": "working-directory",
+          "kind": "string",
+          "description": "Working directory the Copilot CLI uses on the remote host.",
+          "required": true
+        },
+        {
+          "name": "trust-profile",
+          "kind": "string",
+          "description": "Name of an llm-trust-profile whose HostingWorkspacesClientInstances lists the remote user-computer-profile client-instance id.",
+          "required": true
+        }
+      ]
+    }
+  }
+}
