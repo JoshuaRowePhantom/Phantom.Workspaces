@@ -53,7 +53,11 @@ internal sealed class FakeCopilotClient : ICopilotClient
 
     public ValueTask DisposeAsync()
     {
-        this.started = false;
+        // Intentionally do NOT flip 'started' back to false. The fake is shared across successive
+        // per-channel CopilotSdkChatClient instances in RemoteCopilotSdkSessionTests; the outgoing
+        // client's fire-and-forget DisposeCoreAsync can race with the incoming client's StartAsync
+        // and would otherwise turn every subsequent CreateSession/ResumeSession call into a
+        // "Client not started." throw.
         return ValueTask.CompletedTask;
     }
 }

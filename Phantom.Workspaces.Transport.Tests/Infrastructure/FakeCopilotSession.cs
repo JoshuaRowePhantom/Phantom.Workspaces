@@ -13,6 +13,8 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
     public IReadOnlyList<ModelInfo> Models { get; set; } = Array.Empty<ModelInfo>();
 
+    public string? LastResumeSessionId { get; private set; }
+
     public void OnCreateSession(SessionConfig config)
     {
         // Dequeue SessionEstablished if one was enqueued, and update SessionId
@@ -26,6 +28,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
     public void OnResumeSession(string resumeSessionId, ResumeSessionConfig config)
     {
         this.SessionId = resumeSessionId;
+        this.LastResumeSessionId = resumeSessionId;
     }
 
     public IDisposable Subscribe(Action<SessionEvent> handler)
@@ -71,11 +74,8 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
     public Task AbortAsync(CancellationToken cancellationToken)
     {
-        lock (this.lockObject)
-        {
-            this.eventQueue.Clear();
-        }
-
+        // Intentionally do NOT clear the queued events. A background AbortAsync racing with the
+        // enqueue of the next scenario turn would otherwise silently drop scripted events.
         return Task.CompletedTask;
     }
 

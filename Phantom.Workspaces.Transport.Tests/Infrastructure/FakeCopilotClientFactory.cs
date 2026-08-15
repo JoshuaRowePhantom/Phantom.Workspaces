@@ -5,9 +5,9 @@ namespace Phantom.Workspaces.Transport.Tests.Infrastructure;
 
 internal sealed class FakeCopilotClientFactory : ICopilotClientFactory
 {
-    private readonly FakeCopilotClient fakeClient;
+    private readonly ICopilotClient fakeClient;
 
-    public FakeCopilotClientFactory(FakeCopilotClient fakeClient)
+    public FakeCopilotClientFactory(ICopilotClient fakeClient)
     {
         this.fakeClient = fakeClient ?? throw new ArgumentNullException(nameof(fakeClient));
     }

@@ -7,6 +7,7 @@ using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Transport.Chat;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -30,7 +31,7 @@ namespace Phantom.Workspaces.Llm;
 /// documentation entities: <c>["documentation", "agent-options", "providers"]</c> and
 /// <c>["documentation", "agent-options", "model-options"]</c>.
 /// </remarks>
-public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient, SlashCommands.IModelSlashCommandClient
+public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient, SlashCommands.IModelSlashCommandClient, ICopilotSdkSessionSink
 {
     private string modelId;
     private readonly string displayName;
@@ -984,6 +985,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         return null;
     }
+
+    event Action<string>? ICopilotSdkSessionSink.SessionEstablished
+    {
+        add => this.SessionEstablished += value;
+        remove => this.SessionEstablished -= value;
+    }
+
+    void ICopilotSdkSessionSink.SetResumeSessionId(string? sessionId) => this.SetResumeSessionId(sessionId);
 
     /// <inheritdoc />
     public void Dispose()

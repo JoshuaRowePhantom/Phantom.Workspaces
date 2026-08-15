@@ -7,7 +7,11 @@ namespace Phantom.Workspaces.Transport.Chat;
 
 public sealed class ChatClientTransportListener : ITransportListener
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    // Use the Microsoft.Extensions.AI-provided options so ChatMessage/ChatResponseUpdate content
+    // polymorphism (TextContent, FunctionCallContent, FunctionResultContent, …) survives the
+    // wire. JsonSerializerDefaults.Web loses the AIContent type discriminator and downgrades
+    // structured content to bare AIContent on the receiving side.
+    private static readonly JsonSerializerOptions JsonOptions = Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions;
     private readonly IChatClient? chatClient;
     private readonly Func<AgentDefinition, CancellationToken, Task<IChatClient>>? chatClientBuilder;
 
@@ -52,6 +56,22 @@ public sealed class ChatClientTransportListener : ITransportListener
             }
 
             var client = await this.chatClientBuilder(definition, ct).ConfigureAwait(false);
+
+            // If the source embedded a resume session id in the initial request (see
+            // ChatClientOverTransport.OpenAsync), apply it synchronously before the pump starts so
+            // the very first turn's CreateOrResumeSessionAsync sees it. This avoids a per-turn
+            // set-resume-session-id frame racing with the process-streaming frame under load.
+            if (request.TryGetProperty(CopilotSdkTransportFrames.ResumeSessionIdInitialProperty, out var initialResumeElement)
+                && initialResumeElement.ValueKind == JsonValueKind.String
+                && client.GetService(typeof(ICopilotSdkSessionSink)) is ICopilotSdkSessionSink initialSink)
+            {
+                var initialResumeId = initialResumeElement.GetString();
+                if (!string.IsNullOrWhiteSpace(initialResumeId))
+                {
+                    initialSink.SetResumeSessionId(initialResumeId);
+                }
+            }
+
             var session = new ChatClientTransportSession(client, channel, ct);
             return new PerChannelClientLifetime(session, client);
         }

@@ -364,8 +364,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        // Resume the GitHub Copilot CLI session (and its model-visible history) after a restart by
        // replaying the stored SDK session id, and keep the persisted id current as new sessions are
-       // established (issue #3).
-       if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
+       // established (issue #3). Uses the ICopilotSdkSessionSink capability so remote-hosted
+       // SDK sessions (behind ChatClientOverTransport) participate too (issue #1319).
+       if (resolvedClient.GetService(typeof(Phantom.Workspaces.Transport.Chat.ICopilotSdkSessionSink))
+               is Phantom.Workspaces.Transport.Chat.ICopilotSdkSessionSink copilotSdkClient)
        {
            var restoredCopilotSdkSessionId = restoredAgent?.CopilotSdkSessionId;
            if (!string.IsNullOrWhiteSpace(restoredCopilotSdkSessionId))
