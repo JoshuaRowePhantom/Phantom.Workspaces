@@ -6,6 +6,7 @@ using AgentSchema;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Llm.Copilot;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -42,6 +43,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly AgentInputQueueManager? queueManager;
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly IGitHubAccountUpsertService? accountUpsertService;
+    private ICopilotClientFactory copilotClientFactory;
 
     /// <summary>
     /// The account-upsert service wired in by the factory, or <see langword="null"/> when none was
@@ -61,8 +63,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private IRunningAgentChatFactory runningAgentChatFactory = default!;
     private ISubAgentTable subAgentTable = default!;
 
-    private CopilotClient? copilotClient;
-    private CopilotSession? copilotSession;
+    private ICopilotClient? copilotClient;
+    private ICopilotSession? copilotSession;
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
     private int disposeStarted;
@@ -195,12 +197,22 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
         this.accountUpsertService = accountUpsertService;
+        this.copilotClientFactory = DefaultCopilotClientFactory.Instance;
 
         if (slashCommandRegistry is { } registry)
         {
             registry.Register(new SlashCommands.CopilotSdkWorkingDirectorySlashCommandHandler(this));
             registry.Register(new SlashCommands.CopilotSdkModelSlashCommandHandler(this));
         }
+    }
+
+    /// <summary>
+    /// Internal helper for test injection: sets a custom <see cref="ICopilotClientFactory"/>
+    /// after construction.
+    /// </summary>
+    internal void SetCopilotClientFactoryForTest(ICopilotClientFactory factory)
+    {
+        this.copilotClientFactory = factory ?? throw new ArgumentNullException(nameof(factory));
     }
 
     /// <summary>
@@ -444,8 +456,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     public async Task<IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
     {
         await this.EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
-        var models = await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
-        return models.ToArray();
+        return await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -483,7 +494,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
             }
 
-            var client = new CopilotClient(clientOptions);
+            var client = this.copilotClientFactory.Create(clientOptions);
             await client.StartAsync(cancellationToken).ConfigureAwait(false);
             this.copilotClient = client;
         }
@@ -526,7 +537,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var toolCalls = new List<FunctionCallContent>();
             var toolResults = new List<FunctionResultContent>();
 
-            using var subscription = session.On<SessionEvent>(sessionEvent =>
+            using var subscription = session.Subscribe(sessionEvent =>
             {
                 switch (sessionEvent)
                 {
@@ -633,7 +644,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var eventChannel = Channel.CreateUnbounded<SessionEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-            var eventSubscription = session.On<SessionEvent>(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
+            var eventSubscription = session.Subscribe(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
 
             var dispatchLoop = Task.Run(async () =>
             {
@@ -798,7 +809,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Actually stops the in-flight Copilot CLI turn. Cancelling the read loop alone leaves the CLI
     // generating and lets a stale SessionIdleEvent from the abandoned turn complete the next turn's
     // channel (a silent empty response), so the session is also invalidated and recreated next turn.
-    private async Task AbortAndInvalidateSessionAsync(CopilotSession session, CopilotSubAgentRouter? router = null)
+    private async Task AbortAndInvalidateSessionAsync(ICopilotSession session, CopilotSubAgentRouter? router = null)
     {
         // Suspend steering BEFORE aborting/invalidating the session (GitHub issue #1142). Once
         // this flag is set, OnQueueChanged early-returns without calling TryDequeueNextImmediate,
@@ -909,7 +920,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     }
 
     // Drops the cached session (disposing it in the background) so the next turn creates a fresh one.
-    private void InvalidateCopilotSession(CopilotSession session)
+    private void InvalidateCopilotSession(ICopilotSession session)
     {
         if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session)
         {
@@ -938,7 +949,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Drops the cached session without re-arming pendingResumeSessionId. Used when the session's
     // pipe broke (GitHub issue #267): the broken session cannot be resumed, so the next
     // EnsureSessionAsync must create a fresh session rather than trying to resume the broken one.
-    private void InvalidateBrokenSession(CopilotSession session)
+    private void InvalidateBrokenSession(ICopilotSession session)
     {
         if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session)
         {
@@ -1160,7 +1171,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         };
     }
 
-    private async Task<CopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
+    private async Task<ICopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
         var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
@@ -1207,7 +1218,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         : Directory.GetCurrentDirectory();
                 }
 
-                var client = new CopilotClient(clientOptions);
+                var client = this.copilotClientFactory.Create(clientOptions);
                 await client.StartAsync(cancellationToken).ConfigureAwait(false);
                 this.copilotClient = client;
 
@@ -1251,7 +1262,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // prior conversation history remains visible to the model (issue #3); otherwise creates a fresh
     // session. The resume id is one-shot. If resuming fails (for example the on-disk session has been
     // removed), fall back to creating a new session so the chat stays usable.
-    private async Task<CopilotSession> CreateOrResumeSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
+    private async Task<ICopilotSession> CreateOrResumeSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
         var resumeSessionId = this.pendingResumeSessionId;
         this.pendingResumeSessionId = null;

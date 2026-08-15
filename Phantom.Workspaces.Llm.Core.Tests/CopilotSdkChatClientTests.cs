@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Copilot;
 using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -349,14 +350,16 @@ public sealed class CopilotSdkChatClientTests
 
         // Place the fake session into the client's private copilotSession field so the CAS inside
         // InvalidateCopilotSession succeeds (it requires copilotSession == session by reference).
+        // Wrap in RealCopilotSessionAdapter since copilotSession field is now ICopilotSession.
+        var wrappedSession = new RealCopilotSessionAdapter(fakeSession);
         typeof(CopilotSdkChatClient)
             .GetField("copilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(client, fakeSession);
+            .SetValue(client, wrappedSession);
 
         // Invoke the private method the interrupt path calls.
         typeof(CopilotSdkChatClient)
             .GetMethod("InvalidateCopilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(client, [fakeSession]);
+            .Invoke(client, [wrappedSession]);
 
         // After invalidation the resume id must be re-armed so the next turn resumes the session.
         var pendingResumeSessionId = (string?)typeof(CopilotSdkChatClient)
@@ -1328,9 +1331,11 @@ public sealed class CopilotSdkChatClientTests
         typeof(CopilotSession)
             .GetField("<SessionId>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(fakeSession, "test-copilot-session-id");
+        // Wrap in RealCopilotSessionAdapter since copilotSession field is now ICopilotSession.
+        var wrappedSession = new RealCopilotSessionAdapter(fakeSession);
         typeof(CopilotSdkChatClient)
             .GetField("copilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(client, fakeSession);
+            .SetValue(client, wrappedSession);
 
         Assert.False(client.SteeringSuspendedForTest);
 
@@ -1352,7 +1357,7 @@ public sealed class CopilotSdkChatClientTests
         // observe both writes; a stricter ordering is enforced by the source's line order.
         var task = (Task)typeof(CopilotSdkChatClient)
             .GetMethod("AbortAndInvalidateSessionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(client, [fakeSession, null])!;
+            .Invoke(client, [wrappedSession, null])!;
 
         // The task will fault because fakeSession.AbortAsync will throw (uninitialized) — that
         // exception is swallowed inside AbortAndInvalidateSessionAsync, so awaiting is safe.

@@ -80,6 +80,13 @@ public sealed record AgentServices : IServiceProvider
     public object? SecretPlaceholderResolver { get; init; }
 
     /// <summary>
+    /// Optional Copilot SDK client factory. Typed as object to avoid a reverse project reference
+    /// from Phantom.Workspaces.Llm.Interfaces to Phantom.Workspaces.Llm.Core; consuming code casts
+    /// to <c>ICopilotClientFactory</c>.
+    /// </summary>
+    public object? CopilotClientFactory { get; init; }
+
+    /// <summary>
     /// Late-bound reference to the current <see cref="AgentChat"/> being constructed, used by the
     /// named <c>agent-session</c> toolset factory (see <see cref="ToolsetFactory.CreateAgentSessionToolsetFactory(IToolsetFactory?)"/>)
     /// to resolve the parent chat when its <c>agent_session_*</c> tools are invoked. Typed as

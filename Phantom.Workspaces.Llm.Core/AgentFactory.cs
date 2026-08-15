@@ -7,6 +7,7 @@ using ModelContextProtocol.Client;
 using MongoDB.Bson;
 using OllamaSharp;
 using OpenAI;
+using Phantom.Workspaces.Llm.Copilot;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
@@ -856,6 +857,11 @@ public static class AgentFactory
             slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
             builtinToolPolicy: builtinToolPolicy);
 
+        if (services?.CopilotClientFactory is ICopilotClientFactory factory)
+        {
+            client.SetCopilotClientFactoryForTest(factory);
+        }
+
         return (client, displayName);
     }
 
@@ -912,6 +918,11 @@ public static class AgentFactory
             slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
             builtinToolPolicy: builtinToolPolicy);
 
+        if (services?.CopilotClientFactory is ICopilotClientFactory factory)
+        {
+            client.SetCopilotClientFactoryForTest(factory);
+        }
+
         return (client, displayName);
     }
 
@@ -963,6 +974,11 @@ public static class AgentFactory
                 accountUpsertService: services?.AccountUpsertService,
                 slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
                 builtinToolPolicy: builtinToolPolicy);
+
+            if (services?.CopilotClientFactory is ICopilotClientFactory factory)
+            {
+                client.SetCopilotClientFactoryForTest(factory);
+            }
 
             return (client, displayName);
         }
@@ -1021,6 +1037,11 @@ public static class AgentFactory
                 subAgentChatRegistry: subAgentChatRegistry,
                 slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
                 builtinToolPolicy: builtinToolPolicy);
+
+            if (services?.CopilotClientFactory is ICopilotClientFactory factory)
+            {
+                client.SetCopilotClientFactoryForTest(factory);
+            }
 
             return (client, displayName);
         }
