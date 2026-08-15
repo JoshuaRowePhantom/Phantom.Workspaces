@@ -544,6 +544,31 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         }
 
                         break;
+                    default:
+                        // Fix #1312: mirror the streaming adapter's default arm — do not silently
+                        // drop unmapped SDK event kinds. Log at Warning with the runtime type name
+                        // and AgentId so future SDK additions are diagnosable from logs. This path
+                        // does not have a transcript channel to emit content into, so surfacing
+                        // is log-only (the streaming path additionally emits an informational
+                        // update tagged with UnknownCopilotSdkEventContentType).
+                        if (sessionEvent is not null
+                            && sessionEvent is not SessionIdleEvent
+                            && sessionEvent is not SessionErrorEvent
+                            && sessionEvent is not AssistantMessageDeltaEvent
+                            && sessionEvent is not AssistantReasoningDeltaEvent
+                            && sessionEvent is not AssistantUsageEvent
+                            && sessionEvent is not SystemNotificationEvent
+                            && sessionEvent is not SubagentStartedEvent
+                            && sessionEvent is not SubagentCompletedEvent
+                            && sessionEvent is not SubagentFailedEvent)
+                        {
+                            this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogWarning(
+                                "Copilot SDK non-streaming path received an unmapped session event of type {EventType} for AgentId {AgentId}.",
+                                sessionEvent.GetType().FullName,
+                                string.IsNullOrEmpty(sessionEvent.AgentId) ? "<root>" : sessionEvent.AgentId);
+                        }
+
+                        break;
                 }
             });
 
@@ -620,7 +645,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     // normally on SessionIdleEvent and faults on SessionErrorEvent, so the turn
                     // channel is completed here rather than inside the translation layer.
                     await foreach (var update in CopilotSdkStreamAdapter
-                        .TranslateCopilotSdkSessionEvents(eventChannel.Reader, turnCancellationToken)
+                        .TranslateCopilotSdkSessionEvents(
+                            eventChannel.Reader,
+                            this.loggerFactory?.CreateLogger(typeof(CopilotSdkStreamAdapter).FullName!),
+                            turnCancellationToken)
                         .ConfigureAwait(false))
                     {
                         await router.RouteAsync(update).ConfigureAwait(false);

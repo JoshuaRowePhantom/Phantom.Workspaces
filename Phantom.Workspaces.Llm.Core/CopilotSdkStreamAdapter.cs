@@ -1,5 +1,7 @@
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -35,6 +37,15 @@ public static class CopilotSdkStreamAdapter
 
     /// <summary>Content-type value marking sub-agent lifecycle signals.</summary>
     public const string SubAgentLifecycleContentType = "subagent_lifecycle";
+
+    /// <summary>
+    /// Content-type value marking a generic <see cref="ChatResponseUpdate"/> emitted by the
+    /// default arm for a <see cref="SessionEvent"/> subclass the adapter does not know how to
+    /// translate. Fix #1312: unmapped SDK event kinds must not be silently dropped. The emitted
+    /// update carries an informational <see cref="TextContent"/> describing the event's runtime
+    /// type so nothing is invisibly lost.
+    /// </summary>
+    public const string UnknownCopilotSdkEventContentType = "unknown-copilot-sdk-event";
 
     /// <summary>
     /// <see cref="FunctionCallContent.Name"/> of the sub-agent-started lifecycle signal.
@@ -77,16 +88,33 @@ public static class CopilotSdkStreamAdapter
     /// <summary>
     /// Translates raw Copilot SDK session events into <see cref="ChatResponseUpdate"/> items.
     /// The stream completes normally on <see cref="SessionIdleEvent"/> and faults with
-    /// <see cref="InvalidOperationException"/> on <see cref="SessionErrorEvent"/>. Unrecognised
-    /// event types are dropped. Accepting a <see cref="ChannelReader{T}"/> keeps the method
-    /// testable without a live Copilot SDK session: tests write mock events to a channel and
-    /// observe the translated output directly.
+    /// <see cref="InvalidOperationException"/> on <see cref="SessionErrorEvent"/>. Fix #1312:
+    /// unrecognised event types are no longer silently dropped — the default arm logs at
+    /// <see cref="LogLevel.Warning"/> (including the runtime event type name and originating
+    /// <c>AgentId</c>) and surfaces a generic informational <see cref="ChatResponseUpdate"/>
+    /// tagged with <see cref="UnknownCopilotSdkEventContentType"/> so future SDK additions are
+    /// diagnosable from logs and visible in the transcript. Accepting a
+    /// <see cref="ChannelReader{T}"/> keeps the method testable without a live Copilot SDK
+    /// session: tests write mock events to a channel and observe the translated output directly.
     /// </summary>
+    public static IAsyncEnumerable<ChatResponseUpdate> TranslateCopilotSdkSessionEvents(
+        ChannelReader<SessionEvent> events,
+        CancellationToken cancellationToken = default)
+        => TranslateCopilotSdkSessionEvents(events, logger: null, cancellationToken);
+
+    /// <inheritdoc cref="TranslateCopilotSdkSessionEvents(ChannelReader{SessionEvent}, CancellationToken)"/>
+    /// <param name="logger">
+    /// Optional logger for the fix-#1312 default arm. When <see langword="null"/>, unknown events
+    /// are still surfaced as generic content updates but not logged. Callers that own a logger
+    /// factory should pass a <see cref="ILogger"/> so unknown events are diagnosable from logs.
+    /// </param>
     public static async IAsyncEnumerable<ChatResponseUpdate> TranslateCopilotSdkSessionEvents(
         ChannelReader<SessionEvent> events,
+        ILogger? logger,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(events);
+        logger ??= NullLogger.Instance;
 
         await foreach (var sessionEvent in events.ReadAllAsync(cancellationToken).ConfigureAwait(false))
         {
@@ -216,6 +244,42 @@ public static class CopilotSdkStreamAdapter
                         FinishReason = ChatFinishReason.Stop,
                     };
                     yield break;
+
+                // Known SDK event kinds whose "when" guard above failed (empty/degenerate payload)
+                // are dropped explicitly here so they do not fall through to the fix-#1312 default
+                // arm and surface as noisy "unknown-copilot-sdk-event" updates.
+                case AssistantMessageDeltaEvent:
+                case AssistantReasoningDeltaEvent:
+                case SubagentStartedEvent:
+                case SubagentCompletedEvent:
+                case SubagentFailedEvent:
+                case AssistantUsageEvent:
+                case SystemNotificationEvent:
+                    break;
+
+                default:
+                    // Fix #1312: never silently drop UNKNOWN event kinds. Known kinds whose
+                    // "when" guard failed are handled by the explicit degenerate-arm above and
+                    // do not reach here. Log at Warning with the runtime type name + AgentId so
+                    // future SDK additions are diagnosable, and emit a generic informational
+                    // update tagged with UnknownCopilotSdkEventContentType so the event still
+                    // reaches persistence / UI.
+                    var runtimeTypeName = sessionEvent?.GetType().FullName ?? "<null>";
+                    var runtimeAgentId = sessionEvent?.AgentId;
+                    logger.LogWarning(
+                        "Copilot SDK adapter received an unmapped session event of type {EventType} for AgentId {AgentId}; surfacing as a generic informational update.",
+                        runtimeTypeName,
+                        string.IsNullOrEmpty(runtimeAgentId) ? "<root>" : runtimeAgentId);
+                    var unknown = Tag(
+                        new TextContent($"[{UnknownCopilotSdkEventContentType}: {runtimeTypeName}]"),
+                        runtimeAgentId);
+                    unknown.AdditionalProperties![ContentTypePropertyName] = UnknownCopilotSdkEventContentType;
+                    yield return new ChatResponseUpdate
+                    {
+                        Role = ChatRole.Assistant,
+                        Contents = [unknown],
+                    };
+                    break;
             }
         }
     }

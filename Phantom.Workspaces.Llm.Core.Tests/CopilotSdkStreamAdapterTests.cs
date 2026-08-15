@@ -582,15 +582,108 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
-    public async Task TranslateCopilotSdkSessionEvents_UnknownEvent_Dropped()
+    public async Task TranslateCopilotSdkSessionEvents_UnknownEventKind_IsSurfacedNotDropped()
     {
+        // Fix #1312: previously unmapped SDK event kinds were silently dropped because the switch
+        // had no default arm. Regression guard: an event kind not in the explicit case arms must
+        // now be surfaced as a generic informational update tagged with
+        // UnknownCopilotSdkEventContentType, and translation of subsequent events must continue.
         var updates = await TranslateAsync(
             new AssistantTurnStartEvent { Data = new AssistantTurnStartData { TurnId = "1", InteractionId = "i-1" } },
             DeltaEvent(string.Empty, "still works"));
 
-        var update = Assert.Single(updates);
-        var text = Assert.IsType<TextContent>(Assert.Single(update.Contents));
-        Assert.Equal("still works", text.Text);
+        Assert.Equal(2, updates.Count);
+        var unknown = Assert.IsType<TextContent>(Assert.Single(updates[0].Contents));
+        Assert.Equal(
+            CopilotSdkStreamAdapter.UnknownCopilotSdkEventContentType,
+            unknown.AdditionalProperties![CopilotSdkStreamAdapter.ContentTypePropertyName]);
+        Assert.Contains(nameof(AssistantTurnStartEvent), unknown.Text, StringComparison.Ordinal);
+
+        var followingDelta = Assert.IsType<TextContent>(Assert.Single(updates[1].Contents));
+        Assert.Equal("still works", followingDelta.Text);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnknownEventKindWithAgentId_TagsWithAgentId()
+    {
+        // Fix #1312: sub-agent-tagged unknown events must carry the AgentId through
+        // ParentToolCallIdPropertyName so the router places them under the correct sub-agent sink.
+        var updates = await TranslateAsync(
+            new AssistantTurnStartEvent
+            {
+                AgentId = "agent-42",
+                Data = new AssistantTurnStartData { TurnId = "1", InteractionId = "i-1" },
+            });
+
+        var content = Assert.IsType<TextContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Equal("agent-42", CopilotSdkStreamAdapter.GetParentToolCallId(content));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnknownEventKind_LogsWarningWithKindAndAgentId()
+    {
+        // Fix #1312: the default arm must log at Warning with the runtime event type name and the
+        // AgentId so future SDK additions are diagnosable from logs.
+        var logger = new RecordingLogger();
+        var channel = Channel.CreateUnbounded<SessionEvent>();
+        channel.Writer.TryWrite(new AssistantTurnStartEvent
+        {
+            AgentId = "agent-42",
+            Data = new AssistantTurnStartData { TurnId = "1", InteractionId = "i-1" },
+        });
+        channel.Writer.Complete();
+
+        await foreach (var _ in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(
+                           channel.Reader, logger, CancellationToken.None))
+        {
+        }
+
+        var warning = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Contains(nameof(AssistantTurnStartEvent), warning.Message, StringComparison.Ordinal);
+        Assert.Contains("agent-42", warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnknownEventKindRootAgent_LogsRootMarker()
+    {
+        // Fix #1312: root-agent unknown events (AgentId null/empty) must still be logged with a
+        // stable marker so the log entry is diagnosable.
+        var logger = new RecordingLogger();
+        var channel = Channel.CreateUnbounded<SessionEvent>();
+        channel.Writer.TryWrite(new AssistantTurnStartEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantTurnStartData { TurnId = "1", InteractionId = "i-1" },
+        });
+        channel.Writer.Complete();
+
+        await foreach (var _ in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(
+                           channel.Reader, logger, CancellationToken.None))
+        {
+        }
+
+        var warning = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        Assert.Contains("<root>", warning.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Records log entries for #1312 default-arm assertions.</summary>
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            this.Entries.Add((logLevel, formatter(state, exception)));
+        }
     }
 
     [Fact]
