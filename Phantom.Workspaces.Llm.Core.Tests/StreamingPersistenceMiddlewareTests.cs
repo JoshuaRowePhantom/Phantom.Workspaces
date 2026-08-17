@@ -3,6 +3,8 @@ using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
+using System.Collections.Concurrent;
+using Phantom.Workspaces.Llm.Tests;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -316,6 +318,134 @@ public class StreamingPersistenceMiddlewareTests
         Assert.Equal("final reply", GetText(stored));
     }
 
+    [Fact]
+    public async Task StreamingPersistenceMiddleware_CoalescingRunsOffCapturedSynchronizationContext()
+    {
+        // #1327: when consumed from a thread carrying a (UI-like) SynchronizationContext, the
+        // inner-stream enumeration + ToChatResponse coalescing must run off that context (on the
+        // thread pool), never on the captured context.
+        using var pump = new AgentChatForegroundContextTests.SingleThreadPump(installSynchronizationContext: true);
+        var innerContexts = new ConcurrentBag<SynchronizationContext?>();
+        var spyStore = new SpyAgentPersistenceStore();
+        var innerClient = new ContextRecordingChatClient(RoleAlternatingUpdates(), innerContexts, storeContexts: null);
+
+        var provider = CreateProvider(spyStore);
+        var middleware = new StreamingPersistenceMiddleware(innerClient, provider, spyStore);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+
+        await pump.PostAsync(async () =>
+        {
+            Assert.Same(pump.Context, SynchronizationContext.Current);
+            await foreach (var _ in middleware.GetStreamingResponseAsync([], null, CancellationToken.None))
+            {
+            }
+
+            return true;
+        });
+
+        Assert.NotEmpty(innerContexts);
+        Assert.All(innerContexts, ctx => Assert.NotSame(pump.Context, ctx));
+    }
+
+    [Fact]
+    public async Task StreamingPersistenceMiddleware_PersistMessageAsyncRunsOffCapturedSynchronizationContext()
+    {
+        // #1327: the persistence-store write must also run off the captured (UI-like) context.
+        using var pump = new AgentChatForegroundContextTests.SingleThreadPump(installSynchronizationContext: true);
+        var storeContexts = new ConcurrentBag<SynchronizationContext?>();
+        var spyStore = new ContextRecordingStore(storeContexts);
+        var innerClient = new ContextRecordingChatClient(RoleAlternatingUpdates(), recordEnumeration: null, storeContexts: null);
+
+        var provider = CreateProvider(spyStore);
+        var middleware = new StreamingPersistenceMiddleware(innerClient, provider, spyStore);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+
+        await pump.PostAsync(async () =>
+        {
+            Assert.Same(pump.Context, SynchronizationContext.Current);
+            await foreach (var _ in middleware.GetStreamingResponseAsync([], null, CancellationToken.None))
+            {
+            }
+
+            return true;
+        });
+
+        Assert.NotEmpty(storeContexts);
+        Assert.All(storeContexts, ctx => Assert.NotSame(pump.Context, ctx));
+    }
+
+    [Fact]
+    public async Task StreamingPersistenceMiddleware_YieldOrdering_StableMessagePersistedBeforeNextUpdateYielded()
+    {
+        // #1327: after offloading, the ordering invariant must still hold — when message N
+        // becomes stable, StoreAsync(N) completes before update N+1 is returned to the consumer.
+        var spyStore = new SpyAgentPersistenceStore();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var blockingClient = new GatingChatClient(gate, [
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool", null)] },
+            new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "result")] },
+        ]);
+
+        var provider = CreateProvider(spyStore);
+        var middleware = new StreamingPersistenceMiddleware(blockingClient, provider, spyStore);
+        var frameworkSession = CreateSession(provider);
+        middleware.SetCurrentSession(frameworkSession);
+
+        var enumerator = middleware.GetStreamingResponseAsync([], null, CancellationToken.None)
+            .GetAsyncEnumerator(CancellationToken.None);
+
+        await enumerator.MoveNextAsync();
+        Assert.Empty(spyStore.StoredMessages);
+
+        gate.SetResult();
+        await enumerator.MoveNextAsync();
+
+        // The stable message[0] is durable before update[1] is observed by the consumer.
+        Assert.Single(spyStore.StoredMessages);
+        Assert.Equal(ChatRole.Assistant, spyStore.StoredMessages[0].Role);
+
+        await enumerator.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task StreamingPersistenceMiddleware_CancellationTokenPropagates_ToInnerEnumerationAndPump()
+    {
+        // #1327: when the caller cancels, the offloaded work observes cancellation on the inner
+        // enumeration and the consumer's MoveNextAsync surfaces an OperationCanceledException.
+        var spyStore = new SpyAgentPersistenceStore();
+        var innerClient = new CancellationObservingChatClient(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("first")] });
+
+        var provider = CreateProvider(spyStore);
+        var middleware = new StreamingPersistenceMiddleware(innerClient, provider, spyStore);
+        var session = CreateSession(provider);
+        middleware.SetCurrentSession(session);
+
+        using var cts = new CancellationTokenSource();
+        var enumerator = middleware.GetStreamingResponseAsync([], null, cts.Token)
+            .GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync());
+
+        var pending = enumerator.MoveNextAsync();
+        await innerClient.EnumerationBlocked;
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await pending);
+        Assert.True(innerClient.InnerObservedCancellation);
+
+        await enumerator.DisposeAsync();
+    }
+
+    private static ChatResponseUpdate[] RoleAlternatingUpdates() =>
+    [
+        new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c0", "tool", null)] },
+        new() { Role = ChatRole.Tool,      Contents = [new FunctionResultContent("c0", "r0")] },
+        new() { Role = ChatRole.Assistant, Contents = [new TextContent("final")], FinishReason = ChatFinishReason.Stop },
+    ];
+
     private static (StreamingPersistenceMiddleware Middleware, AgentSession Session) CreateMiddleware(
         IAgentPersistenceStore store,
         ChatResponseUpdate[] updates)
@@ -508,6 +638,120 @@ public class StreamingPersistenceMiddlewareTests
             => Task.FromResult(new ChatResponse([]));
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// A chat client that records <see cref="SynchronizationContext.Current"/> at the point each
+    /// update is produced (i.e. where the middleware's inner enumeration + coalescing runs).
+    /// </summary>
+    private sealed class ContextRecordingChatClient : IChatClient
+    {
+        private readonly ChatResponseUpdate[] updates;
+        private readonly ConcurrentBag<SynchronizationContext?>? recordEnumeration;
+
+        public ContextRecordingChatClient(
+            ChatResponseUpdate[] updates,
+            ConcurrentBag<SynchronizationContext?>? recordEnumeration,
+            ConcurrentBag<SynchronizationContext?>? storeContexts)
+        {
+            this.updates = updates;
+            this.recordEnumeration = recordEnumeration;
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var update in this.updates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                this.recordEnumeration?.Add(SynchronizationContext.Current);
+                yield return update;
+            }
+
+            await Task.CompletedTask;
+        }
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse([]));
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
+
+        public void Dispose() { }
+    }
+
+    /// <summary>
+    /// A persistence store that records <see cref="SynchronizationContext.Current"/> at each write.
+    /// </summary>
+    private sealed class ContextRecordingStore : IAgentPersistenceStore
+    {
+        private readonly ConcurrentBag<SynchronizationContext?> contexts;
+
+        public ContextRecordingStore(ConcurrentBag<SynchronizationContext?> contexts)
+            => this.contexts = contexts;
+
+        public ValueTask StoreAsync(StoreRequestAgent request, CancellationToken cancellationToken = default)
+        {
+            this.contexts.Add(SynchronizationContext.Current);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<PersistedAgent?> RestoreAsync(RestoreRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<PersistedAgent?>(null);
+
+        public ValueTask<ChatMessage[]> ReadMessagesAsync(ReadMessagesRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Array.Empty<ChatMessage>());
+
+        public ValueTask AddSubAgentLinkAsync(string parentSessionId, string childSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.CompletedTask;
+
+        public ValueTask<IReadOnlyList<AgentSessionId>> ReadSubAgentChildIdsAsync(string parentSessionId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(Array.Empty<AgentSessionId>());
+    }
+
+    /// <summary>
+    /// Yields one update, then blocks (event-driven) until its enumeration token is cancelled,
+    /// recording that the inner enumeration observed the cancellation.
+    /// </summary>
+    private sealed class CancellationObservingChatClient : IChatClient
+    {
+        private readonly ChatResponseUpdate first;
+        private readonly TaskCompletionSource enumerationBlocked =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public CancellationObservingChatClient(ChatResponseUpdate first) => this.first = first;
+
+        public bool InnerObservedCancellation { get; private set; }
+
+        public Task EnumerationBlocked => this.enumerationBlocked.Task;
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            yield return this.first;
+
+            var wait = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using (cancellationToken.Register(() => wait.TrySetResult()))
+            {
+                this.enumerationBlocked.TrySetResult();
+                await wait.Task.ConfigureAwait(false);
+            }
+
+            this.InnerObservedCancellation = cancellationToken.IsCancellationRequested;
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        public Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(new ChatResponse([]));
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(IChatClient) ? this : null;
 
         public void Dispose() { }
     }
