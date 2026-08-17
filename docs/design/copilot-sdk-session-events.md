@@ -846,6 +846,54 @@ The event handler is installed via `session.On(sessionEvent => …)`. Two handle
 **Final response assembly** uses `AssistantMessageEvent.Data.ReasoningText` and
 `AssistantMessageEvent.Data.Content` to build the non-streaming `ChatResponse`.
 
+### Unmapped / benign event handling (#1312 → #1323)
+
+`CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents` and the non-streaming
+`CopilotSdkChatClient.GetResponseAsync` handler must never emit user-visible transcript content
+for events they do not explicitly translate. #1312 added a `default:` arm that yielded a
+placeholder `TextContent` reading `[unknown-copilot-sdk-event: <TypeName>]`; because the SDK
+emits many high-frequency lifecycle / metadata events per turn (most notably
+`AssistantStreamingDeltaEvent`, a per-chunk byte-count progress ping), that placeholder sprayed
+noise char-by-char into the chat and persisted history. #1323 reconciles the switch against the
+live SDK event set and enforces:
+
+- **Known-benign lifecycle / metadata events are consumed silently** via explicit `case` arms
+  (they never reach the default arm). These carry no assistant-visible content and are
+  intentionally dropped from the transcript:
+
+  - Assistant lifecycle: `AssistantStreamingDeltaEvent`, `AssistantMessageStartEvent`,
+    `AssistantTurnStartEvent`, `AssistantTurnEndEvent`, `AssistantIdleEvent`,
+    `AssistantMessageEvent`, `AssistantIntentEvent`, `AssistantReasoningEvent`,
+    `AssistantToolCallDeltaEvent`.
+  - User / system bookkeeping: `UserMessageEvent`, `UserInputRequestedEvent`,
+    `UserInputCompletedEvent`, `SystemMessageEvent`, `PendingMessagesModifiedEvent`.
+  - Session lifecycle / metadata: `SessionStartEvent`, `SessionResumeEvent`,
+    `SessionShutdownEvent`, `SessionInfoEvent`, `SessionWarningEvent`,
+    `SessionTitleChangedEvent`, `SessionModelChangeEvent`, `SessionModeChangedEvent`,
+    `SessionRemoteSteerableChangedEvent`, `SessionSessionLimitsChangedEvent`,
+    `SessionPermissionsChangedEvent`, `SessionPlanChangedEvent`, `SessionTodosChangedEvent`,
+    `SessionWorkspaceFileChangedEvent`, `SessionHandoffEvent`, `SessionTruncationEvent`,
+    `SessionSnapshotRewindEvent`, `SessionContextChangedEvent`, `SessionCompactionStartEvent`,
+    `SessionCompactionCompleteEvent`, `SessionTaskCompleteEvent`, `SessionBinaryAssetEvent`,
+    `SessionCustomNotificationEvent`, `SessionLimitsExhaustedRequestedEvent`,
+    `SessionLimitsExhaustedCompletedEvent`, `SessionAutoModeResolvedEvent`,
+    `SessionBackgroundTasksChangedEvent`, `SessionUsageInfoEvent`,
+    `SessionUsageCheckpointEvent`, `SessionToolsUpdatedEvent`, `SessionSkillsLoadedEvent`,
+    `SessionCustomAgentsUpdatedEvent`, `SessionMcpServersLoadedEvent`,
+    `SessionMcpServerStatusChangedEvent`, `SessionExtensionsLoadedEvent`,
+    `SessionExtensionsAttachmentsPushedEvent`, `SessionScheduleCreatedEvent`,
+    `SessionScheduleCancelledEvent`, `SessionScheduleRearmedEvent`,
+    `SessionAutopilotObjectiveChangedEvent`, `SessionCanvasOpenedEvent`,
+    `SessionCanvasClosedEvent`, `SessionCanvasRegistryChangedEvent`,
+    `SessionCanvasUnavailableEvent`, `SessionCanvasRecordedEvent`, `SessionCanvasRemovedEvent`.
+
+- **Genuinely-unknown events** (an SDK type not covered above and not otherwise mapped) hit the
+  `default:` arm, which logs at `LogLevel.Debug` with the runtime type name and originating
+  `AgentId` (`<root>` for the main agent) and yields **nothing** to the transcript. The
+  `UnknownCopilotSdkEventContentType` marker constant is retained only for log/test
+  identification; it is never emitted as `TextContent`.
+
+
 ### `AgentViewModel` (`Phantom.Workspaces.Agent.Gui`)
 
 `AgentViewModel` does not subscribe to SDK events directly — it consumes the already-abstracted

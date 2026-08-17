@@ -557,12 +557,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
                         break;
                     default:
-                        // Fix #1312: mirror the streaming adapter's default arm — do not silently
-                        // drop unmapped SDK event kinds. Log at Warning with the runtime type name
-                        // and AgentId so future SDK additions are diagnosable from logs. This path
-                        // does not have a transcript channel to emit content into, so surfacing
-                        // is log-only (the streaming path additionally emits an informational
-                        // update tagged with UnknownCopilotSdkEventContentType).
+                        // Fix #1312 / #1323: mirror the streaming adapter's default arm — do not
+                        // silently drop unmapped SDK event kinds, but log at Debug so we do not
+                        // spam Warning per high-frequency SDK ping (e.g. AssistantStreamingDeltaEvent).
+                        // This path does not have a transcript channel to emit content into, so
+                        // surfacing is log-only.
                         if (sessionEvent is not null
                             && sessionEvent is not SessionIdleEvent
                             && sessionEvent is not SessionErrorEvent
@@ -574,7 +573,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                             && sessionEvent is not SubagentCompletedEvent
                             && sessionEvent is not SubagentFailedEvent)
                         {
-                            this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogWarning(
+                            this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogDebug(
                                 "Copilot SDK non-streaming path received an unmapped session event of type {EventType} for AgentId {AgentId}.",
                                 sessionEvent.GetType().FullName,
                                 string.IsNullOrEmpty(sessionEvent.AgentId) ? "<root>" : sessionEvent.AgentId);
