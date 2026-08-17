@@ -1037,6 +1037,90 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowSplitDocumentTabStrip_AfterHorizontalSplit_RendersAllFiveHeaderItemTypes()
+    {
+        // #1324 + #1307: a horizontal split routes the new region through
+        // WorkspaceDockFactory.CreateDocumentDock (which returns a WorkspaceContentDock).
+        // The centralized per-item template provisioning must survive that runtime split:
+        // the split-created dock's tab strip must render ALL FIVE per-item header
+        // templates (icon, favicon, status, running indicator, notification indicator),
+        // not just the default (non-split) content dock. This is the exact path the
+        // issue's "Relationship to #1307" section calls out.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        // A single tab carrying every header-item family: favicon (auto on WebViewModel),
+        // icon + running + notification (added here), and status (appended by
+        // WorkspaceDocument.RebuildTabHeaderItems).
+        var tab = new WebViewModel("https://split.example.com")
+        {
+            Id = "split-all-five",
+            Title = "Split All Five",
+        };
+        tab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+        tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+        tab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+
+        // The split-created dock must come from the #1307 factory path.
+        var splitDock = Assert.IsType<WorkspaceContentDock>(factory.CreateDocumentDock());
+        var document = new WorkspaceDocument(tab) { Owner = splitDock };
+        splitDock.IsCollapsable = true;
+        splitDock.VisibleDockables = factory.CreateList<IDockable>(document);
+        splitDock.ActiveDockable = document;
+
+        // Assemble the post-horizontal-split layout shape:
+        //   Root -> ProportionalDock [ existingDock, splitter, splitCreatedDock ]
+        var root = factory.CreateRootDock();
+        root.IsCollapsable = false;
+        var prop = factory.CreateProportionalDock();
+        var existingDock = factory.CreateDocumentDock();
+        existingDock.IsCollapsable = true;
+        var splitter = factory.CreateProportionalDockSplitter();
+
+        prop.VisibleDockables = factory.CreateList<IDockable>(existingDock, splitter, splitDock);
+        existingDock.Owner = prop;
+        splitter.Owner = prop;
+        splitDock.Owner = prop;
+        prop.ActiveDockable = splitDock;
+
+        root.VisibleDockables = factory.CreateList<IDockable>(prop);
+        prop.Owner = root;
+        root.ActiveDockable = prop;
+
+        factory.InitLayout(root);
+        pane!.ContentLayout = root;
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            // Anchor every assertion to the split-created dock's own tab strip so we
+            // prove the split region — not the default content dock — renders them all.
+            bool IsSplitStrip(object? dc) => ReferenceEquals(dc, splitDock);
+
+            var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(window, IsSplitStrip);
+            Assert.Contains(textBlocks, tb => tb.Text == "🚀");
+            Assert.Contains(textBlocks, tb => tb.Text == "🌐");
+
+            var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                window, IsSplitStrip);
+            Assert.NotEmpty(statusControls);
+
+            var progressBars = await GetTabStripHeaderProgressBarsAsync(window, IsSplitStrip);
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
         GetOuterPaneHeaderProgressBarsAsync(Avalonia.Controls.Window window)
     {
