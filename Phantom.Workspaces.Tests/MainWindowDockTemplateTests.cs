@@ -112,6 +112,21 @@ public sealed class MainWindowDockTemplateTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspacePaneDocumentTemplate_DockControl_DeclaresInstallOnTopLevelTrue()
+    {
+        // #1329: the inner WorkspacePaneDocument DockControl must opt into top-level key
+        // sourcing (InstallOnTopLevel=True) exactly like the outer TopLevelDockControl, so the
+        // Alt+Digit chord fires regardless of where focus currently lives — symmetric with the
+        // outer Alt+Shift+Digit chord. Guards the XAML gap from silently returning.
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+
+        Assert.True(
+            Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetInstallOnTopLevel(innerDockControl));
+        Assert.True(
+            Phantom.Dock.Avalonia.TabSwitching.DockTabSwitch.GetEnabled(innerDockControl));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void DockDataTemplates_ProportionalDock_ResolvesProportionalDockControl()
     {
         // #1130: The matched template builds a ProportionalDockControl (not raw text).

@@ -111,6 +111,7 @@
     <DataTemplate DataType="vm:WorkspacePaneDocument">
         <dock:DockControl Layout="{Binding WorkspacePane.ContentLayout}"
                           AutoCreateDataTemplates="False"
+                          ts:DockTabSwitch.InstallOnTopLevel="True"
                           ts:DockTabSwitch.Enabled="True">
             <ts:DockTabSwitch.Bindings>
                 <ts:DockTabSwitchBindings>

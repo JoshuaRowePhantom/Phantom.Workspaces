@@ -10701,6 +10701,167 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspacePaneDocument_AltDigitFromNonPaneFocus_ActivatesIndexedPaneTab()
+    {
+        // #1329: with InstallOnTopLevel now set on the inner WorkspacePaneDocument DockControl,
+        // Alt+Digit must switch the indexed pane document even when keyboard focus lives outside
+        // the pane's DockControl (e.g. on the left tree) — symmetric with Alt+Shift+Digit.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tabA = new WebViewModel("https://a.example.com") { Id = "altdigit-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "altdigit-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            // Start on the first document so activating the second is observable.
+            ActivateContentTabAtIndex(viewModel, "0");
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.Same(documentDock!.VisibleDockables![0], documentDock.ActiveDockable);
+
+            // Focus lives OUTSIDE the pane DockControl (on the left tree).
+            var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+            Assert.DoesNotContain(
+                GetDocumentDockControl(window).GetVisualDescendants(),
+                v => ReferenceEquals(v, treeView));
+
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D2,
+                KeyModifiers = KeyModifiers.Alt,
+                Source = treeView,
+            });
+
+            Assert.Same(documentDock.VisibleDockables![1], documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspacePaneDocument_AltShiftDigitFromNonPaneFocus_ActivatesWorkspaceTab()
+    {
+        // #1329 symmetry counterpart: from a focus position outside the DockControls, the outer
+        // Alt+Shift+Digit chord must continue to activate the indexed workspace-level pane. Guards
+        // against a regression that would break the currently-working chord when the inner chord
+        // adopts InstallOnTopLevel on the same TopLevel.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await OpenTwoWorkspacesForTabSwitchAsync(viewModel, "1329bbbb");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            ActivateWorkspacePaneAtIndex(viewModel, "0");
+            Assert.Equal(viewModel.WorkspacePanes[0], viewModel.SelectedWorkspacePane);
+
+            var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D2,
+                KeyModifiers = KeyModifiers.Alt | KeyModifiers.Shift,
+                Source = treeView,
+            });
+
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WorkspacePaneDocument_AltDigit_AndOuterAltShiftDigit_CoexistOnSameTopLevel_EachSwitchesOnlyItsOwn()
+    {
+        // #1329: the inner (Alt+Digit) and outer (Alt+Shift+Digit) controllers share one TopLevel.
+        // Modifier-exact matching keeps them independent — Alt+D2 only moves the pane document,
+        // Alt+Shift+D2 only moves the workspace-level pane; neither cross-fires.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        // Two document tabs in the (single) default pane; the inner Alt+Digit and outer
+        // Alt+Shift+Digit controllers both install on the same TopLevel.
+        var tabA = new WebViewModel("https://a.example.com") { Id = "coexist-a", Title = "A" };
+        var tabB = new WebViewModel("https://b.example.com") { Id = "coexist-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            ActivateContentTabAtIndex(viewModel, "0");
+            var paneDock = GetDocumentDock(viewModel);
+            Assert.NotNull(paneDock);
+            Assert.True(paneDock!.VisibleDockables!.Count >= 2, "Pane should hold two documents");
+            var doc0 = paneDock.VisibleDockables![0];
+            var doc1 = paneDock.VisibleDockables![1];
+            Assert.Same(doc0, paneDock.ActiveDockable);
+
+            var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+
+            // Alt+D2 (inner chord) switches the pane document.
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D2,
+                KeyModifiers = KeyModifiers.Alt,
+                Source = treeView,
+            });
+            Assert.Same(doc1, paneDock.ActiveDockable);
+
+            // Alt+Shift+D1 (outer chord) is modifier-exact: it does NOT cross-fire onto the
+            // inner Alt-only controller, so the pane's active document is unchanged.
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D1,
+                KeyModifiers = KeyModifiers.Alt | KeyModifiers.Shift,
+                Source = treeView,
+            });
+            Assert.Same(doc1, paneDock.ActiveDockable);
+
+            // Conversely, plain Alt+D1 (inner chord) moves the pane document back to the first
+            // document — proving the inner controller still responds to its own exact chord.
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D1,
+                KeyModifiers = KeyModifiers.Alt,
+                Source = treeView,
+            });
+            Assert.Same(doc0, paneDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
+    private static DockControl GetDocumentDockControl(MainWindow window) =>
+        window.GetVisualDescendants()
+            .OfType<DockControl>()
+            .First(d => !string.Equals(d.Name, "TopLevelDockControl", StringComparison.Ordinal));
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_AltShiftDigitWithFocusOutsideDock_SwitchesTopLevelDockTab()
     {
         // #1124 adoption: with the event source on the left-pane TreeView (outside the
