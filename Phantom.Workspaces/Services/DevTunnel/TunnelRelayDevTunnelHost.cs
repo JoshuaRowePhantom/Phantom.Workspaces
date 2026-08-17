@@ -19,6 +19,7 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
 {
     private readonly DevTunnelManagementClientWrapper managementClientWrapper;
     private TunnelRelayTunnelHost? relayHost;
+    private CancellationTokenSource? shutdownCts;
 
     public TunnelRelayDevTunnelHost(DevTunnelManagementClientWrapper managementClientWrapper)
     {
@@ -35,10 +36,16 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
             .GetConnectReadyTunnelAsync(tunnelId, cancellationToken)
             .ConfigureAwait(false);
 
+        // Issue #1322: connect under a dedicated shutdown token (linked to the caller's token) so the
+        // SDK's in-flight SSH session requests (SshSession.RequestAsync -> SendMessageAsync) can be
+        // cancelled at teardown BEFORE the underlying SshSession is disposed. Cancelling first makes a
+        // pending request complete with OperationCanceledException (an expected shutdown outcome the SDK
+        // itself observes) instead of racing disposal into an unobserved ObjectDisposedException("SshSession").
+        this.shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var host = new TunnelRelayTunnelHost(
             this.managementClientWrapper.ManagementClient,
             new TraceSource(nameof(TunnelRelayDevTunnelHost)));
-        await host.ConnectAsync(tunnel, new TunnelConnectionOptions { EnableRetry = true }, cancellationToken).ConfigureAwait(false);
+        await host.ConnectAsync(tunnel, new TunnelConnectionOptions { EnableRetry = true }, this.shutdownCts.Token).ConfigureAwait(false);
         this.relayHost = host;
     }
 
@@ -47,14 +54,52 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
         if (this.relayHost is not null)
         {
             var host = this.relayHost;
+            var cts = this.shutdownCts;
             this.relayHost = null;
-            await DisposeRelayHostSafelyAsync(host).ConfigureAwait(false);
+            this.shutdownCts = null;
+            await CancelAndDisposeRelayHostSafelyAsync(host, cts).ConfigureAwait(false);
         }
     }
 
     public async ValueTask DisposeAsync()
     {
         await this.StopAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Cancels the shutdown token, then disposes the SDK relay host, then disposes the token source.
+    /// Issue #1322: cancelling <paramref name="shutdownCts"/> <em>before</em> disposal is the whole
+    /// point — any in-flight <c>SshSession.RequestAsync(SessionRequestMessage, cancellation)</c> the
+    /// SDK is holding honours the token and completes with <see cref="OperationCanceledException"/>
+    /// (an expected shutdown outcome the SDK observes) instead of racing the disposal of the underlying
+    /// <c>SshSession</c> into an unobserved <see cref="ObjectDisposedException"/> that escapes #1301's
+    /// guard (which only wraps the Task returned by <c>DisposeAsync</c>) and reaches
+    /// <see cref="TaskScheduler.UnobservedTaskException"/>. Extracted as an internal seam so the
+    /// cancel-then-dispose ordering is regressible without a live SDK relay host.
+    /// </summary>
+    internal static async Task CancelAndDisposeRelayHostSafelyAsync(IAsyncDisposable host, CancellationTokenSource? shutdownCts)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        if (shutdownCts is not null)
+        {
+            try
+            {
+                shutdownCts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The token source was already disposed by a concurrent/prior teardown — nothing to cancel.
+            }
+        }
+
+        try
+        {
+            await DisposeRelayHostSafelyAsync(host).ConfigureAwait(false);
+        }
+        finally
+        {
+            shutdownCts?.Dispose();
+        }
     }
 
     /// <summary>
