@@ -240,17 +240,30 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal("Updated", doc.EffectiveTabHeader.Title);
     }
 
-    // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
+    // ── #1324: per-item templates are centralized keyed resources, not implicit ──
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
+    public void WorkspaceDataTemplates_DoesNotDeclareImplicitIconTabHeaderItemTemplate()
     {
+        // #1324: the Icon per-item template was moved out of WorkspaceDataTemplates (where the
+        // scope-blocked inner DockControl could not reach it) into the centralized keyed resource
+        // dictionary. It must NOT be re-declared here as an implicit top-level template.
         var templates = new WorkspaceDataTemplates();
         var viewModel = new IconTabHeaderItemViewModel { Icon = "🧠" };
 
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        Assert.DoesNotContain(templates.OfType<IDataTemplate>(), t => t.Match(viewModel));
+    }
 
-        Assert.NotNull(matchingTemplate);
+    [AvaloniaFact(Timeout = 15_000)]
+    public void IconTabHeaderItemTemplate_IsCentralizedKeyedResource()
+    {
+        // #1324: the Icon per-item template is now a keyed resource in TabHeaderItemTemplates.axaml
+        // (merged into App.axaml), reachable identically from every DockControl scope.
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "IconTabHeaderItemTemplate", null, out var resource));
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new IconTabHeaderItemViewModel { Icon = "🧠" }));
     }
 
     // ── #1196: The outer tab-header body is a single keyed resource ───────────

@@ -466,27 +466,15 @@
             </TabControl>
         </Grid>
     </DataTemplate>
-    <!-- Tab header item templates (top-level so they are individually testable and visible to the full
-         template-resolution chain inside ItemsControl after Dock pane moves) -->
-    <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
-        <!-- Show the globe glyph; favicon image loading is a future enhancement -->
-        <TextBlock Text="🌐" />
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
-        <TextBlock Text="{Binding Icon}" />
-    </DataTemplate>
-
-    <!-- #1196: AgentRunningIndicator / NotificationIndicator DataTemplates
-         are defined once as keyed resources in TabHeaderItemTemplates.axaml
-         (merged into App.axaml). The outer tab-header body is likewise a single
-         keyed resource (TabHeaderTemplate) referenced explicitly via
-         ContentControl.ContentTemplate on each DocumentControl.HeaderTemplate,
-         so no implicit vm:TabHeaderViewModel DataTemplate is needed here. -->
-
-    <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
-        <entityControls:StatusControl Item="{Binding Status}" />
-    </DataTemplate>
+    <!-- #1196 / #1324: All tab-header per-item DataTemplates (AgentRunningIndicator,
+         NotificationIndicator, Icon, Favicon, Status) are defined once as keyed
+         resources in TabHeaderItemTemplates.axaml (merged into App.axaml) and are
+         referenced from the keyed TabHeaderTemplate / WebTabHeaderTemplate bodies,
+         which every outer AND inner DockControl scope consumes identically. They are
+         intentionally NOT declared here as implicit top-level templates: the inner
+         nested DockControl (AutoCreateDataTemplates="False") cannot walk up to this
+         ancestor scope (#1130), so implicit copies here were unreachable from inner
+         tabs and produced no icon/favicon/status visuals. -->
 
     <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
         <templates:GitWorktreeReviewView />

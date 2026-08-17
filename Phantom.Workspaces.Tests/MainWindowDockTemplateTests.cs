@@ -799,6 +799,244 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
+    // ---- #1324: centralized tab-header per-item template provisioning ----
+
+    private static TabHeaderItemViewModel[] AllTabHeaderItemInstances() =>
+    [
+        new AgentRunningIndicatorTabHeaderItemViewModel(),
+        new NotificationIndicatorTabHeaderItemViewModel(),
+        new IconTabHeaderItemViewModel { Icon = "🚀" },
+        new FaviconTabHeaderItemViewModel(),
+        new StatusTabHeaderItemViewModel(),
+    ];
+
+    private static System.Collections.Generic.IReadOnlyList<System.Type> AllTabHeaderItemSubtypes() =>
+        typeof(TabHeaderItemViewModel).Assembly.GetTypes()
+            .Where(t => t.IsSubclassOf(typeof(TabHeaderItemViewModel)) && !t.IsAbstract)
+            .ToList();
+
+    private static ItemsControl BuildTabHeaderItemsControl(string resourceKey)
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(
+            Avalonia.Application.Current!.TryFindResource(resourceKey, null, out var resource),
+            $"Expected keyed resource '{resourceKey}' to exist.");
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+
+        var built = template.Build(new WebTabHeaderViewModel { Title = "t" });
+        Assert.NotNull(built);
+
+        var itemsControl = built!.GetLogicalDescendants().OfType<ItemsControl>().FirstOrDefault();
+        Assert.NotNull(itemsControl);
+        return itemsControl!;
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderItemTemplates_HasKeyedResource_ForEveryTabHeaderItemViewModelSubtype()
+    {
+        // #1324: the centralized dictionary must define exactly one keyed DataTemplate per
+        // TabHeaderItemViewModel subtype, so the set is complete and a future subtype forces an edit.
+        Assert.NotNull(Avalonia.Application.Current);
+        foreach (var subtype in AllTabHeaderItemSubtypes())
+        {
+            var key = subtype.Name.Replace("ViewModel", "Template");
+            Assert.True(
+                Avalonia.Application.Current!.TryFindResource(key, null, out var resource),
+                $"Missing centralized keyed template '{key}' for {subtype.Name}.");
+            Assert.IsAssignableFrom<IDataTemplate>(resource);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void AllTabHeaderItemInstances_CoverEveryTabHeaderItemViewModelSubtype()
+    {
+        // Guard so the "resolves every subtype" tests below stay complete if a new subtype is added.
+        Assert.Equal(AllTabHeaderItemSubtypes().Count, AllTabHeaderItemInstances().Length);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplate_ItemsControlDataTemplates_ResolvesEveryTabHeaderItemViewModelSubtype()
+    {
+        var itemsControl = BuildTabHeaderItemsControl("TabHeaderTemplate");
+
+        foreach (var instance in AllTabHeaderItemInstances())
+        {
+            Assert.Contains(
+                itemsControl.DataTemplates.OfType<IDataTemplate>(),
+                t => t.Match(instance));
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_ItemsControlDataTemplates_ResolvesEveryTabHeaderItemViewModelSubtype()
+    {
+        var itemsControl = BuildTabHeaderItemsControl("WebTabHeaderTemplate");
+
+        foreach (var instance in AllTabHeaderItemInstances())
+        {
+            Assert.Contains(
+                itemsControl.DataTemplates.OfType<IDataTemplate>(),
+                t => t.Match(instance));
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplateAndWebTabHeaderTemplate_ShareTheSameKeyedItemTemplates()
+    {
+        // Both header bodies must reference an identical per-item template set (no plain/web divergence).
+        var plain = BuildTabHeaderItemsControl("TabHeaderTemplate").DataTemplates.OfType<IDataTemplate>().ToList();
+        var web = BuildTabHeaderItemsControl("WebTabHeaderTemplate").DataTemplates.OfType<IDataTemplate>().ToList();
+
+        Assert.Equal(AllTabHeaderItemInstances().Length, plain.Count);
+        Assert.Equal(plain.Count, web.Count);
+
+        foreach (var instance in AllTabHeaderItemInstances())
+        {
+            Assert.Equal(
+                plain.Any(t => t.Match(instance)),
+                web.Any(t => t.Match(instance)));
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspaceDataTemplates_DoNotDeclareImplicitTabHeaderItemTemplates()
+    {
+        // #1324: the Icon/Favicon/Status per-item templates must NOT be re-declared as implicit
+        // top-level templates in WorkspaceDataTemplates (that per-scope duplication was the bug).
+        var dictionary = new WorkspaceDataTemplates();
+        foreach (var instance in AllTabHeaderItemInstances())
+        {
+            Assert.DoesNotContain(
+                dictionary.OfType<IDataTemplate>(),
+                t => t.Match(instance));
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_AgentSessionTab_RendersRunningAndNotificationIndicators()
+    {
+        // #1324: both indicator items must materialise on an inner content tab (the outer strip
+        // already works; this extends the running-only coverage to include the notification glyph).
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://indicators.example.com")
+        {
+            Id = "inner-both-indicators",
+            Title = "Indicators Tab",
+        };
+        tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+        tab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var progressBars = await GetTabStripHeaderProgressBarsAsync(
+                window, dc => dc is WorkspaceContentDock);
+
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_TabWithIconHeader_RendersIconGlyphInsidePartHeaderPresenter()
+    {
+        // #1324: IconTabHeaderItemViewModel must render on inner tabs (previously unreachable in the
+        // scope-blocked inner DockControl).
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://icon.example.com")
+        {
+            Id = "inner-icon",
+            Title = "Icon Tab",
+        };
+        tab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(
+                window, dc => dc is WorkspaceContentDock);
+
+            Assert.Contains(textBlocks, tb => tb.Text == "🚀");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_WebTab_RendersFaviconGlyphInsidePartHeaderPresenter()
+    {
+        // #1324: a WebViewModel inner tab carries a FaviconTabHeaderItemViewModel and must render the
+        // globe glyph via WebTabHeaderTemplate (previously the inner scope forced TabHeaderTemplate and
+        // never reached the favicon template at all).
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://favicon.example.com")
+        {
+            Id = "inner-favicon",
+            Title = "Favicon Tab",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(
+                window, dc => dc is WorkspaceContentDock);
+
+            Assert.Contains(textBlocks, tb => tb.Text == "🌐");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_ContentTab_RendersStatusControlInsidePartHeaderPresenter()
+    {
+        // #1324: WorkspaceDocument.RebuildTabHeaderItems appends a StatusTabHeaderItemViewModel to every
+        // inner tab; its StatusControl must materialise inside the inner PART_HeaderPresenter.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://status.example.com")
+        {
+            Id = "inner-status",
+            Title = "Status Tab",
+        };
+        await viewModel.OpenTabAsync(tab);
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                window, dc => dc is WorkspaceContentDock);
+
+            Assert.NotEmpty(statusControls);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
     private static Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
         GetOuterPaneHeaderProgressBarsAsync(Avalonia.Controls.Window window)
     {
@@ -858,6 +1096,59 @@ public sealed class MainWindowDockTemplateTests
 
         // TOCTOU: re-check after subscribing in case the bars already materialised
         // between construction and the subscribe.
+        var initial = TryCollect();
+        if (initial is not null)
+        {
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult(initial);
+        }
+
+        return tcs.Task;
+    }
+
+    private static Task<System.Collections.Generic.IReadOnlyList<T>>
+        GetTabStripHeaderControlsAsync<T>(
+            Avalonia.Controls.Window window,
+            Func<object?, bool> dataContextPredicate)
+        where T : Avalonia.Controls.Control
+    {
+        // Generic sibling of GetTabStripHeaderProgressBarsAsync: resolves as soon as at least one
+        // control of type T has materialised inside a matching DocumentTabStripItem's
+        // PART_HeaderPresenter. Event-driven (anchored to LayoutUpdated), no Task.Delay / polling.
+        var tcs = new TaskCompletionSource<System.Collections.Generic.IReadOnlyList<T>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        System.Collections.Generic.IReadOnlyList<T>? TryCollect()
+        {
+            var tabStrip = window.GetVisualDescendants()
+                .OfType<DocumentTabStrip>()
+                .FirstOrDefault(ts => dataContextPredicate(ts.DataContext));
+            if (tabStrip is null)
+                return null;
+
+            var controls = tabStrip.GetVisualDescendants()
+                .OfType<DocumentTabStripItem>()
+                .SelectMany(item => item.GetVisualDescendants()
+                    .OfType<Avalonia.Controls.Presenters.ContentPresenter>()
+                    .Where(cp => cp.Name == "PART_HeaderPresenter"))
+                .SelectMany(headerPresenter => headerPresenter.GetVisualDescendants()
+                    .OfType<T>())
+                .ToList();
+
+            return controls.Count > 0 ? controls : null;
+        }
+
+        EventHandler? handler = null;
+        handler = (_, _) =>
+        {
+            var controls = TryCollect();
+            if (controls is null)
+                return;
+            window.LayoutUpdated -= handler;
+            tcs.TrySetResult(controls);
+        };
+        window.LayoutUpdated += handler;
+
         var initial = TryCollect();
         if (initial is not null)
         {

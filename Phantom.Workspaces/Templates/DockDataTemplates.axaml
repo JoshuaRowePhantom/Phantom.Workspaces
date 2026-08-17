@@ -124,8 +124,19 @@
                     <dock:DocumentControl>
                         <dock:DocumentControl.HeaderTemplate>
                             <DataTemplate x:DataType="vm:WorkspaceDocument">
-                                <ContentControl Content="{Binding EffectiveTabHeader}"
-                                                ContentTemplate="{StaticResource TabHeaderTemplate}">
+                                <ContentControl Content="{Binding EffectiveTabHeader}">
+                                    <!-- #1324: use the SAME type-selecting ContentControl.DataTemplates
+                                         shape as the outer WorkspaceContentDock/WorkspacesPaneDock
+                                         header wirings (referencing both keyed body templates) so the
+                                         inner scope selects the correct body by type AND picks up all
+                                         five per-item templates identically. Previously this hard-coded
+                                         ContentTemplate="{StaticResource TabHeaderTemplate}", which both
+                                         bypassed WebTabHeaderTemplate for inner web tabs and gave the
+                                         inner ItemsControl access to only a subset of per-item templates. -->
+                                    <ContentControl.DataTemplates>
+                                        <StaticResource ResourceKey="WebTabHeaderTemplate" />
+                                        <StaticResource ResourceKey="TabHeaderTemplate" />
+                                    </ContentControl.DataTemplates>
                                     <ToolTip.Tip>
                                         <templates:TabTooltipView DataContext="{Binding TabViewModel}" />
                                     </ToolTip.Tip>
