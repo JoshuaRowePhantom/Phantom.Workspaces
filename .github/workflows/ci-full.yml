@@ -3,11 +3,10 @@ name: CI (full)
 # Runs the full suite that the fast PR gate skips: the Windows-only integration
 # tests on windows-latest and the cross-platform Docker/data-layer tests on
 # ubuntu-latest (MongoDB Atlas Local is a Linux container that cannot run on
-# hosted windows-latest). Scheduled nightly, on demand, and gated before release.
+# hosted windows-latest). Run on demand and gated before release; the nightly
+# schedule was removed so runs only happen intentionally (e.g. before a tag).
 
 on:
-  schedule:
-    - cron: "0 6 * * *"
   workflow_dispatch:
 
 concurrency:
