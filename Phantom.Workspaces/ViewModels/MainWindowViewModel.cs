@@ -3510,7 +3510,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             case BrowserDockTabDescriptor browserDesc:
                 if (!string.IsNullOrWhiteSpace(browserDesc.Url))
                 {
-                    return new WebViewModel(browserDesc.Url, titleFixed: browserDesc.IsTitleExplicit)
+                    return new WebViewModel(browserDesc.Url, this, titleFixed: browserDesc.IsTitleExplicit)
                     {
                         Id = tabId,
                         Title = !string.IsNullOrEmpty(browserDesc.Title) ? browserDesc.Title : browserDesc.Url,
@@ -3562,7 +3562,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            return new WebViewModel(url.GetString()!)
+            return new WebViewModel(url.GetString()!, this)
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,
@@ -3717,7 +3717,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            return new WebViewModel(url.GetString()!)
+            return new WebViewModel(url.GetString()!, this)
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,

@@ -10862,6 +10862,36 @@ public sealed class MainWindowIntegrationTests
             .First(d => !string.Equals(d.Name, "TopLevelDockControl", StringComparison.Ordinal));
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowIntegration_BlankTargetNavigation_OpensNewWebTabInSameWorkspacePane()
+    {
+        // #1325: a target="_blank" / window.open() navigation on a browser tab whose tabService
+        // is wired must open a new WebViewModel tab in the same workspace pane.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var sourceTab = new WebViewModel("https://source.example.com", viewModel)
+        {
+            Id = "blank-source",
+            Title = "Source",
+        };
+        await viewModel.OpenTabAsync(sourceTab);
+
+        var paneBefore = viewModel.SelectedWorkspacePane;
+        var countBefore = paneBefore.Tabs.OfType<WebViewModel>().Count();
+
+        // Simulate the _blank navigation routed through ConfiguredWebView → RaiseOpenNewWindow.
+        sourceTab.RaiseOpenNewWindow("https://blank-target.example.com");
+        await Task.Yield();
+
+        var newTab = paneBefore.Tabs
+            .OfType<WebViewModel>()
+            .FirstOrDefault(t => t.AddressBarUrl == "https://blank-target.example.com");
+
+        Assert.NotNull(newTab);
+        Assert.Equal(countBefore + 1, paneBefore.Tabs.OfType<WebViewModel>().Count());
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task MainWindow_AltShiftDigitWithFocusOutsideDock_SwitchesTopLevelDockTab()
     {
         // #1124 adoption: with the event source on the left-pane TreeView (outside the

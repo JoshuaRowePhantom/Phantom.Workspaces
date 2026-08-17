@@ -193,7 +193,19 @@ public class ConfiguredWebView : AcceleratorAwareWebView
     private void OnNewWindowRequested(object? sender, object? e)
     {
         // Handle new window requests (e.g., Ctrl+click, window.open())
-        if (this.ViewModel == null || e == null)
+        HandleNewWindowRequested(e, this.ViewModel);
+    }
+
+    /// <summary>
+    /// Core handling for a <c>NewWindowRequested</c> event: sets the args' <c>Handled</c>
+    /// flag so WebView2 does not spawn its own external OS window, then routes the requested
+    /// URL to the bound <see cref="WebViewModel"/> so it opens as a new in-app tab.
+    /// Extracted so the reflection-based args handling can be unit-tested without a live
+    /// WebView2 control.
+    /// </summary>
+    internal static void HandleNewWindowRequested(object? e, WebViewModel? viewModel)
+    {
+        if (viewModel == null || e == null)
         {
             return;
         }
@@ -201,16 +213,16 @@ public class ConfiguredWebView : AcceleratorAwareWebView
         try
         {
             var argsType = e.GetType();
-            
+
             // Try to get Request property (which is a Uri)
             var requestProperty = argsType.GetProperty("Request");
             if (requestProperty != null)
             {
                 var url = requestProperty.GetValue(e);
-                
+
                 if (url != null)
                 {
-                    // Set Handled to true to prevent default behavior
+                    // Set Handled to true to prevent default behavior (an external OS window).
                     var handledProperty = argsType.GetProperty("Handled");
                     if (handledProperty != null && handledProperty.CanWrite)
                     {
@@ -221,7 +233,7 @@ public class ConfiguredWebView : AcceleratorAwareWebView
                     string urlString = url.ToString() ?? string.Empty;
 
                     // Notify the ViewModel to open a new tab
-                    this.ViewModel.RaiseOpenNewWindow(urlString);
+                    viewModel.RaiseOpenNewWindow(urlString);
                 }
             }
         }
