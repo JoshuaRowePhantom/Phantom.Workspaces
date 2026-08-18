@@ -121,6 +121,19 @@
                 </ts:DockTabSwitchBindings>
             </ts:DockTabSwitch.Bindings>
             <dock:DockControl.DataTemplates>
+                <!-- #1334: also supply IRootDock within the inner pane DockControl scope.
+                     Restore (TryRestoreFromDockLayoutAsync) wholesale-swaps this DockControl.Layout
+                     to a brand-new IRootDock graph whose subtree can be a multi-region
+                     ProportionalDock of WorkspaceContentDock leaves. Because this scope has
+                     AutoCreateDataTemplates="False" and a non-inheriting scoped template set
+                     (#1130) that does not walk up to the outer Window scope, without this key the
+                     restored root and its nested leaves do not resolve against the local
+                     header-bearing WorkspaceContentDock template and BOTH regions render headerless.
+                     Same rationale as #1130 for the other keys: the inner scope must own every
+                     polymorphic template a restored layout can contain. -->
+                <DataTemplate DataType="dmc:IRootDock">
+                    <dock:RootDockControl />
+                </DataTemplate>
                 <DataTemplate DataType="vm:WorkspaceContentDock">
                     <dock:DocumentControl>
                         <dock:DocumentControl.HeaderTemplate>

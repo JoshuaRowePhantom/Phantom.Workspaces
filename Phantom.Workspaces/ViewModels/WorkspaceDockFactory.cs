@@ -67,6 +67,50 @@ public class WorkspaceDockFactory : Factory
     }
 
     /// <summary>
+    /// #1334: uniformly wires a <see cref="WorkspaceContentDock"/> region so that fresh, restored,
+    /// primary, secondary, and menu-split docks are configured identically. The single owns-tabs
+    /// "primary" dock is bound to the pane's <see cref="WorkspacePaneViewModel.Tabs"/> via
+    /// <c>ItemsSource</c> and a live <see cref="WorkspaceDocumentGenerator"/>; every other region
+    /// re-initializes and registers its already-materialized restored documents so
+    /// <see cref="GetDocumentForTab"/> and the Ctrl-click / <c>NewWindowRequested</c> anchor
+    /// resolution route each tab to the region that actually hosts it (#1333). Centralizing the
+    /// wiring here removes the DFS-first-only asymmetry that left non-primary restored regions
+    /// mis-registered.
+    /// </summary>
+    public void WireContentDock(WorkspaceContentDock dock, WorkspacePaneViewModel workspacePane, bool ownsTabs)
+    {
+        if (ownsTabs)
+        {
+            dock.VisibleDockables?.Clear();
+            dock.ItemsSource = workspacePane.Tabs;
+            dock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
+                this,
+                doc => this.RegisterDocument(doc.Id, doc),
+                id => this.UnregisterDocument(id));
+        }
+        else if (dock.VisibleDockables is { } stubs)
+        {
+            foreach (var stub in stubs.OfType<WorkspaceDocument>())
+            {
+                // The stub's Context was pre-wired by InitLayout's ContextLocator but not fully
+                // initialized (no header, no tab-event subscriptions). Complete initialization and
+                // register it so the region's tabs render their header template and resolve to the
+                // owning dock for Ctrl-click / NewWindowRequested (#1333).
+                if (stub.TabViewModel is not { } tabVm)
+                {
+                    continue;
+                }
+
+                stub.Initialize(tabVm);
+                if (!string.IsNullOrEmpty(stub.Id))
+                {
+                    this.RegisterDocument(stub.Id, stub);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Returns the <see cref="WorkspacePaneDocument"/> registered for the given pane ID, or null if none.
     /// </summary>
     public WorkspacePaneDocument? GetPaneDocument(string paneId)

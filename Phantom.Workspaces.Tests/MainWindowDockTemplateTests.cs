@@ -97,6 +97,26 @@ public sealed class MainWindowDockTemplateTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void WorkspacePaneDockControl_InnerDockControl_HasRootDockTemplate()
+    {
+        // #1334: the inner workspace-pane DockControl has its own scoped, non-inheriting template
+        // set (AutoCreateDataTemplates="False", per #1130 lookup does not walk up to ancestor
+        // scopes). On restore, TryRestoreFromDockLayoutAsync wholesale-swaps this DockControl's
+        // Layout to a brand-new IRootDock graph whose subtree can be a multi-region ProportionalDock
+        // of WorkspaceContentDock leaves. Without a local IRootDock template the restored root (and
+        // its nested leaves) fall through to the generic IDocumentDock fallback (no HeaderTemplate),
+        // so BOTH regions render headerless. Guard the inner scope owns the IRootDock key.
+        var innerDockControl = BuildInnerWorkspacePaneDockControl();
+
+        var rootDock = new global::Dock.Model.Mvvm.Controls.RootDock();
+        var matching = innerDockControl.DataTemplates
+            .OfType<IDataTemplate>()
+            .FirstOrDefault(t => t.Match(rootDock));
+
+        Assert.NotNull(matching);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void WorkspacePaneDockControl_InnerDockControl_HasProportionalDockTemplate()
     {
         // #1130: The inner workspace-pane DockControl (produced by the WorkspacePaneDocument
@@ -1565,6 +1585,275 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
+    // ── #1334: restored multi-region ProportionalDock via the REAL restore path ──
+    //
+    // These five tests drive OpenWorkspaceAsync → TryRestoreFromDockLayoutAsync with a persisted
+    // two-region layout (RootDock → ProportionalDock [ leftDock, splitter, rightDock ]) and assert
+    // on the restored dock/document MODEL that backs each region's header, cross-region
+    // tab-switch numbering, and uniform wiring. Before the fix (DFS-first-only wiring) only the
+    // primary (DFS-first) region's documents were initialized/registered; every other region's
+    // restored WorkspaceDocument stayed an un-initialized stub whose EffectiveTabHeader remained the
+    // plain (headerless-fallback) TabHeaderViewModel — reproducing the "both regions headerless"
+    // report. After the fix WorkspaceDockFactory.WireContentDock initializes and registers every
+    // region, so each region's document carries the web-tab header model (WebTabHeaderViewModel with
+    // the favicon + status items). These assert on the model rather than the rendered visual tree
+    // because the headless harness does not inflate the nested per-item header ItemsControl for a
+    // freshly opened (OpenWorkspaceAsync) pane; the render path itself is covered by the #1330
+    // booted-harness tests above.
+
+    /// <summary>
+    /// Drives the real restore path: upserts a workspace entity whose <c>dock-layout</c> is a
+    /// two-region ProportionalDock, opens it via <see cref="MainWindowViewModel.OpenWorkspaceAsync"/>,
+    /// waits for population, and returns the restored pane and both region docks.
+    /// </summary>
+    private static async Task<(WorkspacePaneViewModel Pane, WorkspaceContentDock Left, WorkspaceContentDock Right)>
+        RestoreTwoRegionWorkspaceAsync(
+            MainWindowViewModel viewModel,
+            string workspaceGuid,
+            string leftTabId,
+            string rightTabId,
+            string leftUrl = "https://left-1334.example.com",
+            string rightUrl = "https://right-1334.example.com")
+    {
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+
+        var leftDockId = $"dock-left-{workspaceGuid}";
+        var rightDockId = $"dock-right-{workspaceGuid}";
+        var layoutJson = MultiRegionRestoreTestSupport.BuildTwoRegionDockLayoutJson(
+            leftDockId, leftTabId, leftUrl, rightDockId, rightTabId, rightUrl);
+
+        var workspaceId = new EntityId(workspaceGuid);
+        var workspaceJson = $$"""
+            {
+              "entity-id": "{{workspaceId.Value}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "1334 Restore WS" },
+              "dock-layout": {{layoutJson}},
+              "regions": []
+            }
+            """;
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var pane = viewModel.WorkspacePanes.Single(
+            p => string.Equals(p.Id, workspaceId.ToString(), System.StringComparison.Ordinal));
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(pane);
+
+        var docks = EnumerateDocumentDocks(pane.ContentLayout!)
+            .OfType<WorkspaceContentDock>()
+            .ToList();
+        var left = docks.Single(d => string.Equals(d.Id, leftDockId, System.StringComparison.Ordinal));
+        var right = docks.Single(d => string.Equals(d.Id, rightDockId, System.StringComparison.Ordinal));
+        return (pane, left, right);
+    }
+
+    private static void AddAllFiveHeaderItems(WebViewModel tab)
+    {
+        // 🌐 (favicon) and the StatusControl are part of the default web-tab header; add the
+        // remaining three families so an all-five assertion is meaningful.
+        tab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+        tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+        tab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_RestoredMultiRegionProportionalDock_BothRegionsRenderAllFiveHeaderItemTypes()
+    {
+        // #1334: after a REAL OpenWorkspaceAsync restore of a two-region ProportionalDock layout,
+        // BOTH the left and right restored regions' documents must carry the web-tab header model
+        // (WebTabHeaderViewModel) and surface all five per-item header families. Before the fix the
+        // non-primary region's WorkspaceDocument stayed an un-initialized stub whose EffectiveTabHeader
+        // was the plain (headerless-fallback) TabHeaderViewModel.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
+            viewModel, "d0c11334-0001-4000-8000-000000000001", "tab-left-1", "tab-right-1");
+
+        var leftTab = pane.Tabs.OfType<WebViewModel>().Single(t => t.Id == "tab-left-1");
+        var rightTab = pane.Tabs.OfType<WebViewModel>().Single(t => t.Id == "tab-right-1");
+        AddAllFiveHeaderItems(leftTab);
+        AddAllFiveHeaderItems(rightTab);
+
+        // Force each region document to rebuild its cached header items from its (now five-family)
+        // tab header. A Title change is the model signal WorkspaceDocument listens to; a non-initialized
+        // stub never subscribed, so this no-ops on the broken (pre-fix) non-primary region.
+        leftTab.Title = "Left region";
+        rightTab.Title = "Right region";
+
+        foreach (var (region, tabId) in new[] { (left, "tab-left-1"), (right, "tab-right-1") })
+        {
+            var document = region.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+            Assert.Equal(tabId, document.Id);
+            Assert.NotNull(document.TabViewModel);
+
+            // A restored web region resolves to the web-tab header model, not the headerless fallback.
+            var header = Assert.IsType<WebTabHeaderViewModel>(document.EffectiveTabHeader);
+
+            Assert.Contains(header.Items, i => i is FaviconTabHeaderItemViewModel);
+            Assert.Contains(header.Items, i => i is IconTabHeaderItemViewModel);
+            Assert.Contains(header.Items, i => i is AgentRunningIndicatorTabHeaderItemViewModel);
+            Assert.Contains(header.Items, i => i is NotificationIndicatorTabHeaderItemViewModel);
+            Assert.Contains(header.Items, i => i is StatusTabHeaderItemViewModel);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task DockTabSwitch_RestoredMultiRegionProportionalDock_AssignsContiguousBadgesAcrossBothRegions()
+    {
+        // #1334: after a real restore, the cross-region Alt+Digit switch numbering must be contiguous
+        // across BOTH regions — the DockTabOrder union is [leftTab (badge 1), rightTab (badge 2)], the
+        // two ordered tabs live in DIFFERENT regions, and each is an initialized web document that can
+        // actually carry a numbered badge. Before the fix the non-primary region's tab stayed an
+        // un-initialized, un-registered stub, so it could not be numbered/activated in its own region.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
+            viewModel, "d0c11334-0002-4000-8000-000000000002", "tab-left-2", "tab-right-2");
+
+        // Cross-region ordering is contiguous [leftTab, rightTab] per DockTabOrder — the 1-based index
+        // into this union is the Alt+Digit badge number.
+        var ordered = new global::Phantom.Dock.Avalonia.TabSwitching.DockTabOrder()
+            .Compute(pane.ContentLayout)
+            .ToList();
+        Assert.Equal(
+            new[] { "tab-left-2", "tab-right-2" },
+            ordered.Select(e => e.Dockable.Id).ToArray());
+
+        // Contiguous numbering spans BOTH regions: badge 1 is in the left region, badge 2 in the right.
+        Assert.Same(left, ordered[0].Dockable.Owner);
+        Assert.Same(right, ordered[1].Dockable.Owner);
+
+        // Every ordered entry is an initialized web document (headed), so each badge slot in the union
+        // belongs to a real, numbered region tab rather than a headerless fallback stub.
+        foreach (var entry in ordered)
+        {
+            var document = Assert.IsType<WorkspaceDocument>(entry.Dockable);
+            Assert.NotNull(document.TabViewModel);
+            Assert.IsType<WebTabHeaderViewModel>(document.EffectiveTabHeader);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredNonPrimaryRegionWebTab_CtrlClickNewWindow_InsertsInSameRegion()
+    {
+        // #1334 / #1333: opening a new tab anchored to the RIGHT (non-primary) region's web tab —
+        // the exact path a Ctrl-click / NewWindowRequested drives via OpenTabAsync(insertAfterTabId)
+        // — must place the new document in the RIGHT dock, and the factory registry must resolve the
+        // new tab to the RIGHT dock (not the DFS-first primary).
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
+            viewModel, "d0c11334-0003-4000-8000-000000000003", "tab-left-3", "tab-right-3");
+
+        var factory = GetDockFactory(viewModel);
+
+        // The right region's restored tab must be registered so anchor resolution finds it.
+        var rightAnchor = factory.GetDocumentForTab("tab-right-3");
+        Assert.NotNull(rightAnchor);
+        Assert.Same(right, rightAnchor!.Owner);
+
+        var newTab = new WebViewModel("https://ctrlclick-1334.example.com")
+        {
+            Id = "tab-ctrlclick-3",
+            Title = "Ctrl Click",
+        };
+        await viewModel.OpenTabAsync(newTab, insertAfterTabId: "tab-right-3");
+
+        var newDoc = factory.GetDocumentForTab("tab-ctrlclick-3");
+        Assert.NotNull(newDoc);
+        Assert.Same(right, newDoc!.Owner);
+        Assert.Contains(right.VisibleDockables!.OfType<WorkspaceDocument>(), d => d.Id == "tab-ctrlclick-3");
+        Assert.DoesNotContain(left.VisibleDockables!.OfType<WorkspaceDocument>(), d => d.Id == "tab-ctrlclick-3");
+    }
+
+    [AvaloniaFact(Timeout = 25_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionWorkspace_SwitchAwayAndBack_BothRegionsStillAssignBadges()
+    {
+        // #1334 (locks the #1332 interaction on the restored multi-region shape): switch to another
+        // workspace and back, then verify BOTH restored regions still carry their initialized web-tab
+        // header/badge scope and the cross-region switch order is still contiguous across the union.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
+            viewModel, "d0c11334-0004-4000-8000-000000000004", "tab-left-4", "tab-right-4");
+
+        // Open a second (empty) workspace and switch to it, then back.
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var otherId = new EntityId("d0c11334-0004-4000-8000-0000000000ff");
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, otherId, $$"""
+            {
+              "entity-id": "{{otherId.Value}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "1334 Other WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = otherId });
+        var otherPane = viewModel.WorkspacePanes.Single(
+            p => string.Equals(p.Id, otherId.ToString(), System.StringComparison.Ordinal));
+
+        viewModel.SelectedWorkspacePane = otherPane;
+        viewModel.SelectedWorkspacePane = pane;
+
+        // After the round-trip both restored regions still resolve to an initialized web document.
+        var leftDoc = left.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        var rightDoc = right.VisibleDockables!.OfType<WorkspaceDocument>().Single();
+        Assert.NotNull(leftDoc.TabViewModel);
+        Assert.NotNull(rightDoc.TabViewModel);
+        Assert.IsType<WebTabHeaderViewModel>(leftDoc.EffectiveTabHeader);
+        Assert.IsType<WebTabHeaderViewModel>(rightDoc.EffectiveTabHeader);
+
+        // Cross-region badge numbering is still contiguous across the union after switching back.
+        var ordered = new global::Phantom.Dock.Avalonia.TabSwitching.DockTabOrder()
+            .Compute(pane.ContentLayout)
+            .ToList();
+        Assert.Equal(
+            new[] { "tab-left-4", "tab-right-4" },
+            ordered.Select(e => e.Dockable.Id).ToArray());
+        Assert.Same(leftDoc, ordered[0].Dockable);
+        Assert.Same(rightDoc, ordered[1].Dockable);
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionLayout_EveryContentDockUniformlyWired()
+    {
+        // #1334: every WorkspaceContentDock in the restored tree is wired uniformly by
+        // WorkspaceDockFactory.WireContentDock — the DFS-first primary owns the tabs (ItemsSource +
+        // generator) while every other region has its restored documents registered so
+        // GetDocumentForTab resolves each tab to the dock that actually hosts it. No DFS-first-only
+        // asymmetry: tabs in BOTH regions resolve to their own owning region.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
+            viewModel, "d0c11334-0005-4000-8000-000000000005", "tab-left-5", "tab-right-5");
+
+        var factory = GetDockFactory(viewModel);
+
+        // Every content dock's restored tab resolves to the dock that actually hosts it.
+        var leftReg = factory.GetDocumentForTab("tab-left-5");
+        var rightReg = factory.GetDocumentForTab("tab-right-5");
+        Assert.NotNull(leftReg);
+        Assert.NotNull(rightReg);
+        Assert.Same(left, leftReg!.Owner);
+        Assert.Same(right, rightReg!.Owner);
+
+        // The DFS-first primary (left) owns the pane's Tabs via ItemsSource + a live generator.
+        Assert.Same(pane.Tabs, left.ItemsSource);
+        Assert.IsType<WorkspaceDocumentGenerator>(left.ItemContainerGenerator);
+
+        // Both regions carry the header-bearing WorkspaceContentDock type (uniform wiring, not a
+        // headerless base DocumentDock).
+        foreach (var dock in EnumerateDocumentDocks(pane.ContentLayout!))
+        {
+            Assert.IsType<WorkspaceContentDock>(dock);
+        }
+    }
+
     private static System.Collections.Generic.IEnumerable<IDocumentDock> EnumerateDocumentDocks(IDockable dockable)
     {
         if (dockable is IDocumentDock documentDock)
@@ -1707,22 +1996,23 @@ public sealed class MainWindowDockTemplateTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void InnerWorkspacePaneDockControl_HasOnlyItsScopedFiveTemplateSubset()
+    public void InnerWorkspacePaneDockControl_HasOnlyItsScopedSixTemplateSubset()
     {
-        // #1130: the inner-pane DockControl has a hand-picked 5-template subset
+        // #1130: the inner-pane DockControl has a hand-picked template subset
         // declared in-XAML on DockDataTemplates.axaml (WorkspaceContentDock,
         // WorkspaceDocument, IProportionalDock, IProportionalDockSplitter,
-        // IDocumentDock). #1196 must NOT overwrite it.
+        // IDocumentDock). #1196 must NOT overwrite it. #1334 added a sixth key,
+        // IRootDock, so the restore-time wholesale Layout swap resolves the
+        // restored root (and its nested multi-region leaves) against this scope.
         var innerDockControl = BuildInnerWorkspacePaneDockControl();
 
-        Assert.Equal(5, innerDockControl.DataTemplates.Count);
+        Assert.Equal(6, innerDockControl.DataTemplates.Count);
 
-        // Guard: IRootDock must NOT be matched by the inner set. (WorkspacesPaneDock
-        // inherits DocumentDock and would be matched by the IDocumentDock template,
-        // but there is no scenario in which a WorkspacesPaneDock is placed inside
-        // the inner-pane DockControl.)
+        // #1334: IRootDock must now be matched by the inner set so a restored
+        // RootDock graph resolves locally instead of falling through to the
+        // headerless IDocumentDock fallback.
         var rootDock = new global::Dock.Model.Mvvm.Controls.RootDock();
-        Assert.Null(innerDockControl.DataTemplates
+        Assert.NotNull(innerDockControl.DataTemplates
             .OfType<IDataTemplate>().FirstOrDefault(t => t.Match(rootDock)));
     }
 
@@ -1793,10 +2083,11 @@ public sealed class MainWindowDockTemplateTests
     public void PhantomHostWindow_AfterOnApplyTemplate_InnerPaneDockControlIsNotOverwritten()
     {
         // Inner-pane DockControl (built by the WorkspacePaneDocument template)
-        // declares its own scoped 5-template subset. PhantomHostWindow's
-        // OnApplyTemplate must skip any DockControl whose DataTemplates.Count > 0.
+        // declares its own scoped 6-template subset (#1334 added IRootDock).
+        // PhantomHostWindow's OnApplyTemplate must skip any DockControl whose
+        // DataTemplates.Count > 0.
         var innerDockControl = BuildInnerWorkspacePaneDockControl();
-        Assert.Equal(5, innerDockControl.DataTemplates.Count);
+        Assert.Equal(6, innerDockControl.DataTemplates.Count);
         var originalTemplates = innerDockControl.DataTemplates.ToList();
 
         var referenceTemplates = new DockDataTemplates().OfType<IDataTemplate>().ToList();
@@ -1813,7 +2104,7 @@ public sealed class MainWindowDockTemplateTests
             host.UpdateLayout();
             Dispatcher.UIThread.RunJobs();
 
-            // Inner DockControl kept its scoped 5-template subset unchanged.
+            // Inner DockControl kept its scoped 6-template subset unchanged.
             Assert.Equal(originalTemplates.Count, innerDockControl.DataTemplates.Count);
             for (var i = 0; i < originalTemplates.Count; i++)
             {
@@ -1852,7 +2143,7 @@ public sealed class MainWindowDockTemplateTests
         // Enumerate every DockControl reachable from every open Window and
         // classify by role. Outer DockControls must match the full DockDataTemplates
         // universe; inner-pane DockControls must have exactly the scoped
-        // 5-template subset.
+        // 6-template subset (#1334 added IRootDock).
         var viewModel = CreateTestMainWindowViewModel();
         var window = new MainWindow(viewModel);
         window.Show();
@@ -1861,7 +2152,7 @@ public sealed class MainWindowDockTemplateTests
             Dispatcher.UIThread.RunJobs();
 
             var referenceCount = new DockDataTemplates().OfType<IDataTemplate>().Count();
-            const int innerScopedSubsetCount = 5;
+            const int innerScopedSubsetCount = 6;
 
             Assert.NotNull(Avalonia.Application.Current);
             var openWindows = GetOpenWindows();

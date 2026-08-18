@@ -3082,6 +3082,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     /// <summary>
+    /// #1334: recursively enumerates every <see cref="WorkspaceContentDock"/> in a restored content
+    /// layout tree in depth-first pre-order. The first element is the deterministic DFS-first
+    /// "primary" region (matching <see cref="FindDocumentDock"/>'s DFS traversal); the remainder are
+    /// the non-primary split regions. Used by <see cref="TryRestoreFromDockLayoutAsync"/> to wire
+    /// every region uniformly via <see cref="WorkspaceDockFactory.WireContentDock"/>.
+    /// </summary>
+    internal static IEnumerable<WorkspaceContentDock> EnumerateContentDocks(IDockable dockable)
+    {
+        if (dockable is WorkspaceContentDock contentDock)
+        {
+            yield return contentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                foreach (var found in EnumerateContentDocks(child))
+                {
+                    yield return found;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// #1324: enforces the invariant that every document-dock region in a restored layout
     /// tree is the workspace-specific dock type. Pre-#1307 persisted layouts encode inner
     /// split docks as a base <c>Dock.Model.Mvvm.Controls.DocumentDock</c>; those re-hydrate as
@@ -3574,38 +3600,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.dockFactory.DockState.Restore(layout);
             this.SubscribeToInnerDockChanges(workspacePane);
 
-            // Find the primary ContentDock and configure it for future dynamic tab management.
-            // The split structure (sibling ContentDocks in a ProportionalDock) is preserved
-            // because we only replace the primary dock's VisibleDockables.
-            var contentDock = this.FindDocumentDock(layout) as WorkspaceContentDock;
-
-            // #1333: register every restored stub that lives in a NON-primary split region so
-            // GetDocumentForTab resolves it to the dock actually hosting it (not the primary
-            // dock). Without this, the primary dock's ItemsSource generator fabricates a
-            // duplicate wrapper for every all-region tab and overwrites documentsByTabId, so
-            // OpenTabAsync anchor resolution mis-routes new tabs opened from a non-primary
-            // region (e.g. Ctrl-click / NewWindowRequested) into the primary dock. Initialize
-            // each stub fully (its Context was only shallow-wired by InitLayout's ContextLocator)
-            // and register it before the primary generator runs. WorkspacePane.Tabs still
-            // receives every tab below (:Tabs.Add), so membership stays complete.
-            for (int i = 0; i < stubs.Count; i++)
+            // #1334: wire EVERY restored WorkspaceContentDock uniformly via
+            // WorkspaceDockFactory.WireContentDock. The DFS-first dock is the deterministic
+            // owns-tabs "primary" (bound to workspacePane.Tabs via ItemsSource + generator); every
+            // other region re-initializes and registers its restored documents so each tab resolves
+            // to the dock that actually hosts it (#1333). This replaces the previous
+            // "find the DFS-first primary and wire only that one" logic, which mis-registered
+            // non-primary split regions. Wiring the non-primary regions BEFORE the tabs are re-added
+            // below ensures the primary generator's #1333 guard sees them already registered and
+            // does not fabricate duplicate wrappers for all-region tabs.
+            var contentDocks = EnumerateContentDocks(layout).ToList();
+            var primaryDock = contentDocks.FirstOrDefault();
+            foreach (var dock in contentDocks)
             {
-                var restoredTabVm = tabResults[i];
-                if (restoredTabVm is null) continue;
-                var stub = stubs[i];
-                if (ReferenceEquals(stub.Owner, contentDock)) continue;
-                stub.Initialize(restoredTabVm);
-                this.dockFactory.RegisterDocument(stub.Id, stub);
-            }
-
-            if (contentDock is not null)
-            {
-                contentDock.VisibleDockables?.Clear();
-                contentDock.ItemsSource = workspacePane.Tabs;
-                contentDock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
-                    this.dockFactory,
-                    doc => this.dockFactory.RegisterDocument(doc.Id, doc),
-                    id => this.dockFactory.UnregisterDocument(id));
+                this.dockFactory.WireContentDock(
+                    dock, workspacePane, ownsTabs: ReferenceEquals(dock, primaryDock));
             }
 
             // Add tab VMs; the generator creates dock documents in the primary content dock
