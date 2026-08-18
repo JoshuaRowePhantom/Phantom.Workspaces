@@ -9,7 +9,7 @@
         MinHeight="300"
         WindowStartupLocation="CenterScreen"
         Title="Network Connection Status">
-    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto"
+    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto,Auto"
           Margin="16">
         <StackPanel Grid.Row="0"
                     IsVisible="{Binding HasLocalAccessPoint}"
@@ -93,7 +93,31 @@
             </ScrollViewer>
         </Border>
 
-        <Button Grid.Row="4"
+        <StackPanel Grid.Row="4"
+                    IsVisible="{Binding HasRecentErrors}"
+                    Margin="0,0,0,16">
+            <TextBlock Text="Recent Errors (outbound request failures)"
+                       FontWeight="SemiBold"
+                       Margin="0,0,0,8" />
+            <Border Classes="pane-container" MaxHeight="120">
+                <ScrollViewer>
+                    <ItemsControl ItemsSource="{Binding RecentErrors}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:RecentConnectivityErrorViewModel">
+                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="8,4">
+                                    <TextBlock Text="{Binding Timestamp}" Classes="muted" />
+                                    <TextBlock Text="{Binding Message}"
+                                               Foreground="Red"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+        </StackPanel>
+
+        <Button Grid.Row="5"
                 Content="Close"
                 HorizontalAlignment="Right"
                 Click="OnCloseClick" />

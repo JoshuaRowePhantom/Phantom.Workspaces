@@ -1,3 +1,4 @@
+using System.Net;
 using System.Reflection;
 using System.Text.Json;
 using Avalonia.Controls;
@@ -13,6 +14,7 @@ using global::Dock.Model.Core;
 using Phantom.Dock.Avalonia.TabSwitching;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
@@ -416,6 +418,37 @@ public sealed class MainWindowViewModelTests
         await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 1);
 
         return (pane, leftDock, rightDock);
+    }
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_OnRefreshTick_WhenWebDataThrows_DoesNotCrashAndFlagsNetworkStatus()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        Assert.NotNull(viewModel.ConnectionStatus);
+
+        var failure = new WebDataAccessRequestException("relay answered 404", HttpStatusCode.NotFound);
+
+        await viewModel.RefreshOnceAsync(() => throw failure);
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.True(viewModel.ConnectionStatus!.HasRecentErrors);
+        Assert.True(viewModel.ConnectionStatus.HasProblem);
+        var recorded = Assert.Single(viewModel.ConnectionStatus.RecentErrors);
+        Assert.Equal("relay answered 404", recorded.Message);
+    }
+
+    [AvaloniaFact]
+    public async Task MainWindowViewModel_OnRefreshTick_WhenUnexpectedExceptionThrows_StillPropagates()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => viewModel.RefreshOnceAsync(() => throw new InvalidOperationException("unexpected")));
+
+        Dispatcher.UIThread.RunJobs();
+        Assert.False(viewModel.ConnectionStatus!.HasRecentErrors);
     }
 
     private static MainWindowViewModel CreateTestMainWindowViewModel()

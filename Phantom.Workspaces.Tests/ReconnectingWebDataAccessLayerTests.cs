@@ -142,11 +142,73 @@ public sealed class ReconnectingWebDataAccessLayerTests
         Assert.Equal(DevTunnelConnectionState.Failed, reconnecting.Status.State);
     }
 
+    [Fact]
+    public async Task ReconnectingWebDataAccessLayer_When404_ClassifiesAsTransientDisconnect()
+    {
+        var endpoints = new Queue<DevTunnelEndpointResolution>(
+        [
+            Endpoint("https://t-5280.usw2.devtunnels.ms/"),
+            Endpoint("https://t-5280.usw2.devtunnels.ms/"),
+        ]);
+        // Layer 1 (initial) fails the update with 404; layer 2 (after reconnect) succeeds.
+        var layers = new Queue<FakeLayer>(
+        [
+            new FakeLayer { UpdateBehavior = () => throw NotFoundFailure() },
+            new FakeLayer(),
+        ]);
+        var reconnecting = new ReconnectingWebDataAccessLayer(
+            resolveEndpointAsync: _ => Task.FromResult(endpoints.Dequeue()),
+            buildDataAccessLayer: _ => layers.Dequeue(),
+            delayScheduler: new RecordingDelayScheduler(),
+            reconnectOptions: NoJitterOptions,
+            nextJitterSample: () => 0.0);
+
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
+        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(DevTunnelConnectionState.Connected, reconnecting.Status.State);
+    }
+
+    [Fact]
+    public async Task ReconnectingWebDataAccessLayer_When503_ClassifiesAsTransientDisconnect()
+    {
+        var endpoints = new Queue<DevTunnelEndpointResolution>(
+        [
+            Endpoint("https://t-5280.usw2.devtunnels.ms/"),
+            Endpoint("https://t-5280.usw2.devtunnels.ms/"),
+        ]);
+        // Layer 1 (initial) fails the update with 503; layer 2 (after reconnect) succeeds.
+        var layers = new Queue<FakeLayer>(
+        [
+            new FakeLayer { UpdateBehavior = () => throw ServiceUnavailableFailure() },
+            new FakeLayer(),
+        ]);
+        var reconnecting = new ReconnectingWebDataAccessLayer(
+            resolveEndpointAsync: _ => Task.FromResult(endpoints.Dequeue()),
+            buildDataAccessLayer: _ => layers.Dequeue(),
+            delayScheduler: new RecordingDelayScheduler(),
+            reconnectOptions: NoJitterOptions,
+            nextJitterSample: () => 0.0);
+
+        await reconnecting.StartAsync(TestContext.Current.CancellationToken);
+        var result = await reconnecting.UpdateAsync(EmptyUpdateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(DevTunnelConnectionState.Connected, reconnecting.Status.State);
+    }
+
     private static WebDataAccessRequestException ConnectivityFailure()
         => new("relay unreachable", statusCode: null);
 
     private static WebDataAccessRequestException UnauthorizedFailure()
         => new("unauthorized", HttpStatusCode.Unauthorized);
+
+    private static WebDataAccessRequestException NotFoundFailure()
+        => new("not found", HttpStatusCode.NotFound);
+
+    private static WebDataAccessRequestException ServiceUnavailableFailure()
+        => new("service unavailable", HttpStatusCode.ServiceUnavailable);
 
     private static WebDataAccessRequestException ApplicationError()
         => new("bad request", HttpStatusCode.BadRequest);

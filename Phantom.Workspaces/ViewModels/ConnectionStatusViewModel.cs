@@ -35,8 +35,12 @@ public sealed class InboundConnectionViewModel
 /// </summary>
 public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
 {
+    /// <summary>The maximum number of recent client-connectivity errors retained for the dialog.</summary>
+    private const int MaxRecentErrors = 20;
+
     private readonly ReverseConnectionStatusRegistry registry;
     private readonly Action<Action> dispatch;
+    private readonly ObservableCollection<RecentConnectivityErrorViewModel> recentErrors = new();
     private string? accessPoint;
     private string? localAccessPoint;
     private string? tunnelName;
@@ -52,6 +56,7 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
     {
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
         this.dispatch = dispatch ?? (action => action());
+        this.RecentErrors = new ReadOnlyObservableCollection<RecentConnectivityErrorViewModel>(this.recentErrors);
         this.registry.ConnectionsChanged += this.OnConnectionsChanged;
         this.RefreshInbound();
     }
@@ -133,15 +138,51 @@ public sealed class ConnectionStatusViewModel : ViewModelBase, IDisposable
 
     /// <summary>
     /// Whether the dev tunnel is in a state that should be flagged to the user (an error, or actively
-    /// reconnecting). Drives the warning glyph in the network display.
+    /// reconnecting), or a recent client-side connectivity error has been recorded. Drives the warning
+    /// glyph in the network display.
     /// </summary>
     public bool HasProblem =>
-        this.devTunnelState is DevTunnelHostState.Error or DevTunnelHostState.Reconnecting;
+        this.devTunnelState is DevTunnelHostState.Error or DevTunnelHostState.Reconnecting
+        || this.recentErrors.Count > 0;
 
     /// <summary>Detail about the current problem (the last error), when <see cref="HasProblem"/>.</summary>
     public string? ProblemText => this.HasProblem
-        ? this.devTunnelError ?? this.DevTunnelStatusText
+        ? this.devTunnelError ?? this.recentErrors.FirstOrDefault()?.Message ?? this.DevTunnelStatusText
         : null;
+
+    /// <summary>
+    /// Recent client-side connectivity errors (outbound requests to the web data layer that failed),
+    /// newest first, bounded to the most recent <see cref="MaxRecentErrors"/>. Surfaced in the
+    /// connection-status window so transient tunnel/relay failures are visible instead of crashing.
+    /// </summary>
+    public ReadOnlyObservableCollection<RecentConnectivityErrorViewModel> RecentErrors { get; }
+
+    /// <summary>Whether any recent client-side connectivity error has been recorded.</summary>
+    public bool HasRecentErrors => this.recentErrors.Count > 0;
+
+    /// <summary>
+    /// Records a client-side connectivity failure (an outbound web-data request that failed) so it is
+    /// surfaced in the connection-status window instead of escaping and crashing the app. Newest first,
+    /// bounded to the most recent <see cref="MaxRecentErrors"/>. Marshalled onto the UI thread via the
+    /// configured dispatch.
+    /// </summary>
+    public void RecordClientConnectivityError(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var entry = new RecentConnectivityErrorViewModel(DateTimeOffset.Now, exception.Message);
+        this.dispatch(() =>
+        {
+            this.recentErrors.Insert(0, entry);
+            while (this.recentErrors.Count > MaxRecentErrors)
+            {
+                this.recentErrors.RemoveAt(this.recentErrors.Count - 1);
+            }
+
+            this.RaisePropertyChanged(nameof(this.HasRecentErrors));
+            this.RaisePropertyChanged(nameof(this.HasProblem));
+            this.RaisePropertyChanged(nameof(this.ProblemText));
+        });
+    }
 
     /// <summary>Updates the displayed dev tunnel host status (state, public access point, last error).</summary>
     public void SetDevTunnelStatus(DevTunnelHostState state, string? accessPointUrl, string? lastError)
@@ -200,4 +241,20 @@ public sealed class OutboundConnectionViewModel
 
     /// <summary>The connection state (e.g. connecting / connected / retrying / failed).</summary>
     public string State { get; }
+}
+
+/// <summary>A recent client-side connectivity error (an outbound web-data request failure), shown in the connection-status window.</summary>
+public sealed class RecentConnectivityErrorViewModel
+{
+    public RecentConnectivityErrorViewModel(DateTimeOffset timestamp, string message)
+    {
+        this.Timestamp = timestamp;
+        this.Message = message;
+    }
+
+    /// <summary>When the error occurred.</summary>
+    public DateTimeOffset Timestamp { get; }
+
+    /// <summary>The error message.</summary>
+    public string Message { get; }
 }

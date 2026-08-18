@@ -23,6 +23,7 @@ using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
@@ -1765,7 +1766,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         object? sender,
         EventArgs e)
     {
-        await this.EntityBroker.RefreshAsync();
+        await this.RefreshOnceAsync(() => this.EntityBroker.RefreshAsync());
+    }
+
+    /// <summary>
+    /// Runs a single entity refresh, swallowing the connectivity failures that a periodic refresh must
+    /// tolerate. The refresh runs from an <c>async void</c> timer tick, so an escaping exception would
+    /// crash the app: a cancelled refresh (shutdown/teardown) is ignored, and a
+    /// <see cref="WebDataAccessRequestException"/> (dropped tunnel, stale relay answering 404/503, server
+    /// 5xx) is surfaced as a client connectivity error instead. Any other exception still propagates so
+    /// genuine bugs are not hidden.
+    /// </summary>
+    internal async Task RefreshOnceAsync(Func<Task> refresh)
+    {
+        try
+        {
+            await refresh();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (WebDataAccessRequestException exception)
+        {
+            this.ConnectionStatus?.RecordClientConnectivityError(exception);
+        }
     }
 
     private void OnEntityBrokerChanged(
