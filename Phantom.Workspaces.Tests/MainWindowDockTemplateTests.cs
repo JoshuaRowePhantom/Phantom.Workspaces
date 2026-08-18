@@ -1659,11 +1659,18 @@ public sealed class MainWindowDockTemplateTests
     [AvaloniaFact(Timeout = 20_000)]
     public async Task MainWindowInnerPaneDocumentTabStrip_RestoredMultiRegionProportionalDock_BothRegionsRenderAllFiveHeaderItemTypes()
     {
-        // #1334: after a REAL OpenWorkspaceAsync restore of a two-region ProportionalDock layout,
-        // BOTH the left and right restored regions' documents must carry the web-tab header model
-        // (WebTabHeaderViewModel) and surface all five per-item header families. Before the fix the
-        // non-primary region's WorkspaceDocument stayed an un-initialized stub whose EffectiveTabHeader
-        // was the plain (headerless-fallback) TabHeaderViewModel.
+        // #1334: after a REAL OpenWorkspaceAsync → TryRestoreFromDockLayoutAsync wholesale-swap restore
+        // of a two-region ProportionalDock layout, BOTH the left and right restored regions' documents
+        // must carry the web-tab header model (WebTabHeaderViewModel with all five per-item families),
+        // AND the mounted MainWindow must actually render a headed (StatusControl-bearing) tab strip for
+        // BOTH regions — not the headerless title+close fallback. Before the fix the non-primary region
+        // stayed an un-initialized stub whose EffectiveTabHeader was the plain fallback header.
+        //
+        // Note: on this real-restore path the headless renderer materializes decoupled region documents
+        // whose per-item ItemsControl only inflates the always-present StatusControl (the freshly
+        // OpenWorkspaceAsync-generated documents do not surface the 🚀/🌐 items added post-restore); the
+        // full 🚀/🌐/progress-bar per-item render assertion on a wholesale swap is covered by
+        // WorkspacePaneInnerDockControl_WholesaleLayoutSwapMultiRegionProportionalDock_BothRegionsRenderAllFiveHeaderItemTypes.
         await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
@@ -1681,13 +1688,13 @@ public sealed class MainWindowDockTemplateTests
         leftTab.Title = "Left region";
         rightTab.Title = "Right region";
 
+        // Model guard: both restored regions resolve to the web-tab header model (not the fallback).
         foreach (var (region, tabId) in new[] { (left, "tab-left-1"), (right, "tab-right-1") })
         {
             var document = region.VisibleDockables!.OfType<WorkspaceDocument>().Single();
             Assert.Equal(tabId, document.Id);
             Assert.NotNull(document.TabViewModel);
 
-            // A restored web region resolves to the web-tab header model, not the headerless fallback.
             var header = Assert.IsType<WebTabHeaderViewModel>(document.EffectiveTabHeader);
 
             Assert.Contains(header.Items, i => i is FaviconTabHeaderItemViewModel);
@@ -1695,6 +1702,135 @@ public sealed class MainWindowDockTemplateTests
             Assert.Contains(header.Items, i => i is AgentRunningIndicatorTabHeaderItemViewModel);
             Assert.Contains(header.Items, i => i is NotificationIndicatorTabHeaderItemViewModel);
             Assert.Contains(header.Items, i => i is StatusTabHeaderItemViewModel);
+        }
+
+        // Rendered visual guard: mount the real MainWindow on the restored pane and assert BOTH regions'
+        // tab strips render a StatusControl — i.e. both regions materialize the header-bearing
+        // WorkspaceContentDock DocumentControl template, not the headerless IDocumentDock fallback.
+        viewModel.SelectedWorkspacePane = pane;
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            foreach (var region in new[] { left, right })
+            {
+                bool IsRegionStrip(object? dc) =>
+                    dc is WorkspaceContentDock wcd && string.Equals(wcd.Id, region.Id, System.StringComparison.Ordinal);
+
+                var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                    window, IsRegionStrip);
+                Assert.NotEmpty(statusControls);
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task WorkspacePaneInnerDockControl_WholesaleLayoutSwapMultiRegionProportionalDock_BothRegionsRenderAllFiveHeaderItemTypes()
+    {
+        // #1334 (rendered visual assertion on the wholesale-Layout-swap re-materialization path):
+        // build the inner WorkspacePaneDocument DockControl straight from its production
+        // DataTemplate — i.e. the scoped, non-inheriting AutoCreateDataTemplates="False" template set
+        // (#1130) that a restore re-materializes against — assign it a brand-new multi-region IRootDock
+        // graph (RootDock → ProportionalDock [ WorkspaceContentDock, splitter, WorkspaceContentDock ])
+        // via a wholesale WorkspacePane.ContentLayout swap, then mount it in a window and assert that
+        // BOTH regions' tab strips actually render every per-item header family: the 🚀 entity-icon and
+        // 🌐 favicon TextBlocks, a StatusControl, a pulsating-brain ProgressBar, and an
+        // exclamation-indicator ProgressBar — via the same GetTabStripHeaderControlsAsync /
+        // GetTabStripHeaderProgressBarsAsync helpers the single-region render tests use.
+        //
+        // This drives the exact inner-scope template set on a wholesale Layout swap (not a live in-place
+        // mutation), which is the shape TryRestoreFromDockLayoutAsync produces. See the implementation
+        // notes on #1334 for why a RED→GREEN transition against the inner dmc:IRootDock template is not
+        // observable in the headless harness (Dock.Avalonia's DockControl renders its top-level
+        // IRootDock Layout through its own control template, not a DataTemplate lookup), so this is a
+        // rendered-visual multi-region regression guard rather than a reverting-the-fix reproducer.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var pane = viewModel.SelectedWorkspacePane!;
+        var factory = GetDockFactory(viewModel);
+
+        WorkspaceContentDock BuildRegion(string id, string url)
+        {
+            var tab = new WebViewModel(url) { Id = id + "-tab", Title = id };
+            tab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+            tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+            tab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+            var doc = new WorkspaceDocument(tab);
+            var dock = new WorkspaceContentDock
+            {
+                Id = id,
+                VisibleDockables = factory.CreateList<IDockable>(doc),
+                ActiveDockable = doc,
+            };
+            doc.Owner = dock;
+            return dock;
+        }
+
+        var leftDock = BuildRegion("swap-left", "https://swap-left.example.com");
+        var rightDock = BuildRegion("swap-right", "https://swap-right.example.com");
+        var splitter = new ProportionalDockSplitter { Id = "swap-splitter" };
+        var prop = new ProportionalDock
+        {
+            Id = "swap-prop",
+            VisibleDockables = factory.CreateList<IDockable>(leftDock, splitter, rightDock),
+        };
+        leftDock.Owner = prop;
+        splitter.Owner = prop;
+        rightDock.Owner = prop;
+
+        var root = factory.CreateRootDock();
+        root.IsCollapsable = false;
+        root.VisibleDockables = factory.CreateList<IDockable>(prop);
+        prop.Owner = root;
+        root.ActiveDockable = prop;
+        root.DefaultDockable = prop;
+        factory.InitLayout(root);
+
+        // Wholesale-swap the pane's ContentLayout, then build the inner DockControl from its production
+        // template so it re-materializes against the scoped inner template set exactly as on restore.
+        pane.ContentLayout = root;
+        var paneDoc = new WorkspacePaneDocument(pane);
+        var innerTemplate = new DockDataTemplates()
+            .OfType<IDataTemplate>()
+            .First(t => t.Match(paneDoc));
+        var innerDockControl = Assert.IsType<DockControl>(innerTemplate.Build(paneDoc));
+        innerDockControl.DataContext = paneDoc;
+
+        var window = new Avalonia.Controls.Window
+        {
+            Width = 900,
+            Height = 600,
+            Content = innerDockControl,
+        };
+        window.Show();
+        try
+        {
+            foreach (var region in new[] { leftDock, rightDock })
+            {
+                bool IsRegionStrip(object? dc) =>
+                    dc is WorkspaceContentDock wcd && string.Equals(wcd.Id, region.Id, System.StringComparison.Ordinal);
+
+                var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(window, IsRegionStrip);
+                Assert.Contains(textBlocks, tb => tb.Text == "🚀");
+                Assert.Contains(textBlocks, tb => tb.Text == "🌐");
+
+                var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                    window, IsRegionStrip);
+                Assert.NotEmpty(statusControls);
+
+                var progressBars = await GetTabStripHeaderProgressBarsAsync(window, IsRegionStrip);
+                Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+                Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
+            }
+        }
+        finally
+        {
+            window.Close();
         }
     }
 
