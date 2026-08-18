@@ -205,6 +205,219 @@ public sealed class MainWindowViewModelTests
         }
     }
 
+    // --- #1333: multi-region dock-layout restore (documentsByTabId region ownership) --------------
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoreMultiRegionLayout_WorkspacePaneTabsContainsAllRegionsTabs()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, _, _) = await OpenTwoRegionRestoredWorkspaceAsync(
+            viewModel,
+            new EntityId("d0c1a7a0-1333-4000-8000-000000000001"),
+            "mr1-left", "mr1-tab-left", "mr1-right", "mr1-tab-right");
+
+        Assert.Contains(pane.Tabs, t => t.Id == "mr1-tab-left");
+        Assert.Contains(pane.Tabs, t => t.Id == "mr1-tab-right");
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionLayout_GetDocumentForTab_ResolvesRightRegionTabToRightDock()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (_, _, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
+            viewModel,
+            new EntityId("d0c1a7a0-1333-4000-8000-000000000002"),
+            "mr2-left", "mr2-tab-left", "mr2-right", "mr2-tab-right");
+
+        var dockFactory = MultiRegionRestoreTestSupport.GetDockFactory(viewModel);
+        var rightDocument = dockFactory.GetDocumentForTab("mr2-tab-right");
+        Assert.NotNull(rightDocument);
+        Assert.Same(rightDock, rightDocument!.Owner);
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionLayout_NoDuplicateDocumentsAcrossRegions()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, _, _) = await OpenTwoRegionRestoredWorkspaceAsync(
+            viewModel,
+            new EntityId("d0c1a7a0-1333-4000-8000-000000000003"),
+            "mr3-left", "mr3-tab-left", "mr3-right", "mr3-tab-right");
+
+        foreach (var tabId in new[] { "mr3-tab-left", "mr3-tab-right" })
+        {
+            var occurrences = MultiRegionRestoreTestSupport.EnumerateDocks(pane.ContentLayout!)
+                .SelectMany(d => d.VisibleDockables?.OfType<WorkspaceDocument>() ?? Enumerable.Empty<WorkspaceDocument>())
+                .Count(doc => doc.Id == tabId);
+            Assert.Equal(1, occurrences);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionWebTab_RaiseOpenNewWindow_InsertsNewTabInSameRegion()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, leftDock, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
+            viewModel,
+            new EntityId("d0c1a7a0-1333-4000-8000-000000000004"),
+            "mr4-left", "mr4-tab-left", "mr4-right", "mr4-tab-right");
+
+        var rightTab = Assert.IsType<WebViewModel>(pane.Tabs.Single(t => t.Id == "mr4-tab-right"));
+        var rightSourceDoc = rightDock.VisibleDockables!.OfType<WorkspaceDocument>().Single(d => d.Id == "mr4-tab-right");
+        var sourceIndex = rightDock.VisibleDockables!.IndexOf(rightSourceDoc);
+
+        rightTab.RaiseOpenNewWindow("https://mr4-new.example.com");
+        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 2);
+
+        var newDoc = rightDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .Single(d => d.TabViewModel is WebViewModel wv && wv.AddressBarUrl == "https://mr4-new.example.com");
+
+        // (a) inserted into the RIGHT region at sourceIndex + 1
+        Assert.Equal(sourceIndex + 1, rightDock.VisibleDockables!.IndexOf(newDoc));
+        // (b) NOT into the LEFT region
+        Assert.DoesNotContain(
+            leftDock.VisibleDockables!.OfType<WorkspaceDocument>(),
+            d => d.TabViewModel is WebViewModel wv && wv.AddressBarUrl == "https://mr4-new.example.com");
+        // (c) the new tab VM was added to the pane's Tabs membership set
+        Assert.Contains(pane.Tabs, t => t is WebViewModel wv && wv.AddressBarUrl == "https://mr4-new.example.com");
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionWebTab_RaiseOpenNewWindow_DoesNotDropAnyExistingTabFromPaneTabs()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, _, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
+            viewModel,
+            new EntityId("d0c1a7a0-1333-4000-8000-000000000005"),
+            "mr5-left", "mr5-tab-left", "mr5-right", "mr5-tab-right");
+
+        var beforeIds = pane.Tabs.Select(t => t.Id).ToList();
+
+        var rightTab = Assert.IsType<WebViewModel>(pane.Tabs.Single(t => t.Id == "mr5-tab-right"));
+        rightTab.RaiseOpenNewWindow("https://mr5-new.example.com");
+        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 2);
+
+        var afterIds = pane.Tabs.Select(t => t.Id).ToList();
+        foreach (var id in beforeIds)
+        {
+            Assert.Contains(id, afterIds);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_RestoredMultiRegionNavigation_BackForward_ReachesRightRegionTab()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (pane, _, _) = await OpenTwoRegionRestoredWorkspaceAsync(
+            viewModel,
+            new EntityId("d0c1a7a0-1333-4000-8000-000000000006"),
+            "mr6-left", "mr6-tab-left", "mr6-right", "mr6-tab-right");
+
+        var leftTab = pane.Tabs.Single(t => t.Id == "mr6-tab-left");
+        var rightTab = pane.Tabs.Single(t => t.Id == "mr6-tab-right");
+
+        await viewModel.OpenTabAsync(leftTab);
+        await viewModel.OpenTabAsync(rightTab);
+        Assert.Equal("mr6-tab-right", pane.SelectedTab?.Id);
+
+        viewModel.NavigateBackCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        Assert.Equal("mr6-tab-left", pane.SelectedTab?.Id);
+
+        viewModel.NavigateForwardCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+        Assert.Equal("mr6-tab-right", pane.SelectedTab?.Id);
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_ManuallySplitAfterRestore_RaiseOpenNewWindow_InsertsNewTabInSplitDock()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        // Restore a single-region layout, then split it at runtime like the working manual path.
+        var tabA = new WebViewModel("https://split-a.example.com", viewModel) { Id = "mr7-a", Title = "A" };
+        var tabB = new WebViewModel("https://split-b.example.com", viewModel) { Id = "mr7-b", Title = "B" };
+        await viewModel.OpenTabAsync(tabA);
+        await viewModel.OpenTabAsync(tabB);
+
+        var pane = viewModel.SelectedWorkspacePane;
+        var dockFactory = MultiRegionRestoreTestSupport.GetDockFactory(viewModel);
+        var primaryDock = FindDocumentDockIn(pane.ContentLayout!)!;
+        var docA = primaryDock.VisibleDockables!.OfType<WorkspaceDocument>().Single(d => d.Id == "mr7-a");
+
+        var splitDock = dockFactory.CreateDocumentDock();
+        splitDock.Id = "mr7-split";
+        var contentRoot = (IDock)pane.ContentLayout!;
+        dockFactory.AddDockable(contentRoot, splitDock);
+        dockFactory.MoveDockable(primaryDock, splitDock, docA, null);
+        Assert.Same(splitDock, docA.Owner);
+        dockFactory.RegisterDocument("mr7-a", docA);
+
+        pane.SelectedTab = docA.TabViewModel;
+        dockFactory.SetActiveDockable(docA);
+
+        var splitTab = Assert.IsType<WebViewModel>(docA.TabViewModel);
+        splitTab.RaiseOpenNewWindow("https://mr7-new.example.com");
+        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(splitDock, 2);
+
+        var newDoc = splitDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .Single(d => d.TabViewModel is WebViewModel wv && wv.AddressBarUrl == "https://mr7-new.example.com");
+        var indexA = splitDock.VisibleDockables!.IndexOf(docA);
+        Assert.Equal(indexA + 1, splitDock.VisibleDockables!.IndexOf(newDoc));
+    }
+
+    private static async Task<(WorkspacePaneViewModel Pane, IDock LeftDock, IDock RightDock)> OpenTwoRegionRestoredWorkspaceAsync(
+        MainWindowViewModel viewModel,
+        EntityId workspaceId,
+        string leftDockId,
+        string leftTabId,
+        string rightDockId,
+        string rightTabId)
+    {
+        var entityBroker = GetEntityBroker(viewModel);
+        var layoutJson = MultiRegionRestoreTestSupport.BuildTwoRegionDockLayoutJson(
+            leftDockId, leftTabId, "https://left.example.com",
+            rightDockId, rightTabId, "https://right.example.com");
+
+        var workspaceJson = $$"""
+            {
+              "entity-id": "{{workspaceId.Value}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "MR Restore WS" },
+              "dock-layout": {{layoutJson}},
+              "regions": []
+            }
+            """;
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var pane = viewModel.WorkspacePanes.Single(
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+
+        // Restore runs asynchronously (Phase 2 of OpenWorkspaceAsync); wait for it to complete.
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(pane);
+
+        var leftDock = MultiRegionRestoreTestSupport.FindDockById(pane.ContentLayout!, leftDockId)!;
+        var rightDock = MultiRegionRestoreTestSupport.FindDockById(pane.ContentLayout!, rightDockId)!;
+        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(leftDock, 1);
+        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 1);
+
+        return (pane, leftDock, rightDock);
+    }
+
     private static MainWindowViewModel CreateTestMainWindowViewModel()
     {
         var sourceFactory = typeof(MainWindowIntegrationTests).GetMethod("CreateInMemoryRepositorySource", BindingFlags.NonPublic | BindingFlags.Static)!;

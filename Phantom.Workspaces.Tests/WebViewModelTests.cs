@@ -640,6 +640,46 @@ public sealed class WebViewModelTests
         Assert.Equal(indexSource + 1, indexNew);
     }
 
+    // --- #1333: restored web tab anchors new-window opens on its own id ---
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WebViewModel_RaiseOpenNewWindow_WithTabServiceFromRestore_CallsOpenTabAsyncWithSourceId()
+    {
+        var tabService = new RecordingTabService();
+        var restoredWebVm = new WebViewModel("https://restored.example.com", tabService)
+        {
+            Id = "restored-anchor-1",
+            Title = "Restored",
+        };
+
+        restoredWebVm.RaiseOpenNewWindow("https://mr9-new.example.com");
+        await tabService.OpenTabInvoked.Task;
+
+        Assert.Equal("restored-anchor-1", tabService.LastInsertAfterTabId);
+    }
+
+    private sealed class RecordingTabService : IWorkspaceTabService
+    {
+        public TaskCompletionSource OpenTabInvoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string? LastInsertAfterTabId { get; private set; }
+
+        public Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true, string? workspacePaneId = null)
+        {
+            this.LastInsertAfterTabId = insertAfterTabId;
+            this.OpenTabInvoked.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab) => Task.CompletedTask;
+
+        public void CloseTab(WorkspaceTabViewModel tab)
+        {
+        }
+
+        public Task<bool> TryFocusExistingWebTabAsync(string url) => Task.FromResult(false);
+    }
+
     [Fact]
     public void ConfiguredWebView_OnNewWindowRequested_WhenHandlerRuns_SetsArgsHandledTrue()
     {

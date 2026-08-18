@@ -142,6 +142,7 @@ public class WorkspaceDockFactory : Factory
             VisibleDockables = CreateList<IDockable>(),
             ItemsSource = workspacePane.Tabs,
             ItemContainerGenerator = new WorkspaceDocumentGenerator(
+                this,
                 doc => this.documentsByTabId[doc.Id] = doc,
                 id => this.documentsByTabId.Remove(id)),
         };

@@ -8,6 +8,7 @@ namespace Phantom.Workspaces.ViewModels;
 public class WorkspaceDocument : Document, IAsyncDisposable, IJsonOnDeserialized
 {
     private bool hasUnreadNotification;
+    private bool initialized;
     private string baseTitle = string.Empty;
     private readonly StatusTabHeaderItemViewModel statusIndicator;
     private TabHeaderViewModel cachedTabHeader;
@@ -38,14 +39,22 @@ public class WorkspaceDocument : Document, IAsyncDisposable, IJsonOnDeserialized
     /// Called by <see cref="WorkspaceDocumentGenerator.PrepareDocumentContainer"/> and
     /// after dock layout restore. No-ops if the document is already initialized.
     /// </summary>
+    /// <remarks>
+    /// #1333: the guard is keyed on a one-shot <see cref="initialized"/> flag rather than on
+    /// <c>base.Context</c> because a restored non-primary-region stub has its <c>Context</c>
+    /// pre-wired by the dock <c>ContextLocator</c> during <c>InitLayout</c> (which does not build
+    /// the header or subscribe to tab events). Keying on <c>Context</c> would leave such a stub
+    /// permanently header-less; keying on <see cref="initialized"/> lets it complete initialization.
+    /// </remarks>
     internal void Initialize(WorkspaceTabViewModel tabViewModel)
     {
-        if (base.Context is null)
+        if (!this.initialized)
             this.InitializeCore(tabViewModel);
     }
 
     private void InitializeCore(WorkspaceTabViewModel tabViewModel)
     {
+        this.initialized = true;
         base.Context = tabViewModel;
         this.Id = tabViewModel.Id;
         this.Descriptor ??= BuildDescriptor(tabViewModel);

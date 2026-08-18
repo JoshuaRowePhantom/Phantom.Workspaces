@@ -3532,6 +3532,19 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             // Switch to the restored layout and wire Owner/Factory/Context for every node
             this.UnsubscribeFromInnerDockChanges(workspacePane);
+
+            // #1333: the pre-restore default content dock created in
+            // CreateWorkspaceContentLayout is still bound to workspacePane.Tabs via ItemsSource,
+            // so its generator keeps reacting to the Tabs.Add calls below. Left attached, it
+            // fabricates and registers a document for each re-added tab, stealing the registration
+            // from (and leaving empty) the restored region dock that should own the tab. Detach it
+            // so the restored docks are the sole owners of their tabs.
+            if (workspacePane.ContentLayout is not null
+                && this.FindDocumentDock(workspacePane.ContentLayout) is WorkspaceContentDock previousPrimaryDock)
+            {
+                previousPrimaryDock.ItemsSource = null;
+            }
+
             workspacePane.ContentLayout = layout;
             this.dockFactory.InitLayout(layout);
             this.dockFactory.DockState.Restore(layout);
@@ -3541,11 +3554,32 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             // The split structure (sibling ContentDocks in a ProportionalDock) is preserved
             // because we only replace the primary dock's VisibleDockables.
             var contentDock = this.FindDocumentDock(layout) as WorkspaceContentDock;
+
+            // #1333: register every restored stub that lives in a NON-primary split region so
+            // GetDocumentForTab resolves it to the dock actually hosting it (not the primary
+            // dock). Without this, the primary dock's ItemsSource generator fabricates a
+            // duplicate wrapper for every all-region tab and overwrites documentsByTabId, so
+            // OpenTabAsync anchor resolution mis-routes new tabs opened from a non-primary
+            // region (e.g. Ctrl-click / NewWindowRequested) into the primary dock. Initialize
+            // each stub fully (its Context was only shallow-wired by InitLayout's ContextLocator)
+            // and register it before the primary generator runs. WorkspacePane.Tabs still
+            // receives every tab below (:Tabs.Add), so membership stays complete.
+            for (int i = 0; i < stubs.Count; i++)
+            {
+                var restoredTabVm = tabResults[i];
+                if (restoredTabVm is null) continue;
+                var stub = stubs[i];
+                if (ReferenceEquals(stub.Owner, contentDock)) continue;
+                stub.Initialize(restoredTabVm);
+                this.dockFactory.RegisterDocument(stub.Id, stub);
+            }
+
             if (contentDock is not null)
             {
                 contentDock.VisibleDockables?.Clear();
                 contentDock.ItemsSource = workspacePane.Tabs;
                 contentDock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
+                    this.dockFactory,
                     doc => this.dockFactory.RegisterDocument(doc.Id, doc),
                     id => this.dockFactory.UnregisterDocument(id));
             }
