@@ -10856,6 +10856,71 @@ public sealed class MainWindowIntegrationTests
         }
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task WorkspacePaneDocument_AfterMultipleTopLevelWorkspaceSwitches_AltDigitStillSwitchesInnerTab()
+    {
+        // #1332: switching the active top-level workspace re-templates the inner WorkspacePaneDocument
+        // DockControl, so its tab-switch controller instances churn. After several switches the stale
+        // controllers used to steal and no-op the Alt+Digit chord. With focus/most-recently-focused
+        // routing, the chord must still switch the CURRENTLY active pane's inner document tab.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        await OpenTwoWorkspacesForTabSwitchAsync(viewModel, "1332aaaa");
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            Dispatcher.UIThread.RunJobs();
+
+            // Give each of the two panes two document tabs.
+            ActivateWorkspacePaneAtIndex(viewModel, "0");
+            Dispatcher.UIThread.RunJobs();
+            await viewModel.OpenTabAsync(new WebViewModel("https://a1.example.com") { Id = "1332-a1", Title = "A1" });
+            await viewModel.OpenTabAsync(new WebViewModel("https://a2.example.com") { Id = "1332-a2", Title = "A2" });
+
+            ActivateWorkspacePaneAtIndex(viewModel, "1");
+            Dispatcher.UIThread.RunJobs();
+            await viewModel.OpenTabAsync(new WebViewModel("https://b1.example.com") { Id = "1332-b1", Title = "B1" });
+            await viewModel.OpenTabAsync(new WebViewModel("https://b2.example.com") { Id = "1332-b2", Title = "B2" });
+
+            // Toggle the active top-level workspace several times to churn the inner DockControl.
+            for (var i = 0; i < 6; i++)
+            {
+                ActivateWorkspacePaneAtIndex(viewModel, (i % 2).ToString());
+                Dispatcher.UIThread.RunJobs();
+            }
+
+            // End on the second workspace and make its inner pane the focused region.
+            ActivateWorkspacePaneAtIndex(viewModel, "1");
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal(viewModel.WorkspacePanes[1], viewModel.SelectedWorkspacePane);
+
+            ActivateContentTabAtIndex(viewModel, "0");
+            var documentDock = GetDocumentDock(viewModel);
+            Assert.NotNull(documentDock);
+            Assert.True(documentDock!.VisibleDockables!.Count >= 2, "Active pane should hold two documents");
+            Assert.Same(documentDock.VisibleDockables![0], documentDock.ActiveDockable);
+
+            // Focus lives outside the pane DockControl (on the left tree) — the #1329/#1332 sourcing case.
+            var treeView = window.GetVisualDescendants().OfType<TreeView>().First();
+
+            window.RaiseEvent(new KeyEventArgs
+            {
+                RoutedEvent = InputElement.KeyDownEvent,
+                Key = Key.D2,
+                KeyModifiers = KeyModifiers.Alt,
+                Source = treeView,
+            });
+
+            Assert.Same(documentDock.VisibleDockables![1], documentDock.ActiveDockable);
+        }
+        finally
+        {
+            await CloseWindowAsync(window);
+        }
+    }
+
     private static DockControl GetDocumentDockControl(MainWindow window) =>
         window.GetVisualDescendants()
             .OfType<DockControl>()
