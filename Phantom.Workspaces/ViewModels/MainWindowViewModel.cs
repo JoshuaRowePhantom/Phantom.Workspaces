@@ -3057,6 +3057,131 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
+    /// <summary>
+    /// #1324: enforces the invariant that every document-dock region in a restored layout
+    /// tree is the workspace-specific dock type. Pre-#1307 persisted layouts encode inner
+    /// split docks as a base <c>Dock.Model.Mvvm.Controls.DocumentDock</c>; those re-hydrate as
+    /// a base <see cref="IDocumentDock"/> that falls through the generic fallback DataTemplate
+    /// (no <c>HeaderTemplate</c>) and renders headerless tabs. Walk the tree and replace any
+    /// <see cref="IDocumentDock"/> that is not already a <see cref="WorkspaceContentDock"/> (or
+    /// the outer <see cref="WorkspacesPaneDock"/>) with a <see cref="WorkspaceContentDock"/>,
+    /// preserving all layout state, so the single centralized header template on the workspace
+    /// dock type covers every content region. This is performed at deserialization time in
+    /// <see cref="TryRestoreFromDockLayoutAsync"/>, the only path that can introduce a base
+    /// <c>DocumentDock</c> into the live tree (all factory creation paths already produce the
+    /// workspace-specific type). A polymorphism-layer type substitution is not viable because
+    /// System.Text.Json forbids registering one derived type under two discriminators (which the
+    /// round-trip of both the base and the workspace-specific <c>$type</c> would require) and
+    /// because <see cref="WorkspaceContentDock"/> derives from the Avalonia — not the Mvvm —
+    /// <c>DocumentDock</c> hierarchy.
+    /// </summary>
+    internal static void MigrateBaseDocumentDocksToWorkspaceContentDock(IDockable? dockable)
+    {
+        if (dockable is not IDock dock || dock.VisibleDockables is null)
+        {
+            return;
+        }
+
+        var children = dock.VisibleDockables;
+        for (int i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            if (child is IDocumentDock and not WorkspaceContentDock and not WorkspacesPaneDock)
+            {
+                var replacement = ConvertToWorkspaceContentDock((IDocumentDock)child);
+                children[i] = replacement;
+
+                if (ReferenceEquals(dock.ActiveDockable, child))
+                {
+                    dock.ActiveDockable = replacement;
+                }
+
+                if (ReferenceEquals(dock.DefaultDockable, child))
+                {
+                    dock.DefaultDockable = replacement;
+                }
+
+                if (ReferenceEquals(dock.FocusedDockable, child))
+                {
+                    dock.FocusedDockable = replacement;
+                }
+
+                child = replacement;
+            }
+
+            MigrateBaseDocumentDocksToWorkspaceContentDock(child);
+        }
+    }
+
+    /// <summary>
+    /// Builds a <see cref="WorkspaceContentDock"/> that carries the full layout state of the
+    /// given source document dock. Copies every readable/writable <see cref="IDockable"/>,
+    /// <see cref="IDock"/>, and <see cref="IDocumentDock"/> interface property (excluding
+    /// commands and the <c>Owner</c>/<c>Factory</c>/<c>OriginalOwner</c> runtime back-references,
+    /// which <see cref="WorkspaceDockFactory.InitLayout"/> re-wires afterwards) so the substituted
+    /// dock is a lossless replacement of the persisted base <c>DocumentDock</c>.
+    /// </summary>
+    private static WorkspaceContentDock ConvertToWorkspaceContentDock(IDocumentDock source)
+    {
+        var replacement = new WorkspaceContentDock();
+
+        foreach (var property in s_documentDockCopyableProperties)
+        {
+            property.SetValue(replacement, property.GetValue(source));
+        }
+
+        if (replacement.VisibleDockables is not null)
+        {
+            foreach (var childDockable in replacement.VisibleDockables)
+            {
+                childDockable.Owner = replacement;
+            }
+        }
+
+        return replacement;
+    }
+
+    private static readonly IReadOnlyList<System.Reflection.PropertyInfo> s_documentDockCopyableProperties =
+        BuildDocumentDockCopyableProperties();
+
+    private static IReadOnlyList<System.Reflection.PropertyInfo> BuildDocumentDockCopyableProperties()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<System.Reflection.PropertyInfo>();
+
+        var interfaces = new List<Type> { typeof(IDocumentDock) };
+        interfaces.AddRange(typeof(IDocumentDock).GetInterfaces());
+
+        foreach (var iface in interfaces)
+        {
+            foreach (var property in iface.GetProperties())
+            {
+                if (!property.CanRead || !property.CanWrite)
+                {
+                    continue;
+                }
+
+                if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(property.PropertyType))
+                {
+                    continue;
+                }
+
+                // Owner/Factory/OriginalOwner are runtime back-references that InitLayout re-wires.
+                if (property.Name is "Owner" or "Factory" or "OriginalOwner")
+                {
+                    continue;
+                }
+
+                if (seen.Add(property.Name))
+                {
+                    result.Add(property);
+                }
+            }
+        }
+
+        return result;
+    }
+
     internal string? FindWorkspacePaneIdForTab(string tabId)
     {
         foreach (var pane in this.WorkspacePanes)
@@ -3369,6 +3494,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         if (layout is null) return false;
+
+        // #1324: pre-#1307 persisted layouts encode inner split docks as a base
+        // Dock.Model.Mvvm.Controls.DocumentDock. Re-hydrated as a base DocumentDock, those tab
+        // strips fall through the generic IDocumentDock fallback template (no HeaderTemplate) and
+        // render headerless. Guarantee the workspace-specific dock type across the restored tree so
+        // the single centralized HeaderTemplate on WorkspaceContentDock covers every content region.
+        MigrateBaseDocumentDocksToWorkspaceContentDock(layout);
 
         // Walk the entire layout tree to find all stub documents (handles split layouts)
         var stubs = EnumerateAllDocuments(layout)

@@ -1136,6 +1136,236 @@ public sealed class MainWindowDockTemplateTests
         }
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_RestorePersistedLayoutWithBaseDocumentDock_MaterializesWorkspaceContentDock()
+    {
+        // #1324: pre-#1307 persisted layouts encode inner split docks as a base
+        // Dock.Model.Mvvm.Controls.DocumentDock. Deserializing such a layout through the exact
+        // restore serializer (DockSerializer + WorkspaceDockTypeInfoResolver) produces a base
+        // DocumentDock; the restore-time migration must materialize it as a WorkspaceContentDock so
+        // it matches the header-bearing DataTemplate instead of the headerless generic fallback.
+        IRootDock originalRoot = new RootDock
+        {
+            Id = "restore-root",
+            Title = "restore-root",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var baseDock = new DocumentDock
+        {
+            Id = "persisted-base-dock",
+            Title = "Persisted Base Dock",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var persistedDoc = new Document { Id = "persisted-doc", Title = "Persisted Doc" };
+        baseDock.VisibleDockables!.Add(persistedDoc);
+        baseDock.ActiveDockable = persistedDoc;
+        originalRoot.VisibleDockables!.Add(baseDock);
+        originalRoot.ActiveDockable = baseDock;
+        originalRoot.DefaultDockable = baseDock;
+
+        var serializer = new global::Dock.Serializer.SystemTextJson.DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>),
+            new WorkspaceDockTypeInfoResolver());
+
+        var json = serializer.Serialize(originalRoot);
+        Assert.Contains(typeof(DocumentDock).FullName!, json);
+
+        var restored = serializer.Deserialize<IRootDock>(json);
+        Assert.NotNull(restored);
+
+        // Reproduce the bug precondition: a straight restore yields a base DocumentDock,
+        // which is exactly what renders headerless.
+        var beforeMigration = FindDocumentDockIn(restored!);
+        Assert.NotNull(beforeMigration);
+        Assert.IsNotType<WorkspaceContentDock>(beforeMigration);
+
+        MainWindowViewModel.MigrateBaseDocumentDocksToWorkspaceContentDock(restored);
+
+        // Every document-dock region in the restored tree is now the workspace-specific type.
+        var documentDocks = EnumerateDocumentDocks(restored!).ToList();
+        Assert.NotEmpty(documentDocks);
+        Assert.All(documentDocks, d => Assert.IsType<WorkspaceContentDock>(d));
+
+        var migrated = Assert.IsType<WorkspaceContentDock>(FindDocumentDockIn(restored!));
+        Assert.Equal("persisted-base-dock", migrated.Id);
+        Assert.Equal("Persisted Base Dock", migrated.Title);
+        Assert.Equal(1, migrated.VisibleDockables?.Count);
+        Assert.NotNull(migrated.ActiveDockable);
+        Assert.Equal("persisted-doc", migrated.ActiveDockable!.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindowViewModel_MigrateBaseDocumentDock_PreservesActiveDockableAndReparentsChildren()
+    {
+        // Losslessness of the substitution, isolated from serialization: Id/Title/VisibleDockables/
+        // ActiveDockable identity are preserved, the child's Owner is re-pointed to the new dock,
+        // and the parent's active/default/focused references are re-pointed to the replacement.
+        var root = new RootDock
+        {
+            Id = "root",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var baseDock = new DocumentDock
+        {
+            Id = "base-dock",
+            Title = "Base Dock",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var doc = new Document { Id = "doc", Title = "Doc" };
+        baseDock.VisibleDockables!.Add(doc);
+        baseDock.ActiveDockable = doc;
+        doc.Owner = baseDock;
+        root.VisibleDockables!.Add(baseDock);
+        root.ActiveDockable = baseDock;
+        root.DefaultDockable = baseDock;
+        root.FocusedDockable = baseDock;
+        baseDock.Owner = root;
+
+        MainWindowViewModel.MigrateBaseDocumentDocksToWorkspaceContentDock(root);
+
+        var migrated = Assert.IsType<WorkspaceContentDock>(root.VisibleDockables![0]);
+        Assert.Same(migrated, root.ActiveDockable);
+        Assert.Same(migrated, root.DefaultDockable);
+        Assert.Same(migrated, root.FocusedDockable);
+        Assert.Equal("base-dock", migrated.Id);
+        Assert.Equal("Base Dock", migrated.Title);
+        Assert.Same(doc, migrated.VisibleDockables?[0]);
+        Assert.Same(doc, migrated.ActiveDockable);
+        Assert.Same(migrated, doc.Owner);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void MainWindowViewModel_MigrateBaseDocumentDock_InSplitTree_MigratesEveryRegionAndKeepsSplitters()
+    {
+        // A pre-#1307 split layout: ProportionalDock [ baseDock, splitter, baseDock2 ]. Both
+        // document regions must become WorkspaceContentDock while the ProportionalDock and its
+        // splitter are left untouched.
+        var root = new RootDock
+        {
+            Id = "root",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var prop = new ProportionalDock
+        {
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var baseDock1 = new DocumentDock
+        {
+            Id = "left",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        var splitter = new ProportionalDockSplitter { Id = "splitter" };
+        var baseDock2 = new DocumentDock
+        {
+            Id = "right",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable>(),
+        };
+        prop.VisibleDockables!.Add(baseDock1);
+        prop.VisibleDockables!.Add(splitter);
+        prop.VisibleDockables!.Add(baseDock2);
+        root.VisibleDockables!.Add(prop);
+
+        MainWindowViewModel.MigrateBaseDocumentDocksToWorkspaceContentDock(root);
+
+        var migratedProp = Assert.IsType<ProportionalDock>(root.VisibleDockables![0]);
+        Assert.IsType<WorkspaceContentDock>(migratedProp.VisibleDockables![0]);
+        Assert.Same(splitter, migratedProp.VisibleDockables![1]);
+        Assert.IsType<WorkspaceContentDock>(migratedProp.VisibleDockables![2]);
+        Assert.Equal("left", ((WorkspaceContentDock)migratedProp.VisibleDockables![0]).Id);
+        Assert.Equal("right", ((WorkspaceContentDock)migratedProp.VisibleDockables![2]).Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_RestoredBaseDocumentDock_RendersAllFiveHeaderItemTypes()
+    {
+        // #1324 end-to-end: a restored base DocumentDock (the pre-#1307 shape) hosting a live
+        // document with all five header-item families renders headerless BEFORE substitution.
+        // After MigrateBaseDocumentDocksToWorkspaceContentDock the region is a WorkspaceContentDock,
+        // so its tab strip renders every per-item glyph via the centralized header template.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        var tab = new WebViewModel("https://restored.example.com")
+        {
+            Id = "restored-all-five",
+            Title = "Restored All Five",
+        };
+        tab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+        tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+        tab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+
+        var document = new WorkspaceDocument(tab);
+
+        // A base DocumentDock exactly as a pre-#1307 persisted layout re-hydrates.
+        var baseDock = new DocumentDock
+        {
+            Id = "restored-base-dock",
+            VisibleDockables = factory.CreateList<IDockable>(document),
+        };
+        baseDock.ActiveDockable = document;
+        document.Owner = baseDock;
+
+        var root = factory.CreateRootDock();
+        root.IsCollapsable = false;
+        root.VisibleDockables = factory.CreateList<IDockable>(baseDock);
+        baseDock.Owner = root;
+        root.ActiveDockable = baseDock;
+        root.DefaultDockable = baseDock;
+
+        MainWindowViewModel.MigrateBaseDocumentDocksToWorkspaceContentDock(root);
+
+        var migrated = Assert.IsType<WorkspaceContentDock>(FindDocumentDockIn(root));
+
+        factory.InitLayout(root);
+        pane!.ContentLayout = root;
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            bool IsRestoredStrip(object? dc) => ReferenceEquals(dc, migrated);
+
+            var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(window, IsRestoredStrip);
+            Assert.Contains(textBlocks, tb => tb.Text == "🚀");
+            Assert.Contains(textBlocks, tb => tb.Text == "🌐");
+
+            var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                window, IsRestoredStrip);
+            Assert.NotEmpty(statusControls);
+
+            var progressBars = await GetTabStripHeaderProgressBarsAsync(window, IsRestoredStrip);
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static System.Collections.Generic.IEnumerable<IDocumentDock> EnumerateDocumentDocks(IDockable dockable)
+    {
+        if (dockable is IDocumentDock documentDock)
+        {
+            yield return documentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                foreach (var found in EnumerateDocumentDocks(child))
+                {
+                    yield return found;
+                }
+            }
+        }
+    }
+
     private static Task<System.Collections.Generic.IReadOnlyList<ProgressBar>>
         GetOuterPaneHeaderProgressBarsAsync(Avalonia.Controls.Window window)
     {
