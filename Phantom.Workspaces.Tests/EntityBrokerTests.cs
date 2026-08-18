@@ -1495,6 +1495,59 @@ public sealed class EntityBrokerTests
     }
 
     [AvaloniaFact]
+    public async Task GetEntitiesAsync_ConcurrentIdenticalRequests_CoalesceIntoSingleDataAccessCall()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entityId = new EntityId("cccccccc-cccc-cccc-cccc-cccccccccccc");
+        var broker = await CreateBrokerAsync(ct);
+
+        await SeedSnapshotAsync(
+            broker,
+            CreateSnapshot(
+                entityId,
+                new Timestamp(DateTimeOffset.UtcNow.AddMinutes(-10), "1"),
+                """
+                {
+                  "entity-id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                  "entity-types": ["entity", "task"],
+                  "names": [["coalesce-target"]],
+                  "display-name": { "default": "Test" }
+                }
+                """));
+
+        var getCount = 0;
+        var firstCallStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var gate = new ManualResetEventSlim(false);
+
+        var mockDal = new CallbackDataAccessLayer(
+            broker.EntityRepository.DataAccessLayer,
+            onGetAsync: () =>
+            {
+                Interlocked.Increment(ref getCount);
+                firstCallStarted.TrySetResult();
+                gate.Wait(ct);
+            });
+
+        broker.EntityRepository.SetDataAccessLayerForTesting(mockDal);
+
+        var first = broker.GetEntitiesAsync([entityId], ct);
+
+        // Once the first request is blocked inside the data-access layer, a second identical request
+        // must be subsumed by the in-flight one rather than issuing a duplicate call (issue #1328).
+        await firstCallStarted.Task.WaitAsync(ct);
+        var second = broker.GetEntitiesAsync([entityId], ct);
+
+        gate.Set();
+
+        var firstResult = await first;
+        var secondResult = await second;
+
+        Assert.Equal(entityId, Assert.Single(firstResult).EntityId);
+        Assert.Equal(entityId, Assert.Single(secondResult).EntityId);
+        Assert.Equal(1, getCount);
+    }
+
+    [AvaloniaFact]
     public async Task UpdateAsync_RelationshipChange_AddsParticipantsToChangedEntityIds()
     {
         var ct = TestContext.Current.CancellationToken;

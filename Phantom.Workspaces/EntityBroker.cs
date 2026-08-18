@@ -17,12 +17,30 @@ public sealed class EntityBroker
     private readonly Dictionary<EntityId, WeakReference<SubscribedEntityViewModel>> subscribedEntitiesById = new();
     private readonly Dictionary<string, WeakReference<SubscribedGet>> subscribedGets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WeakReference<SubscribedQuery>> subscribedQueries = new(StringComparer.Ordinal);
+    private readonly EntityBrokerQuerySatisfier querySatisfier;
     private Action<Action> uiMarshal = static action => action();
 
     public EntityBroker(
         EntityRepository entityRepository)
     {
         this.entityRepository = entityRepository;
+        this.querySatisfier = new EntityBrokerQuerySatisfier(
+            new DataAccessLayerQueryExecutor(() => this.entityRepository.DataAccessLayer),
+            this.ResolveCachedSnapshot);
+    }
+
+    private EntitySnapshot? ResolveCachedSnapshot(EntityId entityId)
+    {
+        lock (this.gate)
+        {
+            if (this.subscribedEntitiesById.TryGetValue(entityId, out var weakRef)
+                && weakRef.TryGetTarget(out var entity))
+            {
+                return entity.Snapshot;
+            }
+        }
+
+        return null;
     }
 
     public EntityRepository EntityRepository => this.entityRepository;
@@ -296,8 +314,8 @@ public sealed class EntityBroker
 
         if (changedEntityIds.Count > 0)
         {
-            var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
-            var queriesChanged = await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken).ConfigureAwait(false);
+            var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, periodic: false, cancellationToken).ConfigureAwait(false);
+            var queriesChanged = await this.RefreshSubscribedQueriesAsync(changedEntityIds, periodic: false, cancellationToken).ConfigureAwait(false);
             this.Changed?.Invoke(
                 this,
                 new EntityBrokerChangedEventArgs
@@ -337,14 +355,15 @@ public sealed class EntityBroker
                 snapshotsById[entity.EntityId] = entity.Snapshot;
             }
 
-            // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
-            var changedEntitiesResult = await Task.Run(() => this.entityRepository.DataAccessLayer.GetChangedEntitiesAsync(
+            // #1328: route through the satisfier as a periodic (tick-driven) read so it is throttled
+            // one-at-a-time and can subsume the per-subscription refreshes below.
+            var changedEntitiesResult = await this.querySatisfier.SatisfyOrEnqueuePeriodicGetChangedAsync(
                 new GetChangedEntitiesRequest
                 {
                     EntityIdTimestamps = snapshotsById.Select(
                         static pair => new EntityIdTimestamp(pair.Key, pair.Value.ModifiedTime)).ToArray(),
                 },
-                cancellationToken));
+                cancellationToken);
 
             var pendingUpdates = new List<PendingSnapshotUpdate>();
             lock (this.gate)
@@ -363,8 +382,8 @@ public sealed class EntityBroker
             this.ApplyPendingSnapshotUpdates(pendingUpdates);
         }
 
-        var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, cancellationToken);
-        var queriesChanged = await this.RefreshSubscribedQueriesAsync(changedEntityIds, cancellationToken);
+        var getsChanged = await this.RefreshSubscribedGetsAsync(changedEntityIds, periodic: true, cancellationToken);
+        var queriesChanged = await this.RefreshSubscribedQueriesAsync(changedEntityIds, periodic: true, cancellationToken);
         if (changedEntityIds.Count == 0)
         {
             return;
@@ -382,10 +401,13 @@ public sealed class EntityBroker
     internal async Task<IReadOnlyCollection<SubscribedEntityViewModel>> GetSubscribedEntitiesForGetRequestAsync(
         GetRequest request,
         ISet<EntityId>? changedEntityIds = null,
+        bool periodic = false,
         CancellationToken cancellationToken = default)
     {
-        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
-        var getResult = await Task.Run(() => this.entityRepository.DataAccessLayer.GetAsync(request, cancellationToken));
+        // #1328: route background reads through the satisfier so identical/subsumed calls coalesce.
+        var getResult = periodic
+            ? await this.querySatisfier.SatisfyOrEnqueuePeriodicGetAsync(request, cancellationToken)
+            : await this.querySatisfier.SatisfyOrIssueOnDemandGetAsync(request, cancellationToken);
         var snapshots = getResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
@@ -406,10 +428,13 @@ public sealed class EntityBroker
     internal async Task<IReadOnlyCollection<SubscribedEntityViewModel>> GetSubscribedEntitiesForQueryRequestAsync(
         QueryRequest request,
         ISet<EntityId>? changedEntityIds = null,
+        bool periodic = false,
         CancellationToken cancellationToken = default)
     {
-        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
-        var queryResult = await Task.Run(() => this.entityRepository.DataAccessLayer.QueryAsync(request, cancellationToken));
+        // #1328: route background reads through the satisfier so identical/subsumed calls coalesce.
+        var queryResult = periodic
+            ? await this.querySatisfier.SatisfyOrEnqueuePeriodicQueryAsync(request, cancellationToken)
+            : await this.querySatisfier.SatisfyOrIssueOnDemandQueryAsync(request, cancellationToken);
         var snapshots = queryResult.Batches.SelectMany(static batch => batch.Entities).ToArray();
         var entities = new List<SubscribedEntityViewModel>(snapshots.Length);
 
@@ -436,13 +461,13 @@ public sealed class EntityBroker
             return new Dictionary<EntityId, EntitySnapshot>();
         }
 
-        // Run this on the default scheduler to avoid blocking the UI thread with a potentially long-running operation
-        var getResult = await Task.Run(() => this.entityRepository.DataAccessLayer.GetAsync(
+        // #1328: on-demand read (invoked by GetEntitiesAsync / subscription warm-up).
+        var getResult = await this.querySatisfier.SatisfyOrIssueOnDemandGetAsync(
             new GetRequest
             {
                 Entities = entityRequests,
             },
-            cancellationToken));
+            cancellationToken);
 
         var result = new Dictionary<EntityId, EntitySnapshot>();
         foreach (var snapshot in getResult.Batches.SelectMany(static b => b.Entities))
@@ -714,7 +739,7 @@ public sealed class EntityBroker
         QueryRequest request,
         CancellationToken cancellationToken = default)
     {
-        return await this.GetSubscribedEntitiesForQueryRequestAsync(request, null, cancellationToken);
+        return await this.GetSubscribedEntitiesForQueryRequestAsync(request, null, periodic: false, cancellationToken);
     }
 
     private List<SubscribedEntityViewModel> GetLiveSubscribedEntities()
@@ -745,6 +770,7 @@ public sealed class EntityBroker
 
     private async Task<bool> RefreshSubscribedGetsAsync(
         ISet<EntityId> changedEntityIds,
+        bool periodic,
         CancellationToken cancellationToken)
     {
         List<SubscribedGet> liveSubscribedGets;
@@ -773,7 +799,7 @@ public sealed class EntityBroker
         bool anyMembershipChanged = false;
         foreach (var subscribedGet in liveSubscribedGets)
         {
-            if (await subscribedGet.RefreshAsync(cancellationToken, changedEntityIds))
+            if (await subscribedGet.RefreshAsync(cancellationToken, changedEntityIds, periodic))
             {
                 anyMembershipChanged = true;
             }
@@ -784,6 +810,7 @@ public sealed class EntityBroker
 
     private async Task<bool> RefreshSubscribedQueriesAsync(
         ISet<EntityId> changedEntityIds,
+        bool periodic,
         CancellationToken cancellationToken)
     {
         List<SubscribedQuery> liveSubscribedQueries;
@@ -812,7 +839,7 @@ public sealed class EntityBroker
         bool anyMembershipChanged = false;
         foreach (var subscribedQuery in liveSubscribedQueries)
         {
-            if (await subscribedQuery.RefreshAsync(cancellationToken, changedEntityIds))
+            if (await subscribedQuery.RefreshAsync(cancellationToken, changedEntityIds, periodic))
             {
                 anyMembershipChanged = true;
             }
@@ -851,11 +878,13 @@ public sealed class SubscribedGet
 
     internal async Task<bool> RefreshAsync(
         CancellationToken cancellationToken = default,
-        ISet<EntityId>? changedEntityIds = null)
+        ISet<EntityId>? changedEntityIds = null,
+        bool periodic = false)
     {
         var nextResults = (await this.entityBroker.GetSubscribedEntitiesForGetRequestAsync(
             this.request,
             changedEntityIds,
+            periodic,
             cancellationToken)).ToList();
 
         // The result collection is bound to the UI; marshal the merge so it does not cross-thread the
@@ -888,11 +917,13 @@ public sealed class SubscribedQuery
 
     internal async Task<bool> RefreshAsync(
         CancellationToken cancellationToken = default,
-        ISet<EntityId>? changedEntityIds = null)
+        ISet<EntityId>? changedEntityIds = null,
+        bool periodic = false)
     {
         var nextResults = (await this.entityBroker.GetSubscribedEntitiesForQueryRequestAsync(
             this.request,
             changedEntityIds,
+            periodic,
             cancellationToken)).ToList();
 
         // The result collection is bound to the UI; marshal the merge so it does not cross-thread the
