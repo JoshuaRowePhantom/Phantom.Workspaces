@@ -12,6 +12,7 @@ using Dock.Model.Controls;
 using Dock.Model.Core;
 using Dock.Model.Mvvm.Controls;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
@@ -1338,6 +1339,223 @@ public sealed class MainWindowDockTemplateTests
             Assert.NotEmpty(statusControls);
 
             var progressBars = await GetTabStripHeaderProgressBarsAsync(window, IsRestoredStrip);
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+            Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_RestoredMultiRegionSplitBaseDocumentDock_BothRegionsRenderAllFiveHeaderItemTypes()
+    {
+        // #1330 end-to-end: a restored multi-region split (ProportionalDock [ baseDock, splitter,
+        // baseDock ]) where BOTH leaves are pre-#1307 base DocumentDocks. After the restore-time
+        // migration, every region is a WorkspaceContentDock, so BOTH tab strips render all five
+        // per-item header families via the single centralized header template.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        static DocumentDock BuildBaseLeafWithAllFive(string id, string url)
+        {
+            var tab = new WebViewModel(url) { Id = id + "-tab", Title = id };
+            tab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+            tab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+            tab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+            var document = new WorkspaceDocument(tab);
+            var baseDock = new DocumentDock
+            {
+                Id = id,
+                VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable> { document },
+                ActiveDockable = document,
+            };
+            document.Owner = baseDock;
+            return baseDock;
+        }
+
+        var leftBase = BuildBaseLeafWithAllFive("mr-render-left", "https://mr-left.example.com");
+        var rightBase = BuildBaseLeafWithAllFive("mr-render-right", "https://mr-right.example.com");
+        var splitter = new ProportionalDockSplitter { Id = "mr-render-splitter" };
+        var prop = new ProportionalDock
+        {
+            Id = "mr-render-prop",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable> { leftBase, splitter, rightBase },
+        };
+        leftBase.Owner = prop;
+        splitter.Owner = prop;
+        rightBase.Owner = prop;
+
+        var root = factory.CreateRootDock();
+        root.IsCollapsable = false;
+        root.VisibleDockables = factory.CreateList<IDockable>(prop);
+        prop.Owner = root;
+        root.ActiveDockable = prop;
+        root.DefaultDockable = prop;
+
+        MainWindowViewModel.MigrateBaseDocumentDocksToWorkspaceContentDock(root);
+
+        var migratedDocks = EnumerateDocumentDocks(root).Cast<WorkspaceContentDock>().ToList();
+        Assert.Equal(2, migratedDocks.Count);
+
+        factory.InitLayout(root);
+        pane!.ContentLayout = root;
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            foreach (var migrated in migratedDocks)
+            {
+                bool IsRegionStrip(object? dc) => ReferenceEquals(dc, migrated);
+
+                var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(window, IsRegionStrip);
+                Assert.Contains(textBlocks, tb => tb.Text == "🚀");
+                Assert.Contains(textBlocks, tb => tb.Text == "🌐");
+
+                var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                    window, IsRegionStrip);
+                Assert.NotEmpty(statusControls);
+
+                var progressBars = await GetTabStripHeaderProgressBarsAsync(window, IsRegionStrip);
+                Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
+                Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task MainWindowViewModel_TryRestoreFromDockLayoutAsync_MultiRegionSplitBaseDocumentDockJson_BothRegionsAreWorkspaceContentDockAfterRestore()
+    {
+        // #1330 restore composition: a persisted multi-region layout whose split leaves are the
+        // pre-#1307 base Mvvm DocumentDock $type. Driving the real workspace restore path
+        // (TryRestoreFromDockLayoutAsync via OpenWorkspaceAsync) must migrate BOTH split regions to
+        // WorkspaceContentDock, preserve each region's tab count, and keep the splitter sibling.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+
+        // Build a real two-region layout, then rewrite each split leaf's $type discriminator to the
+        // base pre-#1307 Mvvm DocumentDock to simulate a legacy persisted layout.
+        var layoutJson = MultiRegionRestoreTestSupport.BuildTwoRegionDockLayoutJson(
+                "mr-restore-left", "mr-restore-tab-left", "https://mr-left.example.com",
+                "mr-restore-right", "mr-restore-tab-right", "https://mr-right.example.com")
+            .Replace(typeof(WorkspaceContentDock).FullName!, typeof(DocumentDock).FullName!);
+
+        var workspaceId = new EntityId("d0c1a7a0-1330-4000-8000-000000000001");
+        var workspaceJson = $$"""
+            {
+              "entity-id": "{{workspaceId.Value}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "MR 1330 Restore WS" },
+              "dock-layout": {{layoutJson}},
+              "regions": []
+            }
+            """;
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+
+        var pane = viewModel.WorkspacePanes.Single(
+            p => string.Equals(p.Id, workspaceId.ToString(), System.StringComparison.Ordinal));
+        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(pane);
+
+        var documentDocks = EnumerateDocumentDocks(pane.ContentLayout!).ToList();
+        Assert.Equal(2, documentDocks.Count);
+        Assert.All(documentDocks, d => Assert.IsType<WorkspaceContentDock>(d));
+        Assert.All(documentDocks, d => Assert.Equal(1, d.VisibleDockables?.Count));
+
+        var prop = EnumerateDocumentDocks(pane.ContentLayout!)
+            .Select(d => d.Owner)
+            .OfType<ProportionalDock>()
+            .First();
+        Assert.Contains(prop.VisibleDockables!, x => x is ProportionalDockSplitter);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowInnerPaneDocumentTabStrip_MenuCreatedSplitOnRestoredWorkspace_NewRegionRendersAllFiveHeaderItemTypes()
+    {
+        // #1330 regression guard on the menu-split path: after a restored region (migrated from a
+        // base DocumentDock), a menu-created split (WorkspaceDockFactory.CreateDocumentDock, the
+        // NewHorizontal/VerticalDocumentDock entry point) must still produce a header-bearing
+        // WorkspaceContentDock whose tab strip renders all five per-item header families.
+        await using var viewModel = CreateBootedMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var pane = viewModel.SelectedWorkspacePane;
+        Assert.NotNull(pane);
+        var factory = GetDockFactory(viewModel);
+
+        // Restored region: a pre-#1307 base DocumentDock (migrated below).
+        var restoredTab = new WebViewModel("https://restored.example.com") { Id = "restored-region-tab", Title = "Restored" };
+        var restoredDoc = new WorkspaceDocument(restoredTab);
+        var restoredBase = new DocumentDock
+        {
+            Id = "restored-region",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable> { restoredDoc },
+            ActiveDockable = restoredDoc,
+        };
+        restoredDoc.Owner = restoredBase;
+
+        // Menu-created split via the #1307 factory path (always a WorkspaceContentDock).
+        var newTab = new WebViewModel("https://menu-split.example.com") { Id = "menu-split-tab", Title = "Menu Split" };
+        newTab.TabHeader!.Items.Add(new IconTabHeaderItemViewModel { Icon = "🚀" });
+        newTab.TabHeader!.Items.Add(new AgentRunningIndicatorTabHeaderItemViewModel { IsRunning = true });
+        newTab.TabHeader!.Items.Add(new NotificationIndicatorTabHeaderItemViewModel { HasUnread = true });
+        var newDoc = new WorkspaceDocument(newTab);
+        var splitDock = Assert.IsType<WorkspaceContentDock>(factory.CreateDocumentDock());
+        splitDock.VisibleDockables = factory.CreateList<IDockable>(newDoc);
+        splitDock.ActiveDockable = newDoc;
+        newDoc.Owner = splitDock;
+
+        var splitter = new ProportionalDockSplitter { Id = "menu-split-splitter" };
+        var prop = new ProportionalDock
+        {
+            Id = "menu-split-prop",
+            VisibleDockables = new System.Collections.ObjectModel.ObservableCollection<IDockable> { restoredBase, splitter, splitDock },
+        };
+        restoredBase.Owner = prop;
+        splitter.Owner = prop;
+        splitDock.Owner = prop;
+
+        var root = factory.CreateRootDock();
+        root.IsCollapsable = false;
+        root.VisibleDockables = factory.CreateList<IDockable>(prop);
+        prop.Owner = root;
+        root.ActiveDockable = prop;
+        root.DefaultDockable = prop;
+
+        // Restore-time migration converts the restored base leaf; the menu-split dock is already
+        // a WorkspaceContentDock and is left intact.
+        MainWindowViewModel.MigrateBaseDocumentDocksToWorkspaceContentDock(root);
+        Assert.IsType<WorkspaceContentDock>(splitDock);
+
+        factory.InitLayout(root);
+        pane!.ContentLayout = root;
+
+        var window = new MainWindow(viewModel);
+        window.Show();
+        try
+        {
+            bool IsNewRegionStrip(object? dc) => ReferenceEquals(dc, splitDock);
+
+            var textBlocks = await GetTabStripHeaderControlsAsync<TextBlock>(window, IsNewRegionStrip);
+            Assert.Contains(textBlocks, tb => tb.Text == "🚀");
+            Assert.Contains(textBlocks, tb => tb.Text == "🌐");
+
+            var statusControls = await GetTabStripHeaderControlsAsync<Phantom.Workspaces.Controls.StatusControl>(
+                window, IsNewRegionStrip);
+            Assert.NotEmpty(statusControls);
+
+            var progressBars = await GetTabStripHeaderProgressBarsAsync(window, IsNewRegionStrip);
             Assert.Contains(progressBars, pb => pb.Classes.Contains("pulsating-brain"));
             Assert.Contains(progressBars, pb => pb.Classes.Contains("exclamation-indicator"));
         }
