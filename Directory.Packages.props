@@ -14,7 +14,7 @@
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="12.1.0" />
     <PackageVersion Include="AvaloniaUI.DiagnosticsSupport" Version="2.2.3" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
-    <PackageVersion Include="Dock.Avalonia" Version="12.0.0.2" />
+    <PackageVersion Include="Dock.Avalonia" Version="12.1.0.2" />
     <PackageVersion Include="Dock.Avalonia.Themes.Fluent" Version="12.0.0.2" />
     <PackageVersion Include="Dock.Model.Avalonia" Version="12.0.0.2" />
     <PackageVersion Include="Dock.Model.Mvvm" Version="12.0.0.2" />
