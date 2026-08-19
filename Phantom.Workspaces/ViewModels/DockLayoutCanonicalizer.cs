@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Dock.Model.Controls;
 using Dock.Model.Core;
@@ -79,7 +80,103 @@ internal static class DockLayoutCanonicalizer
         }
 
         var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
-        return serializer.Deserialize<IRootDock>(json);
+        return serializer.Deserialize<IRootDock>(MigrateLegacyReferenceMetadata(json));
+    }
+
+    /// <summary>
+    /// #1348: migrates a legacy (<c>DockSerializer</c>-format, no <c>$values</c>) layout so that it
+    /// deserializes under Dock 12.1.0.2. The legacy write path serialized each <c>IList&lt;T&gt;</c> in
+    /// an isolated scope, so <see cref="ReferenceHandler.Preserve"/>'s <c>$id</c> counter reset at
+    /// every list boundary and reused ids across lists (e.g. <c>$id="1"</c> occurs 105 times in the
+    /// #1334 fixture). Dock 12.1.0.2 (upstream PR danipen/Dock #1107) widened the reference-tracking
+    /// scope so it no longer resets per list, so the first duplicate id throws
+    /// <c>'$id' metadata property '1' conflicts with an existing identifier</c>.
+    /// <para>
+    /// This pre-pass is a pure JSON transform that STRIPS all <c>$id</c> metadata and drops every
+    /// <c>{"$ref":"N"}</c> reference object. In real legacy layouts the only shared references are the
+    /// AD/DD/FD/<c>Window</c> back-references (only 3 <c>$ref</c> tokens in the #1334 fixture), all of
+    /// which <see cref="Canonicalize"/> rebuilds/prunes on load, so no meaningful sharing is lost;
+    /// Dock reconstructs the tree from the inline <c>$type</c> objects. Keyed off legacy-format
+    /// detection (not the specific fixture) so any user's already-persisted 12.0.0.2 layout also loads.
+    /// </para>
+    /// </summary>
+    internal static string MigrateLegacyReferenceMetadata(string json)
+    {
+        JsonNode? root;
+        try
+        {
+            root = JsonNode.Parse(json);
+        }
+        catch (JsonException)
+        {
+            return json;
+        }
+
+        if (root is null)
+        {
+            return json;
+        }
+
+        var stripped = StripReferenceMetadata(root);
+        return stripped?.ToJsonString() ?? json;
+    }
+
+    /// <summary>
+    /// Recursively removes <c>$id</c> metadata and collapses <c>{"$ref":"N"}</c> reference objects to
+    /// <c>null</c>. Returns the transformed node, or <c>null</c> when the node was a bare reference
+    /// object (so callers can drop it).
+    /// </summary>
+    private static JsonNode? StripReferenceMetadata(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+            {
+                if (obj.ContainsKey("$ref"))
+                {
+                    // A bare reference object points at an already-materialized instance elsewhere.
+                    // Legacy layouts only ever share AD/DD/FD/Window, which Canonicalize rebuilds, so
+                    // dropping the reference (property becomes null) is safe.
+                    return null;
+                }
+
+                obj.Remove("$id");
+
+                foreach (var key in obj.Select(kvp => kvp.Key).ToList())
+                {
+                    var child = obj[key];
+                    var replacement = StripReferenceMetadata(child);
+                    if (!ReferenceEquals(replacement, child))
+                    {
+                        obj[key] = replacement;
+                    }
+                }
+
+                return obj;
+            }
+
+            case JsonArray array:
+            {
+                for (var i = array.Count - 1; i >= 0; i--)
+                {
+                    var replacement = StripReferenceMetadata(array[i]);
+                    if (replacement is null)
+                    {
+                        // Never leave a null hole in a dockables collection.
+                        array.RemoveAt(i);
+                    }
+                    else if (!ReferenceEquals(replacement, array[i]))
+                    {
+                        array[i] = replacement;
+                    }
+                }
+
+                return array;
+            }
+
+            default:
+                return node;
+        }
     }
 
     /// <summary>Serializes a layout through the single-call reference-preserving path.</summary>

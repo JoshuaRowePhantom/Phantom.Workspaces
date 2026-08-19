@@ -149,6 +149,57 @@ public sealed class WorkspaceDockPersistenceTests
         Assert.Empty(DockLayoutCanonicalizer.CollectAllWindows(layout!));
     }
 
+    // ── Test 5: #1348 legacy fixture loads under Dock 12.1.0.2 via the migration pre-pass ──
+
+    [Fact]
+    public void WorkspaceDockPersistence_LoadLegacyLayout1334UnderDock1210_Succeeds()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "dock-layout-1334.json");
+        var json = File.ReadAllText(fixturePath);
+
+        // Legacy fixture has no $values envelope and reuses $id values across per-list scopes.
+        Assert.DoesNotContain("\"$values\"", json);
+
+        var layout = DockLayoutCanonicalizer.Deserialize(json);
+
+        Assert.NotNull(layout);
+    }
+
+    // ── Test 6: #1348 duplicate-$id legacy JSON deserializes without a conflict throw ──────
+
+    [Fact]
+    public void WorkspaceDockPersistence_Dock1210UpgradeWithDuplicateIds_DeserializesWithoutConflict()
+    {
+        // Two objects reuse $id="1" — legal under 12.0.0.2 per-list scopes, rejected by 12.1.0.2.
+        const string legacyJson =
+            "{\"$id\": \"1\", \"$type\": \"Dock.Model.Mvvm.Controls.RootDock\", " +
+            "\"VisibleDockables\": [" +
+            "{\"$id\": \"1\", \"$type\": \"Dock.Model.Mvvm.Controls.DocumentDock\", \"Id\": \"dock-a\"}, " +
+            "{\"$id\": \"1\", \"$type\": \"Dock.Model.Mvvm.Controls.DocumentDock\", \"Id\": \"dock-b\"}]}";
+
+        var exception = Record.Exception(() => DockLayoutCanonicalizer.Deserialize(legacyJson));
+
+        Assert.Null(exception);
+    }
+
+    // ── Test 7: #1348 migration pre-pass strips conflicting $id/$ref metadata ───────────────
+
+    [Fact]
+    public void DockLayoutCanonicalizer_LegacyJsonWithDuplicateIds_MigratesToConflictFreeJson()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "dock-layout-1334.json");
+        var json = File.ReadAllText(fixturePath);
+
+        var migrated = DockLayoutCanonicalizer.MigrateLegacyReferenceMetadata(json);
+
+        Assert.DoesNotContain("\"$id\"", migrated);
+        Assert.DoesNotContain("\"$ref\"", migrated);
+        // The transform must stay valid JSON that still carries the dock $type discriminators.
+        var parsed = JsonDocument.Parse(migrated);
+        Assert.Contains("Dock.Model.Mvvm.Controls.RootDock", migrated);
+        parsed.Dispose();
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         var count = 0;

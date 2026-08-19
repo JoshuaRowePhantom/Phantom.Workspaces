@@ -5,9 +5,9 @@
     <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Dock.Model" Version="12.0.0.2" />
-    <PackageReference Include="Dock.Model.Mvvm" Version="12.0.0.2" />
-    <PackageReference Include="Dock.Serializer.SystemTextJson" Version="12.0.0.2" />
+    <PackageReference Include="Dock.Model" Version="12.1.0.2" />
+    <PackageReference Include="Dock.Model.Mvvm" Version="12.1.0.2" />
+    <PackageReference Include="Dock.Serializer.SystemTextJson" Version="12.1.0.2" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
   </ItemGroup>
 </Project>
