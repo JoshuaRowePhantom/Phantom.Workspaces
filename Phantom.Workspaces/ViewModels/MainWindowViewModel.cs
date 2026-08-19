@@ -2800,10 +2800,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
 
-        // Serialize dock layout: DockState.Save captures split proportions and active-dockable
-        // state into the layout tree. Owner back-references are handled by ReferenceHandler.Preserve
-        // ($ref markers); WorkspaceDockTypeInfoResolver strips Type-typed properties that STJ cannot
-        // serialize (e.g. Avalonia StyledElement.StyleKey).
+        // #1335: serialize the dock layout through the canonical single-JsonSerializer.Serialize
+        // path (ReferenceHandler.Preserve). DockState.Save captures split proportions and
+        // active-dockable state into the layout tree. Because the whole tree serializes in one call,
+        // ActiveDockable/DefaultDockable/FocusedDockable — which are the SAME instances as their
+        // VisibleDockables siblings — emit as $ref back-references instead of full inline $id clones
+        // (the legacy DockSerializer.JsonConverterList reset Preserve on every list boundary, which
+        // is what leaked duplicate WorkspaceDocument instances on every save). Before serializing,
+        // DockLayoutCanonicalizer clones the live tree, dedupes documents by Id, and prunes empty
+        // non-primary docks / orphan floating windows, so the persisted layout stays canonical.
+        // WorkspaceDockTypeInfoResolver strips Type-typed properties STJ cannot serialize (e.g.
+        // Avalonia StyledElement.StyleKey) and the Owner back-reference.
         JsonNode? dockLayout = null;
         if (workspacePane.ContentLayout is not null)
         {
@@ -2826,10 +2833,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             this.dockFactory.DockState.Save(workspacePane.ContentLayout);
 
-            var serializer = new DockSerializer(
-                typeof(System.Collections.ObjectModel.ObservableCollection<>),
-                new WorkspaceDockTypeInfoResolver());
-            var layoutJson = serializer.Serialize(workspacePane.ContentLayout);
+            var liveTabIds = workspacePane.Tabs
+                .Select(t => t.Id)
+                .Where(id => !string.IsNullOrEmpty(id))
+                .ToArray();
+            var layoutJson = DockLayoutCanonicalizer.SerializeCanonical(workspacePane.ContentLayout, liveTabIds);
 
             if (!string.IsNullOrWhiteSpace(layoutJson))
             {
@@ -3061,6 +3069,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// Recursively enumerates every <see cref="WorkspaceDocument"/> in a dock layout tree.
     /// Walks the entire <see cref="IDock.VisibleDockables"/> hierarchy so that documents
     /// inside split panes are discovered, not just those in the primary content dock.
+    /// #1335: intentionally VisibleDockables-only. ActiveDockable/DefaultDockable/FocusedDockable
+    /// may alias a stale document instance left behind when the primary generator regenerates a
+    /// content dock's items (the live VisibleDockables holds the authoritative instance); walking
+    /// those references would surface duplicates. Persisted layouts are canonicalized on load and
+    /// save (see <see cref="DockLayoutCanonicalizer"/>), so every real tab lives in VisibleDockables.
     /// </summary>
     internal static IEnumerable<WorkspaceDocument> EnumerateAllDocuments(IDockable dockable)
     {
@@ -3127,6 +3140,31 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// </summary>
     internal static void MigrateBaseDocumentDocksToWorkspaceContentDock(IDockable? dockable)
     {
+        var visited = new HashSet<IDockable>(ReferenceEqualityComparer.Instance);
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dockable, visited);
+    }
+
+    private static void MigrateBaseDocumentDocksToWorkspaceContentDock(IDockable? dockable, HashSet<IDockable> visited)
+    {
+        if (dockable is null || !visited.Add(dockable))
+        {
+            return;
+        }
+
+        if (dockable is IRootDock rootDock)
+        {
+            // #1335: also descend into floating-window layouts so a base DocumentDock persisted
+            // inside a Window subtree is migrated too.
+            MigrateBaseDocumentDocksToWorkspaceContentDock(rootDock.Window?.Layout, visited);
+            if (rootDock.Windows is not null)
+            {
+                foreach (var window in rootDock.Windows)
+                {
+                    MigrateBaseDocumentDocksToWorkspaceContentDock(window.Layout, visited);
+                }
+            }
+        }
+
         if (dockable is not IDock dock || dock.VisibleDockables is null)
         {
             return;
@@ -3159,8 +3197,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 child = replacement;
             }
 
-            MigrateBaseDocumentDocksToWorkspaceContentDock(child);
+            MigrateBaseDocumentDocksToWorkspaceContentDock(child, visited);
         }
+
+        // #1335: also descend into AD/DD/FD references so a base DocumentDock reachable only via an
+        // active-dockable chain (legacy inline clone) is migrated. The reference visited-set stops
+        // the common case where these alias a VisibleDockables child already handled above.
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dock.ActiveDockable, visited);
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dock.DefaultDockable, visited);
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dock.FocusedDockable, visited);
     }
 
     /// <summary>
@@ -3533,10 +3578,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         IRootDock? layout;
         try
         {
-            var serializer = new DockSerializer(
-                typeof(System.Collections.ObjectModel.ObservableCollection<>),
-                new WorkspaceDockTypeInfoResolver());
-            layout = serializer.Deserialize<IRootDock>(dockLayoutJson);
+            // #1335: read BOTH the legacy DockSerializer format and the new single-serialize
+            // (ReferenceHandler.Preserve) format so existing persisted workspaces keep loading.
+            layout = DockLayoutCanonicalizer.Deserialize(dockLayoutJson);
         }
         catch
         {
@@ -3544,6 +3588,16 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         if (layout is null) return false;
+
+        // #1335: heal legacy bloat before migration. A layout persisted by the old
+        // DockSerializer.JsonConverterList path accumulated duplicate WorkspaceDocument instances
+        // (via inline-cloned ActiveDockable/DefaultDockable/FocusedDockable) and orphan floating
+        // windows. Canonicalize dedupes documents by Id (keeping the primary VisibleDockables
+        // instance), rewrites AD/DD/FD to the canonical instance, prunes empty non-primary docks and
+        // secondary roots, and prunes floating windows that own no live tab — so the first load of a
+        // bloated 100+-instance layout collapses to its canonical form and the next save writes it
+        // back canonically.
+        DockLayoutCanonicalizer.Canonicalize(layout, liveTabIds: null);
 
         // #1324: pre-#1307 persisted layouts encode inner split docks as a base
         // Dock.Model.Mvvm.Controls.DocumentDock. Re-hydrated as a base DocumentDock, those tab

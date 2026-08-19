@@ -50,6 +50,12 @@ public sealed class WorkspaceDocumentGenerator : DockItemContainerGenerator
     {
         if (container is WorkspaceDocument doc && item is WorkspaceTabViewModel tab)
         {
+            // #1335/#1334: wire the per-document header/status/notification services (via
+            // Initialize) at document-creation time, BEFORE the document is registered with the
+            // factory. Because Initialize runs first, documentsByTabId always receives the single
+            // fully-wired instance for this tab Id — there is no last-writer-wins race between a
+            // wired and an unwired duplicate, so GetDocumentForTab returns the currently-rendered,
+            // header-configured document.
             doc.Initialize(tab);
             this.onPrepared?.Invoke(doc);
         }

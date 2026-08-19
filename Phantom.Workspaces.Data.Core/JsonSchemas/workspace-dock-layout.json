@@ -1,32 +1,55 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/workspace-dock-layout.json",
-  "description": "Inline Dock layout snapshot stored in a workspace entity's dock-layout property. Produced by Dock.Serializer.SystemTextJson. A null or structurally invalid object causes the workspace to fall back to default layout.",
+  "description": "Inline Dock layout snapshot stored in a workspace entity's dock-layout property. Serialized in one pass by System.Text.Json with ReferenceHandler.Preserve (#1335), so collections are emitted as {\"$id\",\"$values\":[...]} wrappers and back-references as {\"$ref\"}. Legacy Dock.Serializer snapshots (plain arrays, no reference metadata) also validate. A null or structurally invalid object causes the workspace to fall back to default layout.",
   "type": "object",
   "properties": {
+    "$id": { "type": "string", "description": "ReferenceHandler.Preserve identity of the root dock container." },
     "Id": { "type": "string", "description": "Stable identifier for the root dock container." },
     "ActiveDockable": { "$ref": "#/$defs/dockable-ref" },
     "DefaultDockable": { "$ref": "#/$defs/dockable-ref" },
     "FocusedDockable": { "$ref": "#/$defs/dockable-ref" },
-    "VisibleDockables": {
-      "type": "array",
-      "description": "Top-level dockable items in this dock (documents or nested docks).",
-      "items": { "$ref": "#/$defs/dockable" }
-    },
-    "HiddenDockables": { "type": "array", "items": { "$ref": "#/$defs/dockable" } },
-    "PinnedDockables": { "type": "array", "items": { "$ref": "#/$defs/dockable" } }
+    "VisibleDockables": { "$ref": "#/$defs/dockable-collection" },
+    "HiddenDockables": { "$ref": "#/$defs/dockable-collection" },
+    "PinnedDockables": { "$ref": "#/$defs/dockable-collection" }
   },
   "unevaluatedProperties": true,
   "$defs": {
+    "dockable-collection": {
+      "description": "A list of dockables, either as a plain JSON array (legacy Dock.Serializer format) or as a ReferenceHandler.Preserve wrapper object carrying $id and $values.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dockable" }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$id": { "type": "string" },
+            "$values": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/dockable" }
+            }
+          },
+          "required": ["$values"]
+        }
+      ]
+    },
     "dockable-ref": {
       "type": "object",
-      "properties": { "Id": { "type": "string" } },
-      "description": "A reference to a dockable by its Id."
+      "description": "A reference to a dockable, either inline (carrying its Id) or a ReferenceHandler.Preserve back-reference ($ref).",
+      "properties": {
+        "Id": { "type": "string" },
+        "$id": { "type": "string" },
+        "$ref": { "type": "string" }
+      }
     },
     "dockable": {
       "type": "object",
-      "description": "A single dockable item — either a WorkspaceDocument (leaf) or a nested dock (split/proportional).",
+      "description": "A single dockable item — a WorkspaceDocument (leaf), a nested dock (split/proportional), or a ReferenceHandler.Preserve back-reference ($ref).",
       "properties": {
+        "$id": { "type": "string" },
+        "$ref": { "type": "string" },
         "Id": {
           "type": "string",
           "description": "Must match the tab-id of the corresponding workspace-tab-descriptor in the tabs array."
@@ -40,11 +63,7 @@
             { "type": "string", "const": "NaN" }
           ]
         },
-        "VisibleDockables": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/dockable" },
-          "description": "Child dockables when this item is a nested dock (split panel)."
-        },
+        "VisibleDockables": { "$ref": "#/$defs/dockable-collection" },
         "ActiveDockable": { "$ref": "#/$defs/dockable-ref" }
       },
       "unevaluatedProperties": true
