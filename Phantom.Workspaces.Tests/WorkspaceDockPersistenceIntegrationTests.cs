@@ -54,8 +54,7 @@ public sealed class WorkspaceDockPersistenceIntegrationTests
             .First();
         await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(primaryDock, 2);
 
-        var factory = MultiRegionRestoreTestSupport.GetDockFactory(viewModel);
-        var resolved = factory.GetDocumentForTab("bloat-0");
+        var resolved = pane.GetDocumentForTab("bloat-0");
         Assert.NotNull(resolved);
 
         // The resolved document is the one actually hosted under a WorkspaceContentDock.

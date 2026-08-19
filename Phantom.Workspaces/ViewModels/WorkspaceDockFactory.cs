@@ -23,12 +23,6 @@ public class WorkspaceDockFactory : Factory
     public DockState DockState => dockState;
 
     /// <summary>
-    /// Registry mapping tab IDs to their dock documents. Populated by
-    /// <see cref="WorkspaceDocumentGenerator"/> via the onPrepared callback.
-    /// </summary>
-    private readonly Dictionary<string, WorkspaceDocument> documentsByTabId = new(StringComparer.Ordinal);
-
-    /// <summary>
     /// Registry mapping pane IDs to their dock documents. Populated by
     /// <see cref="WorkspacePaneDocumentGenerator"/> via the onPrepared callback.
     /// </summary>
@@ -40,42 +34,14 @@ public class WorkspaceDockFactory : Factory
     }
 
     /// <summary>
-    /// Returns the <see cref="WorkspaceDocument"/> registered for the given tab ID, or null if none.
-    /// </summary>
-    public WorkspaceDocument? GetDocumentForTab(string tabId)
-        => this.documentsByTabId.TryGetValue(tabId, out var doc) ? doc : null;
-
-    /// <summary>
-    /// Removes the document registration for the given tab ID (called when a document is cleared).
-    /// </summary>
-    public void UnregisterDocument(string tabId)
-    {
-        this.documentsByTabId.Remove(tabId);
-        this.DockableLocator?.Remove(tabId);
-    }
-
-    /// <summary>
-    /// Registers a document for the given tab ID (called when restoring from dock-layout JSON).
-    /// Also updates <see cref="IDockFactory.DockableLocator"/> so the Dock library can locate
-    /// the document by ID when re-wiring the layout.
-    /// </summary>
-    public void RegisterDocument(string tabId, WorkspaceDocument document)
-    {
-        this.documentsByTabId[tabId] = document;
-        if (this.DockableLocator is not null)
-            this.DockableLocator[tabId] = () => this.documentsByTabId.GetValueOrDefault(tabId);
-    }
-
-    /// <summary>
     /// #1334: uniformly wires a <see cref="WorkspaceContentDock"/> region so that fresh, restored,
     /// primary, secondary, and menu-split docks are configured identically. The single owns-tabs
     /// "primary" dock is bound to the pane's <see cref="WorkspacePaneViewModel.Tabs"/> via
-    /// <c>ItemsSource</c> and a live <see cref="WorkspaceDocumentGenerator"/>; every other region
-    /// re-initializes and registers its already-materialized restored documents so
-    /// <see cref="GetDocumentForTab"/> and the Ctrl-click / <c>NewWindowRequested</c> anchor
-    /// resolution route each tab to the region that actually hosts it (#1333). Centralizing the
-    /// wiring here removes the DFS-first-only asymmetry that left non-primary restored regions
-    /// mis-registered.
+    /// <c>ItemsSource</c> and a live <see cref="WorkspaceDocumentGenerator"/> that registers into
+    /// the OWNING PANE's registry (#1341); every other region re-initializes and registers its
+    /// already-materialized restored documents into the same per-pane registry so the pane's
+    /// <c>GetDocumentForTab</c> and the Ctrl-click / <c>NewWindowRequested</c> anchor resolution
+    /// route each tab to the region that actually hosts it (#1333).
     /// </summary>
     public void WireContentDock(WorkspaceContentDock dock, WorkspacePaneViewModel workspacePane, bool ownsTabs)
     {
@@ -84,9 +50,9 @@ public class WorkspaceDockFactory : Factory
             dock.VisibleDockables?.Clear();
             dock.ItemsSource = workspacePane.Tabs;
             dock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
-                this,
-                doc => this.RegisterDocument(doc.Id, doc),
-                id => this.UnregisterDocument(id));
+                id => workspacePane.GetDocumentForTab(id),
+                doc => workspacePane.RegisterDocument(doc.Id, doc),
+                id => workspacePane.UnregisterDocument(id));
         }
         else if (dock.VisibleDockables is { } stubs)
         {
@@ -104,7 +70,7 @@ public class WorkspaceDockFactory : Factory
                 stub.Initialize(tabVm);
                 if (!string.IsNullOrEmpty(stub.Id))
                 {
-                    this.RegisterDocument(stub.Id, stub);
+                    workspacePane.RegisterDocument(stub.Id, stub);
                 }
             }
         }
@@ -186,9 +152,9 @@ public class WorkspaceDockFactory : Factory
             VisibleDockables = CreateList<IDockable>(),
             ItemsSource = workspacePane.Tabs,
             ItemContainerGenerator = new WorkspaceDocumentGenerator(
-                this,
-                doc => this.documentsByTabId[doc.Id] = doc,
-                id => this.documentsByTabId.Remove(id)),
+                id => workspacePane.GetDocumentForTab(id),
+                doc => workspacePane.RegisterDocument(doc.Id, doc),
+                id => workspacePane.UnregisterDocument(id)),
         };
 
         var root = CreateRootDock();

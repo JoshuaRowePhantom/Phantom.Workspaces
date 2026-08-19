@@ -21,10 +21,11 @@ public sealed class MainWindowTabNavigatorTests
         public string? SelectedWorkspacePaneId { get; set; }
         public bool NavigatingViaHistory { get; set; }
 
-        public Task ActivateTabByIdAsync(string tabId, string? workspacePaneId)
+        public Task<bool> ActivateTabByRequestAsync(NavigationRequest request)
         {
-            this.Activated.Add((tabId, workspacePaneId));
-            return Task.CompletedTask;
+            var paneId = string.IsNullOrEmpty(request.WorkspaceTabId) ? null : request.WorkspaceTabId;
+            this.Activated.Add((request.DocumentTabId, paneId));
+            return Task.FromResult(true);
         }
 
         public Task OpenAgentForSessionAsync(string sessionKey)

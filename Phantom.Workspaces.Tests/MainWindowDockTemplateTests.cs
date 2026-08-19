@@ -1884,10 +1884,8 @@ public sealed class MainWindowDockTemplateTests
         var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
             viewModel, "d0c11334-0003-4000-8000-000000000003", "tab-left-3", "tab-right-3");
 
-        var factory = GetDockFactory(viewModel);
-
         // The right region's restored tab must be registered so anchor resolution finds it.
-        var rightAnchor = factory.GetDocumentForTab("tab-right-3");
+        var rightAnchor = pane.GetDocumentForTab("tab-right-3");
         Assert.NotNull(rightAnchor);
         Assert.Same(right, rightAnchor!.Owner);
 
@@ -1898,7 +1896,7 @@ public sealed class MainWindowDockTemplateTests
         };
         await viewModel.OpenTabAsync(newTab, insertAfterTabId: "tab-right-3");
 
-        var newDoc = factory.GetDocumentForTab("tab-ctrlclick-3");
+        var newDoc = pane.GetDocumentForTab("tab-ctrlclick-3");
         Assert.NotNull(newDoc);
         Assert.Same(right, newDoc!.Owner);
         Assert.Contains(right.VisibleDockables!.OfType<WorkspaceDocument>(), d => d.Id == "tab-ctrlclick-3");
@@ -1968,11 +1966,9 @@ public sealed class MainWindowDockTemplateTests
         var (pane, left, right) = await RestoreTwoRegionWorkspaceAsync(
             viewModel, "d0c11334-0005-4000-8000-000000000005", "tab-left-5", "tab-right-5");
 
-        var factory = GetDockFactory(viewModel);
-
         // Every content dock's restored tab resolves to the dock that actually hosts it.
-        var leftReg = factory.GetDocumentForTab("tab-left-5");
-        var rightReg = factory.GetDocumentForTab("tab-right-5");
+        var leftReg = pane.GetDocumentForTab("tab-left-5");
+        var rightReg = pane.GetDocumentForTab("tab-right-5");
         Assert.NotNull(leftReg);
         Assert.NotNull(rightReg);
         Assert.Same(left, leftReg!.Owner);

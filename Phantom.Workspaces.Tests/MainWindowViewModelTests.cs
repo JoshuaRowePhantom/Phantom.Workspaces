@@ -230,13 +230,12 @@ public sealed class MainWindowViewModelTests
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
 
-        var (_, _, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
+        var (pane, _, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
             viewModel,
             new EntityId("d0c1a7a0-1333-4000-8000-000000000002"),
             "mr2-left", "mr2-tab-left", "mr2-right", "mr2-tab-right");
 
-        var dockFactory = MultiRegionRestoreTestSupport.GetDockFactory(viewModel);
-        var rightDocument = dockFactory.GetDocumentForTab("mr2-tab-right");
+        var rightDocument = pane.GetDocumentForTab("mr2-tab-right");
         Assert.NotNull(rightDocument);
         Assert.Same(rightDock, rightDocument!.Owner);
     }
@@ -366,7 +365,7 @@ public sealed class MainWindowViewModelTests
         dockFactory.AddDockable(contentRoot, splitDock);
         dockFactory.MoveDockable(primaryDock, splitDock, docA, null);
         Assert.Same(splitDock, docA.Owner);
-        dockFactory.RegisterDocument("mr7-a", docA);
+        pane.RegisterDocument("mr7-a", docA);
 
         pane.SelectedTab = docA.TabViewModel;
         dockFactory.SetActiveDockable(docA);
@@ -548,7 +547,7 @@ public sealed class MainWindowViewModelTests
     {
         var dockFactoryField = typeof(MainWindowViewModel).GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic)!;
         var dockFactory = (WorkspaceDockFactory)dockFactoryField.GetValue(viewModel)!;
-        var document = dockFactory.GetDocumentForTab(tabId)!;
+        var document = viewModel.SelectedWorkspacePane.GetDocumentForTab(tabId)!;
         var documentDock = FindDocumentDockIn(viewModel.SelectedWorkspacePane.ContentLayout!)!;
         dockFactory.SetActiveDockable(document);
         dockFactory.SetFocusedDockable(documentDock, document);
@@ -892,22 +891,20 @@ public sealed class MainWindowViewModelTests
             p => string.Equals(p.Id, workspaceId.Value.ToString(), StringComparison.Ordinal));
         await pane.Populated;
 
-        // Open a tab that becomes registered in the dock factory's tab map.
+        // Open a tab that becomes registered in the pane's tab map.
         var tab = new WebViewModel("https://example-1198.example.com/") { Id = "web-1198-e", Title = "Web 1198 E" };
         await viewModel.OpenTabAsync(tab);
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
-        var dockFactoryField = typeof(MainWindowViewModel).GetField("dockFactory", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var dockFactory = (WorkspaceDockFactory)dockFactoryField.GetValue(viewModel)!;
-        Assert.NotNull(dockFactory.GetDocumentForTab(tab.Id));
+        Assert.NotNull(pane.GetDocumentForTab(tab.Id));
 
-        // Close the pane. Before #1198's fix, this left a stale documentsByTabId entry;
-        // after the fix, pane.Tabs is cleared which propagates through the inner dock's
-        // items-source generator and evicts the entry.
+        // Close the pane. #1341: the per-pane registry is discarded wholesale on dispose, so a
+        // reopened pane starts empty and the collision guard cannot false-positive against a stale
+        // prior-owner entry.
         await viewModel.RemoveWorkspacePaneAsync(pane);
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
-        Assert.Null(dockFactory.GetDocumentForTab(tab.Id));
+        Assert.Null(pane.GetDocumentForTab(tab.Id));
     }
 
     [AvaloniaFact]

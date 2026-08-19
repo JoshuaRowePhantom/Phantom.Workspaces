@@ -39,7 +39,8 @@ internal sealed class MainWindowTabNavigator : ITabNavigator
         if (target.TabId is { } tabId)
         {
             // Reuses the existing #1157 open-but-unselected pane logic.
-            await this.host.ActivateTabByIdAsync(tabId, target.WorkspacePaneId);
+            await this.host.ActivateTabByRequestAsync(
+                new NavigationRequest(target.WorkspacePaneId ?? string.Empty, tabId));
 
             if (options.MarkNotificationRead)
             {

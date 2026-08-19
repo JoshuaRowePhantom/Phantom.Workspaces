@@ -11,16 +11,16 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public sealed class WorkspaceDocumentGenerator : DockItemContainerGenerator
 {
-    private readonly WorkspaceDockFactory? factory;
+    private readonly Func<string, WorkspaceDocument?>? getDocumentForTab;
     private readonly Action<WorkspaceDocument>? onPrepared;
     private readonly Action<string>? onCleared;
 
     public WorkspaceDocumentGenerator(
-        WorkspaceDockFactory? factory = null,
+        Func<string, WorkspaceDocument?>? getDocumentForTab = null,
         Action<WorkspaceDocument>? onPrepared = null,
         Action<string>? onCleared = null)
     {
-        this.factory = factory;
+        this.getDocumentForTab = getDocumentForTab;
         this.onPrepared = onPrepared;
         this.onCleared = onCleared;
     }
@@ -32,12 +32,14 @@ public sealed class WorkspaceDocumentGenerator : DockItemContainerGenerator
             return null;
         }
 
-        // #1333: if this tab already has a document hosted in a DIFFERENT region (a restored
-        // non-primary split dock that was registered before this ItemsSource-bound primary dock
-        // was populated), do not fabricate a duplicate wrapper here. Returning null makes the
-        // Dock ItemsSource sync skip adding a container, leaving the tab in its own region and
-        // keeping documentsByTabId pointing at the dock that actually hosts it.
-        var existing = this.factory?.GetDocumentForTab(tab.Id);
+        // #1333/#1341: if this tab already has a document hosted in a DIFFERENT region of THIS pane
+        // (a restored non-primary split dock that was registered before this ItemsSource-bound
+        // primary dock was populated), do not fabricate a duplicate wrapper here. Returning null
+        // makes the Dock ItemsSource sync skip adding a container, leaving the tab in its own region
+        // and keeping the owning pane's registry pointing at the dock that actually hosts it.
+        // The lookup resolves against the OWNING PANE's registry, so it can no longer false-positive
+        // against a stale entry left by a different, already-closed pane (#1340 mechanism (A)).
+        var existing = this.getDocumentForTab?.Invoke(tab.Id);
         if (existing is not null && !ReferenceEquals(existing.Owner, dock))
         {
             return null;

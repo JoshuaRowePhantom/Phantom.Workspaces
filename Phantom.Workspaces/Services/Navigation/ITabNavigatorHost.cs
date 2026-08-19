@@ -10,10 +10,12 @@ namespace Phantom.Workspaces.Services.Navigation;
 internal interface ITabNavigatorHost
 {
     /// <summary>
-    /// Selects the pane that owns <paramref name="tabId"/> (opening it first if it is registered but
-    /// not yet loaded, per #1157) and activates + focuses the tab via the dock factory.
+    /// Resolves the pane named by <see cref="NavigationRequest.WorkspaceTabId"/> (opening it first if
+    /// it is registered but not yet loaded, per #1157), selects it, then activates + focuses the
+    /// document named by <see cref="NavigationRequest.DocumentTabId"/>. Returns true when the document
+    /// tab was activated.
     /// </summary>
-    Task ActivateTabByIdAsync(string tabId, string? workspacePaneId);
+    Task<bool> ActivateTabByRequestAsync(NavigationRequest request);
 
     /// <summary>
     /// Brain-button fallback: switches to (loading if necessary) the workspace pane the agent session
