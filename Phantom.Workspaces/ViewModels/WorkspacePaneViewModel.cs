@@ -619,7 +619,16 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
                 }
 
                 this.Tabs.Add(tabVm);
-                success = true;
+
+                // #1340: only treat the restore as successful if the tab actually materialized a
+                // WorkspaceDocument (registry hit), not merely that Tabs.Add completed. Defence in
+                // depth: any future regression in the generator (collision guard, ItemsSource
+                // wiring, etc.) then falls through to the default-tab fallback instead of silently
+                // rendering "no documents open".
+                if (this.GetDocumentForTab(tabVm.Id) is not null)
+                {
+                    success = true;
+                }
             }
         });
 

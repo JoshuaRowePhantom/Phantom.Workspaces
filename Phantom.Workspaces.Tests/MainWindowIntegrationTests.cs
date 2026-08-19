@@ -4105,6 +4105,272 @@ public sealed class MainWindowIntegrationTests
         Assert.Contains(pane.Tabs, t => t is EntityWorkspaceTabViewModel);
     }
 
+    // ── #1340: close→reopen of restored agent-session tabs (per-pane registry) ──
+
+    /// <summary>
+    /// #1340 shared setup: creates an agent-definition + agent-session entity and a valid empty
+    /// "template" workspace. Opens the template as a real workspace pane, opens the agent session
+    /// into it as a tab via <see cref="OpenAgentSessionShortcutHandler"/>, captures the live
+    /// dock-layout, closes the template, then creates a SEPARATE fresh workspace entity that carries
+    /// that dock-layout and opens it — so the returned pane was produced by the dock-layout restore
+    /// path (the path exercised by the #1340 close→reopen mechanism). Returns the reopenable
+    /// workspace id, the still-open restored pane, and the restored tab id.
+    /// </summary>
+    private static async Task<(EntityId WorkspaceId, WorkspacePaneViewModel Pane, string TabId)>
+        OpenAgentSessionWorkspaceAndPersistDockLayoutAsync(
+            MainWindowViewModel viewModel,
+            string agentDefinitionGuid,
+            string templateWorkspaceGuid,
+            string restoreWorkspaceGuid)
+    {
+        static async Task Bounded(Task task, string label)
+        {
+            var timeout = Task.Delay(TimeSpan.FromSeconds(8));
+            if (await Task.WhenAny(task, timeout) == timeout)
+            {
+                Assert.Fail($"#1340 helper timed out at: {label}");
+            }
+
+            await task;
+        }
+
+        static async Task<T> BoundedResult<T>(Task<T> task, string label)
+        {
+            var timeout = Task.Delay(TimeSpan.FromSeconds(8));
+            if (await Task.WhenAny(task, timeout) == timeout)
+            {
+                Assert.Fail($"#1340 helper timed out at: {label}");
+            }
+
+            return await task;
+        }
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var agentDefinitionEntity = await UpsertEntityAndLoadAsync(entityBroker, new EntityId(agentDefinitionGuid), $$"""
+            {
+              "entity-id": "{{agentDefinitionGuid}}",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "1340-echo", "{{agentDefinitionGuid}}"]],
+              "display-name": { "default": "1340 Echo" },
+              "definition": {
+                "kind": "prompt",
+                "name": "echo-1340",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(agentSessionEntity);
+
+        // Template workspace: a valid empty workspace opened as a real, closable pane.
+        var templateWorkspaceId = new EntityId(templateWorkspaceGuid);
+        await UpsertEntityAndLoadAsync(entityBroker, templateWorkspaceId, $$"""
+            {
+              "entity-id": "{{templateWorkspaceGuid}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "1340 Template WS" },
+              "regions": []
+            }
+            """);
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = templateWorkspaceId });
+        var templatePane = Assert.Single(
+            viewModel.WorkspacePanes,
+            p => string.Equals(p.Id, templateWorkspaceId.ToString(), StringComparison.Ordinal));
+        await CloseDefaultPaneTabsAsync(viewModel, templatePane);
+        viewModel.SelectedWorkspacePane = templatePane;
+
+        // Open the agent session into the template pane and capture the auto-generated tab id.
+        var handler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext, CreateLocalTrustedExecutorSelector(), CreateTestRunningAgentChatTable());
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!));
+        var sessionTab = await BoundedResult(
+            WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(templatePane),
+            "WaitForSelectedTabAsync(templatePane)");
+        var tabId = sessionTab.Id;
+
+        var templateDock = FindDocumentDockIn(templatePane.ContentLayout!);
+        Assert.NotNull(templateDock);
+        await Bounded(
+            WaitForWorkspaceTabAsync(templateDock!, tabId),
+            "WaitForWorkspaceTabAsync(templateDock)");
+
+        // The agent-session document's Descriptor (needed for round-trip restore) is only populated
+        // once the agent tab has finished initializing.
+        await Bounded(WaitForAgentReadyAsync(sessionTab), "WaitForAgentReadyAsync(sessionTab)");
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(templatePane.ContentLayout!);
+        Assert.Contains("Descriptor", dockLayoutJson, StringComparison.Ordinal);
+
+        await viewModel.RemoveWorkspacePaneAsync(templatePane);
+
+        // Fresh restore workspace carrying the captured dock-layout (single upsert of a new entity).
+        var restoreWorkspaceId = new EntityId(restoreWorkspaceGuid);
+        var withLayoutJson = $$"""
+            {
+              "entity-id": "{{restoreWorkspaceGuid}}",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "1340 Reopen WS" },
+              "dock-layout": {{dockLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, restoreWorkspaceId, withLayoutJson);
+
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = restoreWorkspaceId });
+        var pane = Assert.Single(
+            viewModel.WorkspacePanes,
+            p => string.Equals(p.Id, restoreWorkspaceId.ToString(), StringComparison.Ordinal));
+
+        await Bounded(WaitForPanePopulatedAsync(pane), "WaitForPanePopulatedAsync(restore pane)");
+
+        var contentDock = FindDocumentDockIn(pane.ContentLayout!);
+        if (contentDock is null
+            || contentDock.VisibleDockables?.OfType<WorkspaceDocument>().Any(d => d.Id == tabId) != true)
+        {
+            var tabInfo = string.Join(", ", pane.Tabs.Select(t => $"{t.GetType().Name}:{t.Id}"));
+            var dockInfo = contentDock?.VisibleDockables is null
+                ? "<null>"
+                : string.Join(", ", contentDock.VisibleDockables.Select(d => $"{d.GetType().Name}:{d.Id}"));
+            Assert.Fail(
+                $"#1340 restore did not materialize agent doc '{tabId}'. Tabs=[{tabInfo}] DockDocs=[{dockInfo}]");
+        }
+
+        return (restoreWorkspaceId, pane, tabId);
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task WorkspaceClose_WithRestoredAgentSessionTab_EvictsDocumentsByTabId()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (_, pane, tabId) = await OpenAgentSessionWorkspaceAndPersistDockLayoutAsync(
+            viewModel,
+            "a9e11340-0000-4000-8000-000000000001",
+            "b0b11340-0000-4000-8000-000000000001",
+            "c0c11340-0000-4000-8000-000000000001");
+
+        // The restored agent-session tab materialized a document in THIS pane's per-pane registry.
+        Assert.NotNull(pane.GetDocumentForTab(tabId));
+
+        // Closing the pane discards its entire per-pane registry — no stale entry can survive to be
+        // reachable from a subsequent reopen (the structural #1341 fix for the #1340 mechanism).
+        await viewModel.RemoveWorkspacePaneAsync(pane);
+
+        Assert.Null(pane.GetDocumentForTab(tabId));
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task WorkspaceReopen_AfterCloseWithRestoredAgentSessionTab_MaterializesWorkspaceDocumentInPrimaryDock()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var (workspaceId, pane1, tabId) = await OpenAgentSessionWorkspaceAndPersistDockLayoutAsync(
+            viewModel,
+            "a9e11340-0000-4000-8000-000000000002",
+            "b0b11340-0000-4000-8000-000000000002",
+            "c0c11340-0000-4000-8000-000000000002");
+
+        await viewModel.RemoveWorkspacePaneAsync(pane1);
+
+        // Reopen the same workspace; restore again goes through the persisted dock-layout path.
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
+        var pane2 = Assert.Single(
+            viewModel.WorkspacePanes,
+            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotSame(pane1, pane2);
+
+        await WaitForPanePopulatedAsync(pane2);
+
+        var primaryDock = FindDocumentDockIn(pane2.ContentLayout!);
+        Assert.NotNull(primaryDock);
+        await WaitForWorkspaceTabAsync(primaryDock!, tabId);
+
+        var restoredDoc = primaryDock!.VisibleDockables!
+            .OfType<WorkspaceDocument>()
+            .FirstOrDefault(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+        Assert.NotNull(restoredDoc);
+        Assert.NotNull(pane2.GetDocumentForTab(tabId));
+    }
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task WorkspaceReopen_AfterCloseWithAgentSessionTabInSplitRegion_RecreatesTabInSameRegion()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+
+        var (_, pane1, tabId) = await OpenAgentSessionWorkspaceAndPersistDockLayoutAsync(
+            viewModel,
+            "a9e11340-0000-4000-8000-000000000003",
+            "b0b11340-0000-4000-8000-000000000003",
+            "c0c11340-0000-4000-8000-000000000003");
+
+        // Move the agent-session document into a NON-PRIMARY split region, then persist that layout
+        // as a fresh restore workspace.
+        var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+        var primaryDock = FindDocumentDockIn(pane1.ContentLayout!)!;
+        var agentDoc = primaryDock.VisibleDockables!.OfType<WorkspaceDocument>()
+            .Single(d => string.Equals(d.Id, tabId, StringComparison.Ordinal));
+
+        var splitDock = new WorkspaceContentDock
+        {
+            Id = $"split-{tabId}",
+            VisibleDockables = dockFactory.CreateList<IDockable>(),
+        };
+        var contentRoot = (IDock)pane1.ContentLayout!;
+        dockFactory.AddDockable(contentRoot, splitDock);
+        dockFactory.MoveDockable(primaryDock, splitDock, agentDoc, null);
+        Assert.Same(splitDock, agentDoc.Owner);
+
+        var serializer = new DockSerializer(
+            typeof(System.Collections.ObjectModel.ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var splitLayoutJson = serializer.Serialize(pane1.ContentLayout!);
+
+        var splitWorkspaceId = new EntityId("d0d11340-0000-4000-8000-000000000003");
+        var withSplitLayoutJson = $$"""
+            {
+              "entity-id": "d0d11340-0000-4000-8000-000000000003",
+              "entity-types": ["entity", "workspace"],
+              "display-name": { "default": "1340 Split Reopen WS" },
+              "dock-layout": {{splitLayoutJson}},
+              "regions": []
+            }
+            """;
+        await UpsertEntityAndLoadAsync(entityBroker, splitWorkspaceId, withSplitLayoutJson);
+
+        await viewModel.RemoveWorkspacePaneAsync(pane1);
+
+        // Open the split-layout workspace: the agent-session tab that lived in a non-primary split
+        // region must be re-created.
+        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = splitWorkspaceId });
+        var pane2 = Assert.Single(
+            viewModel.WorkspacePanes,
+            p => string.Equals(p.Id, splitWorkspaceId.ToString(), StringComparison.Ordinal));
+        Assert.NotSame(pane1, pane2);
+
+        await WaitForPanePopulatedAsync(pane2);
+
+        // The restored tab must materialize a WorkspaceDocument in a content dock of the reopened
+        // pane, and the pane's per-pane registry must own it. Under #1341 the non-primary eviction
+        // path is structural, so this succeeds by construction.
+        Assert.NotNull(pane2.GetDocumentForTab(tabId));
+        var hostingDock = MultiRegionRestoreTestSupport.EnumerateDocks(pane2.ContentLayout!)
+            .OfType<WorkspaceContentDock>()
+            .FirstOrDefault(d => d.VisibleDockables?.OfType<WorkspaceDocument>()
+                .Any(doc => string.Equals(doc.Id, tabId, StringComparison.Ordinal)) == true);
+        Assert.NotNull(hostingDock);
+    }
+
     // ── #1158: DockTabDescriptor.Title round-trips through save→restore ─────
 
     [AvaloniaFact(Timeout = 15_000)]

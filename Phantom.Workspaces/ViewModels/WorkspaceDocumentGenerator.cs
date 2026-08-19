@@ -42,7 +42,17 @@ public sealed class WorkspaceDocumentGenerator : DockItemContainerGenerator
         var existing = this.getDocumentForTab?.Invoke(tab.Id);
         if (existing is not null && !ReferenceEquals(existing.Owner, dock))
         {
-            return null;
+            // #1340 defensive hardening: only defer to the existing registration when it is still
+            // genuinely hosted by its claimed owner (a live non-primary split region). If the entry
+            // is orphaned — its owner is not a dock, or that dock no longer lists the document in its
+            // VisibleDockables — treat it as stale and materialize a fresh document here instead of
+            // silently returning null (which would leave the tab invisible / "no documents open").
+            var ownerDock = existing.Owner as IDock;
+            var stillHosted = ownerDock?.VisibleDockables?.Contains(existing) == true;
+            if (stillHosted)
+            {
+                return null;
+            }
         }
 
         return new WorkspaceDocument();

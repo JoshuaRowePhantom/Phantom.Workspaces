@@ -1,9 +1,11 @@
 using Avalonia.Headless.XUnit;
 using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -367,6 +369,45 @@ public sealed class WorkspacePaneViewModelTests
         await pane.DisposeAsync();
 
         Assert.Equal(1, leaseDisposed);
+    }
+
+    // ── #1340: restore does not reuse a stale documentsByTabId entry ─────────
+
+    [AvaloniaFact(Timeout = 20_000)]
+    public async Task TryRestoreFromDockLayoutAsync_WithStaleDocumentsByTabIdEntry_StillCreatesFreshWorkspaceDocument()
+    {
+        // Drive a real workspace pane (wired with a full environment) via the MainWindow view model.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var tab = new WebViewModel("https://stale-entry-1340.example.com")
+        {
+            Id = "stale-tab-1",
+            Title = "Stale Entry Tab",
+        };
+        await viewModel.OpenTabAsync(tab);
+        var pane = viewModel.SelectedWorkspacePane;
+
+        var contentDock = MainWindowIntegrationTests.FindDocumentDockIn(pane.ContentLayout!);
+        Assert.NotNull(contentDock);
+        await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "stale-tab-1");
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var dockLayoutJson = serializer.Serialize(pane.ContentLayout!);
+
+        // Inject a STALE registry entry for the tab id, owned by an orphan dock that no longer hosts
+        // it — the exact #1340 pre-condition a prior implementation would have hit on reopen.
+        var orphanOwner = new global::Dock.Model.Mvvm.Controls.DocumentDock { Id = "prior-owner" };
+        var staleDoc = new WorkspaceDocument { Id = "stale-tab-1", Owner = orphanOwner };
+        pane.RegisterDocument("stale-tab-1", staleDoc);
+
+        // Re-run restore; the stale entry must NOT suppress creation of a fresh WorkspaceDocument.
+        var success = await pane.TryRestoreFromDockLayoutAsync(pane.Entity, dockLayoutJson);
+
+        Assert.True(success);
+        var fresh = pane.GetDocumentForTab("stale-tab-1");
+        Assert.NotNull(fresh);
+        Assert.NotSame(staleDoc, fresh);
     }
 
     private static SubscribedEntityViewModel CreateWorkspaceEntity(
