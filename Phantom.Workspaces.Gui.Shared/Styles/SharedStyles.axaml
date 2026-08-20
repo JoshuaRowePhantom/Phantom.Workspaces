@@ -207,7 +207,6 @@
                 <StackPanel HorizontalAlignment="Stretch">
                     <Border Classes="entity-card-shell-border"
                             Classes.has-children="{Binding HasChildren, FallbackValue=False}"
-                            ClipToBounds="True"
                             HorizontalAlignment="Stretch">
                         <ContentPresenter Classes="branch-header"
                                           HorizontalAlignment="Stretch"

@@ -37,20 +37,25 @@
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       AllowAutoHide="False">
-            <ContentControl Classes="entity-card-shell entity-card-single-host"
-                            DataContext="{Binding EntityCardNode}"
-                            Content="{Binding}"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Top"
-                            Margin="0,12,0,0"
-                            MinWidth="160">
-                <ContentControl.MaxWidth>
-                    <MultiBinding Converter="{x:Static converters:SingleEntityMaxWidthConverter.Instance}">
-                        <Binding Path="$parent[ScrollViewer].Viewport.Width" />
-                        <Binding Path="$parent[ScrollViewer].Bounds.Width" />
-                    </MultiBinding>
-                </ContentControl.MaxWidth>
-            </ContentControl>
+            <!-- Issue #1343: the 12px top gap lives on this wrapping Grid, so the ScrollViewer
+                 measures its finite arranged height against the real (possibly over-tall) content
+                 height and a vertical scrollbar engages when the card exceeds the viewport. The
+                 inner ContentControl is intentionally NOT top-aligned. -->
+            <Grid RowDefinitions="Auto" Margin="0,12,0,0">
+                <ContentControl Grid.Row="0"
+                                Classes="entity-card-shell entity-card-single-host"
+                                DataContext="{Binding EntityCardNode}"
+                                Content="{Binding}"
+                                HorizontalAlignment="Center"
+                                MinWidth="160">
+                    <ContentControl.MaxWidth>
+                        <MultiBinding Converter="{x:Static converters:SingleEntityMaxWidthConverter.Instance}">
+                            <Binding Path="$parent[ScrollViewer].Viewport.Width" />
+                            <Binding Path="$parent[ScrollViewer].Bounds.Width" />
+                        </MultiBinding>
+                    </ContentControl.MaxWidth>
+                </ContentControl>
+            </Grid>
         </ScrollViewer>
     </DataTemplate>
 

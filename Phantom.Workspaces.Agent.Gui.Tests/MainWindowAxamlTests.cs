@@ -317,7 +317,10 @@ public sealed class MainWindowAxamlTests
         Assert.Contains("Classes=\"workspace-entity-header-wrap\"", entityCardContent, StringComparison.Ordinal);
         Assert.Contains("ActionsMinWidth=\"100\"", entityCardContent, StringComparison.Ordinal);
         Assert.DoesNotContain("HorizontalAlignment=\"Left\"", entityCardContent, StringComparison.Ordinal);
-        Assert.Contains("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
+        // Issues #1343/#1347: the card root no longer clips its own content — clipping the
+        // scrollable chain hid tall-card overflow instead of letting the tree/tab ScrollViewer
+        // scroll it.
+        Assert.DoesNotContain("ClipToBounds=\"True\"", entityCardContent, StringComparison.Ordinal);
 
         Assert.Contains(
             "<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />",
