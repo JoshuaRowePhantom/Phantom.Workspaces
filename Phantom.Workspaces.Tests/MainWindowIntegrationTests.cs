@@ -5567,7 +5567,7 @@ public sealed class MainWindowIntegrationTests
         return await task!;
     }
 
-    private static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)    {
+    internal static IDocumentDock? GetDocumentDock(MainWindowViewModel viewModel)    {
         var contentLayout = viewModel.SelectedWorkspacePane?.ContentLayout;
         if (contentLayout is null)
         {
@@ -5602,7 +5602,7 @@ public sealed class MainWindowIntegrationTests
         viewModel.NotificationService.MarkRead(doc.Id);
     }
 
-    private static void ActivateWorkspacePaneAtIndex(MainWindowViewModel viewModel, string indexText)
+    internal static void ActivateWorkspacePaneAtIndex(MainWindowViewModel viewModel, string indexText)
     {
         if (!int.TryParse(indexText, out var index) || index < 0 || index >= viewModel.WorkspacePanes.Count)
         {
@@ -5928,7 +5928,7 @@ public sealed class MainWindowIntegrationTests
         throw new TimeoutException($"DocumentTabStrip with {expectedDataContextType.Name} DataContext and inflated items not found within {timeoutMs}ms");
     }
 
-    private static async Task CloseWindowAsync(Window window)
+    internal static async Task CloseWindowAsync(Window window)
     {
         window.Close();
         await Dispatcher.UIThread.InvokeAsync(() => { });
@@ -10847,12 +10847,12 @@ public sealed class MainWindowIntegrationTests
 
     // --- #1124 top-level dock-tab-switch adoption tests ---
 
-    private static DockControl GetTopLevelDockControl(MainWindow window) =>
+    internal static DockControl GetTopLevelDockControl(MainWindow window) =>
         window.GetVisualDescendants()
             .OfType<DockControl>()
             .First(d => string.Equals(d.Name, "TopLevelDockControl", StringComparison.Ordinal));
 
-    private static async Task OpenTwoWorkspacesForTabSwitchAsync(
+    internal static async Task OpenTwoWorkspacesForTabSwitchAsync(
         MainWindowViewModel viewModel,
         string idPrefix)
     {
