@@ -114,6 +114,120 @@ public sealed class TunnelRelayDevTunnelHostTests
     }
 
     [Fact]
+    public void IsExpectedShutdownException_SocketExceptionOperationAborted_ReturnsTrue()
+    {
+        // Issue #1350: the SDK's aborted in-flight TcpClient connect faults with SocketError
+        // .OperationAborted (995); the classifier must treat it as an expected shutdown outcome.
+        Assert.True(TunnelRelayDevTunnelHost.IsExpectedShutdownException(
+            new SocketException((int)SocketError.OperationAborted)));
+    }
+
+    [Fact]
+    public async Task CancelAndDisposeRelayHostSafelyAsync_PendingTcpClientConnectAbortedDuringShutdown_DoesNotLeakUnobserved()
+    {
+        // Issue #1350: the SDK bridges each incoming relay channel to the local port with a
+        // fire-and-forget TcpClient connect that is NOT returned by DisposeAsync. Cancelling the
+        // shutdown token BEFORE disposal (as the wrapper does) makes that connect unwind as *Canceled*
+        // instead of *Faulted* with SocketError.OperationAborted, so nothing reaches the finalizer.
+        Exception? unobserved = null;
+        void Handler(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            unobserved = args.Exception;
+            args.SetObserved();
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            var cts = new CancellationTokenSource();
+            var host = new TcpConnectSpawningDisposable(cts.Token);
+
+            await TunnelRelayDevTunnelHost.CancelAndDisposeRelayHostSafelyAsync(host, cts);
+
+            await host.ConnectCompleted;
+            host = null;
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.Null(unobserved);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+    }
+
+    [Fact]
+    public void ObserveForwardedConnectTransform_ForwarderConnectFaultsWithOperationAborted_IsConsumedAtSource()
+    {
+        // Issue #1350: a forwarded-port transform/connect that faults with an expected shutdown outcome
+        // must be observed at the SDK-owning site (via ForwardedPortConnecting), never on the finalizer.
+        Exception? unobserved = null;
+        void Handler(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            unobserved = args.Exception;
+            args.SetObserved();
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            var faulted = Task.FromException<System.IO.Stream?>(
+                new SocketException((int)SocketError.OperationAborted));
+
+            TunnelRelayDevTunnelHost.ObserveForwardedConnectTransform(faulted);
+            faulted = null;
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.Null(unobserved);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+    }
+
+    [Fact]
+    public void ObserveForwardedConnectTransform_GenuineTransformFault_IsReSurfaced()
+    {
+        // A non-shutdown fault surfacing through the transform pipeline must NOT be silently swallowed;
+        // ObserveForwardedConnectTransform re-raises it so real defects still reach the crash handlers.
+        Exception? unobserved = null;
+        void Handler(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            unobserved = args.Exception;
+            args.SetObserved();
+        }
+
+        TaskScheduler.UnobservedTaskException += Handler;
+        try
+        {
+            var faulted = Task.FromException<System.IO.Stream?>(new InvalidOperationException("real defect"));
+
+            TunnelRelayDevTunnelHost.ObserveForwardedConnectTransform(faulted);
+            faulted = null;
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.NotNull(unobserved);
+            var inners = (unobserved as AggregateException)?.Flatten().InnerExceptions
+                ?? (System.Collections.Generic.IReadOnlyList<Exception>)new[] { unobserved! };
+            Assert.Contains(inners, inner => inner is InvalidOperationException { Message: "real defect" });
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Handler;
+        }
+    }
+
+    [Fact]
     public async Task DisposeRelayHostSafelyAsync_UnobservedBackgroundFault_DoesNotSurfaceOnFinalizer()
     {
         // Regression: prior to the fix, the SDK's DisposeAsync would surface a terminal exception
@@ -306,6 +420,41 @@ public sealed class TunnelRelayDevTunnelHostTests
                 {
                     this.shutdownToken.ThrowIfCancellationRequested();
                     throw new ObjectDisposedException("SshSession");
+                }
+                finally
+                {
+                    this.completed.SetResult();
+                }
+            });
+
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class TcpConnectSpawningDisposable : IAsyncDisposable
+    {
+        private readonly CancellationToken shutdownToken;
+        private readonly TaskCompletionSource completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TcpConnectSpawningDisposable(CancellationToken shutdownToken)
+        {
+            this.shutdownToken = shutdownToken;
+        }
+
+        /// <summary>Completes when the fire-and-forget "connect" task has finished.</summary>
+        public Task ConnectCompleted => this.completed.Task;
+
+        public ValueTask DisposeAsync()
+        {
+            // Model the SDK's fire-and-forget local TcpClient connect (issue #1350): a Task NOT
+            // returned to / awaited by us. It observes the shutdown token — cancelled => the Task
+            // becomes Canceled (benign); otherwise it faults with SocketError.OperationAborted.
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    this.shutdownToken.ThrowIfCancellationRequested();
+                    throw new SocketException((int)SocketError.OperationAborted);
                 }
                 finally
                 {

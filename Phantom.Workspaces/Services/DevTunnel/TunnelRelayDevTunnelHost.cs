@@ -1,11 +1,13 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.DevTunnels.Connections;
 using Microsoft.DevTunnels.Contracts;
 using Microsoft.DevTunnels.Ssh;
+using Microsoft.DevTunnels.Ssh.Tcp.Events;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
@@ -20,6 +22,7 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
     private readonly DevTunnelManagementClientWrapper managementClientWrapper;
     private TunnelRelayTunnelHost? relayHost;
     private CancellationTokenSource? shutdownCts;
+    private volatile bool shuttingDown;
 
     public TunnelRelayDevTunnelHost(DevTunnelManagementClientWrapper managementClientWrapper)
     {
@@ -45,6 +48,16 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
         var host = new TunnelRelayTunnelHost(
             this.managementClientWrapper.ManagementClient,
             new TraceSource(nameof(TunnelRelayDevTunnelHost)));
+
+        // Issue #1350: the SDK bridges each incoming relay channel to the local port with a
+        // fire-and-forget TcpClient connect. On teardown the SDK aborts that in-flight connect
+        // (SocketError.OperationAborted, 995); on the loopback dual-stack path the SDK abandons the
+        // faulted connect Task (it is not returned by DisposeAsync), so it reaches the finalizer as an
+        // unobserved fault and is escalated to a crash dialog. Subscribing to ForwardedPortConnecting
+        // is the seam we own: once teardown has begun we reject new forwarded connections so the SDK
+        // never starts a fresh connect that would be aborted, and we observe any in-flight transform
+        // so its terminal shutdown outcome is consumed at the source rather than on the finalizer.
+        host.ForwardedPortConnecting += this.OnForwardedPortConnecting;
         await host.ConnectAsync(tunnel, new TunnelConnectionOptions { EnableRetry = true }, this.shutdownCts.Token).ConfigureAwait(false);
         this.relayHost = host;
     }
@@ -57,6 +70,11 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
             var cts = this.shutdownCts;
             this.relayHost = null;
             this.shutdownCts = null;
+
+            // Reject any further forwarded-port connections before we start cancelling/disposing, so
+            // no new SDK local TcpClient connect can begin racing the teardown (issue #1350).
+            this.shuttingDown = true;
+            host.ForwardedPortConnecting -= this.OnForwardedPortConnecting;
             await CancelAndDisposeRelayHostSafelyAsync(host, cts).ConfigureAwait(false);
         }
     }
@@ -122,6 +140,57 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
         {
             // Expected terminal outcome for the SDK's fire-and-forget background work — consume.
         }
+    }
+
+    /// <summary>
+    /// Handles the SDK relay host's <c>ForwardedPortConnecting</c> event — the seam that fires as the
+    /// SDK is about to bridge an incoming relay channel to the local port (issue #1350). Once teardown
+    /// has begun (<see cref="shuttingDown"/>) we reject the connection so the SDK never starts a fresh
+    /// local <see cref="System.Net.Sockets.TcpClient"/> connect that would be aborted mid-flight and
+    /// leaked as an unobserved fault; otherwise we observe any transform pipeline the SDK is running so
+    /// its terminal shutdown outcome is consumed at the site that owns the relay host.
+    /// </summary>
+    private void OnForwardedPortConnecting(object? sender, ForwardedPortConnectingEventArgs e)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        if (this.shuttingDown)
+        {
+            // A null transformed stream tells the SDK to reject the connection instead of connecting.
+            e.TransformTask = Task.FromResult<Stream?>(null);
+            return;
+        }
+
+        ObserveForwardedConnectTransform(e.TransformTask);
+    }
+
+    /// <summary>
+    /// Observes a forwarded-port transform task (if any) so a terminal shutdown-race outcome the SDK
+    /// surfaces through it is consumed here — at the site that owns the relay host — instead of being
+    /// abandoned to <see cref="TaskScheduler.UnobservedTaskException"/>. Genuine (non-shutdown) faults
+    /// are re-surfaced so real defects are never silently swallowed. Extracted as an internal seam so
+    /// the observe-and-classify behaviour is regressible without a live SDK relay host.
+    /// </summary>
+    internal static void ObserveForwardedConnectTransform(Task? transformTask)
+    {
+        if (transformTask is null)
+        {
+            return;
+        }
+
+        _ = transformTask.ContinueWith(
+            static completed =>
+            {
+                var exception = completed.Exception;
+                if (exception is not null && !IsExpectedShutdownException(exception))
+                {
+                    // Genuine defect surfacing through the transform pipeline — re-raise so it is not
+                    // silently swallowed (it becomes a fresh fault that reaches the normal handlers).
+                    throw exception;
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>
