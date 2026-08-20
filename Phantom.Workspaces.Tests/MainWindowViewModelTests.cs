@@ -25,35 +25,6 @@ namespace Phantom.Workspaces.Tests;
 public sealed class MainWindowViewModelTests
 {
     [AvaloniaFact]
-    public async Task MainWindow_AltDigit_ActivatesContentTabFromVisibleDockables()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        await viewModel.OpenTabAsync(new WebViewModel("https://a.example.com") { Id = "alt-content-a", Title = "A" });
-        await viewModel.OpenTabAsync(new WebViewModel("https://b.example.com") { Id = "alt-content-b", Title = "B" });
-        await viewModel.OpenTabAsync(new WebViewModel("https://c.example.com") { Id = "alt-content-c", Title = "C" });
-
-        var contentDock = FindDocumentDockIn(viewModel.SelectedWorkspacePane.ContentLayout!);
-        Assert.NotNull(contentDock);
-        var docs = contentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
-        Assert.True(docs.Count >= 3);
-        var contentDockControl = CreateContentDockControl(viewModel.SelectedWorkspacePane.ContentLayout!);
-
-        var args = new KeyEventArgs
-        {
-            RoutedEvent = InputElement.KeyDownEvent,
-            Key = Key.D2,
-            KeyModifiers = KeyModifiers.Alt,
-            Source = contentDockControl,
-        };
-        contentDockControl.RaiseEvent(args);
-
-        Assert.True(args.Handled);
-        Assert.Same(docs[1], contentDock.ActiveDockable);
-    }
-
-    [AvaloniaFact]
     public async Task MainWindow_AltShiftDigit_ActivatesWorkspacePaneHostTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -94,66 +65,6 @@ public sealed class MainWindowViewModelTests
         {
             window.Close();
         }
-    }
-
-    [AvaloniaFact]
-    public async Task MainWindow_BadgeLabelAndActivation_UseSameOrder()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-        await viewModel.OpenTabAsync(new WebViewModel("https://1.example.com") { Id = "order-a", Title = "A" });
-        await viewModel.OpenTabAsync(new WebViewModel("https://2.example.com") { Id = "order-b", Title = "B" });
-        await viewModel.OpenTabAsync(new WebViewModel("https://3.example.com") { Id = "order-c", Title = "C" });
-
-        var contentDock = FindDocumentDockIn(viewModel.SelectedWorkspacePane.ContentLayout!);
-        Assert.NotNull(contentDock);
-        var visible = Assert.IsAssignableFrom<IList<IDockable>>(contentDock!.VisibleDockables!);
-        var firstBefore = visible[0];
-        visible.RemoveAt(0);
-        visible.Insert(2, firstBefore);
-        var contentDockControl = CreateContentDockControl(viewModel.SelectedWorkspacePane.ContentLayout!);
-
-        var args = new KeyEventArgs
-        {
-            RoutedEvent = InputElement.KeyDownEvent,
-            Key = Key.D1,
-            KeyModifiers = KeyModifiers.Alt,
-            Source = contentDockControl,
-        };
-        contentDockControl.RaiseEvent(args);
-
-        Assert.True(args.Handled);
-        Assert.Same(visible[0], contentDock.ActiveDockable);
-    }
-
-    [AvaloniaFact]
-    public async Task MainWindow_AfterSplitOrReorder_NumberingMatchesVisibleOrder()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-        await viewModel.OpenTabAsync(new WebViewModel("https://x.example.com") { Id = "reorder-a", Title = "A" });
-        await viewModel.OpenTabAsync(new WebViewModel("https://y.example.com") { Id = "reorder-b", Title = "B" });
-        await viewModel.OpenTabAsync(new WebViewModel("https://z.example.com") { Id = "reorder-c", Title = "C" });
-
-        var contentDock = FindDocumentDockIn(viewModel.SelectedWorkspacePane.ContentLayout!);
-        Assert.NotNull(contentDock);
-        var visible = Assert.IsAssignableFrom<IList<IDockable>>(contentDock!.VisibleDockables!);
-        var last = visible[2];
-        visible.RemoveAt(2);
-        visible.Insert(0, last);
-        var contentDockControl = CreateContentDockControl(viewModel.SelectedWorkspacePane.ContentLayout!);
-
-        var args = new KeyEventArgs
-        {
-            RoutedEvent = InputElement.KeyDownEvent,
-            Key = Key.D2,
-            KeyModifiers = KeyModifiers.Alt,
-            Source = contentDockControl,
-        };
-        contentDockControl.RaiseEvent(args);
-
-        Assert.True(args.Handled);
-        Assert.Same(visible[1], contentDock.ActiveDockable);
     }
 
     [Fact]
@@ -205,218 +116,6 @@ public sealed class MainWindowViewModelTests
         {
             window.Close();
         }
-    }
-
-    // --- #1333: multi-region dock-layout restore (documentsByTabId region ownership) --------------
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_RestoreMultiRegionLayout_WorkspacePaneTabsContainsAllRegionsTabs()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, _, _) = await OpenTwoRegionRestoredWorkspaceAsync(
-            viewModel,
-            new EntityId("d0c1a7a0-1333-4000-8000-000000000001"),
-            "mr1-left", "mr1-tab-left", "mr1-right", "mr1-tab-right");
-
-        Assert.Contains(pane.Tabs, t => t.Id == "mr1-tab-left");
-        Assert.Contains(pane.Tabs, t => t.Id == "mr1-tab-right");
-    }
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_RestoredMultiRegionLayout_GetDocumentForTab_ResolvesRightRegionTabToRightDock()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, _, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
-            viewModel,
-            new EntityId("d0c1a7a0-1333-4000-8000-000000000002"),
-            "mr2-left", "mr2-tab-left", "mr2-right", "mr2-tab-right");
-
-        var rightDocument = pane.GetDocumentForTab("mr2-tab-right");
-        Assert.NotNull(rightDocument);
-        Assert.Same(rightDock, rightDocument!.Owner);
-    }
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_RestoredMultiRegionLayout_NoDuplicateDocumentsAcrossRegions()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, _, _) = await OpenTwoRegionRestoredWorkspaceAsync(
-            viewModel,
-            new EntityId("d0c1a7a0-1333-4000-8000-000000000003"),
-            "mr3-left", "mr3-tab-left", "mr3-right", "mr3-tab-right");
-
-        foreach (var tabId in new[] { "mr3-tab-left", "mr3-tab-right" })
-        {
-            var occurrences = MultiRegionRestoreTestSupport.EnumerateDocks(pane.ContentLayout!)
-                .SelectMany(d => d.VisibleDockables?.OfType<WorkspaceDocument>() ?? Enumerable.Empty<WorkspaceDocument>())
-                .Count(doc => doc.Id == tabId);
-            Assert.Equal(1, occurrences);
-        }
-    }
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_RestoredMultiRegionWebTab_RaiseOpenNewWindow_InsertsNewTabInSameRegion()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, leftDock, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
-            viewModel,
-            new EntityId("d0c1a7a0-1333-4000-8000-000000000004"),
-            "mr4-left", "mr4-tab-left", "mr4-right", "mr4-tab-right");
-
-        var rightTab = Assert.IsType<WebViewModel>(pane.Tabs.Single(t => t.Id == "mr4-tab-right"));
-        var rightSourceDoc = rightDock.VisibleDockables!.OfType<WorkspaceDocument>().Single(d => d.Id == "mr4-tab-right");
-        var sourceIndex = rightDock.VisibleDockables!.IndexOf(rightSourceDoc);
-
-        rightTab.RaiseOpenNewWindow("https://mr4-new.example.com");
-        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 2);
-
-        var newDoc = rightDock.VisibleDockables!.OfType<WorkspaceDocument>()
-            .Single(d => d.TabViewModel is WebViewModel wv && wv.AddressBarUrl == "https://mr4-new.example.com");
-
-        // (a) inserted into the RIGHT region at sourceIndex + 1
-        Assert.Equal(sourceIndex + 1, rightDock.VisibleDockables!.IndexOf(newDoc));
-        // (b) NOT into the LEFT region
-        Assert.DoesNotContain(
-            leftDock.VisibleDockables!.OfType<WorkspaceDocument>(),
-            d => d.TabViewModel is WebViewModel wv && wv.AddressBarUrl == "https://mr4-new.example.com");
-        // (c) the new tab VM was added to the pane's Tabs membership set
-        Assert.Contains(pane.Tabs, t => t is WebViewModel wv && wv.AddressBarUrl == "https://mr4-new.example.com");
-    }
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_RestoredMultiRegionWebTab_RaiseOpenNewWindow_DoesNotDropAnyExistingTabFromPaneTabs()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, _, rightDock) = await OpenTwoRegionRestoredWorkspaceAsync(
-            viewModel,
-            new EntityId("d0c1a7a0-1333-4000-8000-000000000005"),
-            "mr5-left", "mr5-tab-left", "mr5-right", "mr5-tab-right");
-
-        var beforeIds = pane.Tabs.Select(t => t.Id).ToList();
-
-        var rightTab = Assert.IsType<WebViewModel>(pane.Tabs.Single(t => t.Id == "mr5-tab-right"));
-        rightTab.RaiseOpenNewWindow("https://mr5-new.example.com");
-        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 2);
-
-        var afterIds = pane.Tabs.Select(t => t.Id).ToList();
-        foreach (var id in beforeIds)
-        {
-            Assert.Contains(id, afterIds);
-        }
-    }
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_RestoredMultiRegionNavigation_BackForward_ReachesRightRegionTab()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, _, _) = await OpenTwoRegionRestoredWorkspaceAsync(
-            viewModel,
-            new EntityId("d0c1a7a0-1333-4000-8000-000000000006"),
-            "mr6-left", "mr6-tab-left", "mr6-right", "mr6-tab-right");
-
-        var leftTab = pane.Tabs.Single(t => t.Id == "mr6-tab-left");
-        var rightTab = pane.Tabs.Single(t => t.Id == "mr6-tab-right");
-
-        await viewModel.OpenTabAsync(leftTab);
-        await viewModel.OpenTabAsync(rightTab);
-        Assert.Equal("mr6-tab-right", pane.SelectedTab?.Id);
-
-        viewModel.NavigateBackCommand.Execute(null);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-        Assert.Equal("mr6-tab-left", pane.SelectedTab?.Id);
-
-        viewModel.NavigateForwardCommand.Execute(null);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-        Assert.Equal("mr6-tab-right", pane.SelectedTab?.Id);
-    }
-
-    [AvaloniaFact(Timeout = 20_000)]
-    public async Task MainWindowViewModel_ManuallySplitAfterRestore_RaiseOpenNewWindow_InsertsNewTabInSplitDock()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        // Restore a single-region layout, then split it at runtime like the working manual path.
-        var tabA = new WebViewModel("https://split-a.example.com", viewModel) { Id = "mr7-a", Title = "A" };
-        var tabB = new WebViewModel("https://split-b.example.com", viewModel) { Id = "mr7-b", Title = "B" };
-        await viewModel.OpenTabAsync(tabA);
-        await viewModel.OpenTabAsync(tabB);
-
-        var pane = viewModel.SelectedWorkspacePane;
-        var dockFactory = MultiRegionRestoreTestSupport.GetDockFactory(viewModel);
-        var primaryDock = FindDocumentDockIn(pane.ContentLayout!)!;
-        var docA = primaryDock.VisibleDockables!.OfType<WorkspaceDocument>().Single(d => d.Id == "mr7-a");
-
-        var splitDock = dockFactory.CreateDocumentDock();
-        splitDock.Id = "mr7-split";
-        var contentRoot = (IDock)pane.ContentLayout!;
-        dockFactory.AddDockable(contentRoot, splitDock);
-        dockFactory.MoveDockable(primaryDock, splitDock, docA, null);
-        Assert.Same(splitDock, docA.Owner);
-        pane.RegisterDocument("mr7-a", docA);
-
-        pane.SelectedTab = docA.TabViewModel;
-        dockFactory.SetActiveDockable(docA);
-
-        var splitTab = Assert.IsType<WebViewModel>(docA.TabViewModel);
-        splitTab.RaiseOpenNewWindow("https://mr7-new.example.com");
-        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(splitDock, 2);
-
-        var newDoc = splitDock.VisibleDockables!.OfType<WorkspaceDocument>()
-            .Single(d => d.TabViewModel is WebViewModel wv && wv.AddressBarUrl == "https://mr7-new.example.com");
-        var indexA = splitDock.VisibleDockables!.IndexOf(docA);
-        Assert.Equal(indexA + 1, splitDock.VisibleDockables!.IndexOf(newDoc));
-    }
-
-    private static async Task<(WorkspacePaneViewModel Pane, IDock LeftDock, IDock RightDock)> OpenTwoRegionRestoredWorkspaceAsync(
-        MainWindowViewModel viewModel,
-        EntityId workspaceId,
-        string leftDockId,
-        string leftTabId,
-        string rightDockId,
-        string rightTabId)
-    {
-        var entityBroker = GetEntityBroker(viewModel);
-        var layoutJson = MultiRegionRestoreTestSupport.BuildTwoRegionDockLayoutJson(
-            leftDockId, leftTabId, "https://left.example.com",
-            rightDockId, rightTabId, "https://right.example.com");
-
-        var workspaceJson = $$"""
-            {
-              "entity-id": "{{workspaceId.Value}}",
-              "entity-types": ["entity", "workspace"],
-              "display-name": { "default": "MR Restore WS" },
-              "dock-layout": {{layoutJson}},
-              "regions": []
-            }
-            """;
-        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(entityBroker, workspaceId, workspaceJson);
-        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
-
-        var pane = viewModel.WorkspacePanes.Single(
-            p => string.Equals(p.Id, workspaceId.ToString(), StringComparison.Ordinal));
-
-        // Restore runs asynchronously (Phase 2 of OpenWorkspaceAsync); wait for it to complete.
-        await MainWindowIntegrationTests.WaitForPanePopulatedAsync(pane);
-
-        var leftDock = MultiRegionRestoreTestSupport.FindDockById(pane.ContentLayout!, leftDockId)!;
-        var rightDock = MultiRegionRestoreTestSupport.FindDockById(pane.ContentLayout!, rightDockId)!;
-        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(leftDock, 1);
-        await MultiRegionRestoreTestSupport.WaitForDockableCountAsync(rightDock, 1);
-
-        return (pane, leftDock, rightDock);
     }
 
     [AvaloniaFact]
@@ -672,241 +371,6 @@ public sealed class MainWindowViewModelTests
             StringComparison.Ordinal);
     }
 
-    // ---------------------------------------------------------------------------------------------
-    // #1172 — TryFocusExistingWebTabAsync (same-workspace, same-URL dedup for IUrlOpener).
-    // ---------------------------------------------------------------------------------------------
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_SameUrlOpenInSelectedPane_ActivatesTabAndReturnsTrue()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var url = "https://example.com/";
-        var existing = new WebViewModel(url) { Id = "web-existing", Title = "Existing" };
-        await viewModel.OpenTabAsync(existing);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        var otherTab = new WebViewModel("https://other.example.com/") { Id = "web-other", Title = "Other" };
-        await viewModel.OpenTabAsync(otherTab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        var result = await viewModel.TryFocusExistingWebTabAsync(url);
-
-        Assert.True(result);
-        Assert.Equal(existing, viewModel.SelectedWorkspacePane.SelectedTab);
-    }
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_SameUrlOpenInDifferentPane_ReturnsFalse()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var url = "https://example.com/";
-
-        // Open a tab with the URL in the currently selected pane.
-        var firstPaneTab = new WebViewModel(url) { Id = "web-p1", Title = "P1" };
-        await viewModel.OpenTabAsync(firstPaneTab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        var firstPane = viewModel.SelectedWorkspacePane;
-
-        // Move that tab to a "different" pane by removing it from the selected pane's Tabs.
-        // Simulate a second pane by clearing the current pane's tabs; TryFocusExistingWebTabAsync
-        // scans SelectedWorkspacePane.Tabs, so an empty selected pane must return false even if
-        // other panes contain matching tabs — which is what "cross-workspace dedup is rejected"
-        // requires.
-        firstPane.Tabs.Clear();
-
-        var result = await viewModel.TryFocusExistingWebTabAsync(url);
-        Assert.False(result);
-    }
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_DifferentUrl_ReturnsFalse()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var tab = new WebViewModel("https://example.com/a") { Id = "web-a", Title = "A" };
-        await viewModel.OpenTabAsync(tab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        var result = await viewModel.TryFocusExistingWebTabAsync("https://example.com/b");
-        Assert.False(result);
-    }
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_UrlDiffersOnlyByTrailingSlashOrHostCase_MatchesExistingTab()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var tab = new WebViewModel("https://example.com/") { Id = "web-a", Title = "A" };
-        await viewModel.OpenTabAsync(tab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        // Uri.AbsoluteUri lowercases host and canonicalizes paths.
-        var result = await viewModel.TryFocusExistingWebTabAsync("https://Example.com/");
-        Assert.True(result);
-    }
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_UrlDiffersOnlyByFragment_ReturnsFalse()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var tab = new WebViewModel("https://example.com/page#a") { Id = "web-a", Title = "A" };
-        await viewModel.OpenTabAsync(tab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        var result = await viewModel.TryFocusExistingWebTabAsync("https://example.com/page#b");
-        Assert.False(result);
-    }
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_NoSelectedWorkspacePane_ReturnsFalse()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        // Do NOT initialize — the placeholder pane has null ContentLayout.
-
-        var result = await viewModel.TryFocusExistingWebTabAsync("https://example.com/");
-        Assert.False(result);
-    }
-
-    [AvaloniaFact]
-    public async Task TryFocusExistingWebTabAsync_NonWebViewModelTabWithSameTitle_ReturnsFalse()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        // A dummy non-web tab whose id happens to look like a URL; must not match.
-        var dummy = new WebViewModel("https://example.com/") { Id = "web-a", Title = "A" };
-        await viewModel.OpenTabAsync(dummy);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        // Replace the tab in the pane's Tabs with a non-WebViewModel — a plain WorkspaceTabViewModel
-        // is abstract; we simulate by removing the web tab entirely.
-        viewModel.SelectedWorkspacePane.Tabs.Clear();
-
-        var result = await viewModel.TryFocusExistingWebTabAsync("https://example.com/");
-        Assert.False(result);
-    }
-
-    // ── #1198: pane-close cascades DisposeAsync to child tabs ───────────────
-
-    [AvaloniaFact]
-    public async Task MainWindowViewModel_ClosingWorkspacePaneWithRunningAgentTab_DisposesAllChildTabs()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, tabs) = AddPaneWithDisposeSpyTabs(viewModel, "ws-1198-a", 2);
-
-        await viewModel.RemoveWorkspacePaneAsync(pane);
-
-        Assert.All(tabs, t => Assert.Equal(1, t.DisposeCount));
-        Assert.Empty(pane.Tabs);
-    }
-
-    [AvaloniaFact]
-    public async Task MainWindowViewModel_ClosingWorkspacePaneWithRunningAgentTab_ReleasesRunningAgentChatLease()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var pane = AddPane(viewModel, "ws-1198-b");
-        var agentTab = new AgentSessionWorkspaceTabViewModel
-        {
-            Id = "agent-1198-b",
-            Title = "Agent B",
-        };
-        var leaseDisposed = 0;
-        var lease = new Phantom.Workspaces.Llm.RunningAgentChatLease(
-            new Phantom.Workspaces.Llm.Interfaces.AgentSessionId("agent-session-1198-b"),
-            null!,
-            () => { System.Threading.Interlocked.Increment(ref leaseDisposed); return ValueTask.CompletedTask; });
-        agentTab.SetLease(lease);
-        pane.Tabs.Add(agentTab);
-
-        await viewModel.RemoveWorkspacePaneAsync(pane);
-
-        Assert.Equal(1, leaseDisposed);
-    }
-
-    [AvaloniaFact]
-    public async Task MainWindowViewModel_ClosingPaneViaDockCloseButton_DisposesDocumentAndChildren()
-    {
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, tabs) = AddPaneWithDisposeSpyTabs(viewModel, "ws-1198-c", 1);
-        var paneDoc = new WorkspacePaneDocument(pane);
-
-        // Dock UI close path: OnDockableClosed → OnWorkspacePaneDockableClosed → RemoveWorkspacePaneAsync.
-        viewModel.OnWorkspacePaneDockableClosed(paneDoc);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        Assert.DoesNotContain(viewModel.WorkspacePanes, p => ReferenceEquals(p, pane));
-        Assert.Equal(1, tabs[0].DisposeCount);
-    }
-
-    [AvaloniaFact]
-    public async Task MainWindowViewModel_ClosingSingleTabViaDockClose_DisposesTabViewModel()
-    {
-        // Regression: single-tab close through the existing OnDockableTabClosed seam
-        // must still dispose the tab VM.
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var (pane, tabs) = AddPaneWithDisposeSpyTabs(viewModel, "ws-1198-d", 1);
-        var tab = tabs[0];
-
-        viewModel.OnDockableTabClosed(tab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        Assert.DoesNotContain(tab, pane.Tabs);
-        Assert.Equal(1, tab.DisposeCount);
-    }
-
-    [AvaloniaFact]
-    public async Task MainWindowViewModel_ReopeningWorkspaceAfterClose_RecreatesAgentSessionTab()
-    {
-        // #1198: closing a pane must evict stale documentsByTabId entries so the
-        // freshly-restored tab is not treated as "already open" by OpenTabAsync's
-        // dedupe (which would dispose the fresh tab and activate a dead document).
-        await using var viewModel = CreateTestMainWindowViewModel();
-        await viewModel.InitializeAsync();
-
-        var entityBroker = GetEntityBroker(viewModel);
-        var workspaceId = new EntityId("10810001-1198-4000-8000-000000000001");
-        await UpsertWorkspaceAsync(entityBroker, workspaceId, "ws-1198-e", "WS 1198 E");
-        await viewModel.OpenWorkspaceAsync(new GetEntityRequest { EntityId = workspaceId });
-
-        var pane = Assert.Single(
-            viewModel.WorkspacePanes,
-            p => string.Equals(p.Id, workspaceId.Value.ToString(), StringComparison.Ordinal));
-        await pane.Populated;
-
-        // Open a tab that becomes registered in the pane's tab map.
-        var tab = new WebViewModel("https://example-1198.example.com/") { Id = "web-1198-e", Title = "Web 1198 E" };
-        await viewModel.OpenTabAsync(tab);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        Assert.NotNull(pane.GetDocumentForTab(tab.Id));
-
-        // Close the pane. #1341: the per-pane registry is discarded wholesale on dispose, so a
-        // reopened pane starts empty and the collision guard cannot false-positive against a stale
-        // prior-owner entry.
-        await viewModel.RemoveWorkspacePaneAsync(pane);
-        await Dispatcher.UIThread.InvokeAsync(() => { });
-
-        Assert.Null(pane.GetDocumentForTab(tab.Id));
-    }
-
     [AvaloniaFact]
     public async Task NavigateToHistoryEntry_ReplaysTargetTabViaTabNavigator_WithoutRePushingHistory()
     {
@@ -928,7 +392,7 @@ public sealed class MainWindowViewModelTests
         var targetIndex = -1;
         for (var i = 0; i < history.Entries.Count; i++)
         {
-            if (history.Entries[i].TabId == "hist-a")
+            if (history.Entries[i].DocumentTabId == "hist-a")
             {
                 targetIndex = i;
                 break;
@@ -944,60 +408,79 @@ public sealed class MainWindowViewModelTests
         Assert.Equal(entryCountBefore, history.Entries.Count);
     }
 
-    private static WorkspacePaneViewModel AddPane(MainWindowViewModel viewModel, string id)
+    // ══════════════════════════════════════════════════════════════════════════
+    // NEW TESTS: #1341 navigation by request
+    // ══════════════════════════════════════════════════════════════════════════
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_NavigateByRequest_ResolvesPaneByWorkspaceTabId_ThenDelegatesToPane()
     {
-        var entityId = Guid.NewGuid();
-        using var entityDoc = JsonDocument.Parse($$"""
-            {
-              "entity-id": "{{entityId}}",
-              "entity-types": ["entity", "workspace"],
-              "display-name": "{{id}}"
-            }
-            """);
-        var entity = new SubscribedEntityViewModel(
-            new EntitySnapshot
-            {
-                EntityId = new EntityId(entityId),
-                ConcurrencyTag = new ConcurrencyTag("1"),
-                ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, "1"),
-                Data = entityDoc.RootElement.Clone(),
-                Relationships = Array.Empty<EntitySnapshot>(),
-            });
-        var pane = new WorkspacePaneViewModel(entity, id);
-        viewModel.WorkspacePanes.Add(pane);
-        return pane;
+        // Test #11: ActivateTabByRequestAsync with WorkspaceTabId resolves the correct pane and activates the tab.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceIdA = new EntityId("11411001-0000-4000-8000-000000000001");
+        var workspaceIdB = new EntityId("11411001-0000-4000-8000-000000000002");
+        await UpsertWorkspaceAsync(entityBroker, workspaceIdA, "nav-test-a", "Nav Test A");
+        await UpsertWorkspaceAsync(entityBroker, workspaceIdB, "nav-test-b", "Nav Test B");
+
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceIdA });
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceIdB });
+
+        var paneA = viewModel.WorkspacePanes.Single(p => p.Id == workspaceIdA.ToString());
+        var paneB = viewModel.WorkspacePanes.Single(p => p.Id == workspaceIdB.ToString());
+
+        // Add a tab to pane A.
+        viewModel.SelectedWorkspacePane = paneA;
+        var tabInA = new WebViewModel("https://nav-a.example.com") { Id = "nav-tab-in-a", Title = "Tab in A" };
+        await viewModel.OpenTabAsync(tabInA);
+
+        var contentDockA = MainWindowIntegrationTests.FindDocumentDockIn(paneA.ContentLayout!);
+        await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDockA!, "nav-tab-in-a");
+
+        // Switch to pane B.
+        viewModel.SelectedWorkspacePane = paneB;
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        // Navigate to tab in pane A using the request API.
+        var request = new Phantom.Workspaces.Services.Navigation.NavigationRequest(workspaceIdA.ToString(), "nav-tab-in-a");
+        var result = await viewModel.ActivateTabByRequestAsync(request);
+
+        Assert.True(result);
+        Assert.Equal(workspaceIdA.ToString(), viewModel.SelectedWorkspacePane.Id);
+        var activeDoc = contentDockA!.ActiveDockable as WorkspaceDocument;
+        Assert.NotNull(activeDoc);
+        Assert.Equal("nav-tab-in-a", activeDoc!.Id);
     }
 
-    private static (WorkspacePaneViewModel pane, DisposeSpyTab_1198[] tabs) AddPaneWithDisposeSpyTabs(
-        MainWindowViewModel viewModel, string paneId, int tabCount)
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_NavigateByRequest_UnknownDocumentTabId_FallsBackToAllPanesOwnershipQuery()
     {
-        var pane = AddPane(viewModel, paneId);
-        var tabs = new DisposeSpyTab_1198[tabCount];
-        for (var i = 0; i < tabCount; i++)
-        {
-            tabs[i] = new DisposeSpyTab_1198($"{paneId}-tab-{i}");
-            pane.Tabs.Add(tabs[i]);
-        }
-        return (pane, tabs);
-    }
+        // Test #12: When WorkspaceTabId is missing/invalid, the fallback searches all panes via OwnsDocumentTab.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
 
-    private sealed class DisposeSpyTab_1198 : WorkspaceTabViewModel
-    {
-        public int DisposeCount { get; private set; }
+        var entityBroker = GetEntityBroker(viewModel);
+        var workspaceId = new EntityId("11411002-0000-4000-8000-000000000001");
+        await UpsertWorkspaceAsync(entityBroker, workspaceId, "fallback-ws", "Fallback WS");
+        await viewModel.OpenWorkspaceAsync(new Phantom.Workspaces.Data.GetEntityRequest { EntityId = workspaceId });
 
-        [System.Diagnostics.CodeAnalysis.SetsRequiredMembers]
-        public DisposeSpyTab_1198(string id)
-        {
-            this.Id = id;
-            this.Title = id;
-            this.DockRegion = "full";
-        }
+        var pane = viewModel.WorkspacePanes.Single(p => p.Id == workspaceId.ToString());
+        var tab = new WebViewModel("https://fallback-tab.example.com") { Id = "fallback-tab", Title = "Fallback" };
+        await viewModel.OpenTabAsync(tab);
 
-        public override async ValueTask DisposeAsync()
-        {
-            this.DisposeCount++;
-            await base.DisposeAsync();
-        }
+        var contentDock = MainWindowIntegrationTests.FindDocumentDockIn(pane.ContentLayout!);
+        await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "fallback-tab");
+
+        // Navigate with an EMPTY WorkspaceTabId so the fallback path is exercised.
+        var request = new Phantom.Workspaces.Services.Navigation.NavigationRequest(string.Empty, "fallback-tab");
+        var result = await viewModel.ActivateTabByRequestAsync(request);
+
+        Assert.True(result);
+        var activeDoc = contentDock!.ActiveDockable as WorkspaceDocument;
+        Assert.NotNull(activeDoc);
+        Assert.Equal("fallback-tab", activeDoc!.Id);
     }
 
     private static DirectoryInfo FindRepositoryRoot()

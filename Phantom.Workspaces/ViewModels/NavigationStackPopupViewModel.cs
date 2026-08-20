@@ -108,10 +108,10 @@ public sealed class NavigationStackPopupViewModel : TransientPopupViewModel
         {
             var entry = entries[i];
             int displayIndex = entries.Count - 1 - i;
-            var info = this.getTabInfo(entry.TabId);
+            var info = this.getTabInfo(entry.DocumentTabId);
             this.Rows.Add(new NavigationStackRowViewModel
             {
-                TabTitle = info?.TabTitle ?? entry.TabId,
+                TabTitle = info?.TabTitle ?? entry.DocumentTabId,
                 WorkspaceName = info?.WorkspaceName,
                 IsRunning = info?.IsRunning ?? false,
                 IsInteresting = info?.IsInteresting ?? false,

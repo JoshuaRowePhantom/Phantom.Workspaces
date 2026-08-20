@@ -238,8 +238,8 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             await this.navigator.NavigateAsync(
                 new NavigationTarget
                 {
-                    TabId = capturedTabId,
-                    WorkspacePaneId = capturedPaneId,
+                    DocumentTabId = capturedTabId,
+                    WorkspaceTabId = capturedPaneId,
                     AgentSessionKey = sessionKey,
                 },
                 new NavigationOptions { OpenEntityIfNoTab = true });

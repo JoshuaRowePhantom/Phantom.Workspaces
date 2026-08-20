@@ -559,7 +559,7 @@ public sealed class NotificationsViewModelTests
         row.NavigateCommand.Execute(null);
 
         var call = Assert.Single(navigator.Calls);
-        Assert.Equal("tab-1", call.Target.TabId);
+        Assert.Equal("tab-1", call.Target.DocumentTabId);
         Assert.True(call.Options.PushHistory);
         Assert.True(call.Options.FocusWindow);
     }
@@ -583,7 +583,7 @@ public sealed class NotificationsViewModelTests
         row.NavigateCommand.Execute(null);
 
         var call = Assert.Single(navigator.Calls);
-        Assert.Equal("pane-9", call.Target.WorkspacePaneId);
+        Assert.Equal("pane-9", call.Target.WorkspaceTabId);
     }
 
     [Fact]

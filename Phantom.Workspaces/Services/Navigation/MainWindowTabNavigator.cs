@@ -36,11 +36,11 @@ internal sealed class MainWindowTabNavigator : ITabNavigator
             this.host.FocusMainWindow();
         }
 
-        if (target.TabId is { } tabId)
+        if (target.DocumentTabId is { } tabId)
         {
             // Reuses the existing #1157 open-but-unselected pane logic.
             await this.host.ActivateTabByRequestAsync(
-                new NavigationRequest(target.WorkspacePaneId ?? string.Empty, tabId));
+                new NavigationRequest(target.WorkspaceTabId ?? string.Empty, tabId));
 
             if (options.MarkNotificationRead)
             {
@@ -49,7 +49,7 @@ internal sealed class MainWindowTabNavigator : ITabNavigator
 
             if (options.PushHistory && !this.host.NavigatingViaHistory)
             {
-                var paneId = target.WorkspacePaneId ?? this.host.SelectedWorkspacePaneId;
+                var paneId = target.WorkspaceTabId ?? this.host.SelectedWorkspacePaneId;
                 if (paneId is not null)
                 {
                     this.history.Push(new NavigationEntry(tabId, paneId));

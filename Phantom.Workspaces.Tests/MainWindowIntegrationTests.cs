@@ -4268,7 +4268,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 20_000)]
-    public async Task WorkspaceReopen_AfterCloseWithRestoredAgentSessionTab_MaterializesWorkspaceDocumentInPrimaryDock()
+    public async Task WorkspaceReopen_AfterClose_WithRestoredAgentSessionTab_MaterializesDocument_NoStaleEntry()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();

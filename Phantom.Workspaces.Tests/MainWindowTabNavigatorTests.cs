@@ -78,7 +78,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, host, _, _) = Create();
 
         var result = await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1", WorkspacePaneId = "pane-1" });
+            new NavigationTarget { DocumentTabId = "tab-1", WorkspaceTabId = "pane-1" });
 
         Assert.True(result);
         var call = Assert.Single(host.Activated);
@@ -92,7 +92,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, _, _, notifications) = Create();
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1" },
+            new NavigationTarget { DocumentTabId = "tab-1" },
             new NavigationOptions { MarkNotificationRead = true });
 
         Assert.Equal(new[] { "tab-1" }, notifications.MarkedRead);
@@ -104,7 +104,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, _, _, notifications) = Create();
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1" },
+            new NavigationTarget { DocumentTabId = "tab-1" },
             new NavigationOptions { MarkNotificationRead = false });
 
         Assert.Empty(notifications.MarkedRead);
@@ -116,12 +116,12 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, _, history, _) = Create();
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1", WorkspacePaneId = "pane-1" },
+            new NavigationTarget { DocumentTabId = "tab-1", WorkspaceTabId = "pane-1" },
             new NavigationOptions { PushHistory = true });
 
         var entry = Assert.Single(history.Pushed);
-        Assert.Equal("tab-1", entry.TabId);
-        Assert.Equal("pane-1", entry.WorkspacePaneId);
+        Assert.Equal("tab-1", entry.DocumentTabId);
+        Assert.Equal("pane-1", entry.WorkspaceTabId);
     }
 
     [Fact]
@@ -131,11 +131,11 @@ public sealed class MainWindowTabNavigatorTests
         host.SelectedWorkspacePaneId = "selected-pane";
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1" },
+            new NavigationTarget { DocumentTabId = "tab-1" },
             new NavigationOptions { PushHistory = true });
 
         var entry = Assert.Single(history.Pushed);
-        Assert.Equal("selected-pane", entry.WorkspacePaneId);
+        Assert.Equal("selected-pane", entry.WorkspaceTabId);
     }
 
     [Fact]
@@ -144,7 +144,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, _, history, _) = Create();
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1", WorkspacePaneId = "pane-1" },
+            new NavigationTarget { DocumentTabId = "tab-1", WorkspaceTabId = "pane-1" },
             new NavigationOptions { PushHistory = false });
 
         Assert.Empty(history.Pushed);
@@ -157,7 +157,7 @@ public sealed class MainWindowTabNavigatorTests
         host.NavigatingViaHistory = true;
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1", WorkspacePaneId = "pane-1" },
+            new NavigationTarget { DocumentTabId = "tab-1", WorkspaceTabId = "pane-1" },
             new NavigationOptions { PushHistory = true });
 
         Assert.Empty(history.Pushed);
@@ -169,7 +169,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, host, _, _) = Create();
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1" },
+            new NavigationTarget { DocumentTabId = "tab-1" },
             new NavigationOptions { FocusWindow = true });
 
         Assert.Equal(1, host.FocusCount);
@@ -181,7 +181,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, host, _, _) = Create();
 
         await navigator.NavigateAsync(
-            new NavigationTarget { TabId = "tab-1" },
+            new NavigationTarget { DocumentTabId = "tab-1" },
             new NavigationOptions { FocusWindow = false });
 
         Assert.Equal(0, host.FocusCount);
@@ -223,7 +223,7 @@ public sealed class MainWindowTabNavigatorTests
         var (navigator, host, history, notifications) = Create();
         host.SelectedWorkspacePaneId = "pane-1";
 
-        await navigator.NavigateAsync(new NavigationTarget { TabId = "tab-1" });
+        await navigator.NavigateAsync(new NavigationTarget { DocumentTabId = "tab-1" });
 
         Assert.Single(history.Pushed);
         Assert.Equal(new[] { "tab-1" }, notifications.MarkedRead);

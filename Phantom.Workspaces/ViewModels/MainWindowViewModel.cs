@@ -288,7 +288,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         try
         {
             await this.tabNavigator.NavigateAsync(
-                new NavigationTarget { TabId = entry.TabId, WorkspacePaneId = entry.WorkspacePaneId },
+                new NavigationTarget { DocumentTabId = entry.DocumentTabId, WorkspaceTabId = entry.WorkspaceTabId },
                 new NavigationOptions { PushHistory = false });
         }
         finally
@@ -2010,7 +2010,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry)
                 && entry is not null)
             {
-                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
             }
         }
         finally
@@ -2026,7 +2026,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
             {
-                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
             }
         }
         finally
@@ -2042,7 +2042,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.navigationHistoryService.GoForwardSkipping(this.IsTabOpen, out var entry) && entry is not null)
             {
-                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
             }
         }
         finally
@@ -2053,18 +2053,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private bool IsTabOpen(NavigationEntry entry)
     {
-        if (entry.WorkspacePaneId is not null)
+        if (entry.WorkspaceTabId is not null)
         {
             var targetPane = this.WorkspacePanes.FirstOrDefault(
-                p => string.Equals(p.Id, entry.WorkspacePaneId, StringComparison.Ordinal));
-            if (targetPane?.Tabs.Any(t => string.Equals(t.Id, entry.TabId, StringComparison.Ordinal)) == true)
+                p => string.Equals(p.Id, entry.WorkspaceTabId, StringComparison.Ordinal));
+            if (targetPane?.Tabs.Any(t => string.Equals(t.Id, entry.DocumentTabId, StringComparison.Ordinal)) == true)
             {
                 return true;
             }
         }
 
         return this.WorkspacePanes.Any(
-            pane => pane.Tabs.Any(t => string.Equals(t.Id, entry.TabId, StringComparison.Ordinal)));
+            pane => pane.Tabs.Any(t => string.Equals(t.Id, entry.DocumentTabId, StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -2513,7 +2513,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
                     {
-                        this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                        this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
                     }
                 }
                 finally
@@ -2646,7 +2646,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
                     {
-                        this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                        this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
                     }
                 }
                 finally
@@ -4154,7 +4154,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             .FirstOrDefault(e => e.TabKey == tabId)
             ?.TabDescriptor.WorkspaceId;
         _ = this.tabNavigator.NavigateAsync(
-            new NavigationTarget { TabId = tabId, WorkspacePaneId = workspacePaneId },
+            new NavigationTarget { DocumentTabId = tabId, WorkspaceTabId = workspacePaneId },
             new NavigationOptions { PushHistory = true });
     }
 

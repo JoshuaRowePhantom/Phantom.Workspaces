@@ -239,8 +239,8 @@ public sealed class RunningAgentBrainViewModelTests
         row.ActivateCommand.Execute(null);
 
         var call = Assert.Single(navigator.Calls);
-        Assert.Equal("tab-abc", call.Target.TabId);
-        Assert.Equal("pane-xyz", call.Target.WorkspacePaneId);
+        Assert.Equal("tab-abc", call.Target.DocumentTabId);
+        Assert.Equal("pane-xyz", call.Target.WorkspaceTabId);
         Assert.Equal("session-abc", call.Target.AgentSessionKey);
         Assert.True(call.Options.OpenEntityIfNoTab);
     }
@@ -338,7 +338,7 @@ public sealed class RunningAgentBrainViewModelTests
         row.ActivateCommand.Execute(null);
 
         var call = Assert.Single(navigator.Calls);
-        Assert.Null(call.Target.TabId);
+        Assert.Null(call.Target.DocumentTabId);
         Assert.Equal("session-orphan", call.Target.AgentSessionKey);
         Assert.True(call.Options.OpenEntityIfNoTab);
     }
@@ -387,7 +387,7 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.Null(exception);
 
         var call = Assert.Single(navigator.Calls);
-        Assert.Null(call.Target.TabId);
+        Assert.Null(call.Target.DocumentTabId);
         Assert.Equal("session-no-owner", call.Target.AgentSessionKey);
         Assert.True(call.Options.OpenEntityIfNoTab);
         Assert.False(vm.IsOpen);
