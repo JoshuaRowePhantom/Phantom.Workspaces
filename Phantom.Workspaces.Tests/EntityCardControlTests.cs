@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Layout;
@@ -773,6 +774,104 @@ public sealed class EntityCardControlTests
         {
             window.Close();
         }
+    }
+
+    // Issue #1347: when a single entity card is taller than the pane, the entity-card-tree's inner
+    // ScrollViewer must accumulate vertical extent beyond the viewport so the vertical scrollbar
+    // engages. The TreeViewItem template's items row is Auto (not *) so the header measures cleanly
+    // under the pixel-virtualizing VirtualizingStackPanel.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ItemTallerThanViewport_ScrollExtentExceedsViewport()
+    {
+        var (window, tree) = BuildTreeWithTallItem();
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var scrollViewer = tree.GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .First();
+
+            Assert.True(
+                scrollViewer.Extent.Height > scrollViewer.Viewport.Height,
+                $"Extent height {scrollViewer.Extent.Height} should exceed viewport height {scrollViewer.Viewport.Height} for a tall card.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1347: offsetting the inner ScrollViewer must actually move content, so the bottom of a
+    // tall card is reachable.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ItemTallerThanViewport_CanScrollToBottom()
+    {
+        var (window, tree) = BuildTreeWithTallItem();
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var scrollViewer = tree.GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .First();
+
+            var maxOffset = scrollViewer.Extent.Height - scrollViewer.Viewport.Height;
+            Assert.True(maxOffset > 0, "Tall card should produce a positive scrollable range.");
+
+            scrollViewer.Offset = scrollViewer.Offset.WithY(maxOffset);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(
+                scrollViewer.Offset.Y > 0,
+                $"Vertical offset {scrollViewer.Offset.Y} should be positive after scrolling to the bottom.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1347: the shell border must not clip its own content in isolation, otherwise tall-card
+    // overflow is silently cut off instead of being scrollable.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ShellBorder_DoesNotClipTallContent()
+    {
+        var (window, tree) = BuildTreeWithTallItem();
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var shellBorders = tree.GetVisualDescendants()
+                .OfType<Border>()
+                .Where(b => b.Classes.Contains("entity-card-shell-border"))
+                .ToArray();
+
+            Assert.NotEmpty(shellBorders);
+            Assert.All(shellBorders, border => Assert.False(
+                border.ClipToBounds,
+                "entity-card-shell-border must not clip tall content."));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static (Window Window, TreeView Tree) BuildTreeWithTallItem()
+    {
+        var tree = new TreeView();
+        tree.Classes.Add("entity-card-tree");
+        var tallItem = new TreeViewItem
+        {
+            Header = new Border { Height = 2000, Width = 120 },
+        };
+        tree.ItemsSource = new[] { tallItem };
+        var window = new Window { Content = tree, Width = 300, Height = 300 };
+        return (window, tree);
     }
 
     private static void AssertItemsPanelIsVirtualizing(string className)

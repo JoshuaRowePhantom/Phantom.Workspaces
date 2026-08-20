@@ -255,7 +255,11 @@
         <Setter Property="MinWidth" Value="160" />
         <Setter Property="Template">
             <ControlTemplate>
-                <Grid RowDefinitions="Auto,*"
+                <!-- Issue #1347: the items row is Auto (not *) so the header Auto row measures
+                     cleanly under the pixel-virtualizing VirtualizingStackPanel (which supplies an
+                     infinite vertical constraint); a * row cannot resolve against infinity and the
+                     inner ScrollViewer's ExtentHeight never grows past the viewport for a tall card. -->
+                <Grid RowDefinitions="Auto,Auto"
                       ColumnDefinitions="20,*"
                       HorizontalAlignment="Stretch">
                     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"

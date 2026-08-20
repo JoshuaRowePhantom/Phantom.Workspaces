@@ -635,7 +635,10 @@ public sealed class SharedStylesTests
     {
         var styles = ReadSharedStylesText();
         var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
-        Assert.Contains("RowDefinitions=\"Auto,*\"", template, StringComparison.Ordinal);
+        // Issue #1347: the items row must be Auto (not *) so the header Auto row measures cleanly
+        // under the pixel-virtualizing VirtualizingStackPanel and vertical ExtentHeight accumulates.
+        Assert.Contains("RowDefinitions=\"Auto,Auto\"", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("RowDefinitions=\"Auto,*\"", template, StringComparison.Ordinal);
         Assert.Contains("ColumnDefinitions=\"20,*\"", template, StringComparison.Ordinal);
     }
 
@@ -1897,7 +1900,7 @@ public sealed class SharedStylesTests
           <Setter Property="MinWidth" Value="160" />
           <Setter Property="Template">
             <ControlTemplate>
-              <Grid RowDefinitions="Auto,*" ColumnDefinitions="20,*" HorizontalAlignment="Stretch">
+              <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="20,*" HorizontalAlignment="Stretch">
                 <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Padding="6" BorderThickness="1" HorizontalAlignment="Stretch">
                   <ContentControl HorizontalAlignment="Stretch"
                                   Content="{TemplateBinding Header}"
