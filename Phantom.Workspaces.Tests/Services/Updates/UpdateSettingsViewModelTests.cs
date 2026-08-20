@@ -117,6 +117,24 @@ public sealed class UpdateSettingsViewModelTests
         Assert.True(controller.RunAtStartup);
     }
 
+    [Fact]
+    public void ApplyToController_WhenSetRunAtStartupThrows_SurfacesErrorAndDoesNotThrow()
+    {
+        // #1349: save-time reconciliation must not become an unhandled dispatcher crash when a
+        // non-elevated environment fails to register run-at-startup. Surface via StatusText instead.
+        var controller = new FakeUpdateController
+        {
+            RunAtStartup = false,
+            SetRunAtStartupError = new UnauthorizedAccessException("Access is denied."),
+        };
+        var viewModel = new UpdateSettingsViewModel(controller, new UpdateSettings { RunAtStartup = true });
+
+        var exception = Record.Exception(() => viewModel.ApplyToController());
+
+        Assert.Null(exception);
+        Assert.Contains("Access is denied.", viewModel.StatusText);
+    }
+
     private sealed class FakeUpdateController : IUpdateController
     {
         private readonly TaskCompletionSource checkCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);

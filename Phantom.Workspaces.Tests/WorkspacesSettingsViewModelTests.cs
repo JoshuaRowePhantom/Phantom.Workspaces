@@ -905,6 +905,33 @@ public sealed class WorkspacesSettingsViewModelTests
         Assert.Contains(true, controller.SetRunAtStartupCalls);
     }
 
+    [AvaloniaFact]
+    public async Task SaveAsync_WhenStartupReconciliationFails_DoesNotPropagate_AndSurfacesStatus()
+    {
+        // #1349: if run-at-startup registration fails (e.g. non-elevated), Save must still persist
+        // the configuration and must not surface an unhandled exception to the dispatcher.
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var controller = new RecordingUpdateController
+        {
+            SetRunAtStartupError = new UnauthorizedAccessException("Access is denied."),
+        };
+        var configuration = new WorkspacesConfiguration();
+
+        var settings = new WorkspacesSettingsViewModel(
+            service,
+            configuration,
+            profileAppearance: null,
+            updateController: controller,
+            updateDispatch: null);
+
+        settings.Updates!.RunAtStartup = true;
+
+        var saved = await settings.SaveAsync();
+
+        Assert.NotNull(saved);
+        Assert.Contains("Access is denied.", settings.Updates!.StatusText);
+    }
+
     private sealed class RecordingUpdateController : Phantom.Workspaces.Services.Updates.IUpdateController
     {
         public string RunningVersion { get; } = "1.0.0";
@@ -917,6 +944,8 @@ public sealed class WorkspacesSettingsViewModelTests
         public bool IsRunAtStartupEnabled { get; private set; }
 
         public List<bool> SetRunAtStartupCalls { get; } = new();
+
+        public System.Exception? SetRunAtStartupError { get; set; }
 
         public event System.EventHandler<Phantom.Workspaces.Services.Updates.UpdateAvailability>? UpdateAvailabilityChanged;
 
@@ -931,6 +960,11 @@ public sealed class WorkspacesSettingsViewModelTests
         public void SetRunAtStartup(bool enabled)
         {
             this.SetRunAtStartupCalls.Add(enabled);
+            if (this.SetRunAtStartupError is not null)
+            {
+                throw this.SetRunAtStartupError;
+            }
+
             this.IsRunAtStartupEnabled = enabled;
         }
     }

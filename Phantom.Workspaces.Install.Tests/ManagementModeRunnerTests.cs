@@ -26,6 +26,12 @@ public sealed class ManagementModeRunnerTests
             (this.ScheduledTasksImpl as FakeScheduledTasks)
                 ?? throw new InvalidOperationException("ScheduledTasks is not a FakeScheduledTasks in this harness.");
 
+        public IStartupRegistration StartupRegistrationImpl { get; }
+
+        public FakeStartupRegistration StartupRegistration =>
+            (this.StartupRegistrationImpl as FakeStartupRegistration)
+                ?? throw new InvalidOperationException("StartupRegistration is not a FakeStartupRegistration in this harness.");
+
         public FakeInstanceReleaseWaiter ReleaseWaiter { get; } = new(released: true);
 
         public InstallLayout Layout { get; }
@@ -35,12 +41,14 @@ public sealed class ManagementModeRunnerTests
         public Harness(
             IProcessLauncher? processLauncher = null,
             IScheduledTasks? scheduledTasks = null,
-            UpdateService? updateService = null)
+            UpdateService? updateService = null,
+            IStartupRegistration? startupRegistration = null)
         {
             this.ProcessLauncherImpl = processLauncher ?? new FakeProcessLauncher();
             this.ScheduledTasksImpl = scheduledTasks ?? new FakeScheduledTasks();
+            this.StartupRegistrationImpl = startupRegistration ?? new FakeStartupRegistration();
             this.Layout = new InstallLayout(this.FileSystem, AppRoot);
-            var startupTaskService = new StartupTaskService(this.ScheduledTasksImpl, this.Layout.CurrentExecutablePath);
+            var startupTaskService = new StartupTaskService(this.StartupRegistrationImpl, this.ScheduledTasksImpl, this.Layout.CurrentExecutablePath);
             var healthGate = new HealthGate(this.FileSystem, this.Layout);
             // When testing throwing-process-launcher, ApplyUpdateRunner still needs *some* launcher —
             // give it a benign fake so its own paths are unaffected.
@@ -105,10 +113,10 @@ public sealed class ManagementModeRunnerTests
         var exitCode = await harness.Runner.RunAsync(options, payload, "0.1.0");
 
         Assert.Equal(ExitCode.Success, exitCode);
-        Assert.True(harness.ScheduledTasks.Exists(StartupTaskService.StartupTaskName));
-        var registered = harness.ScheduledTasks.Registered[StartupTaskService.StartupTaskName];
-        Assert.Equal(harness.Layout.CurrentExecutablePath, registered.ExecutablePath);
-        Assert.Equal(new[] { StartupTaskService.StartupArgument }, registered.Arguments);
+        Assert.True(harness.StartupRegistration.IsEnabled(StartupTaskService.StartupRunValueName));
+        var commandLine = harness.StartupRegistration.Entries[StartupTaskService.StartupRunValueName];
+        Assert.Contains(harness.Layout.CurrentExecutablePath, commandLine, StringComparison.Ordinal);
+        Assert.Contains(StartupTaskService.StartupArgument, commandLine, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -158,13 +166,17 @@ public sealed class ManagementModeRunnerTests
         Assert.Equal("0.1.0", harness.Layout.ResolveCurrentVersion());
         var request = Assert.Single(harness.ProcessLauncher.Requests);
         Assert.Equal(harness.Layout.CurrentExecutablePath, request.FileName);
-        Assert.True(harness.ScheduledTasks.Exists(StartupTaskService.StartupTaskName));
+        Assert.True(harness.StartupRegistration.IsEnabled(StartupTaskService.StartupRunValueName));
     }
 
     [Fact]
     public async Task RunAsync_Install_WhenStartupTaskEnableFails_StillSucceedsAndLaunches()
     {
-        var harness = new Harness(scheduledTasks: new ThrowingScheduledTasks());
+        var harness = new Harness(
+            startupRegistration: new FakeStartupRegistration
+            {
+                EnableError = new InvalidOperationException("simulated run-at-startup failure"),
+            });
         var payload = harness.SeedPayload();
         var options = CommandLineOptions.Parse("--install", "--silent");
 
@@ -187,7 +199,7 @@ public sealed class ManagementModeRunnerTests
         var exitCode = await harness.Runner.RunAsync(options, payload, "0.1.0");
 
         Assert.Equal(ExitCode.Success, exitCode);
-        Assert.True(harness.ScheduledTasks.Exists(StartupTaskService.StartupTaskName));
+        Assert.True(harness.StartupRegistration.IsEnabled(StartupTaskService.StartupRunValueName));
     }
 
     private sealed class ThrowingScheduledTasks : IScheduledTasks
@@ -227,6 +239,7 @@ public sealed class ManagementModeRunnerTests
         var harness = new Harness();
         var payload = harness.SeedPayload();
         harness.Layout.Bootstrap(payload, "0.1.0", FixedInstant);
+        harness.StartupRegistration.Enable(StartupTaskService.StartupRunValueName, "seeded");
         harness.ScheduledTasks.Register(new ScheduledTaskDefinition
         {
             TaskName = StartupTaskService.StartupTaskName,
@@ -238,6 +251,7 @@ public sealed class ManagementModeRunnerTests
         var exitCode = await harness.Runner.RunAsync(options, payload, "0.1.0");
 
         Assert.Equal(ExitCode.Success, exitCode);
+        Assert.False(harness.StartupRegistration.IsEnabled(StartupTaskService.StartupRunValueName));
         Assert.False(harness.ScheduledTasks.Exists(StartupTaskService.StartupTaskName));
         Assert.False(harness.FileSystem.DirectoryExists(harness.Layout.AppRoot));
     }
@@ -283,7 +297,7 @@ public sealed class ManagementModeRunnerTests
             assetMoniker: "win-x64");
 
         var launcher = new FakeProcessLauncher();
-        var startupTaskService = new StartupTaskService(new FakeScheduledTasks(), layout.CurrentExecutablePath);
+        var startupTaskService = new StartupTaskService(new FakeStartupRegistration(), new FakeScheduledTasks(), layout.CurrentExecutablePath);
         var applyUpdateRunner = new ApplyUpdateRunner(
             layout, new FakeInstanceReleaseWaiter(released: true), new HealthGate(fs, layout), launcher);
         var runner = new ManagementModeRunner(
@@ -323,7 +337,7 @@ public sealed class ManagementModeRunnerTests
             fs, layout, runningVersion: "0.1.0", assetMoniker: "win-x64");
 
         var launcher = new FakeProcessLauncher();
-        var startupTaskService = new StartupTaskService(new FakeScheduledTasks(), layout.CurrentExecutablePath);
+        var startupTaskService = new StartupTaskService(new FakeStartupRegistration(), new FakeScheduledTasks(), layout.CurrentExecutablePath);
         var applyUpdateRunner = new ApplyUpdateRunner(
             layout, new FakeInstanceReleaseWaiter(released: true), new HealthGate(fs, layout), launcher);
         var runner = new ManagementModeRunner(

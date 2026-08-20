@@ -55,6 +55,12 @@
                     HorizontalAlignment="Right"
                     Spacing="8"
                     Margin="0,16,0,0">
+            <TextBlock x:Name="SaveErrorBanner"
+                       IsVisible="False"
+                       VerticalAlignment="Center"
+                       TextWrapping="Wrap"
+                       MaxWidth="700"
+                       Foreground="{DynamicResource SystemControlErrorTextForegroundBrush}" />
             <Button Content="Cancel" Click="OnCancelClicked" />
             <Button Content="Save"
                     IsEnabled="{Binding CanSave}"

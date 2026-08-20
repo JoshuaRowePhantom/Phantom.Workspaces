@@ -229,7 +229,8 @@ public sealed class UpdateControllerTests
                 "win-x64");
 
             var scheduledTasks = new InMemoryScheduledTasks();
-            var startupTaskService = new StartupTaskService(scheduledTasks, this.Layout.CurrentExecutablePath);
+            var startupTaskService = new StartupTaskService(
+                new InMemoryStartupRegistration(), scheduledTasks, this.Layout.CurrentExecutablePath);
 
             var processLauncher = new Mock<IProcessLauncher>();
             processLauncher
@@ -288,5 +289,16 @@ public sealed class UpdateControllerTests
         public void Register(ScheduledTaskDefinition definition) => this.tasks.Add(definition.TaskName);
 
         public void Unregister(string taskName) => this.tasks.Remove(taskName);
+    }
+
+    private sealed class InMemoryStartupRegistration : IStartupRegistration
+    {
+        private readonly HashSet<string> entries = new(StringComparer.OrdinalIgnoreCase);
+
+        public bool IsEnabled(string valueName) => this.entries.Contains(valueName);
+
+        public void Enable(string valueName, string commandLine) => this.entries.Add(valueName);
+
+        public void Disable(string valueName) => this.entries.Remove(valueName);
     }
 }

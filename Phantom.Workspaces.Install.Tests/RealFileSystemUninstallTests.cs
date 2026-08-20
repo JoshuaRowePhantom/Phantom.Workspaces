@@ -35,7 +35,7 @@ public sealed class RealFileSystemUninstallTests
             Assert.Equal("0.0.1", layout.ResolveCurrentVersion());
 
             var scheduledTasks = new FakeScheduledTasks();
-            var startupTaskService = new StartupTaskService(scheduledTasks, layout.CurrentExecutablePath);
+            var startupTaskService = new StartupTaskService(new FakeStartupRegistration(), scheduledTasks, layout.CurrentExecutablePath);
             var applyUpdateRunner = new ApplyUpdateRunner(
                 layout,
                 new FakeInstanceReleaseWaiter(released: true),

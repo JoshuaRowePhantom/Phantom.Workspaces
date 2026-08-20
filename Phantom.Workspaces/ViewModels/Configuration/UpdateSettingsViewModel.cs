@@ -115,7 +115,19 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
     /// </summary>
     public void ApplyToController()
     {
-        this.controller.SetRunAtStartup(this.runAtStartup);
+        try
+        {
+            this.controller.SetRunAtStartup(this.runAtStartup);
+        }
+        catch (Exception exception)
+        {
+            // #1349: a non-elevated environment can fail to register run-at-startup. Handle it at
+            // this source of relevance (mirroring the checkbox setter above): surface the failure
+            // via StatusText and never throw, so the Save path cannot become a dispatcher crash.
+            this.StatusText = this.runAtStartup
+                ? $"Enabling run-at-startup failed: {exception.Message}"
+                : $"Disabling run-at-startup failed: {exception.Message}";
+        }
     }
 
     /// <summary>The latest known available version, or <c>null</c> when none/unknown.</summary>

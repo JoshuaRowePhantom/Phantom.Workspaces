@@ -51,8 +51,11 @@ internal static class ManagementModeDispatcher
         var layout = new InstallLayout(fileSystem, installRoot);
         var clock = new SystemClock();
         var processLauncher = new RealProcessLauncher();
-#pragma warning disable CA1416 // RealScheduledTasks is Windows-only; this path is only reached on Windows
-        var startupTaskService = new StartupTaskService(new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance), layout.CurrentExecutablePath);
+#pragma warning disable CA1416 // RealScheduledTasks/RegistryStartupRegistration are Windows-only; this path is only reached on Windows
+        var startupTaskService = new StartupTaskService(
+            new RegistryStartupRegistration(),
+            new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance),
+            layout.CurrentExecutablePath);
 #pragma warning restore CA1416
         var healthGate = new HealthGate(fileSystem, layout);
         var releaseWaiter = new RealInstanceReleaseWaiter(configFilePath: null);
