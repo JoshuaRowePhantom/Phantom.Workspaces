@@ -25,6 +25,7 @@ public sealed class RunVsCodeTunnelToolTests
         private bool hasExited;
         private int exitCode;
         private string capturedStandardError = string.Empty;
+        private string capturedStandardOutput = string.Empty;
 
         public bool WasKilled { get; private set; }
         public bool WasDisposed { get; private set; }
@@ -32,11 +33,22 @@ public sealed class RunVsCodeTunnelToolTests
         public bool HasExited => this.hasExited;
         public int ExitCode => this.exitCode;
         public string CapturedStandardError => this.capturedStandardError;
+        public string CapturedStandardOutput => this.capturedStandardOutput;
 
-        public void SimulateExit(int exitCode, string capturedStandardError)
+        public void SimulateStandardOutput(string capturedStandardOutput)
+        {
+            this.capturedStandardOutput = capturedStandardOutput;
+        }
+
+        public void SimulateExit(int exitCode, string capturedStandardError, string? capturedStandardOutput = null)
         {
             this.exitCode = exitCode;
             this.capturedStandardError = capturedStandardError;
+            if (capturedStandardOutput is not null)
+            {
+                this.capturedStandardOutput = capturedStandardOutput;
+            }
+
             this.hasExited = true;
         }
 
@@ -652,5 +664,83 @@ public sealed class RunVsCodeTunnelToolTests
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service install"));
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service uninstall"));
         Assert.DoesNotContain(calls, c => c.Arguments.Contains("tunnel service status"));
+    }
+
+    // ---- #1356: child-process stdout is captured and surfaced --------------------------------
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ChildWritesToStdout_CapturedStandardOutputContainsIt()
+    {
+        var child = new FakeChildProcess();
+        child.SimulateExit(1, "some-stderr", "some-stdout-marker");
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        // The child's stdout is accumulated (not discarded) and surfaced in the result.
+        Assert.Contains("some-stdout-marker", child.CapturedStandardOutput);
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("some-stdout-marker", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ChildWritesTunnelUrlToStdout_UrlIsSurfacedInResultOrLog()
+    {
+        const string tunnelUrl = "https://vscode.dev/tunnel/my-machine/abc123";
+        var testLogger = new TestLogger<RunVsCodeTunnelTool>();
+        var child = new FakeChildProcess();
+        child.SimulateExit(0, string.Empty, tunnelUrl);
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child,
+            logger: testLogger);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        var surfacedInResult = result.ErrorMessage?.Contains(tunnelUrl) == true
+            || result.ResultContent?.Contains(tunnelUrl) == true;
+        var surfacedInLog = testLogger.Entries.Any(e => e.Message.Contains(tunnelUrl));
+        Assert.True(surfacedInResult || surfacedInLog);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ChildWritesToStdoutAndStderr_BothAreCapturedIndependently()
+    {
+        var child = new FakeChildProcess();
+        child.SimulateExit(3, "stderr-only-marker", "stdout-only-marker");
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            processLauncher: (_, _) => child);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        // Buffers are independent — neither contains the other's content.
+        Assert.Equal("stdout-only-marker", child.CapturedStandardOutput);
+        Assert.Equal("stderr-only-marker", child.CapturedStandardError);
+        Assert.DoesNotContain("stderr-only-marker", child.CapturedStandardOutput);
+        Assert.DoesNotContain("stdout-only-marker", child.CapturedStandardError);
+
+        // Both are surfaced in the failure message.
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("stdout-only-marker", result.ErrorMessage);
+        Assert.Contains("stderr-only-marker", result.ErrorMessage);
     }
 }

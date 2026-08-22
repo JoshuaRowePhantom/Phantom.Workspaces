@@ -122,8 +122,10 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
                 {
                     var exitCode = SafeExitCode(child);
                     var stderr = child.CapturedStandardError;
+                    var stdout = child.CapturedStandardOutput;
+                    this.LogCapturedStandardOutput(stdout);
                     return WorkspaceToolExecutionResult.Failure(
-                        $"`code tunnel` exited with code {exitCode}.\nStderr:\n{stderr}");
+                        $"`code tunnel` exited with code {exitCode}.\nStdout:\n{stdout}\nStderr:\n{stderr}");
                 }
 
                 var statusResult = await this.RunCliAsync(
@@ -140,11 +142,14 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
                 if (!reportsRunning)
                 {
                     child.Kill();
+                    var stdout = child.CapturedStandardOutput;
+                    this.LogCapturedStandardOutput(stdout);
                     return new WorkspaceToolExecutionResult
                     {
                         ResultContent =
                             $"`code tunnel status` no longer reports the tunnel as running "
-                            + $"(exit {statusResult.ExitCode}).\n{statusResult.StandardOut}",
+                            + $"(exit {statusResult.ExitCode}).\n{statusResult.StandardOut}\n"
+                            + $"Tunnel stdout:\n{stdout}",
                     };
                 }
 
@@ -175,6 +180,16 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     {
         try { return child.ExitCode; }
         catch (InvalidOperationException) { return -1; }
+    }
+
+    // #1356: surface the child's captured stdout (where `code tunnel` prints the tunnel URL and
+    // status) the same way stderr is surfaced, so it is visible in the logs rather than discarded.
+    private void LogCapturedStandardOutput(string capturedStandardOutput)
+    {
+        if (!string.IsNullOrWhiteSpace(capturedStandardOutput))
+        {
+            this.logger.LogInformation("`code tunnel` stdout:\n{Stdout}", capturedStandardOutput);
+        }
     }
 
     private async Task TryLoginAsync(string cliPath, CancellationToken cancellationToken)
