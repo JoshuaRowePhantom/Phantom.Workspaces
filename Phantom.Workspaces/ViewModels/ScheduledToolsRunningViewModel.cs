@@ -175,6 +175,12 @@ public sealed class ToolRowViewModel : ViewModelBase
 /// </summary>
 public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
 {
+    /// <summary>
+    /// #1358: upper bound on the number of <c>tool-execution-result</c> entities a single history
+    /// query materialises, so refresh work is O(recent window) rather than O(entire history).
+    /// </summary>
+    internal const int RecentHistoryResultLimit = 500;
+
     private readonly ScheduledToolHost host;
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Action<Action> dispatch;
@@ -292,9 +298,15 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                             new TopLevelQueryClause
                             {
                                 ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
-                                Clause = new EntityTypeQueryClause
+                                // #1358: bound the recent-history window so refresh work is
+                                // O(window), not O(entire history).
+                                Clause = new TopQueryClause
                                 {
-                                    EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                                    ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                                    Clause = new EntityTypeQueryClause
+                                    {
+                                        EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                                    },
                                 },
                             },
                         ],
@@ -379,6 +391,8 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
         string toolType,
         CancellationToken cancellationToken)
     {
+        // #1358: filter by tool at the query (so other tools' runs are never materialised) and
+        // bound the result set to a recent window; host is refined in memory below.
         var queryResult = await this.dataAccessLayer.QueryAsync(
             new QueryRequest
             {
@@ -387,31 +401,62 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                     new TopLevelQueryClause
                     {
                         ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
-                        Clause = new EntityTypeQueryClause
+                        Clause = new TopQueryClause
                         {
-                            EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                            ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                            Clause = BuildToolHistoryClause(toolType),
                         },
                     },
                 ],
             },
             cancellationToken).ConfigureAwait(false);
 
+        return ParseRuns(queryResult)
+            .Where(r => string.Equals(r.HostLabel, hostLabel, StringComparison.Ordinal))
+            .OrderByDescending(r => r.StartTime)
+            .Select(ToRunSummary)
+            .ToArray();
+    }
+
+    private static IEnumerable<ParsedTopLevelRun> ParseRuns(QueryResult queryResult)
+    {
         return queryResult.Batches
             .SelectMany(batch => batch.Entities)
             .Select(entity => entity.Data)
             .OfType<JsonElement>()
             .Select(ParseTopLevelRun)
             .Where(r => r is not null)
-            .Select(r => r!.Value)
-            .Where(r => string.Equals(r.HostLabel, hostLabel, StringComparison.Ordinal)
-                     && string.Equals(r.ToolName, toolType, StringComparison.Ordinal))
-            .OrderByDescending(r => r.StartTime)
-            .Select(r => new RunSummaryViewModel(
-                r.StartTime,
-                r.EndTime.HasValue ? r.EndTime.Value - r.StartTime : null,
-                r.Status ?? "running",
-                r.Message))
-            .ToArray();
+            .Select(r => r!.Value);
+    }
+
+    private static RunSummaryViewModel ToRunSummary(ParsedTopLevelRun r) => new(
+        r.StartTime,
+        r.EndTime.HasValue ? r.EndTime.Value - r.StartTime : null,
+        r.Status ?? "running",
+        r.Message);
+
+    /// <summary>
+    /// Builds a clause matching top-level <c>tool-execution-result</c> entities for a specific tool
+    /// (filtered by the <c>tool-name</c> field).
+    /// </summary>
+    private static QueryClause BuildToolHistoryClause(string toolType)
+    {
+        return new AndQueryClause
+        {
+            Clauses =
+            [
+                new EntityTypeQueryClause
+                {
+                    EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                },
+                new EntityFieldQueryClause
+                {
+                    FieldPath = new FieldPath("tool-name"),
+                    ComparisonOperator = FieldComparisonOperator.Equals,
+                    Value = JsonSerializer.SerializeToElement(toolType),
+                },
+            ],
+        };
     }
 
     private static ParsedTopLevelRun? ParseTopLevelRun(JsonElement entity)

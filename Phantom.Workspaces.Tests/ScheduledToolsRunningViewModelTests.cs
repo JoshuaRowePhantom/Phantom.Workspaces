@@ -878,4 +878,141 @@ public sealed class ScheduledToolsRunningViewModelTests
         Assert.NotEmpty(mutationThreadIds);
         Assert.All(mutationThreadIds, id => Assert.Equal(scheduler.ExecutionThreadId, id));
     }
+
+    // --- #1358: history queries must be bounded and filtered, not load the entire table ---
+
+    private sealed class RecordingDataAccessLayer : IDataAccessLayer
+    {
+        private readonly IDataAccessLayer inner;
+
+        public RecordingDataAccessLayer(IDataAccessLayer inner) => this.inner = inner;
+
+        public List<QueryRequest> QueryRequests { get; } = new();
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+        {
+            this.QueryRequests.Add(request);
+            return this.inner.QueryAsync(request, cancellationToken);
+        }
+
+        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+            => this.inner.UpdateAsync(request, cancellationToken);
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetAsync(request, cancellationToken);
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618 // forwarding call to the obsolete member is intentional
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetChangedEntitiesAsync(request, cancellationToken);
+    }
+
+    private static bool ClauseTreeContains(QueryClause clause, Func<QueryClause, bool> predicate)
+    {
+        if (predicate(clause))
+        {
+            return true;
+        }
+
+        return clause switch
+        {
+            TopQueryClause top => ClauseTreeContains(top.Clause, predicate),
+            AndQueryClause and => and.Clauses.Any(c => ClauseTreeContains(c, predicate)),
+            OrQueryClause or => or.Clauses.Any(c => ClauseTreeContains(c, predicate)),
+            NotQueryClause not => ClauseTreeContains(not.Clause, predicate),
+            _ => false,
+        };
+    }
+
+    private static IEnumerable<QueryRequest> HistoryQueries(RecordingDataAccessLayer dal)
+        => dal.QueryRequests.Where(r => r.Clauses.Any(c => c.ClauseIdentifier.Value == "tool-execution-results"));
+
+    private static bool IsBounded(QueryRequest request)
+        => request.Clauses.Any(c => ClauseTreeContains(c.Clause, cl => cl is TopQueryClause));
+
+    private static bool FiltersToolName(QueryRequest request, string toolType)
+        => request.Clauses.Any(c => ClauseTreeContains(
+            c.Clause,
+            cl => cl is EntityFieldQueryClause f
+                && f.FieldPath.Components.SequenceEqual(new[] { "tool-name" })
+                && f.ComparisonOperator == FieldComparisonOperator.Equals
+                && f.Value is JsonElement v
+                && v.ValueKind == JsonValueKind.String
+                && v.GetString() == toolType));
+
+    [Fact]
+    public async Task RefreshHistoryAsync_WithLargeHistory_LoadsOnlyBoundedRecentWindow()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        for (var i = 0; i < 30; i++)
+        {
+            await WriteRunAsync(inner, timeProvider, "stub", success: true);
+        }
+
+        var dataAccessLayer = new RecordingDataAccessLayer(inner);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var historyQueries = HistoryQueries(dataAccessLayer).ToArray();
+        Assert.NotEmpty(historyQueries);
+        Assert.All(historyQueries, r => Assert.True(IsBounded(r)));
+        Assert.Single(viewModel.Tools);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForToolAsync_FiltersByToolInQuery_DoesNotMaterializeOtherToolsRuns()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(inner, timeProvider, "stub", success: true);
+        await WriteRunAsync(inner, timeProvider, "other-tool", success: false);
+
+        var dataAccessLayer = new RecordingDataAccessLayer(inner);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = viewModel.Tools.Single(r => r.ToolType == "stub");
+        dataAccessLayer.QueryRequests.Clear();
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        // The load query filters by tool at the query and is bounded.
+        Assert.Contains(dataAccessLayer.QueryRequests, r => FiltersToolName(r, "stub"));
+        Assert.All(HistoryQueries(dataAccessLayer), r => Assert.True(IsBounded(r)));
+
+        // Only the "stub" tool's run is materialised — "other-tool" never appears.
+        var run = Assert.Single(row.RecentRuns);
+        Assert.Equal("succeeded", run.Status);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_WithLargeHistory_CompletesWithinBound()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        for (var i = 0; i < 40; i++)
+        {
+            await WriteRunAsync(inner, timeProvider, "stub", success: i % 2 == 0);
+        }
+
+        var dataAccessLayer = new RecordingDataAccessLayer(inner);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+
+        // Completes (returns) against a bounded query rather than an unbounded materialisation.
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.All(HistoryQueries(dataAccessLayer), r => Assert.True(IsBounded(r)));
+        var row = Assert.Single(viewModel.Tools);
+        Assert.NotNull(row.LastRunStatus);
+    }
 }
