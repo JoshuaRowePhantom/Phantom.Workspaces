@@ -1015,4 +1015,165 @@ public sealed class ScheduledToolsRunningViewModelTests
         var row = Assert.Single(viewModel.Tools);
         Assert.NotNull(row.LastRunStatus);
     }
+
+    // --- #1357: incremental time-windowed (~1 hour) paging of run history on scroll ---
+
+    private static ToolRowViewModel CreateWindowedRow(
+        IReadOnlyList<RunSummaryViewModel> allRuns,
+        TimeProvider timeProvider,
+        List<(DateTimeOffset Lower, DateTimeOffset Upper)>? requestedWindows = null,
+        Func<DateTimeOffset, DateTimeOffset, CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>>? loadWindowOverride = null,
+        Func<DateTimeOffset, CancellationToken, Task<bool>>? hasOlderRunsOverride = null)
+    {
+        Func<DateTimeOffset, DateTimeOffset, CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadWindow =
+            loadWindowOverride ?? ((lower, upper, _) =>
+            {
+                requestedWindows?.Add((lower, upper));
+                IReadOnlyList<RunSummaryViewModel> page = allRuns
+                    .Where(r => r.StartedAt >= lower && r.StartedAt < upper)
+                    .OrderByDescending(r => r.StartedAt)
+                    .ToArray();
+                return Task.FromResult(page);
+            });
+
+        Func<DateTimeOffset, CancellationToken, Task<bool>> hasOlderRuns =
+            hasOlderRunsOverride ?? ((upperExclusive, _) =>
+                Task.FromResult(allRuns.Any(r => r.StartedAt < upperExclusive)));
+
+        return new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            _ => Task.FromResult<IReadOnlyList<RunSummaryViewModel>>(Array.Empty<RunSummaryViewModel>()),
+            foregroundScheduler: null,
+            loadWindow: loadWindow,
+            hasOlderRuns: hasOlderRuns,
+            timeProvider: timeProvider);
+    }
+
+    private static RunSummaryViewModel RunAt(DateTimeOffset startedAt, string status = "succeeded")
+        => new(startedAt, TimeSpan.FromSeconds(1), status, null);
+
+    [Fact]
+    public async Task InitialLoad_LoadsOnlyMostRecentOneHourWindow()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var now = timeProvider.GetUtcNow();
+        var allRuns = new[]
+        {
+            RunAt(now - TimeSpan.FromMinutes(15)), // recent hour
+            RunAt(now - TimeSpan.FromMinutes(45)), // recent hour
+            RunAt(now - TimeSpan.FromMinutes(90)), // older hour — must be excluded
+            RunAt(now - TimeSpan.FromMinutes(200)), // much older — must be excluded
+        };
+        var requestedWindows = new List<(DateTimeOffset Lower, DateTimeOffset Upper)>();
+        var row = CreateWindowedRow(allRuns, timeProvider, requestedWindows);
+
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+
+        // Only the most-recent ~1-hour window was queried, not the entire history.
+        var window = Assert.Single(requestedWindows);
+        Assert.Equal(now, window.Upper);
+        Assert.Equal(now - TimeSpan.FromHours(1), window.Lower);
+        Assert.Equal(TimeSpan.FromHours(1), window.Upper - window.Lower);
+
+        // Only the two runs inside the most-recent hour are materialised.
+        Assert.Equal(2, row.RecentRuns.Count);
+        Assert.All(row.RecentRuns, r => Assert.True(r.StartedAt >= now - TimeSpan.FromHours(1)));
+        Assert.Equal(now - TimeSpan.FromHours(1), row.CurrentWindowStart);
+    }
+
+    [Fact]
+    public async Task LoadNextWindow_AdvancesByApproximatelyOneHour_AppendsOlderRuns()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var now = timeProvider.GetUtcNow();
+        var allRuns = new[]
+        {
+            RunAt(now - TimeSpan.FromMinutes(15)), // hour 1
+            RunAt(now - TimeSpan.FromMinutes(45)), // hour 1
+            RunAt(now - TimeSpan.FromMinutes(75)), // hour 2
+            RunAt(now - TimeSpan.FromMinutes(105)), // hour 2
+        };
+        var requestedWindows = new List<(DateTimeOffset Lower, DateTimeOffset Upper)>();
+        var row = CreateWindowedRow(allRuns, timeProvider, requestedWindows);
+
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, row.RecentRuns.Count);
+        var firstPage = row.RecentRuns.ToArray();
+        var windowStartAfterInitial = row.CurrentWindowStart;
+
+        await row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+
+        // The window advanced by exactly one hour (its new upper equals the previous lower).
+        Assert.Equal(2, requestedWindows.Count);
+        Assert.Equal(windowStartAfterInitial, requestedWindows[1].Upper);
+        Assert.Equal(TimeSpan.FromHours(1), requestedWindows[1].Upper - requestedWindows[1].Lower);
+        Assert.Equal(windowStartAfterInitial - TimeSpan.FromHours(1), row.CurrentWindowStart);
+
+        // Older runs are appended; the initial page is preserved (not cleared).
+        Assert.Equal(4, row.RecentRuns.Count);
+        Assert.Equal(firstPage[0], row.RecentRuns[0]);
+        Assert.Equal(firstPage[1], row.RecentRuns[1]);
+        Assert.All(row.RecentRuns.Skip(2), r => Assert.True(r.StartedAt < windowStartAfterInitial));
+    }
+
+    [Fact]
+    public async Task LoadNextWindow_WhenHistoryExhausted_StopsPagingAndFlagsEnd()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var now = timeProvider.GetUtcNow();
+        // All history lives within the two most-recent hours; nothing older than that remains.
+        var allRuns = new[]
+        {
+            RunAt(now - TimeSpan.FromMinutes(20)), // hour 1
+            RunAt(now - TimeSpan.FromMinutes(80)), // hour 2 (oldest)
+        };
+        var requestedWindows = new List<(DateTimeOffset Lower, DateTimeOffset Upper)>();
+        var row = CreateWindowedRow(allRuns, timeProvider, requestedWindows);
+
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+        Assert.False(row.IsEndOfHistory); // an older run (hour 2) still remains
+
+        await row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+        var windowsAfterPaging = requestedWindows.Count;
+        var runsAfterPaging = row.RecentRuns.Count;
+
+        // The oldest run has now been paged in; no older runs remain.
+        Assert.True(row.IsEndOfHistory);
+        Assert.Equal(2, row.RecentRuns.Count);
+
+        // A further scroll trigger past the end of history is a no-op: no new query, no new items.
+        await row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(windowsAfterPaging, requestedWindows.Count);
+        Assert.Equal(runsAfterPaging, row.RecentRuns.Count);
+    }
+
+    [Fact]
+    public async Task LoadNextWindow_ConcurrentScrollTriggers_DoesNotDoubleLoad()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var loadCount = 0;
+
+        var row = CreateWindowedRow(
+            Array.Empty<RunSummaryViewModel>(),
+            timeProvider,
+            loadWindowOverride: async (_, _, _) =>
+            {
+                Interlocked.Increment(ref loadCount);
+                await gate.Task;
+                return (IReadOnlyList<RunSummaryViewModel>)Array.Empty<RunSummaryViewModel>();
+            },
+            hasOlderRunsOverride: (_, _) => Task.FromResult(true));
+
+        // Fire two overlapping scroll-driven loads while the first is still in flight.
+        var first = row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+        var second = row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+
+        gate.SetResult();
+        await Task.WhenAll(first, second);
+
+        // The re-entrancy guard collapsed the second trigger; the window loaded exactly once.
+        Assert.Equal(1, loadCount);
+    }
 }
