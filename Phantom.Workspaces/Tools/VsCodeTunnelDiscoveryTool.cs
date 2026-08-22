@@ -82,10 +82,12 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
                     $"'code tunnel status' failed (exit {cli.ExitCode}).\nStdout:\n{cli.StandardOut}\nStderr:\n{cli.StandardError}");
             }
 
-            // No tunnel currently running — do not upsert a stale entity.
+            // No tunnel currently running — do not upsert a stale entity. Report this as a
+            // failure (#1355) so callers can distinguish "tunnel discovered" from "no tunnel
+            // found"; a missing tunnel must not be treated as a successful discovery.
             var noTunnelSummary = "VS Code tunnel discovery: no tunnel running.";
             this.logger.LogInformation("{Summary}", noTunnelSummary);
-            return WorkspaceToolExecutionResult.Success() with { ResultContent = noTunnelSummary };
+            return WorkspaceToolExecutionResult.Failure(noTunnelSummary);
         }
 
         var entityName = this.BuildEntityName();

@@ -145,9 +145,46 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
-        Assert.True(result.IsSuccess);
+        // #1355: a not-found discovery is a failure, and still upserts no stale entity.
+        Assert.False(result.IsSuccess);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.Null(entity);
+    }
+
+    [Fact]
+    public async Task Discovery_NoRunningTunnel_ReturnsFailure()
+    {
+        var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("no tunnel running", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Discovery_RunningTunnelFound_ReturnsSuccess()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "found-name",
+            TunnelUrl: "https://vscode.dev/tunnel/found-name",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.True(result.IsSuccess);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.NotNull(entity);
+        Assert.Equal("found-name", entity!.Value.GetProperty("tunnel-name").GetString());
     }
 
     [Fact]
@@ -399,12 +436,14 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
-        Assert.True(result.IsSuccess);
-        Assert.NotNull(result.ResultContent);
-        Assert.Contains("no tunnel running", result.ResultContent);
+        // #1355: no tunnel is a failure; the informative message is surfaced via ErrorMessage
+        // and still logged at Information.
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("no tunnel running", result.ErrorMessage);
         Assert.Contains(
             logger.Entries,
-            e => e.Level == LogLevel.Information && e.Message == result.ResultContent);
+            e => e.Level == LogLevel.Information && e.Message == result.ErrorMessage);
     }
 
     [Fact]
