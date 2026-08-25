@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
+using Phantom.Workspaces;
 using Phantom.Workspaces.Tools;
 using Xunit;
 
@@ -9,92 +10,104 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class VsCodeTunnelStatusResolverTests
 {
-    private static VsCodeTunnelStatusResolver Resolver(
-        Dictionary<string, ProcessResult> byArgs)
+    private const string TunnelNullPayload =
+        "{\"tunnel\":null,\"service_installed\":false}";
+
+    private const string TunnelConnectedPayload =
+        "{\"tunnel\":{\"name\":\"daemon\",\"started_at\":\"2026-08-25T15:42:05.3262829Z\","
+        + "\"tunnel\":\"Connected\",\"last_connected_at\":\"2026-08-25T15:42:05.6461896Z\","
+        + "\"last_disconnected_at\":null,\"last_fail_reason\":null},\"service_installed\":false}";
+
+    private const string TunnelDisconnectedPayload =
+        "{\"tunnel\":{\"name\":\"daemon\",\"started_at\":\"2026-08-25T15:42:05.3262829Z\","
+        + "\"tunnel\":\"Disconnected\",\"last_connected_at\":\"2026-08-25T15:42:05.6461896Z\","
+        + "\"last_disconnected_at\":\"2026-08-25T15:43:05.6461896Z\","
+        + "\"last_fail_reason\":\"connection reset\"},\"service_installed\":false}";
+
+    private const string TunnelUnknownStatePayload =
+        "{\"tunnel\":{\"name\":\"daemon\",\"started_at\":\"2026-08-25T15:42:05.3262829Z\","
+        + "\"tunnel\":\"Reconnecting\",\"last_connected_at\":null,"
+        + "\"last_disconnected_at\":null,\"last_fail_reason\":null},\"service_installed\":false}";
+
+    private static (VsCodeTunnelStatusResolver Resolver, List<string> Args) MakeResolver(ProcessResult status)
     {
+        var args = new List<string>();
         var invoker = new VsCodeCliInvoker(
             notificationService: null,
             logger: null,
             processRunner: (parameters, ct) =>
             {
-                var args = string.Join(" ", parameters.Arguments);
-                foreach (var (key, value) in byArgs)
-                {
-                    if (args.Contains(key))
-                    {
-                        return Task.FromResult(value);
-                    }
-                }
-
-                return Task.FromResult(new ProcessResult(1, "", "", ""));
+                args.Add(string.Join(" ", parameters.Arguments));
+                return Task.FromResult(status);
             });
 
-        return new VsCodeTunnelStatusResolver(invoker: invoker);
+        return (new VsCodeTunnelStatusResolver(invoker: invoker), args);
     }
 
     [Fact]
-    public async Task TunnelStatus_RunningTunnelJsonOutput_ProducesNameAndUrl()
+    public async Task TunnelStatus_TunnelNull_ParsesAsNotRunning()
     {
-        var json = "{\"name\":\"my-desktop\",\"url\":\"https://vscode.dev/tunnel/my-desktop/\",\"connected\":true}";
-        var resolver = Resolver(new()
-        {
-            ["tunnel status --output json"] = new ProcessResult(0, json, "", json),
-        });
-
-        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
-        var status = resolution.Status;
-
-        Assert.NotNull(status);
-        Assert.Equal("my-desktop", status!.TunnelName);
-        Assert.Equal("https://vscode.dev/tunnel/my-desktop/", status.TunnelUrl);
-        Assert.True(status.IsConnected);
-    }
-
-    [Fact]
-    public async Task TunnelStatus_RunningTunnelTextOutput_ProducesNameAndUrl()
-    {
-        var resolver = Resolver(new()
-        {
-            ["tunnel status --output json"] = new ProcessResult(0, "unknown option --output", "", "unknown option --output"),
-            ["tunnel status"] = new ProcessResult(0, "Connected to tunnel: legacy-desktop\n", "", "Connected to tunnel: legacy-desktop\n"),
-        });
-
-        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
-        var status = resolution.Status;
-
-        Assert.NotNull(status);
-        Assert.Equal("legacy-desktop", status!.TunnelName);
-        Assert.Equal("https://vscode.dev/tunnel/legacy-desktop", status.TunnelUrl);
-        Assert.True(status.IsConnected);
-    }
-
-    [Fact]
-    public async Task TunnelStatus_NoTunnelOutput_ReturnsNull()
-    {
-        var resolver = Resolver(new()
-        {
-            ["tunnel status --output json"] = new ProcessResult(1, "", "no tunnel is currently running", "no tunnel is currently running"),
-            ["tunnel status"] = new ProcessResult(1, "No tunnel is currently running.\n", "", "No tunnel is currently running.\n"),
-        });
+        var (resolver, _) = MakeResolver(new ProcessResult(0, TunnelNullPayload, "", TunnelNullPayload));
 
         var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
 
         Assert.Null(resolution.Status);
         Assert.NotNull(resolution.CliResult);
+        Assert.Equal(0, resolution.CliResult!.ExitCode);
     }
 
     [Fact]
-    public async Task TunnelStatus_MalformedOutput_ReturnsNullWithoutThrowing()
+    public async Task TunnelStatus_TunnelConnected_ParsesAsRunningWithNameAndConstructedUrl()
     {
-        var resolver = Resolver(new()
-        {
-            ["tunnel status --output json"] = new ProcessResult(0, "\u0000not json\u0000", "", "not json"),
-            ["tunnel status"] = new ProcessResult(0, "\u0001\u0002garbage", "", "garbage"),
-        });
+        var (resolver, _) = MakeResolver(new ProcessResult(0, TunnelConnectedPayload, "", TunnelConnectedPayload));
 
         var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
 
-        Assert.Null(resolution.Status);
+        Assert.NotNull(resolution.Status);
+        Assert.Equal("daemon", resolution.Status!.TunnelName);
+        Assert.True(resolution.Status.IsConnected);
+        Assert.Equal("https://vscode.dev/tunnel/daemon", resolution.Status.TunnelUrl);
+        Assert.Null(resolution.Status.LastFailReason);
+    }
+
+    [Fact]
+    public async Task TunnelStatus_TunnelDisconnected_ParsesAsRunningButNotConnected()
+    {
+        var (resolver, _) = MakeResolver(new ProcessResult(0, TunnelDisconnectedPayload, "", TunnelDisconnectedPayload));
+
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
+
+        // Running (daemon up) but the connection is lost.
+        Assert.NotNull(resolution.Status);
+        Assert.Equal("daemon", resolution.Status!.TunnelName);
+        Assert.False(resolution.Status.IsConnected);
+        Assert.Equal("connection reset", resolution.Status.LastFailReason);
+    }
+
+    [Fact]
+    public async Task TunnelStatus_UnknownStateString_DoesNotThrowAndTreatedAsNotConnected()
+    {
+        var (resolver, _) = MakeResolver(new ProcessResult(0, TunnelUnknownStatePayload, "", TunnelUnknownStatePayload));
+
+        var resolution = await resolver.ResolveAsync("code", CancellationToken.None);
+
+        // An unknown/future inner state string must not throw and is treated as not-connected.
+        Assert.NotNull(resolution.Status);
+        Assert.Equal("daemon", resolution.Status!.TunnelName);
+        Assert.False(resolution.Status.IsConnected);
+    }
+
+    [Fact]
+    public async Task TunnelStatus_OutputJsonFlagRejected_ResolverUsesPlainStatusInvocation()
+    {
+        var (resolver, args) = MakeResolver(new ProcessResult(0, TunnelConnectedPayload, "", TunnelConnectedPayload));
+
+        await resolver.ResolveAsync("code", CancellationToken.None);
+
+        Assert.NotEmpty(args);
+        Assert.All(args, a => Assert.DoesNotContain("--output", a));
+        Assert.All(args, a => Assert.DoesNotContain("--json", a));
+        Assert.Contains(args, a => a.Contains("tunnel") && a.Contains("status"));
     }
 
     [Fact]

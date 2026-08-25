@@ -491,4 +491,48 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
         Assert.Null(result.ResultContent);
         Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Information);
     }
+
+    // ---- #1359: schema-correct running/not-running via the shared resolver ------------------
+
+    [Fact]
+    public async Task Discovery_TunnelConnected_UpsertsTunnelEntityAndReportsSuccess()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "daemon",
+            TunnelUrl: "https://vscode.dev/tunnel/daemon",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.True(result.IsSuccess);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.NotNull(entity);
+        Assert.Equal("daemon", entity!.Value.GetProperty("tunnel-name").GetString());
+        Assert.Equal("https://vscode.dev/tunnel/daemon", entity.Value.GetProperty("tunnel-url").GetString());
+        Assert.True(entity.Value.GetProperty("active").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Discovery_TunnelNull_ReportsNotFound()
+    {
+        var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        // A `{"tunnel":null,...}` status is reported as no tunnel found (aligned with #1355),
+        // not as a discovered tunnel.
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("no tunnel running", result.ErrorMessage);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.Null(entity);
+    }
 }

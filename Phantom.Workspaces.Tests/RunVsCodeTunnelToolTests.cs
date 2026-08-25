@@ -143,6 +143,42 @@ public sealed class RunVsCodeTunnelToolTests
 
     // ---- Expected Tests -------------------------------------------------------------------
 
+    /// <summary>
+    /// A fake <see cref="IVsCodeTunnelStatusResolver"/>: the runner obtains tunnel status
+    /// exclusively through this shared component (never by invoking the CLI itself).
+    /// </summary>
+    private sealed class FakeStatusResolver : IVsCodeTunnelStatusResolver
+    {
+        private readonly Func<string, CancellationToken, Task<VsCodeTunnelResolution>> handler;
+
+        public int InvocationCount { get; private set; }
+
+        public FakeStatusResolver(Func<string, CancellationToken, Task<VsCodeTunnelResolution>> handler)
+        {
+            this.handler = handler;
+        }
+
+        public static FakeStatusResolver Running() =>
+            new((_, _) => Task.FromResult(new VsCodeTunnelResolution(
+                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                new VsCodeCliResult(0, "{\"tunnel\":{\"name\":\"daemon\",\"tunnel\":\"Connected\"}}", string.Empty),
+                CliLaunchError: null)));
+
+        public static FakeStatusResolver NotRunning(
+            int exitCode = 0,
+            string stdout = "{\"tunnel\":null,\"service_installed\":false}") =>
+            new((_, _) => Task.FromResult(new VsCodeTunnelResolution(
+                Status: null,
+                new VsCodeCliResult(exitCode, stdout, string.Empty),
+                CliLaunchError: null)));
+
+        public Task<VsCodeTunnelResolution> ResolveAsync(string cliPath, CancellationToken cancellationToken)
+        {
+            this.InvocationCount++;
+            return this.handler(cliPath, cancellationToken);
+        }
+    }
+
     [Fact]
     public async Task RunVsCodeTunnelTool_SpawnsCodeTunnelDirectly_NotServiceInstall()
     {
@@ -182,21 +218,22 @@ public sealed class RunVsCodeTunnelToolTests
         var gate = new ManualPollGate();
         var statusCount = 0;
         var child = new FakeChildProcess();
+        var resolver = new FakeStatusResolver((_, _) =>
+        {
+            Interlocked.Increment(ref statusCount);
+            return Task.FromResult(new VsCodeTunnelResolution(
+                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                new VsCodeCliResult(0, string.Empty, string.Empty),
+                CliLaunchError: null));
+        });
 
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, ct) =>
-            {
-                if (args == "tunnel status")
-                {
-                    Interlocked.Increment(ref statusCount);
-                    return Task.FromResult(("tunnel is running", 0));
-                }
-                return Task.FromResult(("", 0));
-            },
+            (cli, args, env, ct) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            tunnelStatusResolver: resolver,
             processLauncher: (_, _) => child,
             waitBetweenPollsAsync: gate.WaitAsync);
 
@@ -245,10 +282,11 @@ public sealed class RunVsCodeTunnelToolTests
         var child = new FakeChildProcess();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is stopped", 0)),
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            tunnelStatusResolver: FakeStatusResolver.NotRunning(),
             processLauncher: (_, _) => child);
 
         var result = await tool.ExecuteAsync(this.Context());
@@ -263,10 +301,12 @@ public sealed class RunVsCodeTunnelToolTests
         var child = new FakeChildProcess();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("running", 7)),  // exit 7, contains "running" in output but non-zero → not running
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            // Resolver reports no running tunnel (e.g. nonzero exit / error) → not running.
+            tunnelStatusResolver: FakeStatusResolver.NotRunning(exitCode: 7, stdout: "error: unexpected argument"),
             processLauncher: (_, _) => child);
 
         var result = await tool.ExecuteAsync(this.Context());
@@ -378,10 +418,11 @@ public sealed class RunVsCodeTunnelToolTests
         var child = new FakeChildProcess();
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is running", 0)),
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            tunnelStatusResolver: FakeStatusResolver.Running(),
             processLauncher: (_, _) => child,
             waitBetweenPollsAsync: gate.WaitAsync);
 
@@ -478,20 +519,22 @@ public sealed class RunVsCodeTunnelToolTests
         var pollGate = new ManualPollGate();
         var statusCount = 0;
         var child = new FakeChildProcess();
+        var resolver = new FakeStatusResolver((_, _) =>
+        {
+            Interlocked.Increment(ref statusCount);
+            return Task.FromResult(new VsCodeTunnelResolution(
+                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                new VsCodeCliResult(0, string.Empty, string.Empty),
+                CliLaunchError: null));
+        });
 
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                if (args == "tunnel status")
-                {
-                    Interlocked.Increment(ref statusCount);
-                }
-                return Task.FromResult(("tunnel is running", 0));
-            },
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: _ => graceGate.Task,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            tunnelStatusResolver: resolver,
             processLauncher: (_, _) => child,
             waitBetweenPollsAsync: pollGate.WaitAsync);
 
@@ -520,19 +563,19 @@ public sealed class RunVsCodeTunnelToolTests
         var graceCompleted = false;
         var pollGate = new ManualPollGate();
         var child = new FakeChildProcess();
+        var resolver = new FakeStatusResolver((_, _) =>
+        {
+            // The status probe must never run before the grace period completes.
+            Assert.True(graceCompleted);
+            return Task.FromResult(new VsCodeTunnelResolution(
+                new VsCodeTunnelStatus("daemon", "https://vscode.dev/tunnel/daemon", true),
+                new VsCodeCliResult(0, string.Empty, string.Empty),
+                CliLaunchError: null));
+        });
 
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, _) =>
-            {
-                if (args == "tunnel status")
-                {
-                    // The status probe must never run before the grace period completes.
-                    Assert.True(graceCompleted);
-                    return Task.FromResult(("tunnel is running", 0));
-                }
-                return Task.FromResult((string.Empty, 0));
-            },
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: async _ =>
             {
                 await graceGate.Task;
@@ -540,6 +583,7 @@ public sealed class RunVsCodeTunnelToolTests
             },
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            tunnelStatusResolver: resolver,
             processLauncher: (_, _) => child,
             waitBetweenPollsAsync: pollGate.WaitAsync);
 
@@ -564,10 +608,11 @@ public sealed class RunVsCodeTunnelToolTests
 
         var tool = new RunVsCodeTunnelTool(
             new FakeExecutionContextProvider(),
-            (cli, args, env, _) => Task.FromResult(("tunnel is stopped", 0)),
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
             initialStatusCheckDelayAsync: _ => Task.CompletedTask,
             defaultCliPathResolver: () => "code",
             tokenResolver: () => null,
+            tunnelStatusResolver: FakeStatusResolver.NotRunning(),
             processLauncher: (_, _) => child);
 
         var result = await tool.ExecuteAsync(this.Context());
@@ -742,5 +787,99 @@ public sealed class RunVsCodeTunnelToolTests
         Assert.NotNull(result.ErrorMessage);
         Assert.Contains("stdout-only-marker", result.ErrorMessage);
         Assert.Contains("stderr-only-marker", result.ErrorMessage);
+    }
+
+    // ---- #1359: schema-correct status via the shared resolver --------------------------------
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_StatusReportsConnected_TreatsTunnelAsUpAndDoesNotKill()
+    {
+        var gate = new ManualPollGate();
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            tunnelStatusResolver: FakeStatusResolver.Running(),
+            processLauncher: (_, _) => child,
+            waitBetweenPollsAsync: gate.WaitAsync);
+
+        var runTask = tool.ExecuteAsync(this.Context());
+
+        // A Connected status makes the tool treat the tunnel as up: it keeps blocking and does NOT
+        // kill the child or emit the failure message.
+        await gate.ReleaseOnePoll();
+        await gate.ReleaseOnePoll();
+
+        Assert.False(runTask.IsCompleted);
+        Assert.False(child.WasKilled);
+
+        // Let ExecuteAsync return by having the child exit.
+        child.SimulateExit(0, "done");
+        await gate.ReleaseOnePoll();
+        await runTask;
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_StatusTunnelNull_ReportsNotRunning()
+    {
+        var child = new FakeChildProcess();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) => Task.FromResult((string.Empty, 0)),
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            // {"tunnel":null,...} → not running.
+            tunnelStatusResolver: FakeStatusResolver.NotRunning(),
+            processLauncher: (_, _) => child);
+
+        var result = await tool.ExecuteAsync(this.Context());
+
+        Assert.True(result.IsSuccess);
+        Assert.True(child.WasKilled);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("no longer reports the tunnel as running", result.ResultContent);
+    }
+
+    [Fact]
+    public async Task RunVsCodeTunnelTool_ObtainsStatusOnlyViaSharedComponent_DoesNotInvokeCliDirectly()
+    {
+        var gate = new ManualPollGate();
+        var cliCalls = new List<CliCall>();
+        var child = new FakeChildProcess();
+        var resolver = FakeStatusResolver.Running();
+
+        var tool = new RunVsCodeTunnelTool(
+            new FakeExecutionContextProvider(),
+            (cli, args, env, _) =>
+            {
+                cliCalls.Add(new CliCall(cli, args, env));
+                return Task.FromResult((string.Empty, 0));
+            },
+            initialStatusCheckDelayAsync: _ => Task.CompletedTask,
+            defaultCliPathResolver: () => "code",
+            tokenResolver: () => null,
+            tunnelStatusResolver: resolver,
+            processLauncher: (_, _) => child,
+            waitBetweenPollsAsync: gate.WaitAsync);
+
+        var runTask = tool.ExecuteAsync(this.Context());
+
+        await gate.ReleaseOnePoll();
+        await gate.ReleaseOnePoll();
+
+        // The runner obtained status solely through the shared resolver and performed no
+        // independent `code tunnel status` invocation.
+        Assert.True(resolver.InvocationCount >= 1);
+        Assert.DoesNotContain(cliCalls, c => c.Arguments.Contains("status"));
+
+        child.SimulateExit(0, "done");
+        await gate.ReleaseOnePoll();
+        await runTask;
     }
 }
