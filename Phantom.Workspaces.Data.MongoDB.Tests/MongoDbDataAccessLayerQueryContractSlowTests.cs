@@ -85,4 +85,87 @@ public sealed class MongoDbDataAccessLayerQueryContractSlowTests : DataAccessLay
             || message.Contains("BUILDING", StringComparison.OrdinalIgnoreCase)
             || message.Contains("while in state", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>
+    /// #1360: The server-side sort is applied BEFORE the limit, so a descending-by-field top-N query
+    /// returns the N highest-ordered entities (the most-recent), not an arbitrary subset.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_WithSortDescendingAndLimit_ReturnsTopNByOrder()
+    {
+        var dataAccessLayer = CreateDataAccessLayer();
+        for (var i = 0; i < 6; i++)
+        {
+            await AddEntityAsync(
+                dataAccessLayer,
+                ["note"],
+                new EntityName("sorted", i.ToString("D2")),
+                status: i.ToString("D2"));
+        }
+
+        var matches = await QueryAsync(
+            dataAccessLayer,
+            "sorted-top",
+            new TopQueryClause
+            {
+                ResultLimit = new QueryResultLimit(2),
+                SortSpecifications =
+                [
+                    new SortSpecification
+                    {
+                        FieldPath = new FieldPath("status"),
+                        Direction = SortDirection.Descending,
+                    },
+                ],
+                Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["note"]) },
+            });
+
+        Assert.Equal(2, matches.Count);
+        Assert.Equal(
+            new HashSet<string> { "05", "04" },
+            matches.Select(GetStatus).ToHashSet());
+    }
+
+    /// <summary>
+    /// #1360: With far more matching entities than the limit, the most-recent entities are still
+    /// returned (sort-before-limit) rather than being dropped by an arbitrary bounded page.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_LimitWithoutMatchingRecent_StillReturnsMostRecent()
+    {
+        var dataAccessLayer = CreateDataAccessLayer();
+        for (var i = 0; i < 20; i++)
+        {
+            await AddEntityAsync(
+                dataAccessLayer,
+                ["note"],
+                new EntityName("recent", i.ToString("D2")),
+                status: i.ToString("D2"));
+        }
+
+        var matches = await QueryAsync(
+            dataAccessLayer,
+            "recent-top",
+            new TopQueryClause
+            {
+                ResultLimit = new QueryResultLimit(3),
+                SortSpecifications =
+                [
+                    new SortSpecification
+                    {
+                        FieldPath = new FieldPath("status"),
+                        Direction = SortDirection.Descending,
+                    },
+                ],
+                Clause = new EntityTypeQueryClause { EntityTypeNames = new EntityTypeNameSet(["note"]) },
+            });
+
+        Assert.Equal(3, matches.Count);
+        Assert.Equal(
+            new HashSet<string> { "19", "18", "17" },
+            matches.Select(GetStatus).ToHashSet());
+    }
+
+    private static string GetStatus(QueryEntitySnapshot snapshot)
+        => snapshot.Data!.Value.GetProperty("status").GetString()!;
 }

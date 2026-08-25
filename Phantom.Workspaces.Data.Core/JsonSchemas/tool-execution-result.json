@@ -21,6 +21,10 @@
       "description": "The name of the tool that produced this result.",
       "type": "string"
     },
+    "host-label": {
+      "description": "The host under which the run was recorded (the name segments preceding 'tool-executions', joined with ' / '). Stored so run-history queries can filter by host server-side.",
+      "type": "string"
+    },
     "start-time": {
       "description": "The UTC time at which the tool run started, as an RFC 3339 date-time.",
       "type": "string",

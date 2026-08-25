@@ -56,6 +56,41 @@ public sealed class MongoDbQueryFilterBuilder
         return clause is TopQueryClause topClause ? topClause.ResultLimit.Value : null;
     }
 
+    /// <summary>
+    /// Builds a compound <see cref="SortDefinition{BsonDocument}"/> from a Top clause's ordered sort
+    /// specifications (each translated against the denormalized <c>current.data.*</c> projection),
+    /// applied in list order (primary key first, then tie-breakers). Returns <see langword="null"/>
+    /// when the clause is not a Top clause or carries no sort specifications, in which case no
+    /// server-side ordering is imposed.
+    /// </summary>
+    public static SortDefinition<BsonDocument>? BuildSort(QueryClause clause)
+    {
+        ArgumentNullException.ThrowIfNull(clause);
+        if (clause is not TopQueryClause { SortSpecifications: { Count: > 0 } sorts })
+        {
+            return null;
+        }
+
+        SortDefinition<BsonDocument>? sort = null;
+        var sortBuilder = Builders<BsonDocument>.Sort;
+        foreach (var specification in sorts)
+        {
+            var components = specification.FieldPath.Components ?? [];
+            if (components.Length == 0)
+            {
+                continue;
+            }
+
+            var field = string.Join('.', new[] { DataField }.Concat(components));
+            var next = specification.Direction == SortDirection.Descending
+                ? sortBuilder.Descending(field)
+                : sortBuilder.Ascending(field);
+            sort = sort is null ? next : sortBuilder.Combine(sort, next);
+        }
+
+        return sort;
+    }
+
     private FilterDefinition<BsonDocument> Translate(QueryClause clause)
     {
         switch (clause)

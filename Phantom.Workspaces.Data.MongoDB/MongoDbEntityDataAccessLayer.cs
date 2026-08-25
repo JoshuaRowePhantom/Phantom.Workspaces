@@ -599,7 +599,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
     }
 
     /// <summary>
-    /// Ensures the five required query indexes exist on the entity collection. This is idempotent and
+    /// Ensures the required query indexes exist on the entity collection. This is idempotent and
     /// should be called once on startup before serving any queries.
     /// </summary>
     public virtual async Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
@@ -611,6 +611,8 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.NameParentPrefixesField)),
             new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.ParticipantIdsField)),
             new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending("current.modified-time-utc")),
+            // #1360: supports server-side sort-by + top-N on tool-execution-result history (start-time).
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending("current.data.start-time")),
         };
 
         await _entityCollection.Indexes.CreateManyAsync(indexModels, cancellationToken).ConfigureAwait(false);
@@ -1163,6 +1165,13 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var filter = translator.TranslateToFilter(clause);
         var find = bsonCollection.Find(filter);
+        if (MongoDbQueryFilterBuilder.BuildSort(clause) is { } sort)
+        {
+            // Sort BEFORE limiting so the limit is a true top-N-by-order (mirrors ProcessQueueAsync),
+            // not an arbitrary subset.
+            find = find.Sort(sort);
+        }
+
         if (MongoDbQueryFilterBuilder.GetResultLimit(clause) is { } limit && limit >= 0)
         {
             find = find.Limit(limit);

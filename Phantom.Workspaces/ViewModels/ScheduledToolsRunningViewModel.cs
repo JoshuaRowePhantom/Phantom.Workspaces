@@ -434,6 +434,9 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                                 Clause = new TopQueryClause
                                 {
                                     ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                                    // #1360: order by start-time descending server-side so the bounded
+                                    // window always contains the most-recent runs, not an arbitrary page.
+                                    SortSpecifications = StartTimeDescendingSort,
                                     Clause = new EntityTypeQueryClause
                                     {
                                         EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
@@ -528,8 +531,9 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
         string toolType,
         CancellationToken cancellationToken)
     {
-        // #1358: filter by tool at the query (so other tools' runs are never materialised) and
-        // bound the result set to a recent window; host is refined in memory below.
+        // #1358/#1360: filter by tool AND host at the query (so other tools'/hosts' runs are never
+        // materialised and cannot starve the window) and return the most-recent runs via a
+        // server-side start-time-descending sort bounded to a recent window.
         var queryResult = await this.dataAccessLayer.QueryAsync(
             new QueryRequest
             {
@@ -541,7 +545,8 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                         Clause = new TopQueryClause
                         {
                             ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
-                            Clause = BuildToolHistoryClause(toolType),
+                            SortSpecifications = StartTimeDescendingSort,
+                            Clause = BuildToolHistoryClause(toolType, BuildHostLabelClause(hostLabel)),
                         },
                     },
                 ],
@@ -575,7 +580,8 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
     /// <summary>
     /// #1357: Loads the runs for a tool whose <c>start-time</c> falls in the half-open window
     /// <c>[lowerInclusive, upperExclusive)</c>, bounded both by time (server-side clauses) and by
-    /// count (<see cref="RecentHistoryResultLimit"/>). Host is refined in memory.
+    /// count (<see cref="RecentHistoryResultLimit"/>). #1360: host is filtered and results are ordered
+    /// (start-time descending) server-side so a busy hour's window is not starved by other hosts.
     /// </summary>
     private async Task<IReadOnlyList<RunSummaryViewModel>> LoadWindowForToolAsync(
         string hostLabel,
@@ -595,8 +601,10 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                         Clause = new TopQueryClause
                         {
                             ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                            SortSpecifications = StartTimeDescendingSort,
                             Clause = BuildToolHistoryClause(
                                 toolType,
+                                BuildHostLabelClause(hostLabel),
                                 BuildStartTimeClause(lowerInclusive, FieldComparisonOperator.GreaterThanOrEqualTo),
                                 BuildStartTimeClause(upperExclusive, FieldComparisonOperator.LessThan)),
                         },
@@ -683,6 +691,34 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
             ComparisonOperator = comparisonOperator,
             Value = JsonSerializer.SerializeToElement(
                 value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)),
+        };
+    }
+
+    /// <summary>
+    /// #1360: A server-side sort by <c>start-time</c> descending, applied before the top-N limit so a
+    /// bounded/windowed query returns the most-recent runs rather than an arbitrary page.
+    /// </summary>
+    private static readonly IReadOnlyList<SortSpecification> StartTimeDescendingSort =
+    [
+        new SortSpecification
+        {
+            FieldPath = new FieldPath("start-time"),
+            Direction = SortDirection.Descending,
+        },
+    ];
+
+    /// <summary>
+    /// #1360: Builds a <c>host-label</c> field clause so the run-history query is filtered to a single
+    /// host server-side, preventing a per-tool/per-host window from being starved by other hosts' runs.
+    /// The value matches how <see cref="ToolExecutionResultWriter"/> stores <c>host-label</c>.
+    /// </summary>
+    private static EntityFieldQueryClause BuildHostLabelClause(string hostLabel)
+    {
+        return new EntityFieldQueryClause
+        {
+            FieldPath = new FieldPath("host-label"),
+            ComparisonOperator = FieldComparisonOperator.Equals,
+            Value = JsonSerializer.SerializeToElement(hostLabel),
         };
     }
 

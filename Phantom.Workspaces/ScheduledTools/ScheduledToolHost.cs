@@ -486,7 +486,7 @@ public sealed class ScheduledToolHost
                 continue;
             }
 
-            if (await this.TryReconcileOrphanAsync(snapshot, data, cancellationToken).ConfigureAwait(false))
+            if (await this.TryReconcileOrphanAsync(snapshot, data, hostNameComponents, cancellationToken).ConfigureAwait(false))
             {
                 reconciled++;
             }
@@ -504,6 +504,7 @@ public sealed class ScheduledToolHost
     private async Task<bool> TryReconcileOrphanAsync(
         EntitySnapshot snapshot,
         JsonElement data,
+        IReadOnlyList<string> hostNameComponents,
         CancellationToken cancellationToken)
     {
         try
@@ -511,6 +512,13 @@ public sealed class ScheduledToolHost
             var node = JsonNode.Parse(data.GetRawText())!.AsObject();
             node["status"] = "failed";
             node["end-time"] = this.timeProvider.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
+
+            // #1360: backfill the queryable host-label on legacy results that predate it, so the
+            // reconciled run remains visible to host-filtered run-history queries.
+            if (node["host-label"] is null)
+            {
+                node["host-label"] = string.Join(" / ", hostNameComponents);
+            }
 
             const string reconciliationMessage = "run did not complete (process terminated or completion write failed); reconciled on startup";
 

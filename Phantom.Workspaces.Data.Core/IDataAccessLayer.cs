@@ -689,6 +689,38 @@ public sealed record TopQueryClause : QueryClause
 
     [JsonPropertyName("clause")]
     public required QueryClause Clause { get; init; }
+
+    /// <summary>
+    /// An ordered list of sort specifications applied as a compound sort (primary key first, then
+    /// tie-breakers) BEFORE the <see cref="ResultLimit"/> is applied, making the limit a true
+    /// top-N-by-order rather than an arbitrary subset. An empty or absent list means the order is
+    /// unspecified (implementation-defined), preserving the previous behavior.
+    /// </summary>
+    [JsonPropertyName("sort-specifications")]
+    public IReadOnlyList<SortSpecification>? SortSpecifications { get; init; }
+}
+
+/// <summary>
+/// A single server-side sort key: the entity data field to order by, and the direction. Multiple
+/// specifications are applied as a compound sort in list order.
+/// </summary>
+public sealed record SortSpecification
+{
+    [JsonPropertyName("field-path")]
+    public required FieldPath FieldPath { get; init; }
+
+    [JsonPropertyName("direction")]
+    public required SortDirection Direction { get; init; }
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter<SortDirection>))]
+public enum SortDirection
+{
+    [JsonStringEnumMemberName("ascending")]
+    Ascending = 0,
+
+    [JsonStringEnumMemberName("descending")]
+    Descending = 1,
 }
 
 public abstract record EntityQueryClause : QueryClause;

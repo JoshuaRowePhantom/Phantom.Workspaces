@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -21,6 +22,15 @@ public sealed class ScheduledToolsRunningViewModelTests
     private sealed class FixedTimeProvider : TimeProvider
     {
         private DateTimeOffset now = new(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
+
+        public FixedTimeProvider()
+        {
+        }
+
+        public FixedTimeProvider(DateTimeOffset now)
+        {
+            this.now = now;
+        }
 
         public DateTimeOffset Advance(TimeSpan by)
         {
@@ -1175,5 +1185,155 @@ public sealed class ScheduledToolsRunningViewModelTests
 
         // The re-entrancy guard collapsed the second trigger; the window loaded exactly once.
         Assert.Equal(1, loadCount);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_MoreRunsThanLimit_ShowsMostRecentRuns()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostA = new[] { "computer", "host-a" };
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        // 500 older successful runs — enough to fill the entire result limit by themselves.
+        for (var i = 0; i < 500; i++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(i), "succeeded");
+        }
+
+        // The single most-recent run failed; the bounded (top-N) query must not drop it.
+        await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(100_000), "failed");
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        Assert.Equal("failed", row.LastRunStatus);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForTool_ManyOtherHostRuns_StillShowsSelectedHostRuns()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostA = new[] { "computer", "host-a" };
+        var hostB = new[] { "computer", "host-b" };
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        // Selected host A: ten older runs...
+        for (var i = 0; i < 10; i++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(i), "succeeded");
+        }
+
+        // ...plus one very recent run so a row for host A is created from history.
+        await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(100_000), "succeeded");
+
+        // Other host B floods the same tool with 500 more-recent runs (filling the limit), which
+        // would starve host A's older runs if the host filter were only applied in memory.
+        for (var j = 0; j < 500; j++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostB, "stub", t0.AddSeconds(1_000 + j), "succeeded");
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools, r => r.Host == "computer / host-a");
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        // All eleven of host A's runs are returned despite host B's flood filling the limit.
+        Assert.Equal(11, row.RecentRuns.Count);
+    }
+
+    [Fact]
+    public async Task LoadWindowForTool_BusyHour_ReturnsSelectedHostRunsWithinWindow()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostA = new[] { "computer", "host-a" };
+        var hostB = new[] { "computer", "host-b" };
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var now = t0.AddSeconds(100_000);
+        var timeProvider = new FixedTimeProvider(now);
+
+        // Host A: five runs in the older part of the [now - 1h, now) window.
+        for (var i = 0; i < 5; i++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostA, "stub", now.AddSeconds(-3_000 - i), "succeeded");
+        }
+
+        // Host A: one run AFTER the window so a row is created from history without being in-window.
+        await SeedRunAsync(dataAccessLayer, hostA, "stub", now.AddSeconds(50_000), "succeeded");
+
+        // Host B saturates the window with 500 more-recent-in-window runs (filling the limit),
+        // which would starve host A's in-window runs if host filtering were only in memory.
+        for (var j = 0; j < 500; j++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostB, "stub", now.AddSeconds(-100 - j), "succeeded");
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer, timeProvider: timeProvider);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools, r => r.Host == "computer / host-a");
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+
+        // Host A's five in-window runs are returned even though host B saturated the window.
+        Assert.Equal(5, row.RecentRuns.Count);
+    }
+
+    /// <summary>
+    /// Seeds a completed tool-execution-result entity directly (mirroring
+    /// <see cref="ToolExecutionResultWriter"/>'s shape, including the queryable <c>host-label</c>)
+    /// so tests can create large, precisely-timed run histories cheaply.
+    /// </summary>
+    private static async Task SeedRunAsync(
+        IDataAccessLayer dataAccessLayer,
+        IReadOnlyList<string> hostComponents,
+        string toolName,
+        DateTimeOffset startTime,
+        string status)
+    {
+        var guid = Guid.NewGuid();
+        var stamp = startTime.ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ", CultureInfo.InvariantCulture);
+        var nameComponents = hostComponents
+            .Append(ToolExecutionResultWriter.ToolExecutionsSegment)
+            .Append(toolName)
+            .Append(stamp)
+            .ToArray();
+        var hostLabel = string.Join(" / ", hostComponents);
+        var startIso = startTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var namesJson = JsonSerializer.Serialize(new[] { nameComponents });
+
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{guid}}",
+              "entity-types": ["entity", "tool-execution-result"],
+              "names": {{namesJson}},
+              "tool-name": {{JsonSerializer.Serialize(toolName)}},
+              "host-label": {{JsonSerializer.Serialize(hostLabel)}},
+              "start-time": {{JsonSerializer.Serialize(startIso)}},
+              "status": {{JsonSerializer.Serialize(status)}}
+            }
+            """);
+
+        var result = await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed run" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId(guid),
+                    ConcurrencyTag = null,
+                    Data = document.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        Assert.DoesNotContain(result.EntityResults, r => r.UpdateState == UpdateState.Failed);
     }
 }
