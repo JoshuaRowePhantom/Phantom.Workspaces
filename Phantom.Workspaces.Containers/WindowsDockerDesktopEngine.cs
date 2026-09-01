@@ -104,6 +104,18 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
         await RunAndEnsureSuccessAsync(arguments, cancellationToken).ConfigureAwait(false);
     }
 
+    public override ValueTask PullAsync(
+        string imageName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(imageName))
+        {
+            throw new ArgumentException("Image name is required.", nameof(imageName));
+        }
+
+        return RunAndEnsureSuccessAsync(["pull", imageName], cancellationToken);
+    }
+
     public override ValueTask StartAsync(
         string containerName,
         CancellationToken cancellationToken = default)

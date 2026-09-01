@@ -171,6 +171,37 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         Assert.NotSame(Microsoft.Extensions.Logging.Abstractions.NullLogger<DockerCommandRunner>.Instance, runner.Logger);
     }
 
+    [Fact]
+    public async Task MongoDbConnectionBroker_WhenContainerMissing_PullsImageBeforeCreate()
+    {
+        var engine = new FakeDockerEngine { UsableResult = true, FailFirstStart = true };
+        var launcher = new FakeDockerDesktopLauncher("C:\\Docker Desktop.exe");
+        var time = new FakeTimeProvider();
+        var broker = CreateBroker(engine, launcher, time);
+
+        _ = await InvokeGetClientAndCatchAsync(broker, SampleConnection());
+
+        Assert.Equal(1, engine.PullCallCount);
+        Assert.Equal(1, engine.CreateCallCount);
+        Assert.Equal(new[] { "Start", "Pull", "Create", "Start" }, engine.CallSequence);
+    }
+
+    [Fact]
+    public async Task MongoDbConnectionBroker_WhenPullFails_FallsBackToCreateUsingCachedImage()
+    {
+        var engine = new FakeDockerEngine { UsableResult = true, FailFirstStart = true, FailPull = true };
+        var launcher = new FakeDockerDesktopLauncher("C:\\Docker Desktop.exe");
+        var time = new FakeTimeProvider();
+        var broker = CreateBroker(engine, launcher, time);
+
+        _ = await InvokeGetClientAndCatchAsync(broker, SampleConnection());
+
+        Assert.Equal(1, engine.PullCallCount);
+        Assert.Equal(1, engine.CreateCallCount);
+        Assert.True(engine.StartCallCount >= 2);
+        Assert.Equal(new[] { "Start", "Pull", "Create", "Start" }, engine.CallSequence);
+    }
+
     private sealed class FakeDockerCommandRunnerLogger : Microsoft.Extensions.Logging.ILogger<DockerCommandRunner>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -197,6 +228,18 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
 
         public int CreateCallCount { get; private set; }
 
+        public int PullCallCount { get; private set; }
+
+        // When true, the first StartAsync throws InvalidOperationException so the broker enters its
+        // pull + create recovery path (mirrors a missing container).
+        public bool FailFirstStart { get; set; }
+
+        // When true, PullAsync throws InvalidOperationException (mirrors an offline/registry failure).
+        public bool FailPull { get; set; }
+
+        // Ordered record of lifecycle calls ("Pull", "Create", "Start") for assertion.
+        public List<string> CallSequence { get; } = [];
+
         // Invoked on every UsableAsync poll after the first (i.e. after the launcher has fired) to
         // let tests flip UsableResult based on wall-clock progress.
         public Action? OnPoll { get; set; }
@@ -211,15 +254,32 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
             return new ValueTask<bool>(this.UsableResult);
         }
 
+        public override ValueTask PullAsync(string imageName, CancellationToken cancellationToken = default)
+        {
+            this.PullCallCount++;
+            this.CallSequence.Add("Pull");
+            if (this.FailPull)
+            {
+                throw new InvalidOperationException("Simulated docker pull failure.");
+            }
+            return ValueTask.CompletedTask;
+        }
+
         public override ValueTask CreateAsync(ContainerDefinition definition, CancellationToken cancellationToken = default)
         {
             this.CreateCallCount++;
+            this.CallSequence.Add("Create");
             return ValueTask.CompletedTask;
         }
 
         public override ValueTask StartAsync(string containerName, CancellationToken cancellationToken = default)
         {
             this.StartCallCount++;
+            this.CallSequence.Add("Start");
+            if (this.FailFirstStart && this.StartCallCount == 1)
+            {
+                throw new InvalidOperationException("Simulated missing container.");
+            }
             return ValueTask.CompletedTask;
         }
 

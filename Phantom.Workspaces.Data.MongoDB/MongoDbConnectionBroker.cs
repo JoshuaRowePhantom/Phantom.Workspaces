@@ -172,6 +172,19 @@ public sealed class MongoDbConnectionBroker
         catch (InvalidOperationException)
         {
             var containerDefinition = _containerDefinitionGenerator.Generate(connectionDefinition);
+
+            // Refresh the (moving :latest) image as its own observable step before creating the
+            // container (issue #1374). Tolerant: if the pull fails (offline, registry down,
+            // rate-limited) fall back to CreateAsync, which uses whatever image is cached locally.
+            try
+            {
+                await _containerEngine.PullAsync(containerDefinition.ImageName, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                // Best-effort pull; proceed with the cached image.
+            }
+
             await _containerEngine.CreateAsync(containerDefinition, cancellationToken).ConfigureAwait(false);
             await _containerEngine.StartAsync(connectionDefinition.ContainerName, cancellationToken).ConfigureAwait(false);
         }
