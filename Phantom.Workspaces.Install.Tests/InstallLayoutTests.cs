@@ -97,6 +97,26 @@ public sealed class InstallLayoutTests
         Assert.False(layout.IsManagedExecutable(@"X:\downloads\extracted\Phantom.Workspaces.exe"));
     }
 
+    [Fact]
+    public void Bootstrap_InstalledPayload_PreservesRuntimeNestedPath()
+    {
+        var fileSystem = new InMemoryFileSystem();
+        var layout = new InstallLayout(fileSystem, AppRoot);
+        const string payloadDirectory = @"X:\downloads\extracted";
+        const string rid = "win-x64";
+        SeedPayload(fileSystem, payloadDirectory);
+        var payloadRuntime = Path.Combine(payloadDirectory, "runtimes", rid, "native", "copilot.exe");
+        fileSystem.WriteAllText(payloadRuntime, "copilot-bytes");
+
+        layout.Bootstrap(payloadDirectory, "0.1.0", FixedInstant);
+
+        var installedRuntime = Path.Combine(
+            layout.GetVersionDirectory("0.1.0"), "runtimes", rid, "native", "copilot.exe");
+        Assert.True(
+            fileSystem.FileExists(installedRuntime),
+            $"Expected installed nested runtime path to survive Bootstrap: {installedRuntime}");
+    }
+
     private static string SeedPayload(InMemoryFileSystem fileSystem, string payloadDirectory)
     {
         fileSystem.CreateDirectory(payloadDirectory);

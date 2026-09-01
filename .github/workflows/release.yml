@@ -95,6 +95,12 @@ jobs:
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
+            # Issue #1377: fail the release if packaging flattened the tree. Validate the FINAL
+            # zip (extract + assert nested runtimes\<rid>\native\copilot.exe), not just the
+            # publish dir, so a packaging regression cannot reach a release.
+            $zipPath = Join-Path $output "Phantom.Workspaces-$version-$rid.zip"
+            .\packaging\validate\Assert-CopilotRuntimeZip.ps1 `
+              -ZipPath $zipPath -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
           }
           "assets=$output" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 

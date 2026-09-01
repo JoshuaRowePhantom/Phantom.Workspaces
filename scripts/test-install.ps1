@@ -137,13 +137,27 @@ try
     Assert-That (Test-Path -LiteralPath $package.AssetPath) "Release zip created."
     Assert-That (Test-Path -LiteralPath $package.ChecksumPath) "Checksum file created."
 
-    # Stage 4: Install into the sandbox.
+    # Stage 4: Install into the sandbox from the EXTRACTED ZIP (not the raw publish output), so the
+    # packaging step - which produces the exact payload the self-updater ships - is exercised
+    # end-to-end. Installing from the flattened publish dir would miss the zip flatten (issue #1377).
     Write-Host "`n== Stage 3: install $versionA into sandbox =="
-    $installExit = Invoke-Exe $exeA @('--install', '--silent', '--install-root', $Sandbox)
+    $extractA = Join-Path $staging 'extract-A'
+    New-Item -ItemType Directory -Force -Path $extractA | Out-Null
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($package.AssetPath, $extractA)
+    $extractedExeA = Join-Path $extractA 'Phantom.Workspaces.exe'
+    Assert-That (Test-Path -LiteralPath $extractedExeA) "Extracted zip contains Phantom.Workspaces.exe."
+    Assert-That (Test-Path -LiteralPath (Join-Path $extractA "runtimes\$rid\native\copilot.exe")) `
+        "Extracted zip preserves runtimes\$rid\native\copilot.exe (issue #1377)."
+    $installExit = Invoke-Exe $extractedExeA @('--install', '--silent', '--install-root', $Sandbox)
     Assert-That ($installExit -eq 0) "--install --silent exited 0."
     $currentLink = Join-Path $Sandbox 'current'
     Assert-That (Test-Path -LiteralPath (Join-Path $Sandbox "versions\$versionA")) "versions\$versionA created."
     Assert-That ((Get-LinkTargetVersion $currentLink) -eq $versionA) "current resolves to $versionA."
+    Assert-That (Test-Path -LiteralPath (Join-Path $Sandbox "versions\$versionA\runtimes\$rid\native\copilot.exe")) `
+        "installed versions\$versionA\runtimes\$rid\native\copilot.exe exists (issue #1377)."
+    Assert-That (Test-Path -LiteralPath (Join-Path $currentLink "runtimes\$rid\native\copilot.exe")) `
+        "current\runtimes\$rid\native\copilot.exe resolves (issue #1377)."
 
     if (-not $SkipUpdate)
     {
