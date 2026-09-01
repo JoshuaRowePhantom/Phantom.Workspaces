@@ -2,6 +2,7 @@ using Phantom.Workspaces.Llm;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Containers;
 using Phantom.Workspaces.Services.Logging;
 using System.CommandLine;
 
@@ -9,8 +10,13 @@ var definitionParser = new AgentDefinitionCommandLineParser();
 
 // #1093: register global uncaught/unobserved exception logging at CLI startup, backed by a
 // config-less file logger factory (#1095), so faults leave a diagnosable record on disk.
-GlobalExceptionLogging.Register(
-    HostFileLoggerFactory.Create(HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory)));
+var hostLoggerFactory =
+    HostFileLoggerFactory.Create(HostLogDirectoryResolver.Resolve(AppContext.BaseDirectory));
+GlobalExceptionLogging.Register(hostLoggerFactory);
+
+// #1373: install the process-wide ambient docker logger factory so the production
+// MongoDbConnectionBroker default path logs docker stdout/stderr through the real host logger.
+DockerCommandRunnerLogging.LoggerFactory = hostLoggerFactory;
 
 var rootCommand = new RootCommand("Phantom Workspaces LLM Agent CLI")
 {};

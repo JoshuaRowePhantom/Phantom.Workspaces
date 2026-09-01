@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Phantom.Workspaces.Containers;
@@ -37,11 +36,14 @@ public sealed class MongoDbConnectionBroker
             throw new ArgumentOutOfRangeException(nameof(connectVerificationAttempts));
         }
 
-        // Build the default engine with the supplied logger so docker stdout/stderr is surfaced
-        // instead of being discarded by a NullLogger (issue #1373). A caller-provided logger flows
-        // straight through to the command runner.
+        // Build the default engine so docker stdout/stderr is surfaced instead of being discarded by
+        // a NullLogger (issue #1373). A caller-provided logger flows straight through to the command
+        // runner. When no logger is supplied — the production factory path constructs the broker with
+        // no arguments — fall back to the process-wide ambient docker logger, which application hosts
+        // initialize at startup with their real ILoggerFactory. It degrades to NullLogger when
+        // uninitialized (e.g. in unit tests), keeping tests quiet.
         _containerEngine = containerEngine
-            ?? new WindowsDockerDesktopEngine(dockerCommandRunnerLogger ?? NullLogger<DockerCommandRunner>.Instance);
+            ?? new WindowsDockerDesktopEngine(dockerCommandRunnerLogger ?? DockerCommandRunnerLogging.CreateLogger());
         _containerDefinitionGenerator = containerDefinitionGenerator ?? new MongoDbContainerDefinitionGenerator();
         _connectVerificationAttempts = connectVerificationAttempts;
         // The operational client uses generous server-selection timeouts (see CreateClient), so each

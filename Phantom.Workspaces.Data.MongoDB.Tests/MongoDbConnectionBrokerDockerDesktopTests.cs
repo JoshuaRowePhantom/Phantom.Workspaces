@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Containers;
 
@@ -171,6 +173,57 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         Assert.NotSame(Microsoft.Extensions.Logging.Abstractions.NullLogger<DockerCommandRunner>.Instance, runner.Logger);
     }
 
+    // Exercises the DEFAULT / production wiring path (issue #1373): the persistence factories
+    // construct the broker with NO arguments. Once an application host has initialized the ambient
+    // docker logger factory, that no-arg default must yield a real, non-null logger — proving docker
+    // stdout/stderr is no longer discarded via NullLogger in production.
+    [Fact]
+    public void MongoDbConnectionBroker_DefaultConstructor_AfterAmbientInit_UsesRealLoggerNotNullLogger()
+    {
+        var factory = new RecordingLoggerFactory();
+        var previous = DockerCommandRunnerLogging.LoggerFactory;
+        try
+        {
+            DockerCommandRunnerLogging.LoggerFactory = factory;
+
+            // No-arg construction — identical to EntityRepository / AgentPersistenceStoreFactory /
+            // FilesystemEditStoreFactory production call sites.
+            var broker = new MongoDbConnectionBroker();
+
+            var engine = Assert.IsType<WindowsDockerDesktopEngine>(broker.ContainerEngine);
+            var runner = Assert.IsType<DockerCommandRunner>(engine.CommandRunner);
+            Assert.NotNull(runner.Logger);
+            Assert.NotSame(NullLogger<DockerCommandRunner>.Instance, runner.Logger);
+            Assert.True(factory.CreateLoggerCallCount >= 1);
+        }
+        finally
+        {
+            DockerCommandRunnerLogging.LoggerFactory = previous;
+        }
+    }
+
+    // Without an ambient factory (the unit-test default) the no-arg broker degrades to NullLogger so
+    // tests stay quiet and behavior matches the pre-#1373 default.
+    [Fact]
+    public void MongoDbConnectionBroker_DefaultConstructor_WhenAmbientUninitialized_UsesNullLogger()
+    {
+        var previous = DockerCommandRunnerLogging.LoggerFactory;
+        try
+        {
+            DockerCommandRunnerLogging.LoggerFactory = NullLoggerFactory.Instance;
+
+            var broker = new MongoDbConnectionBroker();
+
+            var engine = Assert.IsType<WindowsDockerDesktopEngine>(broker.ContainerEngine);
+            var runner = Assert.IsType<DockerCommandRunner>(engine.CommandRunner);
+            Assert.Same(NullLogger<DockerCommandRunner>.Instance, runner.Logger);
+        }
+        finally
+        {
+            DockerCommandRunnerLogging.LoggerFactory = previous;
+        }
+    }
+
     [Fact]
     public async Task MongoDbConnectionBroker_WhenContainerMissing_PullsImageBeforeCreate()
     {
@@ -214,6 +267,27 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
             TState state,
             Exception? exception,
             Func<TState, Exception?, string> formatter)
+        {
+        }
+    }
+
+    // Stands in for a host's real ILoggerFactory: records that CreateLogger was consulted so the
+    // default-broker test can prove the ambient factory (not NullLogger) produced the logger.
+    private sealed class RecordingLoggerFactory : ILoggerFactory
+    {
+        public int CreateLoggerCallCount { get; private set; }
+
+        public void AddProvider(ILoggerProvider provider)
+        {
+        }
+
+        public ILogger CreateLogger(string categoryName)
+        {
+            this.CreateLoggerCallCount++;
+            return new FakeDockerCommandRunnerLogger();
+        }
+
+        public void Dispose()
         {
         }
     }

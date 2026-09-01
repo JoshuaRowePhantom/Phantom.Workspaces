@@ -265,6 +265,11 @@ public partial class App : Application
                 configurationFilePath);
             var loggerFactory = Services.Logging.LoggingBootstrap.CreateLoggerFactory(logDirectoryProvider);
 
+            // #1373: install the process-wide ambient docker logger factory so the production
+            // MongoDbConnectionBroker default path (used by the persistence/edit-store factories)
+            // logs docker stdout/stderr through the real GUI host logger instead of discarding it.
+            Containers.DockerCommandRunnerLogging.LoggerFactory = loggerFactory;
+
             // #1093: route global uncaught/unobserved exceptions through the #1086 file facility now
             // that the logger factory exists (the crash-dialog handlers installed in Program.Main stay
             // in place; this adds the missing logging half).
