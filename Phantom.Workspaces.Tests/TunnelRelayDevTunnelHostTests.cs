@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
@@ -373,6 +374,90 @@ public sealed class TunnelRelayDevTunnelHostTests
         {
             TaskScheduler.UnobservedTaskException -= Handler;
         }
+    }
+
+    [Fact]
+    public async Task TunnelRelayDevTunnelHost_WhenSdkStatusBecomesDisconnected_IsRunningBecomesFalse()
+    {
+        // Issue #1375: a simulated SDK ConnectionStatusChanged -> Disconnected (not during our shutdown)
+        // must flip IsRunning to false so the stale-true signal is fixed. MaxAttempts:0 keeps the
+        // reconnect from immediately re-establishing, so we can observe the dead state deterministically.
+        var sessions = new List<FakeRelayHostSession>();
+        var host = new TunnelRelayDevTunnelHost(
+            connectSessionAsync: (_, _, _) =>
+            {
+                var session = new FakeRelayHostSession();
+                sessions.Add(session);
+                return Task.FromResult<IRelayHostSession>(session);
+            },
+            delayScheduler: new ImmediateDelayScheduler(),
+            reconnectOptions: new DevTunnelReconnectOptions(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(8), MaxAttempts: 0, JitterFraction: 0.0),
+            nextJitterSample: () => 0.0);
+
+        await host.StartAsync("tunnel-123", localPort: 5280, TestContext.Current.CancellationToken);
+        Assert.True(host.IsRunning);
+
+        sessions[0].RaiseDisconnected(new RelayHostDisconnectInfo(TooManyConnections: false, ErrorMessage: "relay closed"));
+        if (host.ReconnectTask is not null)
+        {
+            await host.ReconnectTask;
+        }
+
+        Assert.False(host.IsRunning);
+    }
+
+    [Fact]
+    public async Task TunnelRelayDevTunnelHost_WhenDisconnectedUnexpectedly_TriggersReconnect()
+    {
+        // Issue #1375: an unexpected Disconnected (reason not our teardown) must drive a full reconnect
+        // — a fresh connect-ready tunnel fetch + new SDK host + ConnectAsync — re-establishing hosting
+        // without an application restart.
+        var connectCalls = new List<(string TunnelId, int LocalPort)>();
+        var sessions = new List<FakeRelayHostSession>();
+        var host = new TunnelRelayDevTunnelHost(
+            connectSessionAsync: (tunnelId, localPort, _) =>
+            {
+                connectCalls.Add((tunnelId, localPort));
+                var session = new FakeRelayHostSession();
+                sessions.Add(session);
+                return Task.FromResult<IRelayHostSession>(session);
+            },
+            delayScheduler: new ImmediateDelayScheduler(),
+            reconnectOptions: new DevTunnelReconnectOptions(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(8), MaxAttempts: null, JitterFraction: 0.0),
+            nextJitterSample: () => 0.0);
+
+        await host.StartAsync("tunnel-123", localPort: 5280, TestContext.Current.CancellationToken);
+        Assert.Single(connectCalls);
+
+        sessions[0].RaiseDisconnected(new RelayHostDisconnectInfo(TooManyConnections: false, ErrorMessage: "relay closed"));
+        Assert.NotNull(host.ReconnectTask);
+        await host.ReconnectTask!;
+
+        // The full connect sequence ran again with the same tunnel identity, producing a fresh session.
+        Assert.Equal(2, connectCalls.Count);
+        Assert.Equal(("tunnel-123", 5280), connectCalls[1]);
+        Assert.Equal(1, sessions[0].DisposeCount);
+        Assert.True(host.IsRunning);
+    }
+
+    private sealed class FakeRelayHostSession : IRelayHostSession
+    {
+        public event EventHandler<RelayHostDisconnectInfo>? Disconnected;
+
+        public int DisposeCount { get; private set; }
+
+        public void RaiseDisconnected(RelayHostDisconnectInfo info) => this.Disconnected?.Invoke(this, info);
+
+        public ValueTask DisposeAsync()
+        {
+            this.DisposeCount++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ImmediateDelayScheduler : IDelayScheduler
+    {
+        public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class TokenObservingDisposable : IAsyncDisposable

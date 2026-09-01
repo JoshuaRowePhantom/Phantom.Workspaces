@@ -1,13 +1,11 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.DevTunnels.Connections;
 using Microsoft.DevTunnels.Contracts;
 using Microsoft.DevTunnels.Ssh;
-using Microsoft.DevTunnels.Ssh.Tcp.Events;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
 
@@ -20,68 +18,226 @@ namespace Phantom.Workspaces.Services.DevTunnel;
 internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
 {
     private readonly DevTunnelManagementClientWrapper managementClientWrapper;
-    private TunnelRelayTunnelHost? relayHost;
-    private CancellationTokenSource? shutdownCts;
+    private readonly Func<string, int, CancellationToken, Task<IRelayHostSession>> connectSessionAsync;
+    private readonly IDelayScheduler delayScheduler;
+    private readonly DevTunnelReconnectOptions reconnectOptions;
+    private readonly Func<double>? nextJitterSample;
+
+    private IRelayHostSession? currentSession;
+    private CancellationTokenSource? lifetimeCts;
+    private DevTunnelHostConnectionMonitor? monitor;
+    private string? tunnelId;
+    private int localPort;
     private volatile bool shuttingDown;
+    private volatile bool connected;
 
     public TunnelRelayDevTunnelHost(DevTunnelManagementClientWrapper managementClientWrapper)
     {
         this.managementClientWrapper = managementClientWrapper ?? throw new ArgumentNullException(nameof(managementClientWrapper));
+        this.connectSessionAsync = this.ConnectSdkSessionAsync;
+        this.delayScheduler = RealDelayScheduler.Instance;
+        this.reconnectOptions = DevTunnelReconnectOptions.Default;
+        this.nextJitterSample = null;
     }
 
-    public bool IsRunning => this.relayHost is not null;
+    /// <summary>
+    /// Test seam (issue #1375): injects the session connector, delay scheduler, and backoff/jitter so
+    /// the disconnect-detection and reconnect loop are regressible without a live SDK relay host.
+    /// </summary>
+    internal TunnelRelayDevTunnelHost(
+        Func<string, int, CancellationToken, Task<IRelayHostSession>> connectSessionAsync,
+        IDelayScheduler delayScheduler,
+        DevTunnelReconnectOptions reconnectOptions,
+        Func<double>? nextJitterSample = null)
+    {
+        this.managementClientWrapper = null!;
+        this.connectSessionAsync = connectSessionAsync ?? throw new ArgumentNullException(nameof(connectSessionAsync));
+        this.delayScheduler = delayScheduler ?? throw new ArgumentNullException(nameof(delayScheduler));
+        this.reconnectOptions = reconnectOptions ?? throw new ArgumentNullException(nameof(reconnectOptions));
+        this.nextJitterSample = nextJitterSample;
+    }
+
+    /// <inheritdoc />
+    public event EventHandler<DevTunnelConnectionState>? ConnectionStateChanged;
+
+    /// <inheritdoc />
+    public bool IsRunning => this.connected;
+
+    /// <summary>
+    /// The in-flight reconnect task, if a reconnect is currently being driven by a reported disconnect.
+    /// Exposed for tests to deterministically await the reconnect sequence (issue #1375).
+    /// </summary>
+    internal Task? ReconnectTask { get; private set; }
 
     public async Task StartAsync(string tunnelId, int localPort, CancellationToken cancellationToken = default)
     {
-        // Fetch a fresh, connect-ready tunnel (includes the forwarded ports the SDK relay host requires;
-        // the cached tunnel's ports were cleared by the access-control update, which cannot carry ports).
-        var tunnel = await this.managementClientWrapper
-            .GetConnectReadyTunnelAsync(tunnelId, cancellationToken)
-            .ConfigureAwait(false);
+        this.shuttingDown = false;
+        this.tunnelId = tunnelId;
+        this.localPort = localPort;
 
-        // Issue #1322: connect under a dedicated shutdown token (linked to the caller's token) so the
-        // SDK's in-flight SSH session requests (SshSession.RequestAsync -> SendMessageAsync) can be
-        // cancelled at teardown BEFORE the underlying SshSession is disposed. Cancelling first makes a
-        // pending request complete with OperationCanceledException (an expected shutdown outcome the SDK
-        // itself observes) instead of racing disposal into an unobserved ObjectDisposedException("SshSession").
-        this.shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var host = new TunnelRelayTunnelHost(
-            this.managementClientWrapper.ManagementClient,
-            new TraceSource(nameof(TunnelRelayDevTunnelHost)));
+        // Reconnects run under a lifetime token (linked to the caller's token) so StopAsync can cancel
+        // an in-flight backoff/reconnect. The initial connect honours the caller's token via this link.
+        this.lifetimeCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        this.monitor = new DevTunnelHostConnectionMonitor(
+            connect: ct => this.ConnectAndTrackSessionAsync(ct),
+            delayScheduler: this.delayScheduler,
+            options: this.reconnectOptions,
+            nextJitterSample: this.nextJitterSample);
+        this.monitor.StateChanged += this.OnMonitorStateChanged;
 
-        // Issue #1350: the SDK bridges each incoming relay channel to the local port with a
-        // fire-and-forget TcpClient connect. On teardown the SDK aborts that in-flight connect
-        // (SocketError.OperationAborted, 995); on the loopback dual-stack path the SDK abandons the
-        // faulted connect Task (it is not returned by DisposeAsync), so it reaches the finalizer as an
-        // unobserved fault and is escalated to a crash dialog. Subscribing to ForwardedPortConnecting
-        // is the seam we own: once teardown has begun we reject new forwarded connections so the SDK
-        // never starts a fresh connect that would be aborted, and we observe any in-flight transform
-        // so its terminal shutdown outcome is consumed at the source rather than on the finalizer.
-        host.ForwardedPortConnecting += this.OnForwardedPortConnecting;
-        await host.ConnectAsync(tunnel, new TunnelConnectionOptions { EnableRetry = true }, this.shutdownCts.Token).ConfigureAwait(false);
-        this.relayHost = host;
+        await this.ConnectAndTrackSessionAsync(this.lifetimeCts.Token).ConfigureAwait(false);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken = default)
     {
-        if (this.relayHost is not null)
-        {
-            var host = this.relayHost;
-            var cts = this.shutdownCts;
-            this.relayHost = null;
-            this.shutdownCts = null;
+        // Reject any further forwarded-port connections / disconnect-driven reconnects before we start
+        // cancelling/disposing, so no new SDK work can begin racing the teardown (issues #1350, #1375).
+        this.shuttingDown = true;
+        this.connected = false;
 
-            // Reject any further forwarded-port connections before we start cancelling/disposing, so
-            // no new SDK local TcpClient connect can begin racing the teardown (issue #1350).
-            this.shuttingDown = true;
-            host.ForwardedPortConnecting -= this.OnForwardedPortConnecting;
-            await CancelAndDisposeRelayHostSafelyAsync(host, cts).ConfigureAwait(false);
+        var session = this.currentSession;
+        var cts = this.lifetimeCts;
+        var reconnect = this.ReconnectTask;
+        var currentMonitor = this.monitor;
+        this.currentSession = null;
+        this.lifetimeCts = null;
+        this.monitor = null;
+        this.ReconnectTask = null;
+
+        if (currentMonitor is not null)
+        {
+            currentMonitor.StateChanged -= this.OnMonitorStateChanged;
         }
+
+        // Cancel the reconnect loop first so an in-flight backoff/reconnect unwinds as cancelled.
+        if (cts is not null)
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed by a concurrent/prior teardown — nothing to cancel.
+            }
+        }
+
+        if (reconnect is not null)
+        {
+            try
+            {
+                await reconnect.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected — the reconnect loop observed the lifetime-token cancellation.
+            }
+            catch (Exception exception) when (IsExpectedShutdownException(exception))
+            {
+                // Terminal shutdown outcome of the SDK's fire-and-forget work — consume.
+            }
+        }
+
+        if (session is not null)
+        {
+            session.Disconnected -= this.OnSessionDisconnected;
+            await DisposeRelayHostSafelyAsync(session).ConfigureAwait(false);
+        }
+
+        cts?.Dispose();
     }
 
     public async ValueTask DisposeAsync()
     {
         await this.StopAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs the full connect sequence and tracks the resulting session: fetch a connect-ready tunnel,
+    /// create a new SDK relay host, subscribe to its status/forwarded-port events, and connect. On
+    /// success the session becomes the current session, its disconnect signal is wired to
+    /// <see cref="OnSessionDisconnected"/>, and <see cref="IsRunning"/> becomes true. Used both for the
+    /// initial connect and as the reconnect monitor's connect delegate (issue #1375).
+    /// </summary>
+    private async Task ConnectAndTrackSessionAsync(CancellationToken cancellationToken)
+    {
+        var session = await this.connectSessionAsync(this.tunnelId!, this.localPort, cancellationToken).ConfigureAwait(false);
+        session.Disconnected += this.OnSessionDisconnected;
+        this.currentSession = session;
+        this.connected = true;
+    }
+
+    /// <summary>
+    /// Handles the SDK-reported terminal disconnect of the current relay-host session (issue #1375).
+    /// Marks the relay dead (so <see cref="IsRunning"/> reflects reality), then disposes the dead
+    /// session and drives the reconnect monitor. Ignored during our own teardown or for a stale session.
+    /// </summary>
+    private void OnSessionDisconnected(object? sender, RelayHostDisconnectInfo info)
+    {
+        if (this.shuttingDown)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(sender, this.currentSession))
+        {
+            // A disconnect from an already-replaced session — ignore.
+            return;
+        }
+
+        this.connected = false;
+        var dead = this.currentSession;
+        this.currentSession = null;
+        if (dead is not null)
+        {
+            dead.Disconnected -= this.OnSessionDisconnected;
+        }
+
+        var reconnectToken = this.lifetimeCts?.Token ?? CancellationToken.None;
+        this.ReconnectTask = this.ReconnectAsync(dead, info.TooManyConnections, reconnectToken);
+    }
+
+    private async Task ReconnectAsync(IRelayHostSession? dead, bool tooManyConnections, CancellationToken cancellationToken)
+    {
+        if (dead is not null)
+        {
+            // Dispose the dead host safely (consuming the SDK's terminal shutdown outcomes) before we
+            // recreate — issues #1301/#1322/#1350 handling lives in the session's DisposeAsync.
+            await DisposeRelayHostSafelyAsync(dead).ConfigureAwait(false);
+        }
+
+        var currentMonitor = this.monitor;
+        if (currentMonitor is not null)
+        {
+            await currentMonitor.HandleDisconnectAsync(tooManyConnections, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private void OnMonitorStateChanged(object? sender, DevTunnelConnectionState state)
+    {
+        this.ConnectionStateChanged?.Invoke(this, state);
+    }
+
+    /// <summary>
+    /// Production session connector: fetches a fresh, connect-ready tunnel (its forwarded ports are
+    /// required by the SDK relay host; the cached tunnel's ports were cleared by the access-control
+    /// update), creates the SDK <see cref="TunnelRelayTunnelHost"/>, and connects it inside an
+    /// <see cref="SdkRelayHostSession"/> adapter that owns the #1322 shutdown-token ordering, the #1350
+    /// forwarded-port handling, and the #1375 connection-status disconnect detection.
+    /// </summary>
+    private async Task<IRelayHostSession> ConnectSdkSessionAsync(string tunnelId, int localPort, CancellationToken cancellationToken)
+    {
+        var tunnel = await this.managementClientWrapper
+            .GetConnectReadyTunnelAsync(tunnelId, cancellationToken)
+            .ConfigureAwait(false);
+
+        var sdkHost = new TunnelRelayTunnelHost(
+            this.managementClientWrapper.ManagementClient,
+            new TraceSource(nameof(TunnelRelayDevTunnelHost)));
+
+        var session = new SdkRelayHostSession(sdkHost, cancellationToken);
+        await session.ConnectAsync(tunnel, cancellationToken).ConfigureAwait(false);
+        return session;
     }
 
     /// <summary>
@@ -140,27 +296,6 @@ internal sealed class TunnelRelayDevTunnelHost : IDevTunnelRelayHost
         {
             // Expected terminal outcome for the SDK's fire-and-forget background work — consume.
         }
-    }
-
-    /// <summary>
-    /// Handles the SDK relay host's <c>ForwardedPortConnecting</c> event — the seam that fires as the
-    /// SDK is about to bridge an incoming relay channel to the local port (issue #1350). Once teardown
-    /// has begun (<see cref="shuttingDown"/>) we reject the connection so the SDK never starts a fresh
-    /// local <see cref="System.Net.Sockets.TcpClient"/> connect that would be aborted mid-flight and
-    /// leaked as an unobserved fault; otherwise we observe any transform pipeline the SDK is running so
-    /// its terminal shutdown outcome is consumed at the site that owns the relay host.
-    /// </summary>
-    private void OnForwardedPortConnecting(object? sender, ForwardedPortConnectingEventArgs e)
-    {
-        ArgumentNullException.ThrowIfNull(e);
-        if (this.shuttingDown)
-        {
-            // A null transformed stream tells the SDK to reject the connection instead of connecting.
-            e.TransformTask = Task.FromResult<Stream?>(null);
-            return;
-        }
-
-        ObserveForwardedConnectTransform(e.TransformTask);
     }
 
     /// <summary>

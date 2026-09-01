@@ -163,6 +163,54 @@ public sealed class DevTunnelHostServiceTests
         Assert.Equal(1, relayHost.DisposeCount);
     }
 
+    [Fact]
+    public async Task DevTunnelHostService_WhenRelayDisconnects_SurfacesReconnectingStatus()
+    {
+        // Issue #1375: when the relay host reports its SDK connection dropped, the service must surface
+        // Reconnecting/Error rather than continuing to report Hosting (apparently healthy).
+        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"));
+        var relayHost = new FakeRelayHost();
+        var service = new DevTunnelHostService(managementClient, relayHost);
+        var observed = new List<DevTunnelHostState>();
+        service.StatusChanged += (_, status) => observed.Add(status.State);
+
+        await service.StartAsync(localPort: 5280, protocol: "https", new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Private }, TestContext.Current.CancellationToken);
+        Assert.Equal(DevTunnelHostState.Hosting, service.Status.State);
+
+        relayHost.RaiseConnectionStateChanged(DevTunnelConnectionState.Reconnecting);
+        Assert.Equal(DevTunnelHostState.Reconnecting, service.Status.State);
+        Assert.Equal("tunnel-123", service.Status.TunnelId);
+
+        // A recovered connection returns to Hosting.
+        relayHost.RaiseConnectionStateChanged(DevTunnelConnectionState.Connected);
+        Assert.Equal(DevTunnelHostState.Hosting, service.Status.State);
+
+        // A terminal failure surfaces Error with a diagnostic message.
+        relayHost.RaiseConnectionStateChanged(DevTunnelConnectionState.Failed);
+        Assert.Equal(DevTunnelHostState.Error, service.Status.State);
+        Assert.False(string.IsNullOrEmpty(service.Status.LastError));
+
+        Assert.Contains(DevTunnelHostState.Reconnecting, observed);
+        Assert.Contains(DevTunnelHostState.Error, observed);
+    }
+
+    [Fact]
+    public async Task DevTunnelHostService_WhenStoppedAndRelayRaisesState_DoesNotResurrectStatus()
+    {
+        // The relay is not the authoritative signal once we have stopped hosting: a late state event
+        // must not flip a Stopped service back to Reconnecting/Hosting.
+        var managementClient = new FakeManagementClient(new DevTunnelDescriptor("tunnel-123", "my-tunnel"));
+        var relayHost = new FakeRelayHost();
+        var service = new DevTunnelHostService(managementClient, relayHost);
+
+        await service.StartAsync(localPort: 5280, protocol: "https", new DevTunnelConfiguration { AccessMode = DevTunnelAccessMode.Private }, TestContext.Current.CancellationToken);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+
+        relayHost.RaiseConnectionStateChanged(DevTunnelConnectionState.Reconnecting);
+
+        Assert.Equal(DevTunnelHostState.Stopped, service.Status.State);
+    }
+
     private sealed class FakeManagementClient(DevTunnelDescriptor descriptor) : IDevTunnelManagementClient
     {
         public Exception? EnsureTunnelException { get; init; }
@@ -215,6 +263,11 @@ public sealed class DevTunnelHostServiceTests
         public int StopCount { get; private set; }
 
         public int DisposeCount { get; private set; }
+
+        public event EventHandler<DevTunnelConnectionState>? ConnectionStateChanged;
+
+        public void RaiseConnectionStateChanged(DevTunnelConnectionState state)
+            => this.ConnectionStateChanged?.Invoke(this, state);
 
         public Task StartAsync(string tunnelId, int localPort, CancellationToken cancellationToken = default)
         {
