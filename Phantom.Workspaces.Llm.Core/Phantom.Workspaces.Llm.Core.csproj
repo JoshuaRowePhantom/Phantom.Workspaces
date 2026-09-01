@@ -36,4 +36,26 @@
   <ItemGroup>
     <EmbeddedResource Include="JsonSchemas\*.json" />
   </ItemGroup>
+  <!-- Issue #1376: the GitHub.Copilot.SDK targets copy only the CLI binary (and optional
+       runtime.node) to runtimes\<rid>\native, NOT the tarball's LICENSE.md. The GitHub Copilot
+       CLI License requires shipping a copy of that LICENSE.md and retaining its notices whenever
+       the (unmodified) CLI binary is redistributed. Register the downloaded LICENSE.md as content
+       alongside the binary so it flows transitively to the GUI publish/installer payload. The
+       source path mirrors the SDK's own cache layout (see GitHub.Copilot.SDK.targets). -->
+  <Target Name="RegisterCopilotCliLicense"
+          BeforeTargets="GetCopyToOutputDirectoryItems"
+          DependsOnTargets="_DownloadCopilotCli"
+          Condition="'$(TargetFramework)' != '' And '$(CopilotSkipCliDownload)' != 'true' And '$(_CopilotPlatform)' != ''">
+    <PropertyGroup>
+      <_CopilotLicenseCacheDir>$(IntermediateOutputPath)copilot-cli\$(CopilotCliVersion)\$(_CopilotPlatform)</_CopilotLicenseCacheDir>
+      <_CopilotLicensePath>$(_CopilotLicenseCacheDir)\LICENSE.md</_CopilotLicensePath>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_CopilotLicensePath)')"
+           Text="GitHub Copilot CLI LICENSE.md not found at '$(_CopilotLicensePath)'. The redistributed CLI must ship its LICENSE.md unmodified (issue #1376)." />
+    <ItemGroup>
+      <ContentWithTargetPath Include="$(_CopilotLicensePath)"
+                             TargetPath="runtimes\$(_CopilotRid)\native\LICENSE.md"
+                             CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -13,8 +13,19 @@ internal sealed class FakeCopilotClient : ICopilotClient
         this.session = session ?? throw new ArgumentNullException(nameof(session));
     }
 
+    /// <summary>
+    /// When set, <see cref="StartAsync"/> throws this exception instead of starting. Used to
+    /// simulate the SDK's "Copilot runtime not found" failure (issue #1376).
+    /// </summary>
+    public Exception? StartException { get; set; }
+
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        if (this.StartException is not null)
+        {
+            throw this.StartException;
+        }
+
         this.started = true;
         return Task.CompletedTask;
     }

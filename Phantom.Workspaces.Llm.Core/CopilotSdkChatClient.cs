@@ -496,7 +496,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
 
             var client = this.copilotClientFactory.Create(clientOptions);
-            await client.StartAsync(cancellationToken).ConfigureAwait(false);
+            await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
             this.copilotClient = client;
         }
         finally
@@ -504,6 +504,44 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             this.sessionInitializationLock.Release();
         }
     }
+
+    /// <summary>
+    /// Starts the Copilot client, translating the SDK's raw "Copilot runtime not found" failure
+    /// into a message that makes sense for an installed, signed application (issue #1376). The SDK
+    /// resolves its CLI strictly from <c>AppContext.BaseDirectory\runtimes\&lt;rid&gt;\native\copilot.exe</c>
+    /// and, when it is missing, tells the caller to "restore the NuGet package" — advice that is
+    /// meaningless to an end user of a packaged build. Phantom.Workspaces bundles that runtime as a
+    /// loose file in the installed payload, so a missing runtime means the installation is damaged;
+    /// point the user at reinstalling or at the manual <c>cliPath</c> override instead.
+    /// </summary>
+    private static async Task StartClientAsync(ICopilotClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex) when (IsRuntimeNotFound(ex))
+        {
+            throw new InvalidOperationException(RuntimeMissingMessage, ex);
+        }
+    }
+
+    /// <summary>
+    /// True when the exception is the SDK's "Copilot runtime not found" failure raised because the
+    /// packaged <c>copilot.exe</c> is absent from <c>AppContext.BaseDirectory\runtimes\...\native</c>.
+    /// </summary>
+    private static bool IsRuntimeNotFound(InvalidOperationException ex) =>
+        ex.Message.Contains("Copilot runtime not found", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The installed-app-friendly replacement for the SDK's runtime-not-found message. It must not
+    /// tell a signed-installer user to "restore the NuGet package" (issue #1376).
+    /// </summary>
+    internal const string RuntimeMissingMessage =
+        "The packaged GitHub Copilot runtime (copilot.exe) is missing from this installation. It is " +
+        "expected next to the application at runtimes\\<rid>\\native\\copilot.exe. Reinstall or " +
+        "repair Phantom.Workspaces to restore the bundled runtime, or set the 'cliPath' model option " +
+        "(equivalently RuntimeConnection.ForStdio) to point at an installed GitHub Copilot CLI.";
 
     /// <summary>
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
@@ -1227,7 +1265,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
 
                 var client = this.copilotClientFactory.Create(clientOptions);
-                await client.StartAsync(cancellationToken).ConfigureAwait(false);
+                await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
                 this.copilotClient = client;
 
                 if (this.accountUpsertService is not null)

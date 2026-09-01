@@ -37,6 +37,36 @@
           Condition="'%(_FilesToBundle.Filename)%(_FilesToBundle.Extension)' == 'apphost.exe' and !$([System.String]::Copy('%(_FilesToBundle.Identity)').Contains('\$(RuntimeIdentifier)\'))" />
     </ItemGroup>
   </Target>
+  <!-- Issue #1376: GitHub.Copilot.SDK resolves its CLI strictly from
+       AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe and does NOT search PATH. The SDK
+       registers copilot.exe / copilot_runtime.dll / LICENSE.md as Content (not native libraries).
+       PublishSingleFile drops that transitive content from the publish output entirely (verified:
+       no runtimes\ tree appears in the single-file publish), so the installed payload has no
+       copilot.exe and the provider fails with "Copilot runtime not found". The regular build
+       output ($(OutDir)) DOES contain runtimes\<rid>\native\{copilot.exe,copilot_runtime.dll,
+       LICENSE.md} (the SDK copies them there and the LICENSE is added by Llm.Core). Copy them into
+       the publish output as LOOSE files beside the single-file exe (BaseDirectory), where the SDK's
+       default lookup finds them, and ship the CLI LICENSE.md unmodified as required by the GitHub
+       Copilot CLI License. -->
+  <Target Name="PublishCopilotRuntimeLoose"
+          AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' != ''">
+    <ItemGroup>
+      <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe" />
+      <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot_runtime.dll"
+                                Condition="Exists('$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot_runtime.dll')" />
+      <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\LICENSE.md" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe')"
+           Text="Copilot CLI not found in build output at '$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe'; cannot bundle it into the publish payload (issue #1376)." />
+    <Error Condition="!Exists('$(OutDir)runtimes\$(RuntimeIdentifier)\native\LICENSE.md')"
+           Text="GitHub Copilot CLI LICENSE.md not found in build output at '$(OutDir)runtimes\$(RuntimeIdentifier)\native\LICENSE.md'; the redistributed CLI must ship its license (issue #1376)." />
+    <Copy SourceFiles="@(_CopilotRuntimeToPublish)"
+          DestinationFolder="$(PublishDir)runtimes\$(RuntimeIdentifier)\native"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe')"
+           Text="Copilot CLI (runtimes\$(RuntimeIdentifier)\native\copilot.exe) was not published as a loose file (issue #1376)." />
+  </Target>
   <ItemGroup>
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.Desktop" />

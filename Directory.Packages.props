@@ -31,7 +31,7 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.9.0" />
     <PackageVersion Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
     <PackageVersion Include="Meziantou.Framework.Win32.CredentialManager" Version="3.0.1" />
-    <PackageVersion Include="GitHub.Copilot.SDK" Version="1.0.8" />
+    <PackageVersion Include="GitHub.Copilot.SDK" Version="1.0.11" />
     <PackageVersion Include="Markdig.Signed" Version="1.0.0" />
     <PackageVersion Include="Markdown.Avalonia.Tight" Version="12.0.0-a3" />
     <PackageVersion Include="Markdown.Avalonia.SyntaxHigh" Version="12.0.0-a3" />

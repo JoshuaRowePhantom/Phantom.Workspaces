@@ -57,6 +57,10 @@ jobs:
         shell: pwsh
         run: dotnet build Phantom.Workspaces.slnx -c Release --no-restore
 
+      - name: Assert Copilot SDK version pin
+        shell: pwsh
+        run: .\packaging\validate\Assert-CopilotSdkVersion.ps1
+
       - name: Run test suite (release gate)
         shell: pwsh
         run: .\scripts\run-tests.ps1 -Mode fast
@@ -82,6 +86,12 @@ jobs:
               -c Release -r $rid `
               -p:Version=$version -o $publishDir
             if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
+            # Issue #1376: fail the release if the bundled Copilot runtime / CLI license is absent.
+            # The bundled binary only executes on a matching CPU, so run the startup smoke for the
+            # host RID (win-x64 on the x64 runner) and skip it for the cross-arch payload.
+            $skipSmoke = $rid -ne 'win-x64'
+            .\packaging\validate\Assert-CopilotRuntimePayload.ps1 `
+              -PayloadDirectory $publishDir -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
