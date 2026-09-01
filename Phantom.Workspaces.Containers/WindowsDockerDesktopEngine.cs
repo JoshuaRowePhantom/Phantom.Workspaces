@@ -8,7 +8,13 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
 {
     private readonly IDockerCommandRunner _commandRunner;
 
-    public WindowsDockerDesktopEngine()
+    internal IDockerCommandRunner CommandRunner => _commandRunner;
+
+    /// <summary>
+    /// Reserved for tests. Wires a <see cref="NullLogger{T}"/> so docker output is discarded;
+    /// production must use a logger-bearing constructor so stdout/stderr are surfaced (issue #1373).
+    /// </summary>
+    internal WindowsDockerDesktopEngine()
         : this(new DockerCommandRunner(NullLogger<DockerCommandRunner>.Instance))
     {
     }
@@ -145,9 +151,14 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
             return;
         }
 
+        var failureDetails = string.Join(
+            Environment.NewLine,
+            new[] { result.StandardOut, result.StandardError }
+                .Where(stream => !string.IsNullOrWhiteSpace(stream)));
+
         throw new InvalidOperationException(
             $"Docker command failed: docker {string.Join(' ', arguments)}{Environment.NewLine}" +
-            $"{result.StandardError}".TrimEnd());
+            failureDetails.TrimEnd());
     }
 
     private static void ValidateContainerName(string containerName)

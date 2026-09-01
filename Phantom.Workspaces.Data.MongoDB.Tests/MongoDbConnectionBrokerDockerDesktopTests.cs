@@ -158,6 +158,35 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         Assert.Equal(0, engine.StartCallCount);
     }
 
+    [Fact]
+    public void MongoDbConnectionBroker_UsesLoggingDockerEngine_DoesNotUseNullLogger()
+    {
+        var logger = new FakeDockerCommandRunnerLogger();
+
+        var broker = new MongoDbConnectionBroker(dockerCommandRunnerLogger: logger);
+
+        var engine = Assert.IsType<WindowsDockerDesktopEngine>(broker.ContainerEngine);
+        var runner = Assert.IsType<DockerCommandRunner>(engine.CommandRunner);
+        Assert.Same(logger, runner.Logger);
+        Assert.NotSame(Microsoft.Extensions.Logging.Abstractions.NullLogger<DockerCommandRunner>.Instance, runner.Logger);
+    }
+
+    private sealed class FakeDockerCommandRunnerLogger : Microsoft.Extensions.Logging.ILogger<DockerCommandRunner>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+        }
+    }
+
     private sealed class FakeDockerEngine : ContainerEngine
     {
         public bool UsableResult { get; set; }

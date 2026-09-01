@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Driver;
 using Phantom.Workspaces.Containers;
 
@@ -20,7 +21,8 @@ public sealed class MongoDbTestDatabaseFixture : IAsyncLifetime
 
     private static readonly string DataDirectory = Path.Combine(Path.GetTempPath(), "pw-mongodb-test-data");
 
-    private readonly ContainerEngine _containerEngine = new WindowsDockerDesktopEngine();
+    private readonly ContainerEngine _containerEngine =
+        new WindowsDockerDesktopEngine(NullLogger<DockerCommandRunner>.Instance);
     private readonly MongoDbConnectionBroker _connectionBroker;
 
     public MongoDbTestDatabaseFixture()

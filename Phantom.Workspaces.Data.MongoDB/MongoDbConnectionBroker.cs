@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using Phantom.Workspaces.Containers;
@@ -9,6 +11,8 @@ public sealed class MongoDbConnectionBroker
     private const int DefaultMongoPort = 27017;
 
     private readonly ContainerEngine _containerEngine;
+
+    internal ContainerEngine ContainerEngine => _containerEngine;
     private readonly MongoDbContainerDefinitionGenerator _containerDefinitionGenerator;
     private readonly IDockerDesktopLauncher _dockerDesktopLauncher;
     private readonly TimeSpan _dockerReadinessTimeout;
@@ -25,14 +29,19 @@ public sealed class MongoDbConnectionBroker
         TimeProvider? timeProvider = null,
         IDockerDesktopLauncher? dockerDesktopLauncher = null,
         TimeSpan? dockerReadinessTimeout = null,
-        TimeSpan? dockerReadinessPollInterval = null)
+        TimeSpan? dockerReadinessPollInterval = null,
+        ILogger<DockerCommandRunner>? dockerCommandRunnerLogger = null)
     {
         if (connectVerificationAttempts <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(connectVerificationAttempts));
         }
 
-        _containerEngine = containerEngine ?? new WindowsDockerDesktopEngine();
+        // Build the default engine with the supplied logger so docker stdout/stderr is surfaced
+        // instead of being discarded by a NullLogger (issue #1373). A caller-provided logger flows
+        // straight through to the command runner.
+        _containerEngine = containerEngine
+            ?? new WindowsDockerDesktopEngine(dockerCommandRunnerLogger ?? NullLogger<DockerCommandRunner>.Instance);
         _containerDefinitionGenerator = containerDefinitionGenerator ?? new MongoDbContainerDefinitionGenerator();
         _connectVerificationAttempts = connectVerificationAttempts;
         // The operational client uses generous server-selection timeouts (see CreateClient), so each

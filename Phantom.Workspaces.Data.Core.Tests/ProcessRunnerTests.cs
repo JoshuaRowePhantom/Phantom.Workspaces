@@ -293,7 +293,7 @@ public sealed class ProcessRunnerTests
     }
 
     [Fact]
-    public async Task RunAndLogAsync_ProcessSucceeds_LogsStdoutAtDebugLevel()
+    public async Task RunAndLogAsync_ProcessSucceeds_LogsStdoutAtInformationLevel()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -306,12 +306,12 @@ public sealed class ProcessRunnerTests
             logger);
 
         var entry = Assert.Single(logger.Logs);
-        Assert.Equal(LogLevel.Debug, entry.Level);
+        Assert.Equal(LogLevel.Information, entry.Level);
         Assert.Contains("test-output", entry.Message);
     }
 
     [Fact]
-    public async Task RunAndLogAsync_ProcessSucceeds_LogsStderrAtDebugLevel()
+    public async Task RunAndLogAsync_ProcessSucceeds_LogsStderrAtInformationLevel()
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -324,8 +324,46 @@ public sealed class ProcessRunnerTests
             logger);
 
         var entry = Assert.Single(logger.Logs);
-        Assert.Equal(LogLevel.Debug, entry.Level);
+        Assert.Equal(LogLevel.Information, entry.Level);
         Assert.Contains("test-error", entry.Message);
+    }
+
+    [Fact]
+    public async Task ProcessRunner_RunAndLogAsync_OnSuccess_LogsStandardOutputAndStandardError()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "echo out-line && echo err-line 1>&2 && exit 0"]),
+            logger);
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Information, entry.Level);
+        Assert.Contains("out-line", entry.Message);
+        Assert.Contains("err-line", entry.Message);
+    }
+
+    [Fact]
+    public async Task ProcessRunner_RunAndLogAsync_OnFailure_LogsStandardOutputAndStandardError()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var logger = new FakeLogger();
+        await ProcessRunner.RunAndLogAsync(
+            new RunProcessParameters("cmd.exe", ["/c", "echo out-line && echo err-line 1>&2 && exit 1"]),
+            logger);
+
+        var entry = Assert.Single(logger.Logs);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+        Assert.Contains("out-line", entry.Message);
+        Assert.Contains("err-line", entry.Message);
     }
 
     [Fact]

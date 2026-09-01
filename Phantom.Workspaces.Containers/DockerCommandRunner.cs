@@ -16,6 +16,8 @@ public sealed class DockerCommandRunner : IDockerCommandRunner
     private readonly ILogger<DockerCommandRunner> _logger;
     private readonly string _command;
 
+    internal ILogger<DockerCommandRunner> Logger => _logger;
+
     public DockerCommandRunner(ILogger<DockerCommandRunner> logger)
         : this(logger, "docker")
     {
