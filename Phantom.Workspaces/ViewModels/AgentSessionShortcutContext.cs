@@ -3,6 +3,7 @@ using System.IO;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using System.Globalization;
 using AgentSchema;
@@ -142,9 +143,13 @@ public sealed class AgentSessionShortcutContext
         EntityId? hostProfileEntityId = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
+        var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
+        var computerName = executionContext.EffectiveComputerName;
+        var currentTime = this.timeProvider.GetUtcNow();
         var sessionObjectSimpleName = CreateSessionObjectSimpleName(
             agentSessionId,
-            this.timeProvider.GetUtcNow());
+            currentTime,
+            computerName);
         var agentSessionNames = await WorkspaceEntityNameFactory.CreateEntityNames(
             mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer,
             workspaceEntitySession,
@@ -155,6 +160,8 @@ public sealed class AgentSessionShortcutContext
             agentDefinitionEntity.DisplayName,
             agentSessionId,
             agentSessionNames,
+            currentTime,
+            computerName,
             parameterValues,
             hostProfileEntityId);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
@@ -289,39 +296,75 @@ public sealed class AgentSessionShortcutContext
         string agentDisplayName,
         string agentSessionId,
         IReadOnlyCollection<EntityName> agentSessionNames,
+        DateTimeOffset currentTime,
+        string computerName,
         IReadOnlyDictionary<string, string>? parameterValues = null,
         EntityId? hostProfileEntityId = null)
     {
         var entityId = new EntityId();
-        var namesJson = string.Join(
-            ", ",
-            agentSessionNames.Select(
-                static entityName => $"[{string.Join(", ", entityName.Components.Select(static component => JsonSerializer.Serialize(component)))}]"));
-        var parameterValuesPart = parameterValues is { Count: > 0 }
-            ? $",\n  \"parameter-values\": {System.Text.Json.JsonSerializer.Serialize(parameterValues)}"
-            : string.Empty;
-        var hostProfilePart = hostProfileEntityId is { } profileId && profileId != default
-            ? $",\n  \"host-profile-entity-id\": \"{profileId}\""
-            : string.Empty;
-        using var agentSessionDocument = JsonDocument.Parse(
-            $$"""
+
+        // Assemble the document with JsonNode rather than string interpolation so free-text values
+        // (the agent display name, the computer name, and the human-readable timestamp) cannot
+        // break the JSON when they contain quotes or other special characters (issue #1397).
+        var namesArray = new JsonArray(
+            agentSessionNames
+                .Select(entityName => (JsonNode)new JsonArray(
+                    entityName.Components
+                        .Select(component => (JsonNode)JsonValue.Create(component)!)
+                        .ToArray()))
+                .ToArray());
+
+        // Human-readable, culture-aware local creation time plus the originating computer, so the
+        // sessions list can distinguish otherwise identically-named sessions.
+        var localTime = currentTime.ToLocalTime().ToString("f", CultureInfo.CurrentCulture);
+        var displayName = $"{agentDisplayName} session - {localTime} on {computerName}";
+
+        var root = new JsonObject
+        {
+            ["entity-id"] = entityId.ToString(),
+            ["entity-types"] = new JsonArray("entity", "agent-session"),
+            ["names"] = namesArray,
+            ["display-name"] = new JsonObject { ["default"] = displayName },
+            ["agent-source-entity-id"] = agentDefinitionEntityId.ToString(),
+            ["agent-session-id"] = agentSessionId,
+        };
+
+        if (parameterValues is { Count: > 0 })
+        {
+            var parameterValuesObject = new JsonObject();
+            foreach (var parameterValue in parameterValues)
             {
-              "entity-id": "{{entityId}}",
-              "entity-types": ["entity", "agent-session"],
-              "names": [{{namesJson}}],
-              "display-name": { "default": "{{agentDisplayName}} session" },
-              "agent-source-entity-id": "{{agentDefinitionEntityId}}",
-              "agent-session-id": "{{agentSessionId}}"{{parameterValuesPart}}{{hostProfilePart}}
+                parameterValuesObject[parameterValue.Key] = parameterValue.Value;
             }
-            """);
-        return agentSessionDocument.RootElement.Clone();
+
+            root["parameter-values"] = parameterValuesObject;
+        }
+
+        if (hostProfileEntityId is { } profileId && profileId != default)
+        {
+            root["host-profile-entity-id"] = profileId.ToString();
+        }
+
+        return JsonSerializer.Deserialize<JsonElement>(root.ToJsonString());
     }
 
     private static string CreateSessionObjectSimpleName(
         string agentSessionId,
-        DateTimeOffset currentTime)
+        DateTimeOffset currentTime,
+        string computerName)
     {
         var timestampComponent = currentTime.ToString("yyyy-MM-dd-HH-mm-ss", CultureInfo.InvariantCulture);
-        return $"session-{timestampComponent}-{agentSessionId}";
+        var computerComponent = SanitizeNameComponent(computerName);
+        return $"session-{timestampComponent}-{computerComponent}-{agentSessionId}";
+    }
+
+    private static string SanitizeNameComponent(string value)
+    {
+        var sanitized = new string(
+            value
+                .ToLowerInvariant()
+                .Select(character => (character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-') ? character : '-')
+                .ToArray());
+        return string.IsNullOrEmpty(sanitized) ? "unknown" : sanitized;
     }
 }

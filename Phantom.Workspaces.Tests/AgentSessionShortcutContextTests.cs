@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using Avalonia.Headless.XUnit;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.ViewModels;
@@ -152,5 +153,144 @@ public sealed class AgentSessionShortcutContextTests
         Assert.Equal("issue1399-server", mcpTool.ServerName);
         var connection = Assert.IsType<ApiKeyConnection>(mcpTool.Connection);
         Assert.Equal("https://user-created.example/mcp/", connection.Endpoint);
+    }
+
+    // Issue #1397: new agent-session display names were just "<agent> session" and entity names
+    // embedded only a UTC timestamp + session id, so the sessions list showed indistinguishable
+    // rows with no indication of when or on which computer a session was created.
+    private const string TestComputerName = "JROWE-TEST-PC";
+    private static readonly DateTimeOffset TestInstant = new(2026, 9, 2, 18, 42, 0, TimeSpan.Zero);
+
+    private static async Task<SubscribedEntityViewModel> CreateAgentDefinitionAsync(
+        Phantom.Workspaces.EntityBroker entityBroker,
+        string displayName)
+    {
+        var entityId = new EntityId();
+        var simpleName = "issue1397-" + Guid.NewGuid().ToString("n");
+        var json = $$"""
+            {
+              "entity-id": "{{entityId}}",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", {{JsonSerializer.Serialize(simpleName)}}]],
+              "display-name": { "default": {{JsonSerializer.Serialize(displayName)}} },
+              "definition": {
+                "kind": "prompt",
+                "name": "issue1397-echo",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """;
+        return await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            entityId,
+            json);
+    }
+
+    private static JsonElement DisplayNameDefault(SubscribedEntityViewModel sessionEntity)
+    {
+        var data = Assert.IsType<JsonElement>(sessionEntity.Data);
+        return data.GetProperty("display-name").GetProperty("default");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_CreateSession_DisplayNameIncludesHumanReadableTimeAndComputer()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await CreateAgentDefinitionAsync(entityBroker, "Owner Echo");
+
+        var shortcutContext = new AgentSessionShortcutContext(
+            timeProvider: new FakeTimeProvider(TestInstant),
+            userComputerProfileOverride: TestComputerName);
+        var session = await shortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(session);
+
+        var displayName = DisplayNameDefault(session!).GetString();
+        Assert.NotNull(displayName);
+        var expectedLocalTime = TestInstant.ToLocalTime().ToString("f", System.Globalization.CultureInfo.CurrentCulture);
+        Assert.Contains("Owner Echo", displayName!);
+        Assert.Contains("session", displayName!);
+        Assert.Contains(expectedLocalTime, displayName!);
+        Assert.Contains(TestComputerName, displayName!);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_CreateSession_EntityNameIncludesComputerName()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await CreateAgentDefinitionAsync(entityBroker, "Owner Echo");
+
+        var agentSessionId = Guid.NewGuid().ToString("n");
+        var shortcutContext = new AgentSessionShortcutContext(
+            timeProvider: new FakeTimeProvider(TestInstant),
+            userComputerProfileOverride: TestComputerName);
+        var session = await shortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, agentSessionId);
+        Assert.NotNull(session);
+
+        var data = Assert.IsType<JsonElement>(session!.Data);
+        var allComponents = data.GetProperty("names")
+            .EnumerateArray()
+            .SelectMany(name => name.EnumerateArray().Select(component => component.GetString()))
+            .ToArray();
+
+        var sanitizedComputer = TestComputerName.ToLowerInvariant();
+        Assert.Contains(allComponents, component => component is not null
+            && component.Contains(sanitizedComputer, StringComparison.Ordinal)
+            && component.Contains(agentSessionId, StringComparison.Ordinal));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_CreateSession_DisplayNameUsesLocalTime()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await CreateAgentDefinitionAsync(entityBroker, "Owner Echo");
+
+        var shortcutContext = new AgentSessionShortcutContext(
+            timeProvider: new FakeTimeProvider(TestInstant),
+            userComputerProfileOverride: TestComputerName);
+        var session = await shortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(session);
+
+        var displayName = DisplayNameDefault(session!).GetString();
+        var expectedLocalTime = TestInstant.ToLocalTime().ToString("f", System.Globalization.CultureInfo.CurrentCulture);
+        var expectedUtcTime = TestInstant.ToString("f", System.Globalization.CultureInfo.CurrentCulture);
+        Assert.NotNull(displayName);
+        Assert.Contains(expectedLocalTime, displayName!);
+        if (!string.Equals(expectedLocalTime, expectedUtcTime, StringComparison.Ordinal))
+        {
+            Assert.DoesNotContain(expectedUtcTime, displayName!);
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_CreateSession_DisplayNameIsValidJsonWhenValuesContainQuotes()
+    {
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var quotedDisplayName = "Weird \"Agent\" \\ Name";
+        var agentDefinitionEntity = await CreateAgentDefinitionAsync(entityBroker, quotedDisplayName);
+
+        var shortcutContext = new AgentSessionShortcutContext(
+            timeProvider: new FakeTimeProvider(TestInstant),
+            userComputerProfileOverride: "PC\"WITH\"QUOTES");
+        var session = await shortcutContext.CreateAgentSessionEntityAsync(
+            viewModel, agentDefinitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(session);
+
+        // The entity data round-trips as valid JSON and preserves the special characters verbatim.
+        var displayName = DisplayNameDefault(session!).GetString();
+        Assert.NotNull(displayName);
+        Assert.Contains(quotedDisplayName, displayName!);
+        Assert.Contains("PC\"WITH\"QUOTES", displayName!);
     }
 }
