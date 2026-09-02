@@ -1,6 +1,8 @@
 using GitHub.Copilot;
 using AgentSchema;
+using System.Reflection;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Tests.Infrastructure;
 using Phantom.Workspaces.Llm.SlashCommands;
 
 namespace Phantom.Workspaces.Llm.Tests.SlashCommands;
@@ -278,5 +280,41 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
 
         Assert.IsAssignableFrom<IModelSlashCommandClient>(client);
         Assert.Equal("gpt-5", ((IModelSlashCommandClient)client).ModelId);
+    }
+
+    [Fact]
+    public async Task ModelSlashCommand_AfterExecute_LiveTurnUsesNewModel()
+    {
+        // End-to-end: running /model then sending a message must make the SDK session use the new
+        // model. Because resuming an established Copilot session keeps its original model, the next
+        // turn must CREATE a fresh session with the new model rather than RESUME the old id.
+        var fakeSession = new FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new FakeCopilotClient(fakeSession);
+        var fakeFactory = new FakeCopilotClientFactory(fakeClient);
+
+        using var client = CreateRealClient("gpt-5");
+        client.SetCopilotClientFactoryForTest(fakeFactory);
+
+        var handler = new CopilotSdkModelSlashCommandHandler(client);
+        var context = await CreateContextAsync();
+
+        // Establish the initial live session with the original model.
+        await InvokeEnsureSessionAsync(client);
+        Assert.Equal("gpt-5", fakeSession.CreateSessionConfigs[0].Model);
+
+        // Run /model claude-4, then the next live turn.
+        await handler.ExecuteAsync(context, "claude-4", CancellationToken.None);
+        await InvokeEnsureSessionAsync(client);
+
+        Assert.Empty(fakeSession.ResumeSessionCalls);
+        Assert.Equal("claude-4", fakeSession.CreateSessionConfigs[^1].Model);
+    }
+
+    private static async Task InvokeEnsureSessionAsync(CopilotSdkChatClient client)
+    {
+        var ensure = typeof(CopilotSdkChatClient).GetMethod(
+            "EnsureSessionAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)ensure.Invoke(client, new object?[] { null, CancellationToken.None })!;
     }
 }

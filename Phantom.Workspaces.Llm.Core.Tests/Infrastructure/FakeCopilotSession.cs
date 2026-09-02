@@ -13,8 +13,14 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
     public IReadOnlyList<ModelInfo> Models { get; set; } = Array.Empty<ModelInfo>();
 
+    public List<SessionConfig> CreateSessionConfigs { get; } = new();
+
+    public List<(string SessionId, ResumeSessionConfig Config)> ResumeSessionCalls { get; } = new();
+
     public void OnCreateSession(SessionConfig config)
     {
+        this.CreateSessionConfigs.Add(config);
+
         // Dequeue SessionEstablished if one was enqueued, and update SessionId
         lock (this.lockObject)
         {
@@ -25,6 +31,7 @@ internal sealed class FakeCopilotSession : ICopilotSession
 
     public void OnResumeSession(string resumeSessionId, ResumeSessionConfig config)
     {
+        this.ResumeSessionCalls.Add((resumeSessionId, config));
         this.SessionId = resumeSessionId;
     }
 

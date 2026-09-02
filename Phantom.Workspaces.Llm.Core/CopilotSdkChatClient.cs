@@ -68,6 +68,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private ICopilotSession? copilotSession;
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
+    private bool forceCreateNewSession;
     private int disposeStarted;
     private volatile string? workingDirectoryOverride;
 
@@ -447,6 +448,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         this.modelId = modelId;
         this.currentSessionSignature = null;
+        this.pendingResumeSessionId = null; // force CreateSessionAsync with the new model
+        this.forceCreateNewSession = true;  // prevent the recreate path re-arming the stale resume id
     }
 
     /// <summary>
@@ -1284,12 +1287,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 // Preserve the existing session id so the next CreateOrResumeSessionAsync call
                 // resumes the Copilot CLI session with the updated config (e.g. new working
-                // directory) rather than creating a blank new session.
-                this.pendingResumeSessionId ??= staleSession.SessionId;
+                // directory) rather than creating a blank new session. A model change is the
+                // exception: it must create a brand-new session so the new model takes effect,
+                // because resuming an established session keeps its original model.
+                if (!this.forceCreateNewSession)
+                {
+                    this.pendingResumeSessionId ??= staleSession.SessionId;
+                }
+
                 await staleSession.DisposeAsync().ConfigureAwait(false);
                 this.copilotSession = null;
                 this.currentSessionSignature = null;
             }
+
+            this.forceCreateNewSession = false;
 
             var session = await this.CreateOrResumeSessionAsync(options, cancellationToken).ConfigureAwait(false);
 

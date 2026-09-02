@@ -1200,6 +1200,58 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    public void SetModelId_ClearsPendingResumeSessionId()
+    {
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+
+        // Arm a pending resume id, as a prior session would, then change the model.
+        client.SetResumeSessionId("old-session-id");
+
+        var resumeField = typeof(CopilotSdkChatClient).GetField(
+            "pendingResumeSessionId",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal("old-session-id", resumeField.GetValue(client));
+
+        client.SetModelId("claude-4");
+
+        // The next session must be created (not resumed), so the pending resume id is cleared.
+        Assert.Null(resumeField.GetValue(client));
+    }
+
+    [Fact]
+    public async Task SetModelId_NextTurn_CreatesFreshSessionWithNewModel()
+    {
+        var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
+        var fakeFactory = new Infrastructure.FakeCopilotClientFactory(fakeClient);
+
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        client.SetCopilotClientFactoryForTest(fakeFactory);
+
+        // First turn establishes the initial session with the original model.
+        await InvokeEnsureSessionAsync(client);
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Equal("gpt-5", fakeSession.CreateSessionConfigs[0].Model);
+
+        // Switching the model must force the next turn to CREATE a brand-new session with the new
+        // model, not RESUME the old session id (which would keep the original model).
+        client.SetModelId("claude-4");
+        await InvokeEnsureSessionAsync(client);
+
+        Assert.Empty(fakeSession.ResumeSessionCalls);
+        Assert.Equal(2, fakeSession.CreateSessionConfigs.Count);
+        Assert.Equal("claude-4", fakeSession.CreateSessionConfigs[1].Model);
+    }
+
+    private static async Task InvokeEnsureSessionAsync(CopilotSdkChatClient client)
+    {
+        var ensure = typeof(CopilotSdkChatClient).GetMethod(
+            "EnsureSessionAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)ensure.Invoke(client, new object?[] { null, CancellationToken.None })!;
+    }
+
+    [Fact]
     public void CopilotSdkChatClient_WhenRegistryProvided_RegistersWorkingDirectoryAndModelHandlers()
     {
         var registry = new Phantom.Workspaces.Llm.SlashCommands.SlashCommandRegistry();
