@@ -110,6 +110,51 @@ public sealed class McpToolIntegrationTests
         Assert.DoesNotContain(diagnostics, text => text.Contains("Agent startup failed", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task AgentChat_WithMcpTool_NonCopilotProvider_ExposesMcpTools()
+    {
+        // The DeterministicTestChatClient stands in for a non-Copilot provider: the MCP tool must
+        // still reach ChatOptions.Tools, confirming the #1395 fix is provider-agnostic (the tools
+        // now flow through AIContextProviders before any provider-specific forwarding).
+        await using var server = await TestMcpServerProcess.StartAsync();
+        var client = new DeterministicTestChatClient();
+        var agentJson = $$"""
+            {
+              "kind": "prompt",
+              "name": "mcp-non-copilot",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": [
+                {
+                  "kind": "mcp",
+                  "name": "test-mcp",
+                  "serverName": "test-mcp",
+                  "connection": { "kind": "Anonymous", "endpoint": "{{server.BoundUrl}}" }
+                }
+              ]
+            }
+            """;
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(agentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            DisplayNameOverride = "test-mcp",
+        });
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var toolNames = client.LastRequestOptions?.Tools?
+            .Select(static tool => tool.Name)
+            .Where(static name => !string.IsNullOrWhiteSpace(name))
+            .ToArray()
+            ?? [];
+
+        Assert.Contains(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
+    }
+
     private static async Task<AgentChat> CreateMcpChatAsync(
         (string ServerName, string Endpoint) server,
         List<string>? recordRunningText = null)

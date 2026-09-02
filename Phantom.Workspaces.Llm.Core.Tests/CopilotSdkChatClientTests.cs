@@ -421,6 +421,53 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AgentChat_WithMcpTool_CopilotSessionConfigIncludesMcpTools()
+    {
+        // End-to-end guard for #1395: an agent configured with an MCP server must surface the MCP
+        // tools in the ChatOptions handed to a turn, and BuildSessionConfig (the Copilot SDK path)
+        // must forward them into sessionConfig.Tools. Drives a real loopback MCP server, so tagged
+        // Integration.
+        await using var server = await TestMcpServerProcess.StartAsync();
+        var client = new DeterministicTestChatClient();
+        var agentJson = $$"""
+            {
+              "kind": "prompt",
+              "name": "mcp-copilot",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": [
+                {
+                  "kind": "mcp",
+                  "name": "test-mcp",
+                  "serverName": "test-mcp",
+                  "connection": { "kind": "Anonymous", "endpoint": "{{server.BoundUrl}}" }
+                }
+              ]
+            }
+            """;
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(agentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            DisplayNameOverride = "test-mcp",
+        });
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var options = client.LastRequestOptions;
+        Assert.NotNull(options);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options);
+
+        Assert.NotNull(config.Tools);
+        Assert.Contains(config.Tools!, candidate => string.Equals(candidate.Name, "ping", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void BuildSessionConfig_IgnoresNonFunctionToolsAndMissingOptions()
     {
         var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options: null);

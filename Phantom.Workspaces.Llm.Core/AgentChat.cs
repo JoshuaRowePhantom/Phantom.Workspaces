@@ -456,9 +456,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // dispatch when there is actual tool work: a tool-less agent performs no running-item
        // mutations, so skipping the dispatch keeps CreateAsync from blocking on a foreground
        // scheduler that defers execution until externally pumped (e.g. sub-agent restore tests).
-       var runtimeTools = AgentFactory.ExtractTools(resolvedAgentDefinition);
-       var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0
-           || (runtimeTools?.OfType<McpTool>().Any() ?? false);
+       var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0;
        if (hasToolWork)
        {
            await this.RunOnForegroundAsync(
@@ -2283,16 +2281,25 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         await this.toolMutationLock.WaitAsync(cancellationToken);
         try
         {
-            var customToolTasks = this.runtimeContextProviderRegistrations.Select(registration => this.InitializeCustomToolRuntimeAsync(
-                registration.Tool,
-                registration.Provider,
-                registration.ErrorMessage,
-                cancellationToken));
-            var mcpToolTasks = agentTools.OfType<McpTool>().Select(tool => this.InitializeMcpRuntimeToolAsync(
-                tool,
-                this.request.AgentServices,
-                cancellationToken));
-            var results = await Task.WhenAll(customToolTasks.Concat(mcpToolTasks));
+            // MCP tools and custom toolsets now share a single source of truth: the runtime
+            // context provider registrations built by CreateRuntimeContextProviderRegistrationsAsync
+            // (issue #1395). Dispatching from the same registration list guarantees the provider
+            // that feeds the UI tool tree / diagnostic is the SAME instance already wired into
+            // chatOptions.AIContextProviders, so MCP tools reach the model.
+            var toolTasks = this.runtimeContextProviderRegistrations.Select(registration => registration.Tool switch
+            {
+                McpTool mcpTool => this.InitializeMcpRuntimeToolAsync(
+                    mcpTool,
+                    registration.Provider,
+                    cancellationToken),
+                CustomTool customTool => this.InitializeCustomToolRuntimeAsync(
+                    customTool,
+                    registration.Provider,
+                    registration.ErrorMessage,
+                    cancellationToken),
+                _ => Task.FromResult(new ToolInitializationResult([], [])),
+            });
+            var results = await Task.WhenAll(toolTasks);
             var roots = results.SelectMany(static result => result.Roots).ToList();
 
             this.ReplaceToolNodes(roots);
@@ -2334,7 +2341,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var customTools = agentTools.OfType<CustomTool>()
             .Where(tool => !string.Equals(tool.Kind, "chat-history", StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        if (customTools.Length == 0)
+        var mcpTools = agentTools.OfType<McpTool>().ToArray();
+        if (customTools.Length == 0 && mcpTools.Length == 0)
         {
             return [];
         }
@@ -2351,8 +2359,29 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 Core.Transport.ExecutorTargetResolver.ForTool(tool));
         }).ToArray();
 
-        var registrations = await Task.WhenAll(providerTasks);
-        return registrations;
+        var customRegistrations = await Task.WhenAll(providerTasks);
+
+        // Construct the MCP provider ONCE here so the SAME instance both feeds the UI tool tree /
+        // diagnostic (InitializeMcpRuntimeToolAsync) AND is wired into chatOptions.AIContextProviders,
+        // exposing MCP tools to the model exactly like CustomTool toolsets (issue #1395). No network
+        // connection happens here — McpToolContextProvider.ProvideAIContextAsync connects lazily — so
+        // the registration/reference exists at construction time without blocking on the network.
+        var mcpRegistrations = mcpTools.Select(tool =>
+        {
+            var provider = new McpToolContextProvider(
+                tool,
+                services?.LoggerFactory,
+                Core.Transport.ExecutorTargetResolver.ForTool(tool),
+                services);
+            this.RegisterOwnedResource(provider);
+            return new RuntimeContextProviderRegistration(
+                tool,
+                provider,
+                null,
+                Core.Transport.ExecutorTargetResolver.ForTool(tool));
+        }).ToArray();
+
+        return [.. customRegistrations, .. mcpRegistrations];
     }
 
     private async Task<ToolInitializationResult> InitializeCustomToolRuntimeAsync(
@@ -2487,7 +2516,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private async Task<ToolInitializationResult> InitializeMcpRuntimeToolAsync(
         McpTool mcpTool,
-        AgentServices? services,
+        AIContextProvider? provider,
         CancellationToken cancellationToken)
     {
         var toolServerName = string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName;
@@ -2512,13 +2541,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 isEnabled: true,
                 status: null);
 
-            var provider = new McpToolContextProvider(
-                mcpTool,
-                services?.LoggerFactory,
-                Core.Transport.ExecutorTargetResolver.ForTool(mcpTool),
-                services);
-            this.RegisterOwnedResource(provider);
+            if (provider is null)
+            {
+                throw new InvalidOperationException(
+                    $"No MCP tool provider was created for server '{displayName}'.");
+            }
 
+            // Enumerate through the SAME provider instance that was registered into
+            // chatOptions.AIContextProviders (issue #1395). This both builds the UI tool tree and,
+            // because the provider is already wired for exposure, guarantees the "Loaded tools"
+            // diagnostic below names exactly the tools the model can call — every child node is
+            // indexed enabled with a matching RuntimeTool.Name so it passes IsToolEnabledForRuntime.
             var mcpTools = await AIContextProviderToolReader.GetToolsAsync(
                 provider,
                 this.GetSession().Agent,
@@ -2741,7 +2774,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         IReadOnlyList<AITool> RuntimeTools);
 
     private sealed record RuntimeContextProviderRegistration(
-        CustomTool Tool,
+        Tool Tool,
         AIContextProvider? Provider,
         string? ErrorMessage,
         Core.Transport.ExecutorTarget ExecutorTarget);

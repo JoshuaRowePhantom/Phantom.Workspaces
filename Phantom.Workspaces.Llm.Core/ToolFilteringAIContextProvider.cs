@@ -27,14 +27,27 @@ public sealed class ToolFilteringAIContextProvider : AIContextProvider
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        AIContext underlyingContext;
+        try
+        {
 #pragma warning disable MAAI001
-        var underlyingContext = await this.provider.InvokingAsync(
-            new AIContextProvider.InvokingContext(
-                context.Agent,
-                context.Session,
-                new AIContext()),
-            cancellationToken);
+            underlyingContext = await this.provider.InvokingAsync(
+                new AIContextProvider.InvokingContext(
+                    context.Agent,
+                    context.Session,
+                    new AIContext()),
+                cancellationToken);
 #pragma warning restore MAAI001
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A context provider that fails to yield tools must not crash the turn — it simply
+            // contributes no tools (issue #1395). This matters for an MCP server that failed to
+            // open/connect: its provider is registered for exposure but its lazy connection throws
+            // at request time. The failure was already surfaced as a diagnostic when the tool tree
+            // was built; here we degrade gracefully so the model still gets every other tool.
+            return new AIContext { Tools = [] };
+        }
 
         var tools = underlyingContext.Tools?.ToArray() ?? [];
         if (tools.Length == 0)
