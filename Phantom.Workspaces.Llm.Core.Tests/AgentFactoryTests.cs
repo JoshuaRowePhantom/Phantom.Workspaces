@@ -105,6 +105,89 @@ public class AgentFactoryTests
         var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
         Assert.Equal("${SECRET:GitHubToken}", connection.ApiKey);
     }
+
+    [Fact]
+    public async Task AgentFactory_GitHubModelsConnection_SecretPlaceholder_ResolvesViaSecretResolver()
+    {
+        // #1398: a github-models connection whose apiKey is a ${SECRET:...} placeholder must resolve
+        // through the secret resolver on the async factory path. If the resolver were bypassed the
+        // placeholder would be treated as an environment-variable name and creation would throw.
+        const string token = "${SECRET:GitHubModelsKey}";
+        var resolver = new SecretPlaceholderResolver();
+        resolver.Register(token, new SecretRetriever
+        {
+            SecretName = "GitHubModelsKey",
+            Secret = _ => Task.FromResult(ToSecureString("resolved-models-key")),
+        });
+        var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
+        {
+          "kind": "prompt",
+          "name": "github-models-agent",
+          "model": {
+            "id": "gpt-4.1-mini",
+            "provider": "github-models",
+            "apiType": "OpenAI",
+            "connection": { "kind": "key", "endpoint": "https://models.github.ai/inference", "apiKey": "{{token}}" }
+          },
+          "tools": []
+        }
+        """);
+
+        var (client, displayName) = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { SecretPlaceholderResolver = resolver });
+
+        Assert.NotNull(client);
+        Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
+    }
+
+    [Fact]
+    public async Task AgentFactory_GitHubCopilotByokConnection_SecretPlaceholder_ResolvesViaSecretResolver()
+    {
+        // #1398: a BYOK (openai/azure-openai) connection with a ${SECRET:...} apiKey resolves via the
+        // secret resolver, so the resolved plaintext lands in the SDK's BYOK options.
+        const string token = "${SECRET:ByokKey}";
+        var resolver = new SecretPlaceholderResolver();
+        resolver.Register(token, new SecretRetriever
+        {
+            SecretName = "ByokKey",
+            Secret = _ => Task.FromResult(ToSecureString("resolved-byok-key")),
+        });
+        var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
+        {
+          "kind": "prompt",
+          "name": "byok-agent",
+          "model": {
+            "id": "gpt-test",
+            "provider": "openai",
+            "connection": { "kind": "key", "endpoint": "http://localhost:12345/", "apiKey": "{{token}}" }
+          }
+        }
+        """);
+
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { SecretPlaceholderResolver = resolver });
+
+        var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Equal("resolved-byok-key", client.ByokOptions!.ApiKey);
+    }
+
+    [Fact]
+    public void AgentFactory_ResolveApiKey_SyncMethodRemoved()
+    {
+        // #1398: the synchronous ResolveApiKey duplicate (and its IApiKeyResolver member) were
+        // removed so that all API-key resolution flows through the async resolver-first path.
+        var syncOnAgentFactory = typeof(AgentFactory)
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+            .Where(method => method.Name == "ResolveApiKey")
+            .ToArray();
+        Assert.Empty(syncOnAgentFactory);
+
+        var syncOnInterface = typeof(IApiKeyResolver).GetMethod("ResolveApiKey");
+        Assert.Null(syncOnInterface);
+    }
+
     [Fact]
     public void ConfigureChatOptions_SetsInstructionsAndAdditionalInstructions()
     {
@@ -1838,7 +1921,6 @@ public class AgentFactoryTests
 
     private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
     {
-        public string ResolveApiKey(string? apiKeyValue, string? serverName) => key;
         public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default) => Task.FromResult(key);
     }
 

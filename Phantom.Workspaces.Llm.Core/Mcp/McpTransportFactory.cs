@@ -30,9 +30,11 @@ internal static class McpTransportFactory
     private static readonly Uri DefaultLoopbackRedirectUri = new("http://localhost/");
 
     /// <summary>
-    /// Builds the transport for <paramref name="tool"/>'s connection. The Anonymous/API-key arms are
-    /// synchronous; the OAuth arm is async because client-id/secret placeholder resolution may hit an
-    /// async secret provider.
+    /// Builds the transport for <paramref name="tool"/>'s connection. The Anonymous arm is
+    /// synchronous; the API-key and OAuth arms are async because credential resolution (the
+    /// <c>apiKey</c> and OAuth client-id/secret placeholders) may consult an async secret provider —
+    /// both a <c>${SECRET:&lt;handle&gt;}</c> resolver and the <c>${ENV}</c>/<c>${GITHUB_TOKEN}</c>
+    /// fallback.
     /// </summary>
     public static async Task<IClientTransport> CreateMcpTransportAsync(
         McpTool tool,
@@ -52,9 +54,14 @@ internal static class McpTransportFactory
                     loggerFactory);
 
             case ApiKeyConnection apiKey:
+                var resolvedKey = await AgentFactory.ResolveRequiredSecretOrEnvAsync(
+                    apiKey.ApiKey,
+                    services,
+                    tool.ServerName,
+                    cancellationToken).ConfigureAwait(false);
                 return CreateTransportFromEndpoint(
                     apiKey.Endpoint,
-                    AgentFactory.ResolveApiKey(apiKey.ApiKey, tool.ServerName),
+                    resolvedKey,
                     tool.ServerName,
                     loggerFactory);
 

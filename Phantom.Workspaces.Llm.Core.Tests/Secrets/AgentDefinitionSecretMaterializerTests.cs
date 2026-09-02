@@ -232,6 +232,52 @@ public sealed class AgentDefinitionSecretMaterializerTests
         Assert.Equal(new CredentialStoreSecretSource("ApiKey"), request.DefaultSecretSource);
     }
 
+    [Fact]
+    public async Task AgentDefinitionSecretMaterializer_McpToolKeyConnectionApiKey_IsRewrittenToHandle()
+    {
+        // #1398: an McpTool "key" connection apiKey ${SECRET:Name} is covered by the scanner and must
+        // be rewritten to an opaque ${SECRET:<handle>} handle registered with the resolver.
+        var definition = WithMcpKeySecret("${SECRET:McpApiKey}");
+        var provider = new FakeSecretProvider();
+        provider.Secrets["McpApiKey"] = ToSecureString("mcp-plain-secret");
+
+        var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            Manifest(definition),
+            definition,
+            provider,
+            CancellationToken.None);
+
+        var request = Assert.Single(provider.Requests);
+        Assert.Equal("McpApiKey", request.SecretName);
+
+        var usage = Assert.Single(new SecretUsageScanner().Scan(result.Definition));
+        Assert.Matches("^[0-9a-f]{32}$", usage.SecretName);
+        Assert.DoesNotContain("McpApiKey", result.Definition.ToJson(), StringComparison.Ordinal);
+        Assert.DoesNotContain("mcp-plain-secret", result.Definition.ToJson(), StringComparison.Ordinal);
+
+        var token = Regex.Match(result.Definition.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
+        Assert.True(result.Resolver.TryResolve(token, out var retriever));
+        using var secret = await retriever.Secret(CancellationToken.None);
+        Assert.Equal("mcp-plain-secret", Phantom.Workspaces.Llm.Secrets.SecureStringMarshal.Use(secret, plain => plain));
+    }
+
+    private static AgentDefinition WithMcpKeySecret(string secret = "${SECRET:McpApiKey}") => LoadDefinition($$"""
+    {
+      "kind": "prompt",
+      "name": "test-agent",
+      "model": { "id": "m", "provider": "echo", "apiType": "Echo" },
+      "tools": [
+        {
+          "kind": "mcp",
+          "name": "github",
+          "serverName": "github",
+          "connection": { "kind": "key", "endpoint": "https://api.githubcopilot.com/mcp/", "apiKey": "{{secret}}" },
+          "approvalMode": { "kind": "never" }
+        }
+      ]
+    }
+    """);
+
     private static AgentDefinition WithModelSecret(string secret = "${SECRET:GithubApiToken}") => LoadDefinition($$"""
     {
       "kind": "prompt",

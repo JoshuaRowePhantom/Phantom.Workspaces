@@ -244,6 +244,55 @@ public sealed class McpTransportFactoryTests
         Assert.Equal(first.OAuth.Scopes!.ToArray(), second.OAuth.Scopes!.ToArray());
     }
 
+    [Fact]
+    public async Task McpTransportFactory_ApiKeyConnection_SecretPlaceholder_ResolvesViaSecretResolver()
+    {
+        // #1398: the ApiKeyConnection ("key") arm must consult the secret resolver first, exactly
+        // like the OAuth arm, so a ${SECRET:...} apiKey resolves without any environment variable.
+        const string placeholder = "${SECRET:GitHubToken}";
+        var services = new AgentServices
+        {
+            SecretPlaceholderResolver = new FakeSecretPlaceholderResolver(placeholder, "resolved-secret-token"),
+        };
+
+        var transport = await CreateAsync(
+            new McpTool
+            {
+                ServerName = "github-secret-gated",
+                Connection = new ApiKeyConnection { Endpoint = HttpEndpoint, ApiKey = placeholder },
+            },
+            services);
+
+        var options = GetHttpOptions(transport);
+        Assert.NotNull(options.AdditionalHeaders);
+        Assert.Equal("Bearer resolved-secret-token", options.AdditionalHeaders!["Authorization"]);
+    }
+
+    [Fact]
+    public async Task McpTransportFactory_ApiKeyConnection_EnvVarStillResolves()
+    {
+        // #1398 regression: with no resolver entry, a ${ENV_VAR} apiKey still resolves through the
+        // ${ENV}/${GITHUB_TOKEN}->gh/literal fallback path.
+        const string envVar = "PHANTOM_TEST_MCP_API_KEY";
+        Environment.SetEnvironmentVariable(envVar, "env-resolved-key");
+        try
+        {
+            var transport = await CreateAsync(new McpTool
+            {
+                ServerName = "env-keyed",
+                Connection = new ApiKeyConnection { Endpoint = HttpEndpoint, ApiKey = $"${{{envVar}}}" },
+            });
+
+            var options = GetHttpOptions(transport);
+            Assert.NotNull(options.AdditionalHeaders);
+            Assert.Equal("Bearer env-resolved-key", options.AdditionalHeaders!["Authorization"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(envVar, null);
+        }
+    }
+
     private sealed class FakeSecretPlaceholderResolver : ISecretPlaceholderResolver
     {
         private readonly string placeholder;

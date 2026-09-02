@@ -2,6 +2,9 @@ using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using System.Collections.Specialized;
+using System.Security;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -219,4 +222,85 @@ public sealed class McpToolIntegrationTests
             _ => string.Empty,
         }));
 
+    [Fact]
+    public async Task AgentChat_SecretGatedMcpApiKey_ConnectsWithoutEnvironmentVariable()
+    {
+        // #1398 end-to-end: a manifest whose MCP "key" server uses a ${SECRET:...} apiKey, with a
+        // stub SecretProvider (and no environment variable set), materializes the placeholder to an
+        // opaque handle and opens the server via the secret-aware key arm.
+        await using var server = await TestMcpServerProcess.StartAsync();
+
+        var provider = new StubSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString("secret-gated-token");
+
+        var manifest = AgentManifestLoader.LoadManifestFromJson($$"""
+        {
+          "name": "secret-mcp-agent",
+          "displayName": "Secret MCP Agent",
+          "metadata": { "entity-id": "22222222-2222-2222-2222-222222222222" },
+          "template": {
+            "kind": "prompt",
+            "name": "secret-mcp-agent",
+            "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+            "tools": [
+              {
+                "kind": "mcp",
+                "name": "github-secret-gated",
+                "serverName": "github-secret-gated",
+                "connection": { "kind": "key", "endpoint": "{{server.BoundUrl}}", "apiKey": "${SECRET:GitHubToken}" }
+              }
+            ]
+          }
+        }
+        """);
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentManifest = manifest,
+            AgentServices = new AgentServices
+            {
+                SecretProvider = provider,
+                ChatClientOverride = new DeterministicTestChatClient(),
+            },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        Assert.Contains(
+            chat.History,
+            item => DiagnosticText(item).Contains("Opened MCP server 'github-secret-gated'", StringComparison.Ordinal));
+        Assert.True(provider.CallCount > 0, "The secret provider should have been consulted during materialization.");
+    }
+
+    private static SecureString ToSecureString(string value)
+    {
+        var secure = new SecureString();
+        foreach (var ch in value)
+        {
+            secure.AppendChar(ch);
+        }
+
+        secure.MakeReadOnly();
+        return secure;
+    }
+
+    private sealed class StubSecretProvider : ISecretProvider
+    {
+        public int CallCount { get; private set; }
+        public Dictionary<string, SecureString> Secrets { get; } = [];
+
+        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
+        {
+            this.CallCount++;
+            var retrievers = requests
+                .Where(request => this.Secrets.ContainsKey(request.SecretName))
+                .Select(request => new SecretRetriever
+                {
+                    SecretName = request.SecretName,
+                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
+                })
+                .ToArray();
+
+            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
+        }
+    }
 }
