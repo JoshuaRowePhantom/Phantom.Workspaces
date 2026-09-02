@@ -314,6 +314,53 @@ public sealed class SecretProviderTests
         secret.Dispose();
     }
 
+    [Fact]
+    public async Task SecretProvider_ThisSessionChoice_PersistsGrantKeyedBySessionScopeHash()
+    {
+        var request = Request("ApiKey");
+        var chosenMemory = Memory(SecretUseScope.SessionIdentity, "hash-session");
+        var chosenSource = new CredentialStoreSecretSource("Credential-B");
+        var provider = CreateProvider();
+        provider.Dialog.Result = Accepted(Row(request, chosenMemory, chosenSource));
+        provider.PlatformStore.StoredSecrets[chosenSource.CredentialName] = ToSecureString("credential-value");
+
+        await provider.RequestSecretsAsync([request], CancellationToken.None);
+
+        var put = Assert.Single(provider.AllowedStore.Puts);
+        Assert.Equal(chosenMemory.Hash, put.Hash);
+        Assert.Equal(SecretUseScope.SessionIdentity, put.Record.Memory.Scope);
+    }
+
+    [Fact]
+    public async Task SecretProvider_AllSessionsUsingManifestChoice_PersistsGrantKeyedByManifestIdentityHash()
+    {
+        var request = Request("ApiKey");
+        var chosenMemory = Memory(SecretUseScope.ManifestIdentity, "hash-manifest-id");
+        var chosenSource = new CredentialStoreSecretSource("Credential-B");
+        var provider = CreateProvider();
+        provider.Dialog.Result = Accepted(Row(request, chosenMemory, chosenSource));
+        provider.PlatformStore.StoredSecrets[chosenSource.CredentialName] = ToSecureString("credential-value");
+
+        await provider.RequestSecretsAsync([request], CancellationToken.None);
+
+        var put = Assert.Single(provider.AllowedStore.Puts);
+        Assert.Equal(chosenMemory.Hash, put.Hash);
+        Assert.Equal(SecretUseScope.ManifestIdentity, put.Record.Memory.Scope);
+    }
+
+    [Fact]
+    public async Task SecretProvider_AlwaysAsk_NeverPersists()
+    {
+        var request = Request("ApiKey");
+        var provider = CreateProvider();
+        provider.Dialog.Result = Accepted(Row(request, Memory(SecretUseScope.AlwaysAsk, string.Empty), new CredentialStoreSecretSource("Credential-A")));
+        provider.PlatformStore.StoredSecrets["Credential-A"] = ToSecureString("credential-value");
+
+        await provider.RequestSecretsAsync([request], CancellationToken.None);
+
+        Assert.Empty(provider.AllowedStore.Puts);
+    }
+
     private static async Task<RequestSecretsResult> RequestFailureForSourceAsync(SecretSource source)
     {
         var request = Request("ApiKey", defaultSource: source, sources: [source]);

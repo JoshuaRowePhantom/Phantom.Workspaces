@@ -21,7 +21,8 @@ internal static class SecretUseScopePreimage
         string secretName,
         string useDisplayString,
         string? stableManifestIdentity = null,
-        string? manifestContentHash = null)
+        string? manifestContentHash = null,
+        string? sessionIdentity = null)
     {
         return scope switch
         {
@@ -37,6 +38,10 @@ internal static class SecretUseScopePreimage
                 $"{VersionPrefix}|scope=manifest-content|manifestHash={manifestContentHash}|secret={secretName}",
             SecretUseScope.KeyInManifestContent =>
                 $"{VersionPrefix}|scope=key-manifest-content|manifestHash={manifestContentHash}|secret={secretName}|use={useDisplayString}",
+            SecretUseScope.SessionIdentity =>
+                $"{VersionPrefix}|scope=session-identity|sessionId={sessionIdentity}|secret={secretName}",
+            SecretUseScope.KeyInSession =>
+                $"{VersionPrefix}|scope=key-session|sessionId={sessionIdentity}|secret={secretName}|use={useDisplayString}",
             SecretUseScope.AlwaysAsk => string.Empty,
             _ => throw new ArgumentOutOfRangeException(nameof(scope), scope, "Unknown secret use scope."),
         };
@@ -51,9 +56,10 @@ internal static class SecretUseScopePreimage
         string secretName,
         string useDisplayString,
         string? stableManifestIdentity = null,
-        string? manifestContentHash = null)
+        string? manifestContentHash = null,
+        string? sessionIdentity = null)
     {
-        var preimage = Build(scope, secretName, useDisplayString, stableManifestIdentity, manifestContentHash);
+        var preimage = Build(scope, secretName, useDisplayString, stableManifestIdentity, manifestContentHash, sessionIdentity);
         if (preimage.Length == 0)
         {
             return string.Empty;

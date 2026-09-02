@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm.Core.Tests.Secrets;
@@ -111,5 +112,67 @@ public class SecretUseScopePreimageTests
         var keyInAnyManifest = SecretUseScopePreimage.ComputeHash(SecretUseScope.KeyInAnyManifest, "MY_SECRET", "use");
 
         Assert.NotEqual(anyManifest, keyInAnyManifest);
+    }
+
+    [Fact]
+    public void SecretUseScopePreimage_ExistingScopeHashes_UnchangedByAddingSessionInput()
+    {
+        // Golden hashes for the pre-existing scopes. Adding the sessionIdentity parameter must not
+        // change any existing branch, so previously-persisted grants keep matching (#1401). The
+        // VersionPrefix must not be bumped.
+        var golden = new Dictionary<SecretUseScope, string>
+        {
+            [SecretUseScope.AllUses] = "ca6f2134a9ba19ef293c4e3136a7dcc84edcc753c22ca3950d39b2cb4d6295a4",
+            [SecretUseScope.AnyManifest] = "850659b70107e1ae3ab0380a876529e6f9440f9ff4c0699a4b1fbee40ae742e7",
+            [SecretUseScope.KeyInAnyManifest] = "e1d9aedffcebb5cffff690b7bdf11088540a37f31f19ea379f442c48537651c2",
+            [SecretUseScope.ManifestIdentity] = "46e768b0469f66e9d2a81e6843770416cc6ac26bda65a714b354e9e57fdcb991",
+            [SecretUseScope.ManifestContent] = "5814044a28ece12053b311ebac87b8e40f10054374b8e6018cf4289b4bf6e580",
+            [SecretUseScope.KeyInManifestContent] = "dc1c9db9039aa687f84887270b7ad76568c42fa5eb6463e786fca852376255c1",
+        };
+
+        foreach (var (scope, expected) in golden)
+        {
+            var withoutSession = SecretUseScopePreimage.ComputeHash(
+                scope, "MY_SECRET", "env.API_KEY", stableManifestIdentity: "id", manifestContentHash: "hash");
+            var withSession = SecretUseScopePreimage.ComputeHash(
+                scope, "MY_SECRET", "env.API_KEY", stableManifestIdentity: "id", manifestContentHash: "hash",
+                sessionIdentity: "session-xyz");
+
+            Assert.Equal(expected, withoutSession);
+            Assert.Equal(expected, withSession);
+        }
+    }
+
+    [Fact]
+    public void SecretUseScopePreimage_SessionIdentityScope_DependsOnSessionIdNotManifest()
+    {
+        var a = SecretUseScopePreimage.Build(
+            SecretUseScope.SessionIdentity, "MY_SECRET", "use",
+            stableManifestIdentity: "manifest-1", manifestContentHash: "content-1", sessionIdentity: "session-A");
+        var differentSession = SecretUseScopePreimage.Build(
+            SecretUseScope.SessionIdentity, "MY_SECRET", "use",
+            stableManifestIdentity: "manifest-1", manifestContentHash: "content-1", sessionIdentity: "session-B");
+        var differentManifest = SecretUseScopePreimage.Build(
+            SecretUseScope.SessionIdentity, "MY_SECRET", "use",
+            stableManifestIdentity: "manifest-2", manifestContentHash: "content-2", sessionIdentity: "session-A");
+
+        Assert.Equal($"{Prefix}|scope=session-identity|sessionId=session-A|secret=MY_SECRET", a);
+        Assert.DoesNotContain("manifestId=", a);
+        Assert.DoesNotContain("manifestHash=", a);
+        Assert.NotEqual(a, differentSession);
+        Assert.Equal(a, differentManifest);
+    }
+
+    [Fact]
+    public void SecretUseScopePreimage_ManifestIdentityScope_IndependentOfSessionId()
+    {
+        var sessionA = SecretUseScopePreimage.ComputeHash(
+            SecretUseScope.ManifestIdentity, "MY_SECRET", "use",
+            stableManifestIdentity: "manifest-1", sessionIdentity: "session-A");
+        var sessionB = SecretUseScopePreimage.ComputeHash(
+            SecretUseScope.ManifestIdentity, "MY_SECRET", "use",
+            stableManifestIdentity: "manifest-1", sessionIdentity: "session-B");
+
+        Assert.Equal(sessionA, sessionB);
     }
 }

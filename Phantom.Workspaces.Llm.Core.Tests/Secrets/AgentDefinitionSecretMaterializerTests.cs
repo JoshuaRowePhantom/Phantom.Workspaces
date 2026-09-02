@@ -15,10 +15,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var provider = new FakeSecretProvider();
 
         var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
-            Manifest(definition),
-            definition,
-            provider,
-            CancellationToken.None);
+            definition, provider, CancellationToken.None, Manifest(definition));
 
         Assert.Same(definition, result.Definition);
         Assert.Equal(original, result.Definition.ToJson());
@@ -34,10 +31,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
 
         var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
-            Manifest(definition),
-            definition,
-            provider,
-            CancellationToken.None);
+            definition, provider, CancellationToken.None, Manifest(definition));
 
         var request = Assert.Single(provider.Requests);
         Assert.Equal("GithubApiToken", request.SecretName);
@@ -57,10 +51,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
 
         var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
-            Manifest(definition),
-            definition,
-            provider,
-            CancellationToken.None);
+            definition, provider, CancellationToken.None, Manifest(definition));
 
         var token = Regex.Match(result.Definition.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
         Assert.True(result.Resolver.TryResolve(token, out var retriever));
@@ -76,10 +67,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
 
         var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
-            Manifest(definition),
-            definition,
-            provider,
-            CancellationToken.None);
+            definition, provider, CancellationToken.None, Manifest(definition));
 
         Assert.False(result.Resolver.TryResolve("${SECRET:unknown}", out _));
     }
@@ -92,10 +80,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
 
         await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() =>
             new AgentDefinitionSecretMaterializer().MaterializeAsync(
-                Manifest(definition),
-                definition,
-                provider,
-                CancellationToken.None));
+                definition, provider, CancellationToken.None, Manifest(definition)));
     }
 
     [Fact]
@@ -107,10 +92,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
 
         var ex = await Assert.ThrowsAsync<SecretMaterializationFailedException>(() =>
             new AgentDefinitionSecretMaterializer().MaterializeAsync(
-                Manifest(definition),
-                definition,
-                provider,
-                CancellationToken.None));
+                definition, provider, CancellationToken.None, Manifest(definition)));
 
         Assert.Equal("MissingSecret", Assert.Single(ex.Failures).SecretName);
     }
@@ -125,10 +107,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
 
         var ex = await Assert.ThrowsAsync<SecretMaterializationFailedException>(() =>
             new AgentDefinitionSecretMaterializer().MaterializeAsync(
-                Manifest(definition),
-                definition,
-                provider,
-                CancellationToken.None));
+                definition, provider, CancellationToken.None, Manifest(definition)));
 
         Assert.Equal(2, ex.Failures.Count);
     }
@@ -144,10 +123,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
 
         var ex = await Assert.ThrowsAsync<SecretMaterializationFailedException>(() =>
             new AgentDefinitionSecretMaterializer().MaterializeAsync(
-                Manifest(definition),
-                definition,
-                provider,
-                CancellationToken.None));
+                definition, provider, CancellationToken.None, Manifest(definition)));
 
         Assert.DoesNotContain(secretValue, ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(secretValue, ex.ToString(), StringComparison.Ordinal);
@@ -166,7 +142,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var provider = new FakeSecretProvider();
         provider.Secrets["ToolSecret"] = ToSecureString("tool-secret-value");
 
-        await new AgentDefinitionSecretMaterializer().MaterializeAsync(Manifest(definition), definition, provider, CancellationToken.None);
+        await new AgentDefinitionSecretMaterializer().MaterializeAsync(definition, provider, CancellationToken.None, Manifest(definition));
 
         Assert.DoesNotContain("ToolSecret", definition.ToJson(), StringComparison.Ordinal);
         Assert.Contains("${SECRET:", definition.ToJson(), StringComparison.Ordinal);
@@ -179,7 +155,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var provider = new FakeSecretProvider();
         provider.Secrets["SystemSecret"] = ToSecureString("system-secret-value");
 
-        await new AgentDefinitionSecretMaterializer().MaterializeAsync(Manifest(definition), definition, provider, CancellationToken.None);
+        await new AgentDefinitionSecretMaterializer().MaterializeAsync(definition, provider, CancellationToken.None, Manifest(definition));
 
         Assert.DoesNotContain("SystemSecret", definition.ToJson(), StringComparison.Ordinal);
         Assert.Contains("${SECRET:", definition.ToJson(), StringComparison.Ordinal);
@@ -192,7 +168,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var provider = new FakeSecretProvider { ReturnNull = true };
 
         await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() =>
-            new AgentDefinitionSecretMaterializer().MaterializeAsync(Manifest(definition), definition, provider, CancellationToken.None));
+            new AgentDefinitionSecretMaterializer().MaterializeAsync(definition, provider, CancellationToken.None, Manifest(definition)));
 
         Assert.Contains("${SECRET:MissingSecret}", definition.ToJson(), StringComparison.Ordinal);
     }
@@ -205,7 +181,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var provider = new FakeSecretProvider();
         provider.Secrets["GithubApiToken"] = ToSecureString(secretValue);
 
-        await new AgentDefinitionSecretMaterializer().MaterializeAsync(Manifest(definition), definition, provider, CancellationToken.None);
+        await new AgentDefinitionSecretMaterializer().MaterializeAsync(definition, provider, CancellationToken.None, Manifest(definition));
 
         Assert.DoesNotContain(secretValue, definition.ToJson(), StringComparison.Ordinal);
     }
@@ -219,10 +195,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         var store = new FakePlatformSecretStore(["ApiKey", "Other"]);
 
         await new AgentDefinitionSecretMaterializer(platformSecretStore: store).MaterializeAsync(
-            Manifest(definition),
-            definition,
-            provider,
-            CancellationToken.None);
+            definition, provider, CancellationToken.None, Manifest(definition));
 
         var request = Assert.Single(provider.Requests);
         Assert.Contains(request.CandidateSecretSources, s => s is CredentialStoreSecretSource { CredentialName: "ApiKey" });
@@ -242,10 +215,7 @@ public sealed class AgentDefinitionSecretMaterializerTests
         provider.Secrets["McpApiKey"] = ToSecureString("mcp-plain-secret");
 
         var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
-            Manifest(definition),
-            definition,
-            provider,
-            CancellationToken.None);
+            definition, provider, CancellationToken.None, Manifest(definition));
 
         var request = Assert.Single(provider.Requests);
         Assert.Equal("McpApiKey", request.SecretName);
@@ -259,6 +229,85 @@ public sealed class AgentDefinitionSecretMaterializerTests
         Assert.True(result.Resolver.TryResolve(token, out var retriever));
         using var secret = await retriever.Secret(CancellationToken.None);
         Assert.Equal("mcp-plain-secret", Phantom.Workspaces.Llm.Secrets.SecureStringMarshal.Use(secret, plain => plain));
+    }
+
+    [Fact]
+    public async Task AgentDefinitionSecretMaterializer_NullManifest_ScansAndRewritesDefinition()
+    {
+        var definition = WithModelSecret();
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
+
+        var result = await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            definition,
+            provider,
+            CancellationToken.None);
+
+        var request = Assert.Single(provider.Requests);
+        Assert.Equal("GithubApiToken", request.SecretName);
+
+        var usage = Assert.Single(new SecretUsageScanner().Scan(result.Definition));
+        Assert.Matches("^[0-9a-f]{32}$", usage.SecretName);
+        Assert.DoesNotContain("GithubApiToken", result.Definition.ToJson(), StringComparison.Ordinal);
+
+        var token = Regex.Match(result.Definition.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
+        Assert.True(result.Resolver.TryResolve(token, out _));
+    }
+
+    [Fact]
+    public async Task AgentDefinitionSecretMaterializer_SessionReopenWithLineage_RecomputesManifestScopeHash_MatchesPriorGrant()
+    {
+        var manifest = Manifest(WithModelSecret());
+        var scanned = WithModelSecret();
+        var usage = Assert.Single(new SecretUsageScanner().Scan(scanned));
+        var expectedManifestIdentityHash = new AgentManifestSecretUseMemoryFactory()
+            .Build(manifest, usage.SecretName, usage.JsonPath)
+            .Single(m => m.Scope == SecretUseScope.ManifestIdentity)
+            .Hash;
+
+        // A manifest-less session definition carrying the origin manifest lineage metadata.
+        var sessionDefinition = WithModelSecret();
+        sessionDefinition.Metadata = new Dictionary<string, object>
+        {
+            [AgentManifestSecretUseMemoryFactory.OriginManifestIdMetadataKey] =
+                "11111111-1111-1111-1111-111111111111",
+            [AgentManifestSecretUseMemoryFactory.OriginManifestContentHashMetadataKey] =
+                AgentManifestSecretUseMemoryFactory.ComputeManifestContentHash(manifest),
+        };
+
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
+
+        await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            sessionDefinition,
+            provider,
+            CancellationToken.None,
+            manifest: null,
+            agentSessionId: "reopened-session");
+
+        var request = Assert.Single(provider.Requests);
+        var manifestIdentityMemory = Assert.Single(
+            request.Memories, m => m.Scope == SecretUseScope.ManifestIdentity);
+        Assert.Equal(expectedManifestIdentityHash, manifestIdentityMemory.Hash);
+    }
+
+    [Fact]
+    public async Task AgentDefinitionSecretMaterializer_ThisSessionGrant_DoesNotMatchOtherSession()
+    {
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
+
+        await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            WithModelSecret(), provider, CancellationToken.None, manifest: null, agentSessionId: "session-A");
+        await new AgentDefinitionSecretMaterializer().MaterializeAsync(
+            WithModelSecret(), provider, CancellationToken.None, manifest: null, agentSessionId: "session-B");
+
+        var sessionAHash = provider.Requests[0].Memories
+            .Single(m => m.Scope == SecretUseScope.SessionIdentity).Hash;
+        var sessionBHash = provider.Requests[1].Memories
+            .Single(m => m.Scope == SecretUseScope.SessionIdentity).Hash;
+
+        Assert.NotEqual(sessionAHash, sessionBHash);
     }
 
     private static AgentDefinition WithMcpKeySecret(string secret = "${SECRET:McpApiKey}") => LoadDefinition($$"""

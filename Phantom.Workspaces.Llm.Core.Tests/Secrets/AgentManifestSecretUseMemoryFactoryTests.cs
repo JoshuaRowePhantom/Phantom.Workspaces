@@ -138,4 +138,86 @@ public sealed class AgentManifestSecretUseMemoryFactoryTests
             Assert.DoesNotContain(secretName, memory.DisplayString);
         }
     }
+
+    [Fact]
+    public void AgentManifestSecretUseMemoryFactory_ManifestAndSessionLineage_BuildsUnionOfScopes()
+    {
+        var lineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(
+            ManifestIdentity: "manifest-id",
+            ManifestContentHash: "content-hash",
+            SessionIdentity: "session-1");
+
+        var memories = new AgentManifestSecretUseMemoryFactory().Build(lineage, "MySecret", "use");
+
+        var scopes = memories.Select(m => m.Scope).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                SecretUseScope.AllUses,
+                SecretUseScope.AnyManifest,
+                SecretUseScope.KeyInAnyManifest,
+                SecretUseScope.ManifestIdentity,
+                SecretUseScope.ManifestContent,
+                SecretUseScope.KeyInManifestContent,
+                SecretUseScope.SessionIdentity,
+                SecretUseScope.KeyInSession,
+                SecretUseScope.AlwaysAsk,
+            },
+            scopes);
+    }
+
+    [Fact]
+    public void AgentManifestSecretUseMemoryFactory_NoManifestLineage_OmitsManifestScopesKeepsSessionScopes()
+    {
+        var lineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(
+            ManifestIdentity: null,
+            ManifestContentHash: null,
+            SessionIdentity: "session-1");
+
+        var memories = new AgentManifestSecretUseMemoryFactory().Build(lineage, "MySecret", "use");
+
+        var scopes = memories.Select(m => m.Scope).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                SecretUseScope.AllUses,
+                SecretUseScope.AnyManifest,
+                SecretUseScope.KeyInAnyManifest,
+                SecretUseScope.SessionIdentity,
+                SecretUseScope.KeyInSession,
+                SecretUseScope.AlwaysAsk,
+            },
+            scopes);
+        Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.ManifestIdentity);
+        Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.ManifestContent);
+        Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.KeyInManifestContent);
+    }
+
+    [Fact]
+    public void AgentManifestSecretUseMemoryFactory_ManifestGrantHonoredFromDerivedSession_NoReprompt()
+    {
+        var factory = new AgentManifestSecretUseMemoryFactory();
+        var manifest = Manifest(EntityId);
+
+        // The manifest launch computes the manifest-scope hashes from the live manifest.
+        var manifestLaunch = factory.Build(manifest, "MySecret", "use");
+        var manifestIdentityHash = manifestLaunch.Single(m => m.Scope == SecretUseScope.ManifestIdentity).Hash;
+        var manifestContentHash = manifestLaunch.Single(m => m.Scope == SecretUseScope.ManifestContent).Hash;
+
+        // A derived, manifest-less session carries the origin manifest's identity + content hash on
+        // its lineage, plus a session id. It must recompute the SAME manifest-scope hashes, so a
+        // manifest-scoped grant matches and the derived session is not re-prompted.
+        var derivedLineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(
+            AgentManifestSecretUseMemoryFactory.ReadStableManifestIdentity(manifest),
+            AgentManifestSecretUseMemoryFactory.ComputeManifestContentHash(manifest),
+            SessionIdentity: "derived-session");
+        var derivedLaunch = factory.Build(derivedLineage, "MySecret", "use");
+
+        Assert.Equal(
+            manifestIdentityHash,
+            derivedLaunch.Single(m => m.Scope == SecretUseScope.ManifestIdentity).Hash);
+        Assert.Equal(
+            manifestContentHash,
+            derivedLaunch.Single(m => m.Scope == SecretUseScope.ManifestContent).Hash);
+    }
 }

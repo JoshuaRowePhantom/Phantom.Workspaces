@@ -25,6 +25,12 @@ public enum SecretUseScope
     /// <summary>Allow this secret name at this specific use path, for a manifest identified by content hash.</summary>
     KeyInManifestContent,
 
+    /// <summary>Allow this secret name for a single session identified by its stable agent-session-id.</summary>
+    SessionIdentity,
+
+    /// <summary>Allow this secret name at this specific use path, for a single session.</summary>
+    KeyInSession,
+
     /// <summary>Never remember; always ask the user afresh.</summary>
     AlwaysAsk,
 }

@@ -23,12 +23,12 @@ public sealed class AgentDefinitionSecretMaterializer
     }
 
     public async Task<MaterializedAgentDefinition> MaterializeAsync(
-        AgentManifest manifest,
         AgentDefinition definition,
         ISecretProvider secretProvider,
-        CancellationToken ct)
+        CancellationToken ct,
+        AgentManifest? manifest = null,
+        string? agentSessionId = null)
     {
-        ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(secretProvider);
 
@@ -38,9 +38,11 @@ public sealed class AgentDefinitionSecretMaterializer
             return new MaterializedAgentDefinition(definition, SecretPlaceholderResolver.Empty);
         }
 
+        var lineage = AgentManifestSecretUseMemoryFactory.CreateLineage(manifest, definition, agentSessionId);
+
         var credentialNames = await this.EnumerateCredentialNamesAsync(ct).ConfigureAwait(false);
         var requests = usages
-            .Select(usage => this.BuildRequest(manifest, usage, credentialNames))
+            .Select(usage => this.BuildRequest(lineage, usage, credentialNames))
             .ToArray();
 
         var result = await secretProvider.RequestSecretsAsync(requests, ct).ConfigureAwait(false);
@@ -97,7 +99,7 @@ public sealed class AgentDefinitionSecretMaterializer
     }
 
     private SecretRequest BuildRequest(
-        AgentManifest manifest,
+        AgentManifestSecretUseMemoryFactory.SecretUseLineage lineage,
         SecretUsage usage,
         IReadOnlyList<string> credentialNames)
     {
@@ -113,7 +115,7 @@ public sealed class AgentDefinitionSecretMaterializer
         return new SecretRequest(
             usage.SecretName,
             usage.JsonPath,
-            this.memoryFactory.Build(manifest, usage.SecretName, usage.JsonPath),
+            this.memoryFactory.Build(lineage, usage.SecretName, usage.JsonPath),
             defaultSource,
             candidateSources);
     }

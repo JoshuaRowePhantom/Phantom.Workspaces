@@ -5,6 +5,7 @@ using System.Collections.Specialized;
 using System.Security;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -281,6 +282,63 @@ public sealed class McpToolIntegrationTests
 
         secure.MakeReadOnly();
         return secure;
+    }
+
+    [Fact]
+    public async Task AgentChatSessionCache_SecretGatedSession_ResolvesSecretOnLaunch()
+    {
+        // #1401: a session (prebuilt AgentDefinition, NO manifest) whose MCP "key" apiKey is a
+        // ${SECRET:...} placeholder must materialize on launch through AgentChatSessionCache — the
+        // inverted gate no longer requires a manifest. No environment variable is set.
+        var previousToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+        try
+        {
+            await using var server = await TestMcpServerProcess.StartAsync();
+
+            var provider = new StubSecretProvider();
+            provider.Secrets["GitHubToken"] = ToSecureString("secret-gated-token");
+
+            await using var cache = new AgentChatSessionCache(new AgentServices
+            {
+                SecretProvider = provider,
+                AgentPersistenceStoreOverride = new InMemoryAgentPersistenceStore(),
+            });
+
+            var agentJson = $$"""
+                {
+                  "kind": "prompt",
+                  "name": "secret-gated-session",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                  "tools": [
+                    {
+                      "kind": "mcp",
+                      "name": "github-secret-gated",
+                      "serverName": "github-secret-gated",
+                      "connection": { "kind": "key", "endpoint": "{{server.BoundUrl}}", "apiKey": "${SECRET:GitHubToken}" }
+                    }
+                  ]
+                }
+                """;
+
+            var request = new AgentChatTurnRequest
+            {
+                AgentDefinitionJson = agentJson,
+                AgentSessionId = "secret-gated-session-1",
+                Messages = [new ChatMessage(ChatRole.User, "hello-secret")],
+            };
+
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            await foreach (var _ in cache.RunTurnAsync(request, timeout.Token))
+            {
+            }
+
+            Assert.True(provider.CallCount > 0, "The secret provider should have been consulted during session launch.");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", previousToken);
+        }
     }
 
     private sealed class StubSecretProvider : ISecretProvider

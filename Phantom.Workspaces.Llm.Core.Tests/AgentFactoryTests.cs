@@ -17,6 +17,43 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 public class AgentFactoryTests
 {
     [Fact]
+    public async Task AgentFactory_CreateAgentChat_SessionDefinitionWithSecret_MaterializesWithoutManifest()
+    {
+        // #1401: a session launch passes a prebuilt AgentDefinition and NO manifest. The inverted
+        // gate must still materialize ${SECRET:...} — request the secret, rewrite to an opaque
+        // handle, and populate the resolver.
+        const string plaintext = "super-secret-token";
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "session-agent",
+          "model": {
+            "id": "gpt-test",
+            "provider": "github-copilot",
+            "connection": { "kind": "key", "apiKey": "${SECRET:GitHubToken}" }
+          }
+        }
+        """) ?? throw new InvalidOperationException("Failed to load definition.");
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = definition,
+            AgentSessionId = "session-1",
+            AgentServices = new AgentServices { SecretProvider = provider, ChatClientOverride = new DeterministicTestChatClient() },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        Assert.Equal(1, provider.CallCount);
+        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
+        Assert.StartsWith("${SECRET:", connection.ApiKey, StringComparison.Ordinal);
+        Assert.NotEqual("${SECRET:GitHubToken}", connection.ApiKey);
+        Assert.DoesNotContain(plaintext, chat.AgentDefinition!.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CreateAgentChatAsync_SecretInManifest_CallsSecretProviderAndKeepsDefinitionTokenized()
     {
         const string plaintext = "super-secret-token";

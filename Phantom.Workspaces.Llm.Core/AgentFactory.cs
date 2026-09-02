@@ -446,6 +446,8 @@ public static class AgentFactory
                 ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
         }
 
+        StampOriginManifestLineage(definition, manifest);
+
         var toolResources = manifest.Resources?.OfType<ToolResource>().ToArray() ?? [];
         if (toolResources.Length == 0)
         {
@@ -478,6 +480,26 @@ public static class AgentFactory
     }
 
     /// <summary>
+    /// Stamps the manifest's stable identity and content hash into
+    /// <see cref="AgentDefinition.Metadata"/> so a later manifest-less session launch (reopen, or a
+    /// sibling session derived from the same manifest) recomputes the same manifest-scope consent
+    /// hashes. Mirrors the <c>Metadata["trust-profile"]</c> pattern; no secrets are touched here.
+    /// </summary>
+    private static void StampOriginManifestLineage(AgentDefinition definition, AgentManifest manifest)
+    {
+        var manifestId = AgentManifestSecretUseMemoryFactory.ReadStableManifestIdentity(manifest);
+        var contentHash = AgentManifestSecretUseMemoryFactory.ComputeManifestContentHash(manifest);
+
+        definition.Metadata ??= new Dictionary<string, object>();
+        if (!string.IsNullOrEmpty(manifestId))
+        {
+            definition.Metadata[AgentManifestSecretUseMemoryFactory.OriginManifestIdMetadataKey] = manifestId;
+        }
+
+        definition.Metadata[AgentManifestSecretUseMemoryFactory.OriginManifestContentHashMetadataKey] = contentHash;
+    }
+
+    /// <summary>
     /// Creates an initialized <see cref="AgentChat"/> session from an agent definition,
     /// including configured tool initialization before returning.
     /// </summary>
@@ -500,12 +522,16 @@ public static class AgentFactory
                 }, ct).ConfigureAwait(false)
             : createAgentChatRequest.AgentDefinition;
 
-        if (agentManifest is not null
-            && requestedAgentDefinition is not null
+        if (requestedAgentDefinition is not null
             && services?.SecretProvider is ISecretProvider secretProvider)
         {
             var materialized = await new AgentDefinitionSecretMaterializer()
-                .MaterializeAsync(agentManifest, requestedAgentDefinition, secretProvider, ct)
+                .MaterializeAsync(
+                    requestedAgentDefinition,
+                    secretProvider,
+                    ct,
+                    agentManifest,
+                    createAgentChatRequest.AgentSessionId)
                 .ConfigureAwait(false);
             requestedAgentDefinition = materialized.Definition;
             services = services with { SecretPlaceholderResolver = materialized.Resolver };

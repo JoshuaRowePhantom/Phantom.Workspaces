@@ -108,6 +108,33 @@ public sealed class SecretStoreEndToEndTests : IDisposable
         Assert.Equal(SecretRequestFailureReason.Other, failure.Reason);
     }
 
+    [Fact]
+    public async Task SecretStoreEndToEnd_ManifestGrantThenSessionReopen_NoReprompt()
+    {
+        var platformStore = CreatePlatformStore();
+        var manifest = LoadManifest();
+
+        // Grant at manifest scope ("All Sessions Using This Manifest") while opening the manifest.
+        var firstDialog = DialogChoosing(SecretUseScope.ManifestIdentity, new CredentialStoreSecretSource(CredentialName));
+        await MaterializeAndCreateClientAsync(manifest, firstDialog, platformStore);
+        Assert.Equal(1, firstDialog.ShowCount);
+
+        // Reopen a derived session: a manifest-less definition carrying the origin-manifest lineage
+        // (round-tripped through AgentDefinitionJson, as a persisted session would be).
+        var derived = await AgentFactory.CreateAgentDefinitionAsync(
+            new CreateAgentDefinitionRequest { AgentManifest = manifest },
+            CancellationToken.None);
+        var reopened = AgentDefinition.FromJson(derived.ToJson())
+            ?? throw new InvalidOperationException("Failed to reload derived definition.");
+
+        var secondDialog = DialogChoosing(SecretUseScope.SessionIdentity, new CredentialStoreSecretSource(CredentialName));
+        var second = await MaterializeDefinitionAndCreateClientAsync(
+            reopened, secondDialog, platformStore, agentSessionId: "reopened-session");
+
+        Assert.Equal(0, secondDialog.ShowCount);
+        AssertClientReceivedApiToken(second.ClientResult, SecretValue);
+    }
+
     private async Task<EndToEndResult> MaterializeAndCreateClientAsync(
         AgentManifest manifest,
         ScriptedDialogHost dialog,
@@ -120,7 +147,28 @@ public sealed class SecretStoreEndToEndTests : IDisposable
             CancellationToken.None);
 
         var materialized = await new AgentDefinitionSecretMaterializer(platformSecretStore: platformStore)
-            .MaterializeAsync(manifest, definition, secretProvider, CancellationToken.None);
+            .MaterializeAsync(definition, secretProvider, CancellationToken.None, manifest);
+        var materializedDefinitionJson = materialized.Definition.ToJson();
+
+        var clientResult = await AgentFactory.CreateChatClientAsync(
+            materialized.Definition,
+            new AgentServices { SecretPlaceholderResolver = materialized.Resolver },
+            cancellationToken: CancellationToken.None);
+
+        return new EndToEndResult(clientResult, materializedDefinitionJson, materialized.Definition.ToJson());
+    }
+
+    private async Task<EndToEndResult> MaterializeDefinitionAndCreateClientAsync(
+        AgentDefinition definition,
+        ScriptedDialogHost dialog,
+        FakePlatformSecretStore platformStore,
+        string? agentSessionId)
+    {
+        var allowedStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration { Path = this.storePath });
+        var secretProvider = new SecretProvider(allowedStore, platformStore, dialog);
+
+        var materialized = await new AgentDefinitionSecretMaterializer(platformSecretStore: platformStore)
+            .MaterializeAsync(definition, secretProvider, CancellationToken.None, manifest: null, agentSessionId);
         var materializedDefinitionJson = materialized.Definition.ToJson();
 
         var clientResult = await AgentFactory.CreateChatClientAsync(
