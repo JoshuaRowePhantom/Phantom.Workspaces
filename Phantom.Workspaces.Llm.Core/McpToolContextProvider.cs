@@ -135,6 +135,11 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     private static IClientTransport CreateStdioTransport(Uri endpointUri, string? serverName)
     {
+        return new StdioClientTransport(BuildStdioTransportOptions(endpointUri, serverName));
+    }
+
+    internal static StdioClientTransportOptions BuildStdioTransportOptions(Uri endpointUri, string? serverName)
+    {
         var query = ParseUriQuery(endpointUri.Query);
         var command = GetFirstNonEmptyValue(query, "command")
             ?? (!string.IsNullOrWhiteSpace(endpointUri.Host) ? endpointUri.Host : null);
@@ -166,7 +171,28 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             options.WorkingDirectory = workingDirectory;
         }
 
-        return new StdioClientTransport(options);
+        var envValues = GetAllValues(query, "env");
+        if (envValues.Count > 0)
+        {
+            var environment = new Dictionary<string, string?>(StringComparer.Ordinal);
+            foreach (var entry in envValues)
+            {
+                var separatorIndex = entry.IndexOf('=');
+                if (separatorIndex <= 0)
+                {
+                    throw new InvalidOperationException(
+                        $"MCP stdio env entry must be in NAME=value form: '{entry}'.");
+                }
+
+                var name = entry[..separatorIndex];
+                var value = entry[(separatorIndex + 1)..];
+                environment[name] = value;
+            }
+
+            options.EnvironmentVariables = environment;
+        }
+
+        return options;
     }
 
     private static IClientTransport CreateHttpTransport(

@@ -177,4 +177,50 @@ public sealed class AgentDefinitionMcpToolTests
         using var document = JsonDocument.Parse(json);
         return document.RootElement.Clone();
     }
+
+    [Fact]
+    public void CreateStdioTransport_WithEnvParameters_SetsEnvironmentVariables()
+    {
+        var endpoint = new Uri("stdio://?command=my-server&env=KUSTO_SERVICE_URI%3Dhttps%3A%2F%2Fcluster.kusto.windows.net");
+
+        var options = Phantom.Workspaces.Llm.McpToolContextProvider.BuildStdioTransportOptions(endpoint, "kusto");
+
+        Assert.NotNull(options.EnvironmentVariables);
+        Assert.Equal(
+            "https://cluster.kusto.windows.net",
+            options.EnvironmentVariables!["KUSTO_SERVICE_URI"]);
+    }
+
+    [Fact]
+    public void CreateStdioTransport_WithMultipleEnvParameters_SetsAllVariables()
+    {
+        var endpoint = new Uri("stdio://?command=my-server&env=FOO%3Dbar&env=BAZ%3Dqux%3Dwith%3Dequals");
+
+        var options = Phantom.Workspaces.Llm.McpToolContextProvider.BuildStdioTransportOptions(endpoint, "server");
+
+        Assert.NotNull(options.EnvironmentVariables);
+        Assert.Equal("bar", options.EnvironmentVariables!["FOO"]);
+        Assert.Equal("qux=with=equals", options.EnvironmentVariables!["BAZ"]);
+    }
+
+    [Fact]
+    public void CreateStdioTransport_WithoutEnvParameters_LeavesEnvironmentUnset()
+    {
+        var endpoint = new Uri("stdio://?command=my-server");
+
+        var options = Phantom.Workspaces.Llm.McpToolContextProvider.BuildStdioTransportOptions(endpoint, "server");
+
+        Assert.Null(options.EnvironmentVariables);
+    }
+
+    [Fact]
+    public void CreateStdioTransport_WithMalformedEnvEntry_Throws()
+    {
+        var endpoint = new Uri("stdio://?command=my-server&env=NO_SEPARATOR_HERE");
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => Phantom.Workspaces.Llm.McpToolContextProvider.BuildStdioTransportOptions(endpoint, "server"));
+
+        Assert.Contains("NAME=value", exception.Message);
+    }
 }
