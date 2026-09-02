@@ -1,6 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-session.json",
-  "description": "Schema for agent session entities that track conversational state and runtime context.",
+  "description": "Schema for agent session entities that track conversational state and runtime context. When a session is resumed, MCP-server tool resources are re-resolved against the resuming executor's machine/user context (the search prefixes machine profile, '${USER}/mcp-servers', then 'defaults/mcp-servers'), so the same session may bind to a different mcp-server entity on a different machine.",
   "allOf": [
     {
       "$ref": "entity.json"

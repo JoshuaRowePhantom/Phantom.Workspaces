@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://phantom-workspaces/schemas/mcp-server.json",
   "title": "MCP Server",
-  "description": "A registration for a Model Context Protocol (MCP) server. MCP server entities are referenced by name from agent manifest tool resources (type 'mcp-server-entity') and resolved into MCP tools at runtime. Storing servers as entities lets different machines and users register different servers (for example, machine-specific stdio commands) under the same logical name.",
+  "description": "A registration for a Model Context Protocol (MCP) server. MCP server entities are referenced from agent manifest tool resources (type 'mcp-server-entity') and resolved into MCP tools at runtime. Resolution keys off the mcp-server entity's name (its final name component under a searched prefix), not the 'serverName' field: the tool resource 'name' is appended to each search prefix (machine profile, then '${USER}/mcp-servers', then 'defaults/mcp-servers') and the first existing entity with an 'mcp-server' property wins. Storing servers as entities lets different machines and users register different servers (for example, machine-specific stdio commands) under the same logical name.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
     "serverName": {
       "type": "string",
       "minLength": 1,
-      "description": "The logical name of the MCP server (e.g., 'github'). Tool resources reference this name to resolve the server."
+      "description": "The logical name of the MCP server (e.g., 'github'). Used for discovery listings and to name the resulting MCP tool; it is NOT the manifest-resolution key. Manifest tool resources resolve an mcp-server entity by its entity name under a searched prefix, not by this field."
     },
     "serverDescription": {
       "type": "string",
@@ -28,7 +28,7 @@
       "required": [
         "kind"
       ],
-      "description": "MCP server connection. Discriminated by 'kind'. Supported kinds: Anonymous, key, oauth.",
+      "description": "MCP server connection. Discriminated by 'kind'. Only the Anonymous, key, and oauth kinds are supported at runtime; any other kind is rejected with an \"unsupported connection type\" error.",
       "oneOf": [
         {
           "title": "Anonymous",
@@ -78,7 +78,7 @@
             "apiKey": {
               "type": "string",
               "minLength": 1,
-              "description": "Bearer token. Supports ${ENV_VAR} and ${SECRET:Name}. Special-case ${GITHUB_TOKEN} falls back to gh auth token."
+              "description": "Bearer token. '${ENV_VAR}' reads an environment variable and a literal value is used as-is. '${SECRET:Name}' is resolved via the secret store (rewritten to an opaque secret handle during agent-definition materialization, which triggers the secret-consent dialog). Special-case '${GITHUB_TOKEN}' falls back to gh auth token."
             }
           },
           "examples": [
@@ -107,15 +107,15 @@
             },
             "clientId": {
               "type": "string",
-              "description": "Optional. Omit to use dynamic client registration (RFC 7591). Supports ${ENV_VAR}/${SECRET:Name}."
+              "description": "Optional OAuth client id. Omit to use dynamic client registration (RFC 7591). '${ENV_VAR}' reads an environment variable, a literal value is used as-is, and '${SECRET:Name}' is resolved via the secret-aware resolver (secret store)."
             },
             "clientSecret": {
               "type": "string",
-              "description": "Optional. Omit for a public client (PKCE). Supports ${SECRET:Name}."
+              "description": "Optional OAuth client secret. Omit for a public client (PKCE). '${ENV_VAR}' reads an environment variable, a literal value is used as-is, and '${SECRET:Name}' is resolved via the secret-aware resolver (secret store)."
             },
             "tokenUrl": {
               "type": "string",
-              "description": "Optional explicit token endpoint; normally discovered automatically."
+              "description": "Optional explicit OAuth token endpoint; normally discovered automatically from 'endpoint'."
             },
             "scopes": {
               "type": "array",
@@ -123,6 +123,10 @@
                 "type": "string"
               },
               "description": "OAuth scopes to request."
+            },
+            "authenticationMode": {
+              "type": "string",
+              "description": "Optional OAuth authentication mode. Defaults to 'system'."
             }
           },
           "examples": [
