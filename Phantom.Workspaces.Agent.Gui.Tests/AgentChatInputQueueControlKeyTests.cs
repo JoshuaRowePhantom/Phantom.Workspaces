@@ -312,6 +312,86 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(newText!.Length, newCaretIndex);
     }
 
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_WithTextBeforeSlashToken_PreservesPrecedingText()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.InputText = "hello /wo";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "hello /wo".Length,
+            out var newText,
+            out _);
+
+        Assert.Equal("hello /working-directory", newText);
+        Assert.Equal("hello /working-directory", composer.InputText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_ReplacesOnlySlashToken_NotEntireInput()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        // Text both before the slash token and after the caret must be preserved.
+        composer.InputText = "hello /wo world";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "hello /wo".Length,
+            out var newText,
+            out _);
+
+        Assert.Equal("hello /working-directory world", newText);
+        Assert.NotEqual("/working-directory", newText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_PlacesCaretAfterCompletedToken()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.InputText = "hello /wo world";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "hello /wo".Length,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.NotNull(newText);
+        Assert.Equal("hello /working-directory".Length, newCaretIndex);
+        Assert.Equal("hello /working-directory", newText![..newCaretIndex]);
+    }
+
     [Fact]
     public async Task HandleInputKey_Down_WhenCompletionsVisible_SelectsNext()
     {

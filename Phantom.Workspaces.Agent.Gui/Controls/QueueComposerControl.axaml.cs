@@ -62,6 +62,7 @@ public partial class QueueComposerControl : UserControl
         }
 
         var caretLine = 0;
+        var caretIndex = 0;
         TextBox? textBox = null;
         if (sender is TextBox tb)
         {
@@ -83,6 +84,7 @@ public partial class QueueComposerControl : UserControl
 
             var text = tb.Text ?? string.Empty;
             var clampedCaret = Math.Min(tb.CaretIndex, text.Length);
+            caretIndex = clampedCaret;
             foreach (var c in text.AsSpan(0, clampedCaret))
             {
                 if (c == '\n')
@@ -118,7 +120,7 @@ public partial class QueueComposerControl : UserControl
             }
         }
 
-        if (HandleInputKey(vm, e.Key, e.KeyModifiers, caretLine, out var newText, out var newCaretIndex))
+        if (HandleInputKey(vm, e.Key, e.KeyModifiers, caretLine, caretIndex, out var newText, out var newCaretIndex))
         {
             if (newText is not null && textBox is not null)
             {
@@ -176,6 +178,23 @@ public partial class QueueComposerControl : UserControl
         int caretLine,
         out string? newText,
         out int newCaretIndex)
+        => HandleInputKey(
+            vm,
+            key,
+            keyModifiers,
+            caretLine,
+            (vm.InputText ?? string.Empty).Length,
+            out newText,
+            out newCaretIndex);
+
+    internal static bool HandleInputKey(
+        QueueComposerViewModel vm,
+        Key key,
+        KeyModifiers keyModifiers,
+        int caretLine,
+        int caretIndex,
+        out string? newText,
+        out int newCaretIndex)
     {
         newText = null;
         newCaretIndex = 0;
@@ -212,8 +231,24 @@ public partial class QueueComposerControl : UserControl
                     var accepted = vm.Completions.Accept();
                     if (accepted is not null)
                     {
-                        newText = "/" + accepted;
-                        newCaretIndex = newText.Length;
+                        var currentText = vm.InputText ?? string.Empty;
+                        var caret = Math.Clamp(caretIndex, 0, currentText.Length);
+                        var inserted = "/" + accepted;
+
+                        // Find the '/' that begins the slash token at or immediately before
+                        // the caret so only that token is replaced, not the whole input.
+                        var tokenStart = currentText.Length == 0
+                            ? -1
+                            : currentText.LastIndexOf('/', Math.Max(0, caret - 1));
+
+                        // No slash token found: insert the completion at the caret,
+                        // preserving all surrounding text.
+                        var replaceStart = tokenStart < 0 ? caret : tokenStart;
+                        var before = currentText[..replaceStart];
+                        var after = currentText[caret..];
+
+                        newText = before + inserted + after;
+                        newCaretIndex = before.Length + inserted.Length;
                         vm.InputText = newText;
                     }
                 }
