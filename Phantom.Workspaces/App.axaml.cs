@@ -303,9 +303,15 @@ public partial class App : Application
 
             var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
             var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
+
+            // #1385: register the interactive MCP OAuth redirect handler (system browser + loopback
+            // listener, consent-gated) into the #1382 McpOAuthOptions.RedirectDelegateProvider seam so
+            // the MCP transport factory drives real interactive OAuth in the GUI host. Headless hosts
+            // (CLI / Web.Server / tests) do not wire this and keep the failing default.
+            var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                new AgentServices { SecretProvider = secretProvider },
+                new AgentServices { SecretProvider = secretProvider, McpOAuthOptions = mcpOAuthOptions },
                 foregroundScheduler);
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(agentChatFactory),

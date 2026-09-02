@@ -1,0 +1,220 @@
+using System.Net;
+using System.Text;
+using ModelContextProtocol.Authentication;
+using Phantom.Workspaces.Llm.Secrets;
+
+namespace Phantom.Workspaces.Services.Mcp;
+
+/// <summary>
+/// Host implementation of the MCP SDK's interactive OAuth <see cref="AuthorizationRedirectDelegate"/>
+/// (sub-item #1385). It gates the first interactive authorization of each MCP server behind a user
+/// consent prompt (reusing <see cref="ISecretProvider"/>), opens the system browser at the
+/// authorization URL, captures the authorization-code redirect on a loopback
+/// <see cref="HttpListener"/>, and returns the captured redirect URI. The delegate registered into the
+/// #1382 <c>McpOAuthOptions.RedirectDelegateProvider</c> seam adapts that URI into the authorization
+/// <c>code</c> string the SDK expects.
+/// </summary>
+/// <remarks>
+/// Consent is remembered per MCP server for the process session, so silent token refreshes do not
+/// re-prompt the user. Only the GUI/desktop host wires this handler; headless hosts keep the failing
+/// "interactive OAuth is not configured" default from #1382.
+/// </remarks>
+public sealed class McpOAuthRedirectHandler
+{
+    /// <summary>Overall time the loopback listener waits for the browser redirect before failing.</summary>
+    internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
+
+    private const string CloseWindowHtml =
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Sign-in complete</title></head>" +
+        "<body><p>You can close this window and return to Phantom.Workspaces.</p></body></html>";
+
+    private readonly ISystemBrowserLauncher browserLauncher;
+    private readonly ISecretProvider consentProvider;
+    private readonly TimeSpan timeout;
+    private readonly object gate = new();
+    private readonly HashSet<string> consentedServers = new(StringComparer.OrdinalIgnoreCase);
+
+    public McpOAuthRedirectHandler(ISystemBrowserLauncher browserLauncher, ISecretProvider consentProvider)
+        : this(browserLauncher, consentProvider, DefaultTimeout)
+    {
+    }
+
+    internal McpOAuthRedirectHandler(
+        ISystemBrowserLauncher browserLauncher,
+        ISecretProvider consentProvider,
+        TimeSpan timeout)
+    {
+        this.browserLauncher = browserLauncher ?? throw new ArgumentNullException(nameof(browserLauncher));
+        this.consentProvider = consentProvider ?? throw new ArgumentNullException(nameof(consentProvider));
+        this.timeout = timeout;
+    }
+
+    /// <summary>
+    /// Factory matching the <c>Func&lt;string, AuthorizationRedirectDelegate&gt;</c> shape of
+    /// <c>McpOAuthOptions.RedirectDelegateProvider</c>. The returned delegate runs the interactive flow
+    /// and yields the authorization <c>code</c> the SDK consumes.
+    /// </summary>
+    public AuthorizationRedirectDelegate CreateRedirectDelegate(string serverName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
+        return async (authorizationUri, redirectUri, cancellationToken) =>
+        {
+            var captured = await this.HandleAsync(serverName, authorizationUri, redirectUri, cancellationToken)
+                .ConfigureAwait(false);
+            return GetQueryValue(captured, "code");
+        };
+    }
+
+    /// <summary>
+    /// Runs the interactive authorization flow and returns the full loopback redirect URI (its query
+    /// carries <c>code</c>+<c>state</c>). Throws when consent is declined, when the redirect carries an
+    /// <c>error</c>, or when the wait is cancelled or times out.
+    /// </summary>
+    public async Task<Uri> HandleAsync(
+        string serverName,
+        Uri authorizationUri,
+        Uri redirectUri,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
+        ArgumentNullException.ThrowIfNull(authorizationUri);
+        ArgumentNullException.ThrowIfNull(redirectUri);
+
+        await this.EnsureConsentAsync(serverName, cancellationToken).ConfigureAwait(false);
+
+        using var listener = new HttpListener();
+        listener.Prefixes.Add(NormalizeLoopbackPrefix(redirectUri));
+        listener.Start();
+        try
+        {
+            this.browserLauncher.Open(authorizationUri);
+
+            using var timeoutSource = new CancellationTokenSource();
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, timeoutSource.Token);
+            if (this.timeout != Timeout.InfiniteTimeSpan)
+            {
+                timeoutSource.CancelAfter(this.timeout);
+            }
+
+            HttpListenerContext context;
+            try
+            {
+                context = await listener.GetContextAsync().WaitAsync(linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException(
+                        $"MCP OAuth sign-in for server '{serverName}' was cancelled.", cancellationToken);
+                }
+
+                throw new TimeoutException(
+                    $"Timed out waiting for the OAuth redirect from MCP server '{serverName}'.");
+            }
+
+            var requestUri = context.Request.Url
+                ?? throw new InvalidOperationException(
+                    $"MCP OAuth redirect for server '{serverName}' did not include a request URI.");
+
+            await WriteClosePageAsync(context.Response).ConfigureAwait(false);
+
+            var error = GetQueryValue(requestUri, "error");
+            if (!string.IsNullOrEmpty(error))
+            {
+                throw new InvalidOperationException(
+                    $"MCP OAuth authorization failed for server '{serverName}': {error}.");
+            }
+
+            return requestUri;
+        }
+        finally
+        {
+            if (listener.IsListening)
+            {
+                listener.Stop();
+            }
+        }
+    }
+
+    private async Task EnsureConsentAsync(string serverName, CancellationToken cancellationToken)
+    {
+        lock (this.gate)
+        {
+            if (this.consentedServers.Contains(serverName))
+            {
+                return;
+            }
+        }
+
+        var request = new SecretRequest(
+            SecretName: $"McpOAuth:{serverName}",
+            UseDisplayString: $"Interactive OAuth sign-in for MCP server '{serverName}'",
+            Memories: [],
+            DefaultSecretSource: null,
+            CandidateSecretSources: []);
+
+        var result = await this.consentProvider
+            .RequestSecretsAsync([request], cancellationToken)
+            .ConfigureAwait(false);
+
+        if (result is null)
+        {
+            throw new OperationCanceledException("User declined MCP OAuth sign-in.");
+        }
+
+        lock (this.gate)
+        {
+            this.consentedServers.Add(serverName);
+        }
+    }
+
+    /// <summary>
+    /// Derives the loopback listener prefix (<c>http://127.0.0.1:&lt;port&gt;/</c>) from
+    /// <paramref name="redirectUri"/>. HttpListener requires the host/port authority form and a
+    /// trailing slash.
+    /// </summary>
+    internal static string NormalizeLoopbackPrefix(Uri redirectUri)
+    {
+        ArgumentNullException.ThrowIfNull(redirectUri);
+        var builder = new UriBuilder("http", "127.0.0.1", redirectUri.Port);
+        var prefix = builder.Uri.GetLeftPart(UriPartial.Authority);
+        return prefix.EndsWith('/') ? prefix : prefix + "/";
+    }
+
+    private static async Task WriteClosePageAsync(HttpListenerResponse response)
+    {
+        var payload = Encoding.UTF8.GetBytes(CloseWindowHtml);
+        response.StatusCode = (int)HttpStatusCode.OK;
+        response.ContentType = "text/html; charset=utf-8";
+        response.ContentLength64 = payload.Length;
+        await response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
+        response.OutputStream.Close();
+        response.Close();
+    }
+
+    private static string? GetQueryValue(Uri uri, string key)
+    {
+        var query = uri.Query;
+        if (string.IsNullOrEmpty(query))
+        {
+            return null;
+        }
+
+        foreach (var segment in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var separatorIndex = segment.IndexOf('=');
+            var name = separatorIndex >= 0 ? segment[..separatorIndex] : segment;
+            if (!string.Equals(Uri.UnescapeDataString(name), key, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = separatorIndex >= 0 ? segment[(separatorIndex + 1)..] : string.Empty;
+            return Uri.UnescapeDataString(value);
+        }
+
+        return null;
+    }
+}
