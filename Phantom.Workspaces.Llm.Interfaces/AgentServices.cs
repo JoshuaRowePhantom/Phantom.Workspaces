@@ -80,6 +80,18 @@ public sealed record AgentServices : IServiceProvider
     public object? SecretPlaceholderResolver { get; init; }
 
     /// <summary>
+    /// Optional MCP OAuth seam bundle (redirect-delegate provider, optional redirect URI, optional
+    /// token-cache provider). Typed as <see langword="object"/> for the same layering reason as
+    /// <see cref="SecretProvider"/> — <c>Phantom.Workspaces.Llm.Interfaces</c> must not reference the
+    /// MCP SDK or <c>Phantom.Workspaces.Llm.Core</c>; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Mcp.McpOAuthOptions</c>. When null, the MCP transport factory uses
+    /// its safe default (a redirect delegate that throws a clear "interactive OAuth not configured"
+    /// error and a null token cache so the SDK uses its in-memory cache). Sub-items #1385 (interactive
+    /// redirect delegate) and #1384 (persistent token cache) populate this seam.
+    /// </summary>
+    public object? McpOAuthOptions { get; init; }
+
+    /// <summary>
     /// Optional Copilot SDK client factory. Typed as object to avoid a reverse project reference
     /// from Phantom.Workspaces.Llm.Interfaces to Phantom.Workspaces.Llm.Core; consuming code casts
     /// to <c>ICopilotClientFactory</c>.

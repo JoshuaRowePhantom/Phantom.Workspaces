@@ -1476,6 +1476,38 @@ public static class AgentFactory
         return trimmed;
     }
 
+    /// <summary>
+    /// Resolves an optional MCP credential value (e.g. an OAuth <c>clientId</c> or <c>clientSecret</c>)
+    /// through the same mechanisms used for API keys: a <c>${SECRET:&lt;handle&gt;}</c> token is
+    /// materialized via <see cref="ISecretPlaceholderResolver"/> and bounded with
+    /// <see cref="SecureStringMarshal.Use{T}(System.Security.SecureString, Func{string, T})"/> to
+    /// minimize plaintext lifetime; otherwise the value flows through
+    /// <see cref="ResolveApiKeyAsync"/> for <c>${ENV}</c>/<c>${GITHUB_TOKEN}</c>/literal handling.
+    /// Unlike <see cref="ResolveApiKeyAsync"/>, a null/blank input returns <see langword="null"/>
+    /// rather than throwing, because these OAuth fields are optional (null clientId enables dynamic
+    /// registration; null clientSecret enables a public client + PKCE).
+    /// </summary>
+    internal static async Task<string?> ResolveOptionalSecretOrEnvAsync(
+        string? value,
+        AgentServices? services,
+        string? serverName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (services?.SecretPlaceholderResolver is ISecretPlaceholderResolver secretResolver
+            && secretResolver.TryResolve(value, out var retriever))
+        {
+            using var secure = await retriever.Secret(cancellationToken).ConfigureAwait(false);
+            return SecureStringMarshal.Use(secure, static plain => plain);
+        }
+
+        return await ResolveApiKeyAsync(value, serverName, cancellationToken).ConfigureAwait(false);
+    }
+
     internal static string ResolveApiKey(
         string? apiKeyValue,
         string? serverName)
