@@ -1029,6 +1029,23 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
+    /// <summary>
+    /// Synchronously resolves a registered sub-agent by its session id from the authoritative
+    /// <see cref="subAgentTableMap"/>. The map is populated under <see cref="subAgentsLock"/> the
+    /// instant a sub-agent is registered (via <see cref="ISubAgentTable.Add"/> or lazy restore),
+    /// whereas the <see cref="SubAgents"/> observable collection is filled asynchronously on the
+    /// foreground scheduler and can lag under load. Resolving through the map closes a race
+    /// (issue #1386) where a just-registered or stop-with-disposed session was momentarily absent
+    /// from the observable collection and therefore reported "not found".
+    /// </summary>
+    internal SubAgent? TryGetRegisteredSubAgent(string sessionId)
+    {
+        lock (this.subAgentsLock)
+        {
+            return this.subAgentTableMap.TryGetValue(sessionId, out var subAgent) ? subAgent : null;
+        }
+    }
+
     /// <inheritdoc/>
     public async Task<ISubAgentChat> GetOrCreateAsync(
         string agentId,

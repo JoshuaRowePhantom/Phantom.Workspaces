@@ -99,30 +99,37 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                 return lease.AgentChat;
         }
 
+        // Resolve via the authoritative sub-agent table map first (issue #1386). It is populated
+        // synchronously when a sub-agent is registered, whereas the SubAgents observable collection
+        // is filled asynchronously on the foreground scheduler and can lag under load, intermittently
+        // making a just-registered (or stop-with-disposed) session appear "not found".
+        if (ParentChat.TryGetRegisteredSubAgent(sessionId) is { } registeredSubAgent)
+        {
+            var lease = await registeredSubAgent.AcquireLeaseAsync(cancellationToken);
+
+            RunningAgentChatLease? duplicateLease = null;
+            AgentChat? existingChat = null;
+            lock (_leasesLock)
+            {
+                if (!_leases.TryAdd(id, lease))
+                {
+                    duplicateLease = lease;
+                    existingChat = _leases[id].AgentChat;
+                }
+            }
+
+            if (duplicateLease is not null)
+            {
+                await duplicateLease.DisposeAsync();
+                return existingChat;
+            }
+            return lease.AgentChat;
+        }
+
+        // Fallback: directly-added AgentChat children are present only in the SubAgents observable
+        // collection (they are not tracked in the sub-agent table map), so scan for those.
         foreach (var subAgent in ParentChat.SubAgents)
         {
-            if (subAgent is SubAgent sa && sa.SessionId.Value == sessionId)
-            {
-                var lease = await sa.AcquireLeaseAsync(cancellationToken);
-                
-                RunningAgentChatLease? duplicateLease = null;
-                AgentChat? existingChat = null;
-                lock (_leasesLock)
-                {
-                    if (!_leases.TryAdd(id, lease))
-                    {
-                        duplicateLease = lease;
-                        existingChat = _leases[id].AgentChat;
-                    }
-                }
-
-                if (duplicateLease is not null)
-                {
-                    await duplicateLease.DisposeAsync();
-                    return existingChat;
-                }
-                return lease.AgentChat;
-            }
             if (subAgent is AgentChat ac && ac.AgentSessionId == sessionId)
                 return ac;
         }
@@ -131,15 +138,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
     }
 
     private SubAgent? TryFindSubAgent(string sessionId)
-    {
-        foreach (var subAgent in ParentChat.SubAgents)
-        {
-            if (subAgent is SubAgent sa && sa.SessionId.Value == sessionId)
-                return sa;
-        }
-
-        return null;
-    }
+        => ParentChat.TryGetRegisteredSubAgent(sessionId);
 
     // ── Shared helpers ──────────────────────────────────────────────────────────
 

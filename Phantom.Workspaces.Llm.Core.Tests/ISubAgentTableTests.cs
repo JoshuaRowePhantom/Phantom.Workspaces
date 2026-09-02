@@ -164,6 +164,38 @@ public sealed class ISubAgentTableTests
     }
 
     [Fact]
+    public async Task TryGetRegisteredSubAgent_ResolvesBeforeObservableCollectionPopulated()
+    {
+        // Regression for issue #1386: the sub-agent table map is populated synchronously by Add,
+        // whereas the SubAgents observable collection is filled asynchronously on the foreground
+        // scheduler. Session resolution must consult the map so a just-registered (or
+        // stop-with-disposed) session is never momentarily reported "not found" while the
+        // observable Add is still pending.
+        var scheduler = new CapturingTaskScheduler();
+        await using var parent = CreateParentChat(foregroundScheduler: scheduler);
+        await using var child = CreateChildChat();
+
+        // Drain initialization tasks so only the pending sub-agent Add remains observable-side.
+        scheduler.Drain();
+
+        var subAgent = await ((ISubAgentTable)parent).Add(child);
+
+        // The observable collection has not been drained, so it is still empty…
+        Assert.Empty(parent.SubAgents);
+
+        // …but the synchronous map-based lookup already resolves the sub-agent.
+        Assert.Same(subAgent, parent.TryGetRegisteredSubAgent(child.AgentSessionId));
+    }
+
+    [Fact]
+    public async Task TryGetRegisteredSubAgent_UnknownSessionId_ReturnsNull()
+    {
+        await using var parent = CreateParentChat();
+
+        Assert.Null(parent.TryGetRegisteredSubAgent("does-not-exist"));
+    }
+
+    [Fact]
     public async Task Add_AppendsToSubAgentsCollection()
     {
         var scheduler = new CapturingTaskScheduler();
