@@ -19,7 +19,8 @@ public sealed class ApplicationServices
         ISecretProvider? secretProvider = null,
         ICredentialPicker? credentialPicker = null,
         IAllowedSecretsStore? allowedSecretsStore = null,
-        IPlatformSecretStore? platformSecretStore = null)
+        IPlatformSecretStore? platformSecretStore = null,
+        object? mcpOAuthOptions = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -40,6 +41,7 @@ public sealed class ApplicationServices
         this.CredentialPicker = credentialPicker;
         this.AllowedSecretsStore = allowedSecretsStore;
         this.PlatformSecretStore = platformSecretStore;
+        this.McpOAuthOptions = mcpOAuthOptions;
     }
 
     internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
@@ -105,6 +107,16 @@ public sealed class ApplicationServices
 
     /// <summary>The process-wide platform credential store.</summary>
     public IPlatformSecretStore PlatformSecretStore { get; }
+
+    /// <summary>
+    /// The single process-wide MCP OAuth options bundle (interactive redirect handler + loopback
+    /// listener + token cache), built once by <c>App.axaml.cs</c> via <c>McpOAuthComposition</c> and
+    /// threaded to every GUI session-launch path through the shared <see cref="AgentServicesComposition"/>
+    /// so interactive MCP OAuth works on session launch (issue #1402). Typed as <see langword="object"/>
+    /// to match <c>AgentServices.McpOAuthOptions</c> and avoid a Core dependency. Null in headless
+    /// hosts (CLI / Web.Server / tests), which intentionally keep the failing default.
+    /// </summary>
+    public object? McpOAuthOptions { get; }
 
     /// <summary>
     /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>

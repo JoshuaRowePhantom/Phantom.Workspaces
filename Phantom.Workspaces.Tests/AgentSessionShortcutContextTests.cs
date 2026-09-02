@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -9,6 +10,9 @@ using Avalonia.Headless.XUnit;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -292,5 +296,89 @@ public sealed class AgentSessionShortcutContextTests
         Assert.NotNull(displayName);
         Assert.Contains(quotedDisplayName, displayName!);
         Assert.Contains("PC\"WITH\"QUOTES", displayName!);
+    }
+
+    // Issue #1402 / #1403: the session-launch AgentServices is now produced by the single
+    // AgentServicesComposition root, which threads the process-wide McpOAuthOptions (and
+    // SecretProvider) from ApplicationServices. These helpers/tests prove the session path carries
+    // the same instances the app-level path does, so interactive MCP OAuth is wired on launch.
+    private static ApplicationServices CreateApplicationServicesWithMcpOAuthOptions(object mcpOAuthOptions)
+        => new(
+            MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+            new AgentPersistenceStoreCache(),
+            credentialPicker: new NullCredentialPicker(),
+            allowedSecretsStore: new AllowedSecretsStore(new AllowedSecretsStoreConfiguration()),
+            platformSecretStore: new NullPlatformSecretStore(),
+            mcpOAuthOptions: mcpOAuthOptions);
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ApplicationServices_McpOAuthOptions_ExposesInjectedInstance()
+    {
+        var sentinel = new object();
+        var applicationServices = CreateApplicationServicesWithMcpOAuthOptions(sentinel);
+
+        Assert.Same(sentinel, applicationServices.McpOAuthOptions);
+        await Task.CompletedTask;
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_CreateAgentServices_ThreadsMcpOAuthOptions()
+    {
+        var sentinel = new object();
+        var applicationServices = CreateApplicationServicesWithMcpOAuthOptions(sentinel);
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
+            applicationServices: applicationServices);
+        await viewModel.InitializeAsync();
+
+        var shortcutContext = new AgentSessionShortcutContext();
+        var services = await shortcutContext.CreateAgentServicesAsync(viewModel);
+
+        Assert.NotNull(services.McpOAuthOptions);
+        Assert.Same(sentinel, services.McpOAuthOptions);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_CreateAgentServices_DelegatesToCompositionRoot()
+    {
+        var sentinel = new object();
+        var applicationServices = CreateApplicationServicesWithMcpOAuthOptions(sentinel);
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(
+            applicationServices: applicationServices);
+        await viewModel.InitializeAsync();
+
+        var shortcutContext = new AgentSessionShortcutContext();
+        var services = await shortcutContext.CreateAgentServicesAsync(viewModel);
+
+        // Same process-wide instances as the app-level path (both flow through
+        // AgentServicesComposition.ComposeHostServices), not a hand-assembled bundle.
+        Assert.Same(applicationServices.McpOAuthOptions, services.McpOAuthOptions);
+        Assert.Same(applicationServices.SecretProvider, services.SecretProvider);
+
+        // The full composition-root bundle is present (toolset factory, MCP tool-resource factory,
+        // account-upsert service, current-session context all set).
+        Assert.NotNull(services.ToolsetFactory);
+        Assert.NotNull(services.ToolResourceFactory);
+        Assert.NotNull(services.AccountUpsertService);
+        Assert.NotNull(services.CurrentSessionContext);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task AgentSessionShortcutContext_DoesNotConstructPersistenceStoreOrToolResourceFactory()
+    {
+        // The heavy-lifting moved to the factories (issue #1403): the shortcut context must no longer
+        // declare the RepositorySource persistence switch, the MCP tool-resource composition, or the
+        // entity JSON authoring.
+        var type = typeof(AgentSessionShortcutContext);
+        const BindingFlags allMembers = BindingFlags.Public | BindingFlags.NonPublic
+            | BindingFlags.Instance | BindingFlags.Static;
+
+        Assert.Null(type.GetMethod("CreateToolResourceFactory", allMembers));
+        Assert.Null(type.GetMethod("CreateFixedToolMapping", allMembers));
+        Assert.Null(type.GetMethod("CreateAgentPersistenceStoreAsync", allMembers));
+        Assert.Null(type.GetMethod("CreateAgentSessionEntityData", allMembers));
+        Assert.Null(type.GetMethod("CreateSessionObjectSimpleName", allMembers));
+        Assert.Null(type.GetMethod("SanitizeNameComponent", allMembers));
+
+        await Task.CompletedTask;
     }
 }

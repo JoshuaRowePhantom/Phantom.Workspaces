@@ -313,7 +313,7 @@ public partial class App : Application
             var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
-                new AgentServices { SecretProvider = secretProvider, McpOAuthOptions = mcpOAuthOptions },
+                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions),
                 foregroundScheduler);
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(agentChatFactory),
@@ -324,7 +324,8 @@ public partial class App : Application
                 secretProvider: secretProvider,
                 credentialPicker: credentialPicker,
                 allowedSecretsStore: allowedSecretsStore,
-                platformSecretStore: platformStore);
+                platformSecretStore: platformStore,
+                mcpOAuthOptions: mcpOAuthOptions);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             // #1172: register the canonical URL opener now that MainWindowViewModel exists

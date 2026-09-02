@@ -202,6 +202,35 @@ public sealed class McpTransportFactoryTests
     }
 
     [Fact]
+    public async Task CreateMcpTransport_OAuthWithConfiguredDelegate_DoesNotUseFailingDefault()
+    {
+        // #1402: when AgentServices.McpOAuthOptions carries a RedirectDelegateProvider (as it now
+        // does on the GUI session-launch path), the resolved AuthorizationRedirectDelegate must be
+        // the injected one and must NOT be the throwing "interactive OAuth is not configured" stub.
+        AuthorizationRedirectDelegate injected = (_, _, _) => Task.FromResult<string?>("auth-code");
+        var services = new AgentServices
+        {
+            McpOAuthOptions = new McpOAuthOptions
+            {
+                RedirectDelegateProvider = _ => injected,
+            },
+        };
+
+        var transport = await CreateAsync(OAuthTool(serverName: "configured-delegate"), services);
+
+        var options = GetHttpOptions(transport);
+        Assert.Same(injected, options.OAuth!.AuthorizationRedirectDelegate);
+
+        // Prove it is not the failing default by exercising it: the injected delegate returns a code
+        // rather than throwing InvalidOperationException.
+        var code = await options.OAuth.AuthorizationRedirectDelegate!(
+            new Uri("https://auth.test/authorize"),
+            new Uri("http://localhost/"),
+            CancellationToken.None);
+        Assert.Equal("auth-code", code);
+    }
+
+    [Fact]
     public async Task CreateMcpTransport_AnonymousAndKey_StillProduceSameTransportAfterConsolidation()
     {
         var anonymousTransport = await CreateAsync(new McpTool
