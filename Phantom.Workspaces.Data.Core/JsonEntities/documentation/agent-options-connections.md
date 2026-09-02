@@ -52,6 +52,44 @@ Used when no authentication is needed.
 
 ---
 
+## `OAuthConnection` (`kind: "oauth"` in JSON / `OAuthConnection` in C#)
+
+Used when an MCP server requires OAuth 2.0 authentication. This is a **schema + docs** contract; the runtime transport wiring is tracked separately. Only `endpoint` is required — the OAuth authorization-server metadata, and (when omitted) client registration, are discovered from the endpoint per RFC 9728 / RFC 8414 / RFC 7591.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kind` | string | Yes | `"oauth"` |
+| `endpoint` | string | Yes | The http(s):// MCP resource endpoint. OAuth metadata is discovered from it (RFC 9728/8414). |
+| `clientId` | string | No | OAuth client id. Omit to use dynamic client registration (RFC 7591). Supports `${ENV_VAR}` and `${SECRET:Name}` references. |
+| `clientSecret` | string | No | OAuth client secret. Omit for a public client using PKCE. Supports `${SECRET:Name}` references. |
+| `tokenUrl` | string | No | Explicit token endpoint. Normally discovered automatically from the endpoint metadata. |
+| `scopes` | string[] | No | OAuth scopes to request. |
+
+### `${ENV_VAR}` / `${SECRET:Name}` resolution
+
+`clientId` and `clientSecret` support the same reference syntax as `apiKey`: `${ENV_VAR}` resolves from the environment, and `${SECRET:Name}` resolves from the configured secret store. Prefer references over storing secrets directly in the agent definition.
+
+### Examples
+
+```json
+{
+  "kind": "oauth",
+  "endpoint": "https://mcp.example.com/",
+  "scopes": ["read", "write"]
+}
+```
+
+```json
+{
+  "kind": "oauth",
+  "endpoint": "https://mcp.example.com/",
+  "clientId": "${SECRET:ExampleClientId}",
+  "scopes": ["api://example/.default"]
+}
+```
+
+---
+
 ## MCP stdio transport (via `AnonymousConnection` or `ApiKeyConnection`)
 
 When the connection `endpoint` uses the `stdio://` scheme, a local process is spawned instead of an HTTP connection:

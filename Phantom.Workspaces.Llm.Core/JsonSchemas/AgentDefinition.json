@@ -178,7 +178,10 @@
       "not": {
         "properties": {
           "kind": {
-            "const": "github-cli-builtin-tools"
+            "enum": [
+              "github-cli-builtin-tools",
+              "mcp"
+            ]
           }
         },
         "required": [
@@ -193,6 +196,27 @@
         "kind",
         "connection",
         "serverName"
+      ],
+      "examples": [
+        {
+          "name": "example-oauth",
+          "kind": "mcp",
+          "description": "Example OAuth-authenticated MCP server",
+          "connection": {
+            "kind": "oauth",
+            "endpoint": "https://mcp.example.com/",
+            "clientId": "${SECRET:ExampleClientId}",
+            "scopes": [
+              "read",
+              "write"
+            ]
+          },
+          "serverName": "example",
+          "serverDescription": "Example remote MCP server authenticated with OAuth",
+          "approvalMode": {
+            "kind": "never"
+          }
+        }
       ],
       "properties": {
         "name": {
@@ -213,15 +237,126 @@
         },
         "connection": {
           "type": "object",
-          "additionalProperties": true,
           "required": [
             "kind"
           ],
-          "properties": {
-            "kind": {
-              "type": "string"
+          "description": "MCP server connection. Discriminated by 'kind'. Supported kinds: Anonymous, key, oauth.",
+          "oneOf": [
+            {
+              "title": "Anonymous",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "endpoint"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "Anonymous"
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "http(s):// MCP URL, or stdio://?command=<exe>&arg=<a>&cwd=<dir> for a local process."
+                }
+              },
+              "examples": [
+                {
+                  "kind": "Anonymous",
+                  "endpoint": "https://example.com/mcp/"
+                },
+                {
+                  "kind": "Anonymous",
+                  "endpoint": "stdio://?command=uvx&arg=some-mcp-server"
+                }
+              ]
+            },
+            {
+              "title": "ApiKey",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "endpoint",
+                "apiKey"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "key"
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "http(s):// MCP URL (stdio:// with an apiKey is rejected at runtime)."
+                },
+                "apiKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Bearer token. Supports ${ENV_VAR} and ${SECRET:Name}. Special-case ${GITHUB_TOKEN} falls back to gh auth token."
+                }
+              },
+              "examples": [
+                {
+                  "kind": "key",
+                  "endpoint": "https://api.githubcopilot.com/mcp/",
+                  "apiKey": "${GITHUB_TOKEN}"
+                }
+              ]
+            },
+            {
+              "title": "OAuth",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "endpoint"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "oauth"
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "http(s):// MCP resource endpoint. OAuth metadata is discovered from it (RFC 9728/8414)."
+                },
+                "clientId": {
+                  "type": "string",
+                  "description": "Optional. Omit to use dynamic client registration (RFC 7591). Supports ${ENV_VAR}/${SECRET:Name}."
+                },
+                "clientSecret": {
+                  "type": "string",
+                  "description": "Optional. Omit for a public client (PKCE). Supports ${SECRET:Name}."
+                },
+                "tokenUrl": {
+                  "type": "string",
+                  "description": "Optional explicit token endpoint; normally discovered automatically."
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "OAuth scopes to request."
+                }
+              },
+              "examples": [
+                {
+                  "kind": "oauth",
+                  "endpoint": "https://mcp.example.com/",
+                  "scopes": [
+                    "read",
+                    "write"
+                  ]
+                },
+                {
+                  "kind": "oauth",
+                  "endpoint": "https://mcp.example.com/",
+                  "clientId": "${SECRET:ExampleClientId}",
+                  "scopes": [
+                    "api://example/.default"
+                  ]
+                }
+              ]
             }
-          }
+          ]
         },
         "serverName": {
           "type": "string",

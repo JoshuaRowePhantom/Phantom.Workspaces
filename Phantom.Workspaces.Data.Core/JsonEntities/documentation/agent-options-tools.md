@@ -69,6 +69,33 @@ The transport is chosen from `connection.endpoint`:
 - **`stdio://`** — spawns a local process. URI host or `?command=<process>` sets the executable. `?arg=<value>` (repeatable) sets arguments. `?cwd=<path>` sets the working directory. API keys are **not** supported on stdio.
 - **`http://` or `https://`** — HTTP-based SSE transport. API key (if present) is sent as `Authorization: Bearer <key>`.
 
+### Connection kinds
+
+The `connection` is a strict discriminated union (see `["documentation", "agent-options", "connections"]`). Supported `kind` values for MCP tools:
+
+- **`Anonymous`** — unauthenticated remote or `stdio://` server. Requires `endpoint`.
+- **`key`** — bearer-token authenticated remote server. Requires `endpoint` and `apiKey`.
+- **`oauth`** — OAuth 2.0 authenticated remote server. Requires `endpoint`; `clientId`, `clientSecret`, `tokenUrl`, and `scopes` are optional (metadata and client registration are discovered from the endpoint).
+
+Worked example — an `oauth` MCP tool:
+
+```json
+{
+  "name": "example",
+  "kind": "mcp",
+  "description": "Example OAuth-authenticated MCP server",
+  "connection": {
+    "kind": "oauth",
+    "endpoint": "https://mcp.example.com/",
+    "clientId": "${SECRET:ExampleClientId}",
+    "scopes": ["read", "write"]
+  },
+  "serverName": "example",
+  "serverDescription": "Example remote MCP server authenticated with OAuth",
+  "approvalMode": { "kind": "never" }
+}
+```
+
 ---
 
 ## `chat-history` (CustomTool with kind `"chat-history"`)
