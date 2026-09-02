@@ -306,9 +306,11 @@ public partial class App : Application
 
             // #1385: register the interactive MCP OAuth redirect handler (system browser + loopback
             // listener, consent-gated) into the #1382 McpOAuthOptions.RedirectDelegateProvider seam so
-            // the MCP transport factory drives real interactive OAuth in the GUI host. Headless hosts
-            // (CLI / Web.Server / tests) do not wire this and keep the failing default.
-            var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider);
+            // the MCP transport factory drives real interactive OAuth in the GUI host. #1384: also
+            // register the persistent per-server token cache over the platform secret store so tokens
+            // survive restarts (silent refresh). Headless hosts (CLI / Web.Server / tests) do not wire
+            // this and keep the failing default.
+            var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
                 new AgentServices { SecretProvider = secretProvider, McpOAuthOptions = mcpOAuthOptions },
