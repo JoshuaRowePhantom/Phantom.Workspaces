@@ -13,12 +13,82 @@ public sealed class McpServerEntityToolResourceFactoryTests
     private static readonly EntityName GlobalPrefix =
         new("defaults", "mcp-servers");
 
+    // ${USER}/mcp-servers is the mcp-server entity-type's default creation location; the session
+    // data-access layer binds ${USER} to a concrete user prefix. These tests use a fixed concrete
+    // user prefix to exercise the factory's prefix search/precedence directly (issue #1399).
+    private static readonly EntityName UserPrefix =
+        new("users", "username", "test-user", "mcp-servers");
+
     private static ToolResource McpServerResource(string name) => new()
     {
         Kind = "tool",
         Id = McpServerEntityToolResourceFactory.McpServerEntityToolResourceId,
         Name = name,
     };
+
+    [Fact]
+    public async Task McpServerEntityToolResourceFactory_EntityUnderUserPrefix_Resolves()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await StoreMcpServerAsync(
+            dataAccessLayer,
+            [.. UserPrefix.Components, "github"],
+            serverName: "github",
+            endpoint: "https://user.example/mcp/");
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, UserPrefix, GlobalPrefix]);
+
+        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
+
+        var mcpTool = Assert.IsType<McpTool>(tool);
+        var connection = Assert.IsType<ApiKeyConnection>(mcpTool.Connection);
+        Assert.Equal("https://user.example/mcp/", connection.Endpoint);
+    }
+
+    [Fact]
+    public async Task McpServerEntityToolResourceFactory_UserPrefixTakesPrecedenceOverDefaults()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await StoreMcpServerAsync(
+            dataAccessLayer,
+            [.. GlobalPrefix.Components, "github"],
+            serverName: "github",
+            endpoint: "https://global.example/mcp/");
+        await StoreMcpServerAsync(
+            dataAccessLayer,
+            [.. UserPrefix.Components, "github"],
+            serverName: "github",
+            endpoint: "https://user.example/mcp/");
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, UserPrefix, GlobalPrefix]);
+
+        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
+
+        var mcpTool = Assert.IsType<McpTool>(tool);
+        var connection = Assert.IsType<ApiKeyConnection>(mcpTool.Connection);
+        Assert.Equal("https://user.example/mcp/", connection.Endpoint);
+    }
+
+    [Fact]
+    public async Task McpServerEntityToolResourceFactory_MachineProfileTakesPrecedenceOverUserPrefix()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        await StoreMcpServerAsync(
+            dataAccessLayer,
+            [.. UserPrefix.Components, "github"],
+            serverName: "github",
+            endpoint: "https://user.example/mcp/");
+        await StoreMcpServerAsync(
+            dataAccessLayer,
+            [.. LocalPrefix.Components, "github"],
+            serverName: "github",
+            endpoint: "https://local.example/mcp/");
+        var factory = new McpServerEntityToolResourceFactory(dataAccessLayer, [LocalPrefix, UserPrefix, GlobalPrefix]);
+
+        var tool = await factory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
+
+        var mcpTool = Assert.IsType<McpTool>(tool);
+        var connection = Assert.IsType<ApiKeyConnection>(mcpTool.Connection);
+        Assert.Equal("https://local.example/mcp/", connection.Endpoint);
+    }
 
     [Fact]
     public async Task ResolveToolResourceAsync_ResolvesGlobalMcpServerEntity()

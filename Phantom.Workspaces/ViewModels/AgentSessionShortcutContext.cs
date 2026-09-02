@@ -117,6 +117,12 @@ public sealed class AgentSessionShortcutContext
                 dataAccessLayer,
                 [
                     machineProfilePrefix,
+                    // ${USER}/mcp-servers is the mcp-server entity-type's default creation location
+                    // (its default-name-prefixes), so the UI create flow places servers here. The
+                    // session data-access layer binds ${USER} to the concrete user prefix, matching
+                    // the create flow. Searched after the machine profile but before global defaults
+                    // so machine > user > global precedence is preserved (issue #1399).
+                    new EntityName(WorkspaceEntityMetaVariables.User, "mcp-servers"),
                     new EntityName("defaults", "mcp-servers"),
                 ]));
     }
