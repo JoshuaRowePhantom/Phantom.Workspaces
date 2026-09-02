@@ -233,22 +233,22 @@ public partial class QueueComposerControl : UserControl
                     {
                         var currentText = vm.InputText ?? string.Empty;
                         var caret = Math.Clamp(caretIndex, 0, currentText.Length);
-                        var inserted = "/" + accepted;
 
-                        // Find the '/' that begins the slash token at or immediately before
-                        // the caret so only that token is replaced, not the whole input.
-                        var tokenStart = currentText.Length == 0
-                            ? -1
-                            : currentText.LastIndexOf('/', Math.Max(0, caret - 1));
+                        // Replace the CURRENT token under the caret and insert the
+                        // completion verbatim. Argument completions are bare tokens
+                        // (no leading slash), so the token boundary is the last space
+                        // before the caret, falling back to just after the leading '/'
+                        // for the command-name token (issue #1380).
+                        var lastSpace = currentText.LastIndexOf(' ', Math.Max(0, caret - 1));
+                        var tokenStart = lastSpace >= 0
+                            ? lastSpace + 1
+                            : (currentText.StartsWith('/') ? 1 : caret);
 
-                        // No slash token found: insert the completion at the caret,
-                        // preserving all surrounding text.
-                        var replaceStart = tokenStart < 0 ? caret : tokenStart;
-                        var before = currentText[..replaceStart];
+                        var before = currentText[..tokenStart];
                         var after = currentText[caret..];
 
-                        newText = before + inserted + after;
-                        newCaretIndex = before.Length + inserted.Length;
+                        newText = before + accepted + after;
+                        newCaretIndex = tokenStart + accepted.Length;
                         vm.InputText = newText;
                     }
                 }
