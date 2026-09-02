@@ -2528,31 +2528,95 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public void RaiseTransientNotification_WithText_DoesNotModifyHistory()
+    public async Task RunSlashCommand_TransientResult_IsNotPersistedToStore()
     {
-        var chat = CreateChat();
-        var received = new List<string>();
-        chat.TransientNotification += (_, text) => received.Add(text);
+        // Issue #1396: transient slash-command results are shown as non-persisted diagnostic
+        // notes. They must land in the visible in-memory History but must NOT be written to
+        // the configured store.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var store = new InMemoryAgentPersistenceStore();
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        });
 
-        chat.RaiseTransientNotification("hello");
+        chat.EnqueueTransientDiagnostic("Active model: gpt-5");
 
-        Assert.Empty(chat.History);
-        Assert.Single(received);
-        Assert.Equal("hello", received[0]);
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "transient diagnostic note to appear in history");
+
+        var note = chat.History.Single(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains("Active model: gpt-5", note.Contents.OfType<TextContent>().Single().Text);
+
+        // The note must not have been written to the store.
+        var persisted = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = chat.AgentSessionId },
+            CancellationToken.None);
+        Assert.DoesNotContain(persisted, m =>
+            m.Contents.OfType<TextContent>().Any(c => c.Text.Contains("Active model: gpt-5")));
     }
 
     [Fact]
-    public void RaiseTransientNotification_WithWhitespace_IsNoop()
+    public async Task AgentChat_AfterReload_DoesNotContainTransientDiagnosticNotes()
     {
-        var chat = CreateChat();
-        var received = new List<string>();
-        chat.TransientNotification += (_, text) => received.Add(text);
+        // Issue #1396: a transient diagnostic note must not reappear after a reload, which
+        // rebuilds History from ConfiguredStore.ReadMessagesAsync via LoadInitialHistory.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var store = new InMemoryAgentPersistenceStore();
 
-        chat.RaiseTransientNotification(string.Empty);
-        chat.RaiseTransientNotification("   ");
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "world")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
 
-        Assert.Empty(received);
-        Assert.Empty(chat.History);
+        string sessionId;
+        await using (var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = client,
+            DisplayNameOverride = "test-chat",
+        }))
+        {
+            sessionId = chat.AgentSessionId;
+
+            // A real turn so the session is persisted with user + assistant messages.
+            chat.EnqueueUserMessage("hello");
+            await WaitForConditionAsync(
+                chat.History,
+                () => chat.History.Count == 2 && chat.History[^1].Role == ChatRole.Assistant,
+                "assistant response to complete");
+
+            // Transient diagnostic note — must NOT be persisted.
+            chat.EnqueueTransientDiagnostic("Model set to: gpt-5");
+            await WaitForConditionAsync(
+                chat.History,
+                () => chat.History.Any(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole),
+                "transient diagnostic note to appear in history");
+        }
+
+        // Reload the same session from the same store.
+        await using var reloaded = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentDefinition = null,
+            ConfiguredStore = store,
+        });
+
+        await reloaded.HistoryPopulated;
+
+        // The persisted user + assistant messages survive; the transient diagnostic note does not.
+        Assert.DoesNotContain(reloaded.History, h => h.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains(reloaded.History, h => h.Role == ChatRole.User);
+        Assert.Contains(reloaded.History, h => h.Role == ChatRole.Assistant);
     }
 
     [Fact]

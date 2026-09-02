@@ -489,12 +489,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public event EventHandler? UsageChanged;
 
     /// <summary>
-    /// Raised when a slash command or the host wants to display a one-off status message
-    /// in the chat area without persisting it to conversation history.
-    /// </summary>
-    public event EventHandler<string>? TransientNotification;
-    
-    /// <summary>
     /// Fired when the completion state of this agent changes.
     /// Only relevant for sub-agents; root agents always remain in <see cref="AgentChatCompletionState.Running"/> state.
     /// </summary>
@@ -811,17 +805,31 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     /// <summary>
-    /// Fires <see cref="TransientNotification"/> without touching <see cref="History"/>.
-    /// Used for slash-command status messages that should be shown as one-off inline notifications.
+    /// Adds a transient slash-command result to the visible chat history as a non-persisted
+    /// diagnostic note. The note is added to in-memory <see cref="History"/> only via
+    /// <see cref="AddHistoryItem"/>; it is never written to <c>ConfiguredStore</c>, so it does
+    /// not reappear after a reload (issue #1396).
     /// </summary>
-    public void RaiseTransientNotification(string text)
+    public void EnqueueTransientDiagnostic(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
-        this.TransientNotification?.Invoke(this, text);
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                this.AddHistoryItem(new AgentChatHistoryItem
+                {
+                    Role = AgentChatHistoryItem.DiagnosticChatRole,
+                    Contents = [new TextContent(text)],
+                    Timestamp = this.timeProvider.GetUtcNow(),
+                });
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
     }
 
     /// <summary>
