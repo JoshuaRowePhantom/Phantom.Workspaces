@@ -541,35 +541,53 @@ public static class AgentFactory
             requestedAgentDefinition,
             createAgentChatRequest.TrustProfileProvider);
 
-        IAgentPersistenceStore configuredStore = services?.AgentPersistenceStoreOverride
-            ?? new InMemoryAgentPersistenceStore();
-
-        // Try to extract chat-history tool from agent definition (skipped if override is provided)
-        if (services?.AgentPersistenceStoreOverride is null
-            && requestedAgentDefinition is PromptAgent promptAgent
+        ChatHistoryProviderDefinition? definition = null;
+        if (requestedAgentDefinition is PromptAgent promptAgent
             && promptAgent.Tools != null)
         {
             var chatHistoryTool = promptAgent.Tools.OfType<CustomTool>()
                 .FirstOrDefault(t => t.Kind == "chat-history" || t.Name == "chat-history");
-            
-            if (chatHistoryTool?.Options != null && 
-                chatHistoryTool.Options.TryGetValue("connection", out var connectionObj) && 
+
+            if (chatHistoryTool?.Options != null &&
+                chatHistoryTool.Options.TryGetValue("connection", out var connectionObj) &&
                 connectionObj is IDictionary<string, object> connectionDict)
             {
                 try
                 {
                     // Convert the connection options to JSON then deserialize as ChatHistoryProviderDefinition
                     var connectionJson = System.Text.Json.JsonSerializer.Serialize(connectionDict);
-                    var definition = ChatHistoryProviderDefinition.FromJson(connectionJson);
-                    var storeFactory = createAgentChatRequest.PersistenceStoreFactory
-                        ?? AgentPersistenceStoreFactory.CreateAsync;
-                    configuredStore = await storeFactory(definition, ct).ConfigureAwait(false);
+                    definition = ChatHistoryProviderDefinition.FromJson(connectionJson);
                 }
                 catch (Exception ex)
                 {
-                    // Log warning but don't fail - fall back to in-memory
-                    System.Diagnostics.Debug.WriteLine($"Failed to create chat history provider from agent definition: {ex.Message}");
+                    // Log warning but don't fail - fall through to null -> in-memory via the default delegate
+                    System.Diagnostics.Debug.WriteLine($"Failed to parse chat-history connection options: {ex.Message}");
+                    definition = null;
                 }
+            }
+        }
+
+        IAgentPersistenceStore configuredStore;
+        if (services?.AgentPersistenceStoreOverride is { } explicitOverride)
+        {
+            // Higher-precedence seam: the explicit store override short-circuits the factory
+            // entirely (kept for backwards compatibility with existing test/DI wiring).
+            configuredStore = explicitOverride;
+        }
+        else
+        {
+            var storeFactory = createAgentChatRequest.PersistenceStoreFactory
+                ?? DefaultPersistenceStoreFactory;
+            try
+            {
+                configuredStore = await storeFactory(definition, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Any failure during store creation (including cancellation) is swallowed to keep
+                // the session alive; fall back to an in-memory store (#698).
+                System.Diagnostics.Debug.WriteLine($"Failed to create persistence store: {ex.Message}");
+                configuredStore = new InMemoryAgentPersistenceStore();
             }
         }
 
@@ -609,6 +627,17 @@ public static class AgentFactory
 
         return chat;
     }
+
+    // Default persistence-store factory used when CreateAgentChatRequest.PersistenceStoreFactory is
+    // not supplied. A null definition (agent has no chat-history tool) maps to an in-memory store;
+    // a non-null definition is delegated to AgentPersistenceStoreFactory.CreateAsync, whose null
+    // invariant (ArgumentNullException) is intentionally preserved for direct callers.
+    private static ValueTask<IAgentPersistenceStore> DefaultPersistenceStoreFactory(
+        ChatHistoryProviderDefinition? definition,
+        CancellationToken cancellationToken)
+        => definition is null
+            ? new ValueTask<IAgentPersistenceStore>(AgentPersistenceStoreFactory.CreateInMemory())
+            : AgentPersistenceStoreFactory.CreateAsync(definition, cancellationToken);
 
     private static ReasoningEffort ResolveReasoningEffort(AgentDefinition agent)
     {

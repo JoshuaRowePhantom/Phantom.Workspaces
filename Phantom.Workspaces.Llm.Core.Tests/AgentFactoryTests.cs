@@ -1271,7 +1271,6 @@ public class AgentFactoryTests
     }
 
     [Fact]
-    [Trait("Category", "SlowDocker")]
     public async Task CreateAgentChat_UsesAgentDefinitionChatHistoryTool()
     {
         var mongoConfig = new MongoDbChatHistoryProviderDefinition
@@ -1282,7 +1281,7 @@ public class AgentFactoryTests
             ContainerName = "test-mongo",
             DataDirectory = "/tmp/mongo",
         };
-        
+
         var mongoConfigJson = System.Text.Json.JsonSerializer.Serialize(
             System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(mongoConfig.ToJson())
         );
@@ -1310,12 +1309,100 @@ public class AgentFactoryTests
 
         var agent = AgentDefinitionLoader.LoadAgentFromJson(agentJson);
 
-        // This should extract and create a MongoDB provider from the agent's chat-history tool
-        await using var chat = await CreateChatAsync(agent);
-        
-        // Verify the chat was created successfully
+        // Inject a fake factory so the chat-history tool drives store creation without ever
+        // touching Docker/MongoDB. The factory captures the definition for assertion.
+        ChatHistoryProviderDefinition? observedDefinition = null;
+        var invocationCount = 0;
+        ValueTask<IAgentPersistenceStore> FakeFactory(
+            ChatHistoryProviderDefinition? definition, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocationCount);
+            observedDefinition = definition;
+            return ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore());
+        }
+
+        await using var chat = await CreateChatAsync(agent, persistenceStoreFactory: FakeFactory);
+
         Assert.NotNull(chat);
+        Assert.Equal(1, invocationCount);
+        var mongo = Assert.IsType<MongoDbChatHistoryProviderDefinition>(observedDefinition);
+        Assert.Equal("container", mongo.MongoProvider);
+        Assert.Equal("test-db", mongo.DatabaseName);
+        Assert.Equal("test-collection", mongo.CollectionName);
+        Assert.Equal("test-mongo", mongo.ContainerName);
+        Assert.Equal("/tmp/mongo", mongo.DataDirectory);
         chat.EnqueueUserMessage("hello");
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_NoChatHistoryTool_InvokesPersistenceStoreFactoryWithNullDefinition()
+    {
+        var agentJson = """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """;
+
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(agentJson);
+
+        ChatHistoryProviderDefinition? observedDefinition = null;
+        var invocationCount = 0;
+        var store = new InMemoryAgentPersistenceStore();
+        ValueTask<IAgentPersistenceStore> FakeFactory(
+            ChatHistoryProviderDefinition? definition, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocationCount);
+            observedDefinition = definition;
+            return ValueTask.FromResult<IAgentPersistenceStore>(store);
+        }
+
+        await using var chat = await CreateChatAsync(agent, persistenceStoreFactory: FakeFactory);
+
+        Assert.NotNull(chat);
+        Assert.Equal(1, invocationCount);
+        Assert.Null(observedDefinition);
+        Assert.Same(store, GetConfiguredStore(chat));
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_DefaultFactory_NoChatHistoryTool_UsesInMemoryStore()
+    {
+        var agent = CreateEchoPromptAgentDefinition();
+
+        // No injected factory: the default delegate must map a null definition to an in-memory store.
+        await using var chat = await CreateChatAsync(agent);
+
+        Assert.NotNull(chat);
+        Assert.IsType<InMemoryAgentPersistenceStore>(GetConfiguredStore(chat));
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_AgentPersistenceStoreOverride_TakesPrecedenceOverPersistenceStoreFactory()
+    {
+        var agent = LoadEchoAgentWithChatHistoryTool();
+        var overrideStore = new RecordingAgentPersistenceStore();
+        var services = new AgentServices { AgentPersistenceStoreOverride = overrideStore };
+
+        var factoryInvoked = false;
+        ValueTask<IAgentPersistenceStore> FakeFactory(
+            ChatHistoryProviderDefinition? definition, CancellationToken cancellationToken)
+        {
+            factoryInvoked = true;
+            return ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore());
+        }
+
+        await using var chat = await CreateChatAsync(agent, services, persistenceStoreFactory: FakeFactory);
+
+        Assert.NotNull(chat);
+        Assert.False(factoryInvoked, "AgentPersistenceStoreOverride should short-circuit the factory.");
+        Assert.Same(overrideStore, GetConfiguredStore(chat));
     }
 
     [Fact]
@@ -1814,13 +1901,27 @@ public class AgentFactoryTests
         public void Dispose() => _queue.CompleteAdding();
     }
 
-    private static Task<AgentChat> CreateChatAsync(AgentDefinition agentDefinition, AgentServices? agentServices = null)
+    private static Task<AgentChat> CreateChatAsync(
+        AgentDefinition agentDefinition,
+        AgentServices? agentServices = null,
+        Func<ChatHistoryProviderDefinition?, CancellationToken, ValueTask<IAgentPersistenceStore>>? persistenceStoreFactory = null)
         => AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
             {
                 AgentDefinition = agentDefinition,
                 AgentServices = agentServices,
+                PersistenceStoreFactory = persistenceStoreFactory,
             });
+
+    // Reads the persistence store the AgentChat was configured with. AgentChat holds it on the
+    // internal request record; InternalsVisibleTo makes the type visible to the test project.
+    private static IAgentPersistenceStore GetConfiguredStore(AgentChat chat)
+    {
+        var field = typeof(AgentChat).GetField("request", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("AgentChat.request field not found.");
+        var request = (InternalCreateAgentChatRequest)field.GetValue(chat)!;
+        return request.ConfiguredStore;
+    }
 
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
