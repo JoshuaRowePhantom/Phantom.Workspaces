@@ -14,6 +14,8 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
     private static readonly TimeSpan VectorIndexRemovalPollInterval = TimeSpan.FromSeconds(2);
 
     private readonly IMongoCollection<MongoDbEntityDocument> _entityCollection;
+    // #1411: one small document per entity version lives here instead of an unbounded inline array.
+    private readonly IMongoCollection<MongoDbEntityVersionDocument> _versionCollection;
     private readonly IMongoCollection<MongoDbQueueHead> _queueHeadCollection;
     private readonly Phantom.Workspaces.Data.Vector.IEmbeddingsProvider _embeddingsProvider;
     private readonly TimeProvider _timeProvider;
@@ -31,6 +33,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         _entityCollection = database.GetCollection<MongoDbEntityDocument>($"{collectionName}_entities");
+        _versionCollection = database.GetCollection<MongoDbEntityVersionDocument>($"{collectionName}_versions");
         _queueHeadCollection = database.GetCollection<MongoDbQueueHead>($"{collectionName}_queue_heads");
         _embeddingsProvider = embeddingsProvider ?? new Phantom.Workspaces.Data.Vector.DeterministicEmbeddingsProvider();
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -44,6 +47,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var results = new List<EntityUpdateResult>();
         var pendingWrites = new List<MongoDbEntityDocument>();
+        var pendingVersionWrites = new List<MongoDbEntityVersionDocument>();
 
         var requestedEntityIds = request.Changes
             .Select(static change => ResolveEntityId(change))
@@ -79,7 +83,9 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             }
 
             currentEntities.TryGetValue(entityId.Value.ToString(), out var currentDocument);
-            var currentVersion = currentDocument?.Versions.LastOrDefault();
+            // #1411: the concurrency tag now comes from the current document's latest-version pointer,
+            // not from an inline Versions array (which no longer exists).
+            var currentVersion = GetCurrentVersion(currentDocument);
             var currentTag = currentVersion is null
                 ? (ConcurrencyTag?)null
                 : new ConcurrencyTag(currentVersion.VersionId.ToString());
@@ -130,12 +136,14 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var updatedDocument = currentDocument ?? new MongoDbEntityDocument
             {
                 Id = entityId.Value.ToString(),
-                Versions = [],
             };
 
-            updatedDocument.Versions.Add(new MongoDbEntityVersion
+            // #1411: append the new version as its own small document in the versions collection instead
+            // of growing an inline array on the entity document (which crossed the 16 MB BSON limit).
+            pendingVersionWrites.Add(new MongoDbEntityVersionDocument
             {
                 VersionId = nextVersionId,
+                EntityId = entityId.Value.ToString(),
                 TimestampUtc = nowUtc,
                 Data = nextDataBson,
             });
@@ -189,20 +197,126 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             });
         }
 
-        foreach (var pendingWrite in pendingWrites)
-        {
-            await _entityCollection
-                .ReplaceOneAsync(
-                    Builders<MongoDbEntityDocument>.Filter.Eq(static document => document.Id, pendingWrite.Id),
-                    pendingWrite,
-                    new ReplaceOptions { IsUpsert = true },
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
+        await WritePendingChangesAsync(pendingVersionWrites, pendingWrites, cancellationToken).ConfigureAwait(false);
 
         return new UpdateResult
         {
             EntityResults = results,
+        };
+    }
+
+    /// <summary>
+    /// #1411: persists new version documents and the recomputed current documents. Uses a
+    /// multi-document transaction when the deployment supports it (replica set / Atlas Local) so the
+    /// write is all-or-nothing; otherwise falls back to version-first ordering, so an interrupted
+    /// write leaves at worst an orphan version document (reconciled by later reads/writes) and never
+    /// a current pointer referencing a missing version.
+    /// </summary>
+    private async Task WritePendingChangesAsync(
+        List<MongoDbEntityVersionDocument> versionWrites,
+        List<MongoDbEntityDocument> currentWrites,
+        CancellationToken cancellationToken)
+    {
+        if (versionWrites.Count == 0 && currentWrites.Count == 0)
+        {
+            return;
+        }
+
+        var client = _entityCollection.Database.Client;
+        using var session = await client.StartSessionAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        try
+        {
+            session.StartTransaction();
+            await WriteVersionsThenCurrentAsync(session, versionWrites, currentWrites, cancellationToken).ConfigureAwait(false);
+            await session.CommitTransactionAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (IsTransactionUnsupported(ex))
+        {
+            try
+            {
+                if (session.IsInTransaction)
+                {
+                    await session.AbortTransactionAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (MongoException)
+            {
+                // Aborting a transaction that never began (standalone deployment) is expected here.
+            }
+        }
+
+        // Version-first ordering fallback for deployments without multi-document transactions.
+        await WriteVersionsThenCurrentAsync(null, versionWrites, currentWrites, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task WriteVersionsThenCurrentAsync(
+        IClientSessionHandle? session,
+        List<MongoDbEntityVersionDocument> versionWrites,
+        List<MongoDbEntityDocument> currentWrites,
+        CancellationToken cancellationToken)
+    {
+        // Insert versions first so a crash between the two writes can only orphan a version document,
+        // never lose the version a current pointer references.
+        if (versionWrites.Count > 0)
+        {
+            if (session is null)
+            {
+                await _versionCollection.InsertManyAsync(versionWrites, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _versionCollection.InsertManyAsync(session, versionWrites, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var currentWrite in currentWrites)
+        {
+            var filter = Builders<MongoDbEntityDocument>.Filter.Eq(static document => document.Id, currentWrite.Id);
+            var options = new ReplaceOptions { IsUpsert = true };
+            if (session is null)
+            {
+                await _entityCollection.ReplaceOneAsync(filter, currentWrite, options, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _entityCollection.ReplaceOneAsync(session, filter, currentWrite, options, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool IsTransactionUnsupported(Exception exception)
+    {
+        if (exception is NotSupportedException)
+        {
+            return true;
+        }
+
+        var message = exception.Message;
+        return message.Contains("Transaction numbers are only allowed", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Transactions are not supported", StringComparison.OrdinalIgnoreCase)
+            || (message.Contains("Transaction", StringComparison.OrdinalIgnoreCase)
+                && message.Contains("replica set", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// #1411: builds an in-memory version view of the current document from its latest-version pointer
+    /// (the inline Versions array no longer exists). Returns <see langword="null"/> for a brand-new
+    /// entity with no current projection.
+    /// </summary>
+    private static MongoDbEntityVersion? GetCurrentVersion(MongoDbEntityDocument? document)
+    {
+        var current = document?.Current;
+        if (current is null || string.IsNullOrEmpty(current.ModifiedVersion))
+        {
+            return null;
+        }
+
+        return new MongoDbEntityVersion
+        {
+            VersionId = ObjectId.TryParse(current.ModifiedVersion, out var parsed) ? parsed : ObjectId.Empty,
+            TimestampUtc = current.ModifiedTimeUtc,
+            Data = current.Data,
         };
     }
 
@@ -616,6 +730,21 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         };
 
         await _entityCollection.Indexes.CreateManyAsync(indexModels, cancellationToken).ConfigureAwait(false);
+
+        // #1411: indexes on the versions collection supporting point-in-time/history resolution
+        // (EntityId + TimestampUtc + _id) and export/changed-entities streaming (TimestampUtc + _id).
+        var versionIndexModels = new CreateIndexModel<MongoDbEntityVersionDocument>[]
+        {
+            new(Builders<MongoDbEntityVersionDocument>.IndexKeys
+                .Ascending(static version => version.EntityId)
+                .Ascending(static version => version.TimestampUtc)
+                .Ascending(static version => version.VersionId)),
+            new(Builders<MongoDbEntityVersionDocument>.IndexKeys
+                .Ascending(static version => version.TimestampUtc)
+                .Ascending(static version => version.VersionId)),
+        };
+
+        await _versionCollection.Indexes.CreateManyAsync(versionIndexModels, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -2082,8 +2211,6 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         [BsonId]
         public string Id { get; init; } = string.Empty;
 
-        public List<MongoDbEntityVersion> Versions { get; init; } = [];
-
         /// <summary>
         /// Denormalized projection of the latest version, used for native query-clause evaluation
         /// (see <see cref="MongoDbQueryTranslator"/>). Recomputed on every write.
@@ -2091,6 +2218,29 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         [BsonElement("current")]
         [BsonIgnoreIfNull]
         public MongoDbCurrentProjection? Current { get; set; }
+    }
+
+    /// <summary>
+    /// #1411: one document per entity version, stored in the <c>{collectionName}_versions</c>
+    /// collection. Keeps entity documents small (bounded) so they never approach the 16 MB BSON limit.
+    /// </summary>
+    [BsonIgnoreExtraElements]
+    private sealed class MongoDbEntityVersionDocument
+    {
+        /// <summary>The version/change id; the ObjectId encodes the creation time.</summary>
+        [BsonId]
+        public ObjectId VersionId { get; init; }
+
+        [BsonElement("EntityId")]
+        public string EntityId { get; init; } = string.Empty;
+
+        [BsonElement("TimestampUtc")]
+        public DateTime TimestampUtc { get; init; }
+
+        /// <summary>The entity data as native BSON; <see langword="null"/> for a tombstone (delete).</summary>
+        [BsonElement("Data")]
+        [BsonIgnoreIfNull]
+        public BsonDocument? Data { get; init; }
     }
 
     [BsonIgnoreExtraElements]
