@@ -39,6 +39,26 @@ public sealed class SecretUseDialogViewModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public void Row_MemoryDropdown_ExposesFriendlyDisplayStrings()
+    {
+        var request = Request("ApiKey");
+
+        var row = Assert.Single(new SecretUseDialogViewModel(new SecretUseDialogInput([request]), new FakeCredentialPicker()).Rows);
+
+        foreach (var memory in row.AvailableMemories)
+        {
+            Assert.False(string.IsNullOrEmpty(memory.DisplayString));
+            Assert.NotEqual(memory.ToString(), memory.DisplayString);
+            if (!string.IsNullOrEmpty(memory.Hash))
+            {
+                Assert.DoesNotContain(memory.Hash, memory.DisplayString, StringComparison.Ordinal);
+            }
+        }
+
+        Assert.Contains(row.AvailableMemories, memory => memory.DisplayString == "This Key in This Manifest");
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public void Row_SourceDropdown_DisplaysAwsAndAzurePlaceholderEntries()
     {
         var request = Request("ApiKey");

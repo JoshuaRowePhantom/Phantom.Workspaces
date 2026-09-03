@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using AgentSchema;
 using Phantom.Workspaces.Llm.Secrets;
@@ -191,6 +193,43 @@ public sealed class AgentManifestSecretUseMemoryFactoryTests
         Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.ManifestIdentity);
         Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.ManifestContent);
         Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.KeyInManifestContent);
+    }
+
+    [Fact]
+    public void Build_EveryReturnedMemory_HasNonEmptyFriendlyDisplayString()
+    {
+        // The friendly labels the dialog binds to, keyed by scope. Kept in lockstep with the
+        // factory's private DisplayStrings map (Option A: wording is fixed, do not change).
+        var expectedLabels = new Dictionary<SecretUseScope, string>
+        {
+            [SecretUseScope.AllUses] = "All Uses",
+            [SecretUseScope.AnyManifest] = "Any Manifest",
+            [SecretUseScope.KeyInAnyManifest] = "This Key in Any Manifest",
+            [SecretUseScope.ManifestIdentity] = "This Manifest, Even if Changed",
+            [SecretUseScope.ManifestContent] = "This Manifest",
+            [SecretUseScope.KeyInManifestContent] = "This Key in This Manifest",
+            [SecretUseScope.SessionIdentity] = "This Session",
+            [SecretUseScope.KeyInSession] = "This Key in This Session",
+            [SecretUseScope.AlwaysAsk] = "Always Ask",
+        };
+
+        var lineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(
+            ManifestIdentity: "manifest-id",
+            ManifestContentHash: "content-hash",
+            SessionIdentity: "session-1");
+
+        var memories = new AgentManifestSecretUseMemoryFactory().Build(lineage, "MySecret", "use");
+
+        foreach (var memory in memories)
+        {
+            Assert.False(string.IsNullOrEmpty(memory.DisplayString));
+            Assert.Equal(expectedLabels[memory.Scope], memory.DisplayString);
+            Assert.NotEqual(memory.Hash, memory.DisplayString);
+            if (!string.IsNullOrEmpty(memory.Hash))
+            {
+                Assert.DoesNotContain(memory.Hash, memory.DisplayString, StringComparison.Ordinal);
+            }
+        }
     }
 
     [Fact]
