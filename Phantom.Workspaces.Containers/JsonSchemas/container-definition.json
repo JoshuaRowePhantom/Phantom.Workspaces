@@ -10,6 +10,9 @@
       "type": "string",
       "minLength": 1
     },
+    "hostname": {
+      "type": "string"
+    },
     "network-type": {
       "type": "string",
       "enum": [

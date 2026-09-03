@@ -14,6 +14,13 @@ public sealed class ContainerDefinition
     [JsonPropertyName("image-name")]
     public string ImageName { get; init; } = string.Empty;
 
+    // A stable container hostname. When set, the engine pins the container's hostname via
+    // `docker create --hostname`, so identity-sensitive workloads (e.g. the Atlas Local single-node
+    // replica set, whose member host is derived from the hostname) stay stable across recreations
+    // and image refreshes instead of floating with the ephemeral container id (issue #1415).
+    [JsonPropertyName("hostname")]
+    public string Hostname { get; init; } = string.Empty;
+
     [JsonPropertyName("network-type")]
     public ContainerNetworkType NetworkType { get; init; }
 

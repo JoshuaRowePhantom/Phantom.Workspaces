@@ -2,11 +2,16 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
+using MongoDB.Driver;
+using Moq;
+using Phantom.Workspaces;
 using Phantom.Workspaces.Containers;
 
 namespace Phantom.Workspaces.Data.MongoDB.Tests;
@@ -40,7 +45,13 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
             timeProvider: time,
             dockerDesktopLauncher: launcher,
             dockerReadinessTimeout: readinessTimeout ?? TimeSpan.FromSeconds(30),
-            dockerReadinessPollInterval: readinessPollInterval ?? TimeSpan.FromSeconds(2));
+            dockerReadinessPollInterval: readinessPollInterval ?? TimeSpan.FromSeconds(2),
+            // Keep the #1415 replica-set reconcile from delaying under a non-advancing FakeTimeProvider:
+            // a single, non-delaying probe is enough when no real Mongo is listening on the test port.
+            replicaSetSettleAttempts: 1,
+            replicaSetPrimaryAttempts: 1,
+            // Fail fast against the unreachable test port instead of waiting the 30s production default.
+            serverSelectionTimeout: TimeSpan.FromMilliseconds(250));
     }
 
     private static async Task<Exception?> InvokeGetClientAndCatchAsync(
@@ -255,6 +266,133 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         Assert.Equal(new[] { "Start", "Pull", "Create", "Start" }, engine.CallSequence);
     }
 
+    [Fact]
+    public async Task CreateAsync_EmitsHostnameArgument_WhenDefinitionHasHostname()
+    {
+        var runner = new RecordingDockerCommandRunner();
+        // container inspect -> non-zero, so the engine treats the container as absent (no destroy).
+        runner.Results.Enqueue(new ProcessResult(1, string.Empty, "missing", "missing"));
+        var engine = new WindowsDockerDesktopEngine(runner);
+        var definition = new ContainerDefinition
+        {
+            ContainerName = "phantom-mongo-test",
+            ImageName = "mongodb/mongodb-atlas-local:latest",
+            NetworkType = ContainerNetworkType.Bridge,
+            Hostname = MongoDbContainerDefinitionGenerator.ReplicaSetHostname,
+        };
+
+        await engine.CreateAsync(definition);
+
+        var createCommand = runner.Commands[^1];
+        Assert.Equal("create", createCommand[0]);
+        var hostnameIndex = createCommand.ToList().IndexOf("--hostname");
+        Assert.True(hostnameIndex >= 0, "docker create should include a --hostname argument");
+        Assert.Equal(MongoDbContainerDefinitionGenerator.ReplicaSetHostname, createCommand[hostnameIndex + 1]);
+    }
+
+    [Fact]
+    public async Task EnsureContainerStarted_RecreateAcrossImageRefresh_KeepsStableHostname()
+    {
+        var engine = new FakeDockerEngine
+        {
+            UsableResult = true,
+            UseRunningStateModel = true,
+            ContainerRunning = false,
+        };
+        var launcher = new FakeDockerDesktopLauncher("C:\\Docker Desktop.exe");
+        var time = new FakeTimeProvider();
+        var broker = CreateBroker(engine, launcher, time);
+
+        // First create cycle (container absent).
+        _ = await InvokeGetClientAndCatchAsync(broker, SampleConnection());
+
+        // Simulate a moving :latest image refresh: the container is wiped and recreated while
+        // /data/db persists. Force the next Start to fail so the broker recreates the container.
+        engine.ContainerRunning = false;
+
+        // Second create cycle.
+        _ = await InvokeGetClientAndCatchAsync(broker, SampleConnection());
+
+        Assert.Equal(2, engine.CreateCallCount);
+        Assert.Equal(2, engine.CreatedDefinitions.Count);
+        Assert.All(
+            engine.CreatedDefinitions,
+            definition => Assert.Equal(MongoDbContainerDefinitionGenerator.ReplicaSetHostname, definition.Hostname));
+        // Both cycles request the SAME hostname, so the replica-set member host does not change.
+        Assert.Equal(engine.CreatedDefinitions[0].Hostname, engine.CreatedDefinitions[1].Hostname);
+    }
+
+    [Fact]
+    public async Task VerifyConnection_NoWritablePrimary_IsNotTreatedAsReady()
+    {
+        // A node that answers hello/ping but reports isWritablePrimary:false (RSGhost / no primary)
+        // must NOT be treated as ready — readiness requires a writable primary (#1415).
+        var adminDatabase = new Mock<IMongoDatabase>();
+        adminDatabase
+            .Setup(database => database.RunCommandAsync<BsonDocument>(
+                It.IsAny<Command<BsonDocument>>(),
+                It.IsAny<ReadPreference>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BsonDocument("isWritablePrimary", false));
+
+        var client = new Mock<IMongoClient>();
+        client
+            .Setup(mongoClient => mongoClient.GetDatabase("admin", It.IsAny<MongoDatabaseSettings>()))
+            .Returns(adminDatabase.Object);
+
+        var engine = new FakeDockerEngine { UsableResult = true };
+        var launcher = new FakeDockerDesktopLauncher("C:\\Docker Desktop.exe");
+        var broker = CreateBroker(engine, launcher, new FakeTimeProvider());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await broker.VerifyConnectionAsync(client.Object, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task VerifyConnection_WritablePrimary_IsTreatedAsReady()
+    {
+        var adminDatabase = new Mock<IMongoDatabase>();
+        adminDatabase
+            .Setup(database => database.RunCommandAsync<BsonDocument>(
+                It.IsAny<Command<BsonDocument>>(),
+                It.IsAny<ReadPreference>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BsonDocument("isWritablePrimary", true));
+
+        var client = new Mock<IMongoClient>();
+        client
+            .Setup(mongoClient => mongoClient.GetDatabase("admin", It.IsAny<MongoDatabaseSettings>()))
+            .Returns(adminDatabase.Object);
+
+        var engine = new FakeDockerEngine { UsableResult = true };
+        var launcher = new FakeDockerDesktopLauncher("C:\\Docker Desktop.exe");
+        var broker = CreateBroker(engine, launcher, new FakeTimeProvider());
+
+        // Should complete without throwing.
+        await broker.VerifyConnectionAsync(client.Object, CancellationToken.None);
+    }
+
+    private sealed class RecordingDockerCommandRunner : IDockerCommandRunner
+    {
+        public List<IReadOnlyList<string>> Commands { get; } = [];
+
+        public Queue<ProcessResult> Results { get; } = new();
+
+        public ValueTask<ProcessResult> RunAsync(
+            IReadOnlyList<string> arguments,
+            CancellationToken cancellationToken = default)
+        {
+            this.Commands.Add(arguments.ToArray());
+
+            if (this.Results.TryDequeue(out var result))
+            {
+                return ValueTask.FromResult(result);
+            }
+
+            return ValueTask.FromResult(new ProcessResult(0, string.Empty, string.Empty, string.Empty));
+        }
+    }
+
     private sealed class FakeDockerCommandRunnerLogger : Microsoft.Extensions.Logging.ILogger<DockerCommandRunner>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -311,6 +449,16 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         // When true, PullAsync throws InvalidOperationException (mirrors an offline/registry failure).
         public bool FailPull { get; set; }
 
+        // When true, StartAsync fails unless the container is currently "running" (set by CreateAsync).
+        // Tests flip ContainerRunning to false between GetClientAsync calls to force a fresh recreate
+        // (simulating a :latest image refresh), so successive create cycles can be observed.
+        public bool UseRunningStateModel { get; set; }
+
+        public bool ContainerRunning { get; set; }
+
+        // Every ContainerDefinition passed to CreateAsync, in order (used to assert a stable hostname).
+        public List<ContainerDefinition> CreatedDefinitions { get; } = [];
+
         // Ordered record of lifecycle calls ("Pull", "Create", "Start") for assertion.
         public List<string> CallSequence { get; } = [];
 
@@ -343,6 +491,8 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         {
             this.CreateCallCount++;
             this.CallSequence.Add("Create");
+            this.CreatedDefinitions.Add(definition);
+            this.ContainerRunning = true;
             return ValueTask.CompletedTask;
         }
 
@@ -350,6 +500,16 @@ public sealed class MongoDbConnectionBrokerDockerDesktopTests
         {
             this.StartCallCount++;
             this.CallSequence.Add("Start");
+            if (this.UseRunningStateModel)
+            {
+                if (!this.ContainerRunning)
+                {
+                    throw new InvalidOperationException("Simulated missing/stopped container.");
+                }
+
+                return ValueTask.CompletedTask;
+            }
+
             if (this.FailFirstStart && this.StartCallCount == 1)
             {
                 throw new InvalidOperationException("Simulated missing container.");

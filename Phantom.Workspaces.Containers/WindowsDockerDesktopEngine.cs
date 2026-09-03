@@ -75,6 +75,15 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
             definition.NetworkType.ToString().ToLowerInvariant(),
         };
 
+        // Pin a stable container hostname when the definition specifies one (issue #1415). This keeps
+        // the Atlas Local replica-set member identity constant across recreations/image refreshes,
+        // instead of defaulting to the ephemeral container id.
+        if (!string.IsNullOrWhiteSpace(definition.Hostname))
+        {
+            arguments.Add("--hostname");
+            arguments.Add(definition.Hostname);
+        }
+
         foreach (var environmentVariable in definition.EnvironmentVariables)
         {
             arguments.Add("-e");

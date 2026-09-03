@@ -12,6 +12,15 @@ public sealed class MongoDbContainerDefinitionGenerator
     /// </summary>
     public const string DefaultMongoImageName = "mongodb/mongodb-atlas-local:latest";
 
+    /// <summary>
+    /// A fixed, non-ephemeral container hostname for the local Mongo (Atlas Local) container. The
+    /// Atlas Local image derives its single-node replica-set member host from the container hostname;
+    /// pinning it to a constant (rather than letting it default to the ephemeral container id) keeps
+    /// the persisted <c>/data/db</c> replica-set config matching across container recreations and
+    /// moving-<c>:latest</c> image refreshes, so a writable primary can always be elected (#1415).
+    /// </summary>
+    public const string ReplicaSetHostname = "phantom-mongo";
+
     private const string MongoDataDirectory = "/data/db";
     private const int MongoContainerPort = 27017;
 
@@ -23,6 +32,7 @@ public sealed class MongoDbContainerDefinitionGenerator
         return new ContainerDefinition
         {
             ContainerName = connectionDefinition.ContainerName,
+            Hostname = ReplicaSetHostname,
             ImageName = string.IsNullOrWhiteSpace(connectionDefinition.ImageName)
                 ? DefaultMongoImageName
                 : connectionDefinition.ImageName,

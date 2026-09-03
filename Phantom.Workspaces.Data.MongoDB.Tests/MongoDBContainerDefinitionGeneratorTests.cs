@@ -55,6 +55,30 @@ public sealed class MongoDbContainerDefinitionGeneratorTests
     }
 
     [Fact]
+    public void Generate_SetsStableHostname_NotDerivedFromContainerId()
+    {
+        var generator = new MongoDbContainerDefinitionGenerator();
+        var connectionDefinition = new MongoDbContainerConnectionDefinition
+        {
+            ContainerName = "mongo-db",
+            DataDirectory = "C:\\mongo-data",
+            DatabaseName = "workspace-db",
+            CollectionName = "workspace-collection",
+            HostPort = 37017,
+        };
+
+        var first = generator.Generate(connectionDefinition);
+        var second = generator.Generate(connectionDefinition);
+
+        // The hostname must be a fixed, non-empty constant (so the Atlas Local replica-set member
+        // host cannot float with the ephemeral container id) and identical across calls (#1415).
+        Assert.False(string.IsNullOrWhiteSpace(first.Hostname));
+        Assert.Equal(MongoDbContainerDefinitionGenerator.ReplicaSetHostname, first.Hostname);
+        Assert.Equal(first.Hostname, second.Hostname);
+        Assert.NotEqual(first.ContainerName, first.Hostname);
+    }
+
+    [Fact]
     public void Generate_WhenImageNameOverridden_UsesOverride()
     {
         var generator = new MongoDbContainerDefinitionGenerator();
