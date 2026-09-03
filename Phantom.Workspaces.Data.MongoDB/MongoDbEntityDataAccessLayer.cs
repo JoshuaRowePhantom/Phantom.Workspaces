@@ -850,6 +850,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         const int VersionSliceSize = 200;
         var entityIdString = entityId.IsString ? entityId.AsString : entityId.ToString() ?? string.Empty;
         var skip = 0;
+        var wroteAnyVersion = false;
 
         while (true)
         {
@@ -900,6 +901,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             if (writes.Count > 0)
             {
                 await _versionCollection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
+                wroteAnyVersion = true;
             }
 
             skip += versions.Count;
@@ -909,12 +911,80 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             }
         }
 
+        // Data-loss guard (#1413 / protects #1412's read path): a legacy old-shape document can carry a
+        // valid `current` projection but an empty (or absent) inline Versions array, yielding zero version
+        // documents above. Because #1412 retired EnsureBootstrapVersion, such an entity would have no
+        // version document anywhere and would vanish from ExportAsync/history/point-in-time reads after the
+        // inline array is $unset. Synthesize one bootstrap version from `current` (keyed by the current
+        // latest-version pointer, so it is idempotent) before dropping the inline array.
+        if (!wroteAnyVersion)
+        {
+            var currentDoc = await collection
+                .Find(new BsonDocument("_id", entityId))
+                .Project(new BsonDocument("current", 1))
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (currentDoc is not null
+                && currentDoc.TryGetValue("current", out var currentValue)
+                && currentValue is BsonDocument current)
+            {
+                await EnsureBootstrapVersionFromCurrentAsync(entityId, current, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         // Copy-then-$unset: only after every version has been upserted do we drop the inline array, so
         // an interrupted run leaves the (still old-shape) document to be re-migrated on next startup.
         await collection.UpdateOneAsync(
             new BsonDocument("_id", entityId),
             new BsonDocument("$unset", new BsonDocument("Versions", string.Empty)),
             cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #1413 (protects #1412's read path): synthesizes a single bootstrap version document in the
+    /// <c>{collectionName}_versions</c> collection from an entity's <c>current</c> projection, for legacy
+    /// documents that have a valid <c>current</c> but no recorded versions (an empty/absent inline array).
+    /// This keeps the entity readable/exportable now that all reads stream only from the versions
+    /// collection. The upsert is keyed by the <c>current.modified-version</c> pointer (the latest-version
+    /// ObjectId) so it is idempotent and, for documents that do have history, coincides with the real
+    /// latest version rather than creating a duplicate.
+    /// </summary>
+    private async Task EnsureBootstrapVersionFromCurrentAsync(
+        BsonValue entityId,
+        BsonDocument current,
+        CancellationToken cancellationToken)
+    {
+        if (!current.TryGetValue("modified-version", out var modifiedVersionValue)
+            || !current.TryGetValue("modified-time-utc", out var modifiedTimeValue)
+            || !modifiedTimeValue.IsValidDateTime)
+        {
+            return;
+        }
+
+        var versionIdString = modifiedVersionValue.IsString
+            ? modifiedVersionValue.AsString
+            : modifiedVersionValue.ToString();
+        if (string.IsNullOrEmpty(versionIdString) || !ObjectId.TryParse(versionIdString, out var versionId))
+        {
+            return;
+        }
+
+        var bootstrap = new MongoDbEntityVersionDocument
+        {
+            VersionId = versionId,
+            EntityId = entityId.IsString ? entityId.AsString : entityId.ToString() ?? string.Empty,
+            TimestampUtc = modifiedTimeValue.ToUniversalTime(),
+            Data = current.TryGetValue("data", out var dataValue) && dataValue is BsonDocument dataDocument
+                ? dataDocument
+                : null,
+        };
+
+        await _versionCollection.ReplaceOneAsync(
+            Builders<MongoDbEntityVersionDocument>.Filter.Eq(static v => v.VersionId, bootstrap.VersionId),
+            bootstrap,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static ObjectId ReadInlineVersionId(BsonDocument version)
@@ -953,7 +1023,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         return timeProvider.GetUtcNow().UtcDateTime;
     }
 
-    private static async Task ApplyMigrationBatchAsync(
+    private async Task ApplyMigrationBatchAsync(
         IMongoCollection<BsonDocument> collection,
         List<BsonDocument> docs,
         CancellationToken cancellationToken)
@@ -965,6 +1035,14 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var id = doc["_id"];
             var current = doc["current"].AsBsonDocument;
             var data = current.Contains("data") && current["data"] is BsonDocument d ? d : null;
+
+            // Data-loss guard (#1413 / protects #1412's read path): pre-v760 documents store a valid
+            // `current` but only an empty lowercase `versions` array (never a typed `Versions` array), so
+            // MigrateInlineVersionsAsync — which matches the capital `Versions` field — never sees them.
+            // Synthesize a bootstrap version from `current` (idempotent upsert keyed by the latest-version
+            // pointer) so the entity remains readable/exportable from the versions collection, mirroring the
+            // pre-#1412 EnsureBootstrapVersion behaviour.
+            await EnsureBootstrapVersionFromCurrentAsync(id, current, cancellationToken).ConfigureAwait(false);
 
             // Compute name-parent-prefixes from data.names
             var prefixArray = new BsonArray();
@@ -1007,6 +1085,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     {
                         { "current.names", "" },
                         { "current.type-names", "" },
+                        { "versions", "" },
                     }
                 },
             };

@@ -488,4 +488,82 @@ public sealed class MongoDbEntityDataAccessLayerMigrationSlowTests
         });
         Assert.Equal(UpdateState.Updated, Assert.Single(updateResult.EntityResults).UpdateState);
     }
+
+    /// <summary>
+    /// Regression (#1413 / protects #1412's read path): a legacy pre-migration document with a valid
+    /// <c>current</c> projection but an EMPTY inline versions array must, after migration, be represented
+    /// by exactly one bootstrap version in the <c>_versions</c> collection and remain readable via
+    /// <see cref="MongoDbEntityDataAccessLayer.ExportAsync"/>, history, and point-in-time reads — i.e. no
+    /// data loss now that <c>EnsureBootstrapVersion</c> is retired from the read path. Also asserts the
+    /// bootstrap synthesis is idempotent across two migration runs.
+    /// </summary>
+    [Fact]
+    public async Task MigrateAsync_EmptyInlineVersions_SynthesizesBootstrapVersion_AndIsNotLost()
+    {
+        var id = Guid.NewGuid().ToString();
+        var entityId = new EntityId(Guid.Parse(id));
+        var timestamp = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var versionId = ObjectId.GenerateNewId(timestamp);
+
+        // Pre-migration shape: valid `current` but an EMPTY inline `versions` array (never migrated to a
+        // typed `Versions` array), which yields zero version documents on migration.
+        var doc = new BsonDocument
+        {
+            { "_id", id },
+            { "versions", new BsonArray() },
+            {
+                "current", new BsonDocument
+                {
+                    {
+                        "data", new BsonDocument
+                        {
+                            { "entity-id", id },
+                            { "entity-types", new BsonArray { "entity" } },
+                            { "names", new BsonArray { new BsonArray { new BsonString("workspace"), new BsonString("bootstrap-entity") } } },
+                        }
+                    },
+                    { "is-deleted", false },
+                    { "modified-time-utc", timestamp },
+                    { "modified-version", versionId.ToString() },
+                }
+            },
+        };
+        await GetEntityCollection().InsertOneAsync(doc);
+
+        var dal = CreateDataAccessLayer();
+        await dal.EnsureIndexesAsync();
+
+        await dal.MigrateAsync();
+        await dal.MigrateAsync(); // second run must not duplicate the bootstrap version
+
+        // Exactly one bootstrap version, keyed by the current latest-version pointer.
+        var versionDocs = await GetVersionCollection().Find(new BsonDocument("EntityId", id)).ToListAsync();
+        var version = Assert.Single(versionDocs);
+        Assert.Equal(versionId, version["_id"].AsObjectId);
+
+        // The legacy inline array is gone.
+        var entityDoc = await GetEntityCollection().Find(new BsonDocument("_id", id)).FirstAsync();
+        Assert.False(entityDoc.Contains("versions"), "empty inline versions array must be $unset after migration");
+
+        // Export includes the entity — it would have vanished before the fix.
+#pragma warning disable CS0618 // ExportAsync is intentionally exercised here to verify no data loss.
+        var export = await dal.ExportAsync(new ExportRequest());
+#pragma warning restore CS0618
+        Assert.Contains(export.ChangeBatches.SelectMany(static b => b.Entities), e => e.EntityId.Equals(entityId));
+
+        // History returns the single bootstrap version.
+        var history = await dal.GetHistoryAsync(new GetHistoryRequest { EntityIds = [entityId] });
+        var entry = Assert.Single(history.History);
+        var time = Assert.Single(entry.UpdateTimes);
+        Assert.Equal(versionId.ToString(), time.ChangeId);
+
+        // Point-in-time read resolves the bootstrap version's data from the versions collection.
+        var getResult = await dal.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityId = entityId }],
+            Timestamps = [new Timestamp(new DateTimeOffset(timestamp, TimeSpan.Zero), versionId.ToString())],
+        });
+        var snapshot = Assert.Single(Assert.Single(getResult.Batches).Entities);
+        Assert.Contains("bootstrap-entity", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
+    }
 }
