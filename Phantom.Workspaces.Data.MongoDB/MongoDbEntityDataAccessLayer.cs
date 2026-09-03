@@ -755,15 +755,20 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
     /// <summary>
     /// Backfills <c>current.name-parent-prefixes</c> and <c>current.participant-ids</c> on any
-    /// documents that are missing those fields (written before this schema version), and removes the
-    /// obsolete <c>current.names</c> and <c>current.type-names</c> fields. Processes up to 500
-    /// documents per <c>bulkWrite</c> batch. Idempotent — safe to call multiple times.
+    /// documents that are missing those fields (written before this schema version), removes the
+    /// obsolete <c>current.names</c> and <c>current.type-names</c> fields, and (#1413) performs the
+    /// one-shot migration of legacy inline <c>Versions</c> arrays into the
+    /// <c>{collectionName}_versions</c> collection. Processes up to 500 documents per batch.
+    /// Idempotent and crash-safe — safe to call on every startup.
     /// </summary>
     public virtual async Task MigrateAsync(CancellationToken cancellationToken = default)
     {
         const int BatchSize = 500;
         var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
             _entityCollection.CollectionNamespace.CollectionName);
+
+        // #1413: move legacy inline versions into the versions collection and shrink oversized docs.
+        await MigrateInlineVersionsAsync(bsonCollection, BatchSize, cancellationToken).ConfigureAwait(false);
 
         // Find all non-deleted docs that are missing the new name-parent-prefixes field.
         var filter = new BsonDocument
@@ -783,7 +788,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             batch.AddRange(cursor.Current);
             while (batch.Count >= BatchSize)
             {
-                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], _timeProvider, cancellationToken)
+                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], cancellationToken)
                     .ConfigureAwait(false);
                 batch.RemoveRange(0, BatchSize);
             }
@@ -791,14 +796,166 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         if (batch.Count > 0)
         {
-            await ApplyMigrationBatchAsync(bsonCollection, batch, _timeProvider, cancellationToken).ConfigureAwait(false);
+            await ApplyMigrationBatchAsync(bsonCollection, batch, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// #1413: one-shot, idempotent, crash-safe migration of legacy inline <c>Versions</c> arrays into
+    /// the <c>{collectionName}_versions</c> collection. For each old-shape document, every inline
+    /// version is upserted (keyed by its VersionId) into the versions collection, then the inline
+    /// array is <c>$unset</c> — shrinking documents that had grown near the 16 MB BSON limit. If no
+    /// document carries an inline <c>Versions</c> array, this is a no-op.
+    /// </summary>
+    private async Task MigrateInlineVersionsAsync(
+        IMongoCollection<BsonDocument> collection,
+        int batchSize,
+        CancellationToken cancellationToken)
+    {
+        // Old-shape documents are exactly those that still carry an inline Versions array.
+        var oldShapeFilter = new BsonDocument("Versions", new BsonDocument("$exists", true));
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Project only _id so a single oversized (16 MB) document is never loaded whole here.
+            var idDocuments = await collection
+                .Find(oldShapeFilter)
+                .Project(new BsonDocument("_id", 1))
+                .Limit(batchSize)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (idDocuments.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var idDocument in idDocuments)
+            {
+                await MigrateEntityInlineVersionsAsync(collection, idDocument["_id"], cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task MigrateEntityInlineVersionsAsync(
+        IMongoCollection<BsonDocument> collection,
+        BsonValue entityId,
+        CancellationToken cancellationToken)
+    {
+        // Oversized-document rescue: read the inline Versions array in $slice windows so even a
+        // document at the 16 MB ceiling can be migrated without loading it whole.
+        const int VersionSliceSize = 200;
+        var entityIdString = entityId.IsString ? entityId.AsString : entityId.ToString() ?? string.Empty;
+        var skip = 0;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var projection = new BsonDocument("Versions", new BsonDocument("$slice", new BsonArray { skip, VersionSliceSize }));
+            var sliced = await collection
+                .Find(new BsonDocument("_id", entityId))
+                .Project(projection)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (sliced is null
+                || !sliced.TryGetValue("Versions", out var versionsValue)
+                || versionsValue is not BsonArray versions
+                || versions.Count == 0)
+            {
+                break;
+            }
+
+            var writes = new List<WriteModel<MongoDbEntityVersionDocument>>(versions.Count);
+            foreach (var versionValue in versions)
+            {
+                if (versionValue is not BsonDocument version)
+                {
+                    continue;
+                }
+
+                var versionDocument = new MongoDbEntityVersionDocument
+                {
+                    VersionId = ReadInlineVersionId(version),
+                    EntityId = entityIdString,
+                    TimestampUtc = ReadInlineVersionTimestamp(version, _timeProvider),
+                    Data = version.TryGetValue("data", out var dataValue) && dataValue is BsonDocument dataDocument
+                        ? dataDocument
+                        : null,
+                };
+
+                // Upsert keyed by VersionId so re-running the migration never duplicates a version.
+                writes.Add(new ReplaceOneModel<MongoDbEntityVersionDocument>(
+                    Builders<MongoDbEntityVersionDocument>.Filter.Eq(static v => v.VersionId, versionDocument.VersionId),
+                    versionDocument)
+                {
+                    IsUpsert = true,
+                });
+            }
+
+            if (writes.Count > 0)
+            {
+                await _versionCollection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            skip += versions.Count;
+            if (versions.Count < VersionSliceSize)
+            {
+                break;
+            }
+        }
+
+        // Copy-then-$unset: only after every version has been upserted do we drop the inline array, so
+        // an interrupted run leaves the (still old-shape) document to be re-migrated on next startup.
+        await collection.UpdateOneAsync(
+            new BsonDocument("_id", entityId),
+            new BsonDocument("$unset", new BsonDocument("Versions", string.Empty)),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    private static ObjectId ReadInlineVersionId(BsonDocument version)
+    {
+        if (version.TryGetValue("VersionId", out var value))
+        {
+            if (value.IsObjectId)
+            {
+                return value.AsObjectId;
+            }
+
+            if (value.IsString && ObjectId.TryParse(value.AsString, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return ObjectId.GenerateNewId();
+    }
+
+    private static DateTime ReadInlineVersionTimestamp(BsonDocument version, TimeProvider timeProvider)
+    {
+        if (version.TryGetValue("TimestampUtc", out var value))
+        {
+            if (value.IsValidDateTime)
+            {
+                return value.ToUniversalTime();
+            }
+
+            if (value.IsString && DateTime.TryParse(value.AsString, out var parsed))
+            {
+                return parsed.ToUniversalTime();
+            }
+        }
+
+        return timeProvider.GetUtcNow().UtcDateTime;
     }
 
     private static async Task ApplyMigrationBatchAsync(
         IMongoCollection<BsonDocument> collection,
         List<BsonDocument> docs,
-        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var writes = new List<WriteModel<BsonDocument>>(docs.Count);
@@ -854,23 +1011,6 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 },
             };
 
-            var hasTypedVersions = doc.TryGetValue("Versions", out var versionsValue)
-                && versionsValue.IsBsonArray
-                && versionsValue.AsBsonArray.Count > 0;
-            if (!hasTypedVersions && data is not null)
-            {
-                update["$set"].AsBsonDocument["Versions"] = new BsonArray
-                {
-                    new BsonDocument
-                    {
-                        { "VersionId", ReadVersionId(current) },
-                        { "TimestampUtc", ReadTimestampUtc(current, timeProvider) },
-                        { "data", data.DeepClone() },
-                    },
-                };
-                update["$unset"].AsBsonDocument["versions"] = "";
-            }
-
             writes.Add(new UpdateOneModel<BsonDocument>(
                 new BsonDocumentFilterDefinition<BsonDocument>(new BsonDocument("_id", id)),
                 new BsonDocumentUpdateDefinition<BsonDocument>(update)));
@@ -880,42 +1020,6 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             await collection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-    }
-
-    private static ObjectId ReadVersionId(BsonDocument current)
-    {
-        if (current.TryGetValue("modified-version", out var value))
-        {
-            if (value.IsObjectId)
-            {
-                return value.AsObjectId;
-            }
-
-            if (value.IsString && ObjectId.TryParse(value.AsString, out var parsed))
-            {
-                return parsed;
-            }
-        }
-
-        return ObjectId.GenerateNewId();
-    }
-
-    private static DateTime ReadTimestampUtc(BsonDocument current, TimeProvider timeProvider)
-    {
-        if (current.TryGetValue("modified-time-utc", out var value))
-        {
-            if (value.IsValidDateTime)
-            {
-                return value.ToUniversalTime();
-            }
-
-            if (value.IsString && DateTime.TryParse(value.AsString, out var parsed))
-            {
-                return parsed.ToUniversalTime();
-            }
-        }
-
-        return timeProvider.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>

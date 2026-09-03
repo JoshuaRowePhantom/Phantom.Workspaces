@@ -279,4 +279,213 @@ public sealed class MongoDbEntityDataAccessLayerMigrationSlowTests
 
         Assert.Equal(0, stillMissing);
     }
+
+    // ---- #1413: inline-versions migration ----
+
+    private IMongoCollection<BsonDocument> GetVersionCollection()
+        => _fixture.Database.GetCollection<BsonDocument>(
+            $"{MongoDbTestDatabaseFixture.EntityCollectionName}_versions");
+
+    /// <summary>
+    /// Inserts a hardcoded old-shape (pre-#1411) entity document carrying an inline capital
+    /// <c>Versions</c> array, as production/dev databases contain today.
+    /// </summary>
+    private async Task<(string Id, IReadOnlyList<(ObjectId VersionId, DateTime TimestampUtc, string Name)> Versions)>
+        InsertOldShapeDocumentAsync(int versionCount, int paddingBytesPerVersion = 0)
+    {
+        var id = Guid.NewGuid().ToString();
+        var baseTime = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var versions = new BsonArray();
+        var meta = new List<(ObjectId, DateTime, string)>();
+        BsonDocument? lastData = null;
+        ObjectId lastVersionId = default;
+        DateTime lastTimestamp = default;
+
+        for (var i = 0; i < versionCount; i++)
+        {
+            var timestamp = baseTime.AddSeconds(i);
+            var versionId = ObjectId.GenerateNewId(timestamp);
+            var name = $"v{i}";
+            var data = new BsonDocument
+            {
+                { "entity-id", id },
+                { "entity-types", new BsonArray { "entity" } },
+                { "names", new BsonArray { new BsonArray { name } } },
+            };
+            if (paddingBytesPerVersion > 0)
+            {
+                data["padding"] = new string('x', paddingBytesPerVersion);
+            }
+
+            versions.Add(new BsonDocument
+            {
+                { "VersionId", versionId },
+                { "TimestampUtc", timestamp },
+                { "data", data },
+            });
+            meta.Add((versionId, timestamp, name));
+            lastData = (BsonDocument)data.DeepClone();
+            lastVersionId = versionId;
+            lastTimestamp = timestamp;
+        }
+
+        var doc = new BsonDocument
+        {
+            { "_id", id },
+            { "Versions", versions },
+            {
+                "current", new BsonDocument
+                {
+                    { "data", (BsonValue?)lastData ?? BsonNull.Value },
+                    { "is-deleted", false },
+                    { "modified-time-utc", lastTimestamp },
+                    { "modified-version", lastVersionId.ToString() },
+                    { "name-parent-prefixes", new BsonArray() },
+                    { "participant-ids", new BsonArray() },
+                }
+            },
+        };
+
+        await GetEntityCollection().InsertOneAsync(doc);
+        return (id, meta);
+    }
+
+    [Fact]
+    public async Task MigrateAsync_MovesInlineVersionsToVersionsCollection()
+    {
+        var (id, versions) = await InsertOldShapeDocumentAsync(versionCount: 3);
+
+        var dal = CreateDataAccessLayer();
+        await dal.EnsureIndexesAsync();
+        await dal.MigrateAsync();
+
+        var entityDoc = await GetEntityCollection().Find(new BsonDocument("_id", id)).FirstAsync();
+        Assert.False(entityDoc.Contains("Versions"), "inline Versions array must be $unset after migration");
+
+        var versionDocs = await GetVersionCollection()
+            .Find(new BsonDocument("EntityId", id))
+            .ToListAsync();
+        Assert.Equal(versions.Count, versionDocs.Count);
+        foreach (var expected in versions)
+        {
+            Assert.Contains(versionDocs, v => v["_id"].AsObjectId == expected.VersionId);
+        }
+    }
+
+    [Fact]
+    public async Task MigrateAsync_MigratesAllDocuments_WhenOldCollectionExists()
+    {
+        var expectedVersionCount = 0;
+        for (var i = 0; i < 5; i++)
+        {
+            var (_, versions) = await InsertOldShapeDocumentAsync(versionCount: i + 1);
+            expectedVersionCount += versions.Count;
+        }
+
+        var dal = CreateDataAccessLayer();
+        await dal.EnsureIndexesAsync();
+        await dal.MigrateAsync();
+
+        var remainingOldShape = await GetEntityCollection()
+            .CountDocumentsAsync(new BsonDocument("Versions", new BsonDocument("$exists", true)));
+        Assert.Equal(0, remainingOldShape);
+
+        var totalVersions = await GetVersionCollection().CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty);
+        Assert.Equal(expectedVersionCount, totalVersions);
+    }
+
+    [Fact]
+    public async Task MigrateAsync_InlineVersions_IsIdempotent_WhenRunTwice()
+    {
+        var (id, versions) = await InsertOldShapeDocumentAsync(versionCount: 4);
+
+        var dal = CreateDataAccessLayer();
+        await dal.EnsureIndexesAsync();
+
+        await dal.MigrateAsync();
+        await dal.MigrateAsync();
+
+        var versionDocs = await GetVersionCollection()
+            .CountDocumentsAsync(new BsonDocument("EntityId", id));
+        Assert.Equal(versions.Count, versionDocs);
+
+        var entityDoc = await GetEntityCollection().Find(new BsonDocument("_id", id)).FirstAsync();
+        Assert.False(entityDoc.Contains("Versions"), "second run must be a no-op — the array stays removed");
+    }
+
+    [Fact]
+    public async Task MigrateAsync_PreservesPointInTimeQueries_AfterVersionSplit()
+    {
+        var (id, versions) = await InsertOldShapeDocumentAsync(versionCount: 3);
+        var entityId = new EntityId(id);
+
+        var dal = CreateDataAccessLayer();
+        await dal.EnsureIndexesAsync();
+        await dal.MigrateAsync();
+
+        // History returns every migrated version in order.
+        var history = await dal.GetHistoryAsync(new GetHistoryRequest { EntityIds = [entityId] });
+        var entry = Assert.Single(history.History);
+        Assert.Equal(
+            versions.Select(static v => v.VersionId.ToString()).ToArray(),
+            entry.UpdateTimes.Select(static t => t.ChangeId).ToArray());
+
+        // Point-in-time reads resolve each historical version's data from the versions collection.
+        foreach (var version in versions)
+        {
+            var getResult = await dal.GetAsync(new GetRequest
+            {
+                Entities = [new GetEntityRequest { EntityId = entityId }],
+                Timestamps = [new Timestamp(new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero), version.VersionId.ToString())],
+            });
+            var snapshot = Assert.Single(Assert.Single(getResult.Batches).Entities);
+            Assert.Contains($"\"{version.Name}\"", snapshot.Data?.GetRawText(), StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task MigrateAsync_ShrinksOversizedDocument_BelowBsonLimit()
+    {
+        // Seed a single entity document with a large inline Versions array (~8 MB).
+        var (id, _) = await InsertOldShapeDocumentAsync(versionCount: 40, paddingBytesPerVersion: 200_000);
+
+        var beforeDoc = await GetEntityCollection().Find(new BsonDocument("_id", id)).FirstAsync();
+        var beforeSize = beforeDoc.ToBson().Length;
+        Assert.True(beforeSize > 5_000_000, $"seed document should be multi-megabyte but was {beforeSize} bytes");
+
+        var dal = CreateDataAccessLayer();
+        await dal.EnsureIndexesAsync();
+        await dal.MigrateAsync();
+
+        var afterDoc = await GetEntityCollection().Find(new BsonDocument("_id", id)).FirstAsync();
+        var afterSize = afterDoc.ToBson().Length;
+        Assert.False(afterDoc.Contains("Versions"), "inline Versions array must be removed");
+        Assert.True(afterSize < 1_000_000, $"migrated document should be far below 16 MB but was {afterSize} bytes");
+
+        // The un-wedged document is writable again via the normal update path.
+        var current = afterDoc["current"].AsBsonDocument;
+        var tag = new ConcurrencyTag(current["modified-version"].AsString);
+        using var document = JsonDocument.Parse($$"""
+            {
+              "entity-id": "{{id}}",
+              "entity-types": ["entity"],
+              "names": [["rescued"]]
+            }
+            """);
+        var updateResult = await dal.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "rescue" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId(id),
+                    ConcurrencyTag = tag,
+                    Data = document.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+        Assert.Equal(UpdateState.Updated, Assert.Single(updateResult.EntityResults).UpdateState);
+    }
 }
