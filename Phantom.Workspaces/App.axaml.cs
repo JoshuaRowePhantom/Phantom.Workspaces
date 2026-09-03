@@ -310,7 +310,7 @@ public partial class App : Application
             // register the persistent per-server token cache over the platform secret store so tokens
             // survive restarts (silent refresh). Headless hosts (CLI / Web.Server / tests) do not wire
             // this and keep the failing default.
-            var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore);
+            var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore, loggerFactory);
             var agentChatFactory = new AgentChatFactory(
                 agentPersistenceStore,
                 Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions),

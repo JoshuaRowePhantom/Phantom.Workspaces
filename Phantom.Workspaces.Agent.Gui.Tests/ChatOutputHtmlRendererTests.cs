@@ -948,6 +948,50 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
+    public void ChatOutputHtmlRenderer_ErrorDiagnosticWithDetailLines_RendersCollapsibleSummaryAndBody()
+    {
+        var message = "Failed to open MCP server 'github-oauth': token exchange failed\n"
+            + "System.InvalidOperationException: token exchange failed\n"
+            + "System.Text.Json.JsonException: 'e' is an invalid start of a value.";
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new ErrorContent(message),
+            includeReasoning: false,
+            isDiagnostic: true,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        // Collapsible <details> styled as both diagnostic and error.
+        Assert.Contains("<details", html, StringComparison.Ordinal);
+        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+        Assert.Contains("chat-error", html, StringComparison.Ordinal);
+        // <summary> = first line (header).
+        Assert.Contains("<summary", html, StringComparison.Ordinal);
+        Assert.Contains("Failed to open MCP server &#39;github-oauth&#39;: token exchange failed", html, StringComparison.Ordinal);
+        // <pre> body = remaining detail lines.
+        Assert.Contains("chat-collapsible-body", html, StringComparison.Ordinal);
+        Assert.Contains("System.Text.Json.JsonException: &#39;e&#39; is an invalid start of a value.", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputHtmlRenderer_NonDiagnosticErrorContent_StillRendersFlatBlock()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new ErrorContent("something went wrong"),
+            includeReasoning: false,
+            isDiagnostic: false,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        // No regression: a non-diagnostic error keeps its flat chat-error block, not a <details>.
+        Assert.Contains("chat-error", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<details", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-diagnostic", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RoleClass_HelpRole_ReturnsChatHelpMessage()
     {
         var roleClass = ChatOutputHtmlRenderer.RoleClass("help");

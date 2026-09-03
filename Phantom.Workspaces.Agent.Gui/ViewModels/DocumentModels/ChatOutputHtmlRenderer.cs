@@ -528,6 +528,13 @@ internal static class ChatOutputHtmlRenderer
                 return IsImageMediaType(data.MediaType)
                     ? TextBlock(contentId, "chat-meta", string.IsNullOrWhiteSpace(data.MediaType) ? "image" : data.MediaType, SerializeContentJson(data))
                     : TextBlock(contentId, "chat-monospace", string.IsNullOrWhiteSpace(data.MediaType) ? "[data]" : $"[{data.MediaType}]", SerializeContentJson(data));
+            case ErrorContent error when isDiagnostic && !string.IsNullOrWhiteSpace(error.Message):
+                return RenderCollapsible(
+                    contentId,
+                    "chat-diagnostic chat-error",
+                    DiagnosticHeader(error.Message!),
+                    DiagnosticBody(error.Message!),
+                    SerializeContentJson(error));
             case ErrorContent error:
                 return TextBlock(contentId, "chat-error", error.Message ?? string.Empty, SerializeContentJson(error));
             case UriContent uri:

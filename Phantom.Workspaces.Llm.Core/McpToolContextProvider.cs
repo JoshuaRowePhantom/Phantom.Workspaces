@@ -54,12 +54,24 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         {
             if (this.client is null)
             {
-                var transport = await McpTransportFactory.CreateMcpTransportAsync(
-                    this.tool,
-                    this.services,
-                    this.loggerFactory,
-                    cancellationToken);
-                this.client = await McpClient.CreateAsync(transport, null, this.loggerFactory, cancellationToken);
+                var logger = this.loggerFactory?.CreateLogger<McpToolContextProvider>();
+                var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
+                try
+                {
+                    var transport = await McpTransportFactory.CreateMcpTransportAsync(
+                        this.tool,
+                        this.services,
+                        this.loggerFactory,
+                        cancellationToken);
+                    this.client = await McpClient.CreateAsync(transport, null, this.loggerFactory, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    // Log only the exception type/message (no secrets, tokens, or URIs) and re-throw so
+                    // AgentChat's catch surfaces the structured diagnostic unchanged (issue #1408).
+                    logger?.LogError(ex, "Failed to open MCP server {ServerName}.", serverName ?? "(mcp server)");
+                    throw;
+                }
             }
 
             var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);

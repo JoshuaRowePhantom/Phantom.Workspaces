@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Authentication;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -31,22 +33,28 @@ public sealed class McpOAuthRedirectHandler
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly ISecretProvider consentProvider;
     private readonly TimeSpan timeout;
+    private readonly ILogger logger;
     private readonly object gate = new();
     private readonly HashSet<string> consentedServers = new(StringComparer.OrdinalIgnoreCase);
 
-    public McpOAuthRedirectHandler(ISystemBrowserLauncher browserLauncher, ISecretProvider consentProvider)
-        : this(browserLauncher, consentProvider, DefaultTimeout)
+    public McpOAuthRedirectHandler(
+        ISystemBrowserLauncher browserLauncher,
+        ISecretProvider consentProvider,
+        ILogger<McpOAuthRedirectHandler>? logger = null)
+        : this(browserLauncher, consentProvider, DefaultTimeout, logger)
     {
     }
 
     internal McpOAuthRedirectHandler(
         ISystemBrowserLauncher browserLauncher,
         ISecretProvider consentProvider,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        ILogger<McpOAuthRedirectHandler>? logger = null)
     {
         this.browserLauncher = browserLauncher ?? throw new ArgumentNullException(nameof(browserLauncher));
         this.consentProvider = consentProvider ?? throw new ArgumentNullException(nameof(consentProvider));
         this.timeout = timeout;
+        this.logger = logger ?? (ILogger)NullLogger<McpOAuthRedirectHandler>.Instance;
     }
 
     /// <summary>
@@ -106,10 +114,14 @@ public sealed class McpOAuthRedirectHandler
             {
                 if (cancellationToken.IsCancellationRequested)
                 {
+                    this.logger.LogWarning(
+                        "MCP OAuth sign-in for server '{ServerName}' was cancelled.", serverName);
                     throw new OperationCanceledException(
                         $"MCP OAuth sign-in for server '{serverName}' was cancelled.", cancellationToken);
                 }
 
+                this.logger.LogWarning(
+                    "Timed out waiting for the OAuth redirect from MCP server '{ServerName}'.", serverName);
                 throw new TimeoutException(
                     $"Timed out waiting for the OAuth redirect from MCP server '{serverName}'.");
             }
@@ -123,8 +135,24 @@ public sealed class McpOAuthRedirectHandler
             var error = GetQueryValue(requestUri, "error");
             if (!string.IsNullOrEmpty(error))
             {
-                throw new InvalidOperationException(
+                var errorDescription = GetQueryValue(requestUri, "error_description");
+
+                // Log ONLY the OAuth error/error_description codes. The full redirect URI must never
+                // be logged: its query carries the authorization `code`/`state` (issue #1408).
+                this.logger.LogError(
+                    "MCP OAuth redirect for '{ServerName}' returned error {Error}.", serverName, error);
+
+                // Carry the decoded error/error_description into the thrown exception (via Data) so the
+                // AgentChat catch can surface them as diagnostic detail items without re-parsing URIs.
+                var oauthException = new InvalidOperationException(
                     $"MCP OAuth authorization failed for server '{serverName}': {error}.");
+                oauthException.Data["oauth_error"] = error;
+                if (!string.IsNullOrEmpty(errorDescription))
+                {
+                    oauthException.Data["oauth_error_description"] = errorDescription;
+                }
+
+                throw oauthException;
             }
 
             return requestUri;
@@ -161,6 +189,8 @@ public sealed class McpOAuthRedirectHandler
 
         if (result is null)
         {
+            this.logger.LogWarning(
+                "User declined MCP OAuth sign-in for server '{ServerName}'.", serverName);
             throw new OperationCanceledException("User declined MCP OAuth sign-in.");
         }
 

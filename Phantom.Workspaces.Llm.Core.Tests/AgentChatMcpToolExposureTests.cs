@@ -144,6 +144,75 @@ public sealed class AgentChatMcpToolExposureTests
         Assert.DoesNotContain(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void AgentChat_McpInitThrowsNestedException_DiagnosticListsEachInnerExceptionAsDetail()
+    {
+        // Outer wraps an inner wrapping a JsonException, mirroring the motivating github-oauth case.
+        var inner = new System.Text.Json.JsonException("'e' is an invalid start of a value.");
+        var middle = new InvalidOperationException("token exchange failed", inner);
+        var outer = new InvalidOperationException("could not open server", middle);
+
+        var diagnostic = AgentChat.BuildMcpFailureDiagnostic("github-oauth", outer);
+        var lines = diagnostic.Split('\n');
+
+        // Header carries the concise short reason (deepest exception's message).
+        Assert.StartsWith("Failed to open MCP server 'github-oauth':", lines[0], StringComparison.Ordinal);
+        Assert.Contains("'e' is an invalid start of a value.", lines[0], StringComparison.Ordinal);
+
+        // One detail line per unwrapped exception in the chain.
+        Assert.Contains(lines, line => line.Contains(typeof(InvalidOperationException).FullName!, StringComparison.Ordinal)
+            && line.Contains("could not open server", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains(typeof(InvalidOperationException).FullName!, StringComparison.Ordinal)
+            && line.Contains("token exchange failed", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains(typeof(System.Text.Json.JsonException).FullName!, StringComparison.Ordinal)
+            && line.Contains("'e' is an invalid start of a value.", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AgentChat_McpInitThrowsAggregateException_DiagnosticFlattensEachInner()
+    {
+        var first = new InvalidOperationException("first inner failure");
+        var second = new TimeoutException("second inner failure");
+        var aggregate = new AggregateException("aggregate wrapper", first, second);
+
+        var diagnostic = AgentChat.BuildMcpFailureDiagnostic("multi-mcp", aggregate);
+        var lines = diagnostic.Split('\n');
+
+        // Each inner exception of the AggregateException appears as its own detail line.
+        Assert.Contains(lines, line => line.Contains(typeof(InvalidOperationException).FullName!, StringComparison.Ordinal)
+            && line.Contains("first inner failure", StringComparison.Ordinal));
+        Assert.Contains(lines, line => line.Contains(typeof(TimeoutException).FullName!, StringComparison.Ordinal)
+            && line.Contains("second inner failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AgentChat_McpOAuthFailure_DiagnosticOmitsSecrets()
+    {
+        // The redirect handler carries only error/error_description; simulate secrets riding on the
+        // exception's Data (they must never appear in the surfaced diagnostic).
+        var ex = new InvalidOperationException("MCP OAuth authorization failed for server 'github-oauth': access_denied.");
+        ex.Data["oauth_error"] = "access_denied";
+        ex.Data["oauth_error_description"] = "The user declined the authorization request";
+        ex.Data["access_token"] = "SECRET-ACCESS-TOKEN-abc123";
+        ex.Data["refresh_token"] = "SECRET-REFRESH-TOKEN-def456";
+        ex.Data["client_secret"] = "SECRET-CLIENT-SECRET-ghi789";
+        ex.Data["code"] = "SECRET-AUTH-CODE-jkl012";
+        ex.Data["code_verifier"] = "SECRET-CODE-VERIFIER-mno345";
+
+        var diagnostic = AgentChat.BuildMcpFailureDiagnostic("github-oauth", ex);
+
+        // The decoded OAuth error/description ARE surfaced.
+        Assert.Contains("OAuth error: access_denied", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("OAuth error_description: The user declined the authorization request", diagnostic, StringComparison.Ordinal);
+
+        // No secret value may appear.
+        Assert.DoesNotContain("SECRET-ACCESS-TOKEN", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET-REFRESH-TOKEN", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET-CLIENT-SECRET", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET-AUTH-CODE", diagnostic, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET-CODE-VERIFIER", diagnostic, StringComparison.Ordinal);
+    }
+
     private static string BuildMcpAgentJson((string ServerName, string Endpoint) server)
         => $$"""
             {

@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
 using MongoDB.Bson;
 using OllamaSharp;
@@ -14,6 +15,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using System.ClientModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -38,6 +40,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly object sessionLock = new();
     private readonly InternalCreateAgentChatRequest request;
     private readonly TimeProvider timeProvider;
+    private readonly ILogger logger;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
     private IChatClient? client;
@@ -129,6 +132,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.timeProvider = request.TimeProvider;
+       this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
+           ?? (ILogger)NullLogger<AgentChat>.Instance;
        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
@@ -2616,7 +2621,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
         catch (Exception ex)
         {
-            var errorMessage = $"Failed to open MCP server '{displayName}': {ex}";
+            this.logger.LogError(ex, "Failed to open MCP server {ServerName}.", displayName);
+
+            var shortReason = ShortReason(ex);
+            var errorMessage = BuildMcpFailureDiagnostic(displayName, ex);
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -2633,13 +2641,131 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 runtimeTool: null,
                 parent: null,
                 isEnabled: false,
-                status: errorMessage);
+                status: $"Failed to open MCP server '{displayName}': {shortReason}");
             return new ToolInitializationResult([failedNode], []);
         }
         finally
         {
             this.CompleteRunningItem(runningItem, true);
         }
+    }
+
+    /// <summary>
+    /// Builds the multi-line diagnostic for a failed MCP server open (issue #1408). The first line is
+    /// a concise header (<c>Failed to open MCP server '{name}': {short reason}</c>) so the chat
+    /// renderer's header/body split surfaces it as the collapsible summary; each remaining line is a
+    /// detail item: one per unwrapped exception in the chain, decoded OAuth <c>error</c>/
+    /// <c>error_description</c> when carried, and finally the stack trace. Only exception types,
+    /// messages, OAuth error codes, and the stack are emitted — never tokens, secrets, authorization
+    /// codes, or redirect URIs (issue #1408 privacy requirement).
+    /// </summary>
+    internal static string BuildMcpFailureDiagnostic(string displayName, Exception ex)
+    {
+        var detail = new StringBuilder();
+        detail.Append($"Failed to open MCP server '{displayName}': {ShortReason(ex)}");
+
+        foreach (var link in UnwrapExceptionChain(ex))
+        {
+            detail.Append('\n').Append($"{link.GetType().FullName}: {link.Message}");
+        }
+
+        if (TryDecodeOAuthError(ex, out var code, out var description))
+        {
+            detail.Append('\n').Append($"OAuth error: {code}");
+            if (!string.IsNullOrEmpty(description))
+            {
+                detail.Append('\n').Append($"OAuth error_description: {description}");
+            }
+        }
+
+        if (!string.IsNullOrEmpty(ex.StackTrace))
+        {
+            detail.Append('\n').Append(ex.StackTrace);
+        }
+
+        return detail.ToString();
+    }
+
+    /// <summary>
+    /// Enumerates the exception chain: yields <paramref name="ex"/>, then walks each
+    /// <see cref="Exception.InnerException"/>, flattening every
+    /// <see cref="AggregateException.InnerExceptions"/> member in order (issue #1408).
+    /// </summary>
+    internal static IEnumerable<Exception> UnwrapExceptionChain(Exception ex)
+    {
+        if (ex is null)
+        {
+            yield break;
+        }
+
+        yield return ex;
+
+        if (ex is AggregateException aggregate)
+        {
+            foreach (var inner in aggregate.InnerExceptions)
+            {
+                foreach (var link in UnwrapExceptionChain(inner))
+                {
+                    yield return link;
+                }
+            }
+        }
+        else if (ex.InnerException is { } innerException)
+        {
+            foreach (var link in UnwrapExceptionChain(innerException))
+            {
+                yield return link;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A concise single-line reason for the diagnostic header and failed-node status: the message of
+    /// the deepest (most specific) exception in the chain (issue #1408).
+    /// </summary>
+    internal static string ShortReason(Exception ex)
+    {
+        Exception deepest = ex;
+        foreach (var link in UnwrapExceptionChain(ex))
+        {
+            deepest = link;
+        }
+
+        var message = string.IsNullOrEmpty(deepest.Message) ? deepest.GetType().Name : deepest.Message;
+        var newlineIndex = message.IndexOfAny(['\r', '\n']);
+        return newlineIndex >= 0 ? message[..newlineIndex] : message;
+    }
+
+    /// <summary>
+    /// Inspects the exception chain for a carried OAuth <c>error</c>/<c>error_description</c> (surfaced
+    /// via <see cref="Exception.Data"/> keys <c>oauth_error</c>/<c>oauth_error_description</c> by
+    /// <c>McpOAuthRedirectHandler</c>) and extracts ONLY those codes — never tokens, secrets,
+    /// authorization codes, or redirect URIs (issue #1408).
+    /// </summary>
+    internal static bool TryDecodeOAuthError(Exception ex, out string? code, out string? description)
+    {
+        code = null;
+        description = null;
+
+        foreach (var link in UnwrapExceptionChain(ex))
+        {
+            if (link.Data.Contains("oauth_error")
+                && link.Data["oauth_error"] is string carriedCode
+                && !string.IsNullOrEmpty(carriedCode))
+            {
+                code = carriedCode;
+                if (link.Data.Contains("oauth_error_description")
+                    && link.Data["oauth_error_description"] is string carriedDescription
+                    && !string.IsNullOrEmpty(carriedDescription))
+                {
+                    description = carriedDescription;
+                }
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string BuildCustomToolId(Tool tool)

@@ -137,6 +137,14 @@ internal static class McpTransportFactory
 
         var oauthOptions = ResolveOAuthOptions(services);
 
+        // Log the OAuth wiring endpoint only. Never log client id/secret, tokens, scopes values, or
+        // the redirect URI (issue #1408): only the transport endpoint host/path is safe.
+        var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Mcp.McpTransportFactory");
+        logger?.LogInformation(
+            "Wiring interactive OAuth transport for MCP server '{ServerName}' at endpoint {Endpoint}.",
+            displayName,
+            endpointUri.GetLeftPart(UriPartial.Path));
+
         var clientId = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
             oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
         var clientSecret = await AgentFactory.ResolveOptionalSecretOrEnvAsync(

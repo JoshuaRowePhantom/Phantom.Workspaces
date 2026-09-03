@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -20,18 +21,23 @@ public static class McpOAuthComposition
 
     public static McpOAuthOptions CreateOptions(
         ISecretProvider consentProvider,
-        IPlatformSecretStore? secretStore)
-        => CreateOptions(consentProvider, new SystemBrowserLauncher(), secretStore);
+        IPlatformSecretStore? secretStore,
+        ILoggerFactory? loggerFactory = null)
+        => CreateOptions(consentProvider, new SystemBrowserLauncher(), secretStore, loggerFactory);
 
     public static McpOAuthOptions CreateOptions(
         ISecretProvider consentProvider,
         ISystemBrowserLauncher browserLauncher,
-        IPlatformSecretStore? secretStore = null)
+        IPlatformSecretStore? secretStore = null,
+        ILoggerFactory? loggerFactory = null)
     {
         ArgumentNullException.ThrowIfNull(consentProvider);
         ArgumentNullException.ThrowIfNull(browserLauncher);
 
-        var handler = new McpOAuthRedirectHandler(browserLauncher, consentProvider);
+        var handler = new McpOAuthRedirectHandler(
+            browserLauncher,
+            consentProvider,
+            loggerFactory?.CreateLogger<McpOAuthRedirectHandler>());
         return new McpOAuthOptions
         {
             // #1385: interactive redirect delegate + loopback listener URI.

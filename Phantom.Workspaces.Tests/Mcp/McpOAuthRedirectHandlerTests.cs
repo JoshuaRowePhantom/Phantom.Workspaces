@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Mcp;
@@ -193,6 +194,36 @@ public sealed class McpOAuthRedirectHandlerTests
         Assert.Equal(1, consent.CallCount);
     }
 
+    [Fact]
+    public async Task McpOAuthRedirectHandler_RedirectCarriesErrorParam_LogsAndSurfacesDetail()
+    {
+        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
+        var browser = new FakeSystemBrowserLauncher();
+        // The redirect carries error + error_description AND a code (which must never be logged).
+        browser.OnOpen = _ => SendCallbackAsync(
+            redirectUri,
+            "error=access_denied&error_description=The%20user%20declined&code=must-not-be-logged&state=xyz");
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None));
+        await browser.LastCallbackTask!;
+
+        // The decoded error/error_description are carried on the exception for the surfaced detail.
+        Assert.Equal("access_denied", exception.Data["oauth_error"]);
+        Assert.Equal("The user declined", exception.Data["oauth_error_description"]);
+
+        // The handler logged the error code.
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Error && entry.Message.Contains("access_denied", StringComparison.Ordinal));
+
+        // The full redirect URI (with `code`) must NOT appear in any log entry.
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("must-not-be-logged", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("code=", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(redirectUri.ToString(), StringComparison.Ordinal));
+    }
+
     private static async Task<string> SendCallbackAsync(Uri redirectUri, string rawQuery)
     {
         using var client = new HttpClient();
@@ -281,6 +312,26 @@ public sealed class McpOAuthRedirectHandlerTests
             this.onCalled?.Invoke();
             return Task.FromResult<RequestSecretsResult?>(
                 this.grantConsent ? new RequestSecretsResult([], []) : null);
+        }
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            this.Entries.Add((logLevel, formatter(state, exception)));
         }
     }
 }
