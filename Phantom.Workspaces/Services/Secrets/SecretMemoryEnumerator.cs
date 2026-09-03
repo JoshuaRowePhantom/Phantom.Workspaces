@@ -58,6 +58,7 @@ public static class SecretSourceDisplay
             CredentialStoreSecretSource credential => $"Saved credential '{credential.CredentialName}'",
             AwsLoginSecretSource => "AWS login (not yet implemented)",
             AzureLoginSecretSource => "Azure login (not yet implemented)",
+            OAuthSecretSource => "OAuth sign-in",
             _ => source.ToString() ?? "Unknown secret source",
         };
 }

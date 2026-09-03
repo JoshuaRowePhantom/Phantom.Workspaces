@@ -168,6 +168,45 @@ public sealed class SecretUseDialogViewModelTests
         Assert.DoesNotContain(members, member => member.Contains("SecretUseScope", StringComparison.Ordinal));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SecretUseDialogViewModel_PopulatedMemories_SelectsBroadestDefault()
+    {
+        // The OAuth consent shape: populated scope memories, no KeyInManifestContent candidate.
+        var request = new SecretRequest(
+            "McpOAuth:github",
+            "Interactive OAuth sign-in for MCP server 'github'",
+            [
+                new SecretUseMemory(SecretUseScope.AllUses, "All Uses", "h-all"),
+                new SecretUseMemory(SecretUseScope.AnyManifest, "Any Manifest", "h-any"),
+                new SecretUseMemory(SecretUseScope.KeyInAnyManifest, "This Key in Any Manifest", "h-key"),
+                new SecretUseMemory(SecretUseScope.AlwaysAsk, "Always Ask", string.Empty),
+            ],
+            new OAuthSecretSource(),
+            [new OAuthSecretSource()]);
+
+        var row = Assert.Single(new SecretUseDialogViewModel(new SecretUseDialogInput([request]), new FakeCredentialPicker()).Rows);
+
+        Assert.True(row.HasMemories);
+        Assert.Contains(row.SelectedMemory, row.AvailableMemories);
+        Assert.Equal(SecretUseScope.AllUses, row.SelectedMemory.Scope);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void SecretUseDialogViewModel_EmptyMemories_DoesNotShowBlankComboBox()
+    {
+        var request = new SecretRequest(
+            "McpOAuth:github",
+            "Interactive OAuth sign-in for MCP server 'github'",
+            [],
+            null,
+            []);
+
+        var row = Assert.Single(new SecretUseDialogViewModel(new SecretUseDialogInput([request]), new FakeCredentialPicker()).Rows);
+
+        Assert.False(row.HasMemories);
+        Assert.False(row.HasSources);
+    }
+
     private static SecretUseDialogRowViewModel Row(FakeCredentialPicker picker)
         => Assert.Single(new SecretUseDialogViewModel(new SecretUseDialogInput([Request("ApiKey")]), picker).Rows);
 

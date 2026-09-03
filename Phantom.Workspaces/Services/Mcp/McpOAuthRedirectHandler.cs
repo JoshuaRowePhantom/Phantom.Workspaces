@@ -17,9 +17,14 @@ namespace Phantom.Workspaces.Services.Mcp;
 /// <c>code</c> string the SDK expects.
 /// </summary>
 /// <remarks>
-/// Consent is remembered per MCP server for the process session, so silent token refreshes do not
-/// re-prompt the user. Only the GUI/desktop host wires this handler; headless hosts keep the failing
-/// "interactive OAuth is not configured" default from #1382.
+/// Consent is remembered per MCP server for the process session (the in-process
+/// <see cref="consentedServers"/> fast-path) so silent token refreshes do not re-prompt the user.
+/// The consent request also carries scope memories keyed on <c>McpOAuth:{server}</c>, so an accepted
+/// non-<see cref="SecretUseScope.AlwaysAsk"/> scope is persisted by the consent provider
+/// (<see cref="ISecretProvider"/>) through the same allowed-secrets store as the <c>${SECRET:}</c>
+/// path and matched again on a fresh handler/process, suppressing re-prompting after restart. Only the
+/// GUI/desktop host wires this handler; headless hosts keep the failing "interactive OAuth is not
+/// configured" default from #1382.
 /// </remarks>
 public sealed class McpOAuthRedirectHandler
 {
@@ -32,6 +37,8 @@ public sealed class McpOAuthRedirectHandler
 
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly ISecretProvider consentProvider;
+    private readonly AgentManifestSecretUseMemoryFactory memoryFactory;
+    private readonly Func<string?>? sessionIdentityProvider;
     private readonly TimeSpan timeout;
     private readonly ILogger logger;
     private readonly object gate = new();
@@ -40,8 +47,10 @@ public sealed class McpOAuthRedirectHandler
     public McpOAuthRedirectHandler(
         ISystemBrowserLauncher browserLauncher,
         ISecretProvider consentProvider,
-        ILogger<McpOAuthRedirectHandler>? logger = null)
-        : this(browserLauncher, consentProvider, DefaultTimeout, logger)
+        ILogger<McpOAuthRedirectHandler>? logger = null,
+        AgentManifestSecretUseMemoryFactory? memoryFactory = null,
+        Func<string?>? sessionIdentityProvider = null)
+        : this(browserLauncher, consentProvider, DefaultTimeout, logger, memoryFactory, sessionIdentityProvider)
     {
     }
 
@@ -49,10 +58,14 @@ public sealed class McpOAuthRedirectHandler
         ISystemBrowserLauncher browserLauncher,
         ISecretProvider consentProvider,
         TimeSpan timeout,
-        ILogger<McpOAuthRedirectHandler>? logger = null)
+        ILogger<McpOAuthRedirectHandler>? logger = null,
+        AgentManifestSecretUseMemoryFactory? memoryFactory = null,
+        Func<string?>? sessionIdentityProvider = null)
     {
         this.browserLauncher = browserLauncher ?? throw new ArgumentNullException(nameof(browserLauncher));
         this.consentProvider = consentProvider ?? throw new ArgumentNullException(nameof(consentProvider));
+        this.memoryFactory = memoryFactory ?? new AgentManifestSecretUseMemoryFactory();
+        this.sessionIdentityProvider = sessionIdentityProvider;
         this.timeout = timeout;
         this.logger = logger ?? (ILogger)NullLogger<McpOAuthRedirectHandler>.Instance;
     }
@@ -176,12 +189,30 @@ public sealed class McpOAuthRedirectHandler
             }
         }
 
+        // Build the ordered scope memories for this OAuth consent so the dialog's scope ComboBox is
+        // populated ("All Uses"/"Always Ask"/…). The lineage carries no manifest identity/content —
+        // interactive OAuth has no manifest — and only a session identity when one is available.
+        // Keyed on the OAuth secret name so an accepted, non-AlwaysAsk scope is persisted by the
+        // consent provider (SecretProvider) and matched again on a fresh handler/process, suppressing
+        // re-prompting after restart. The secret name/use string embed only the server name — never a
+        // token, client secret, or authorization code (issue #1408 privacy).
+        var secretName = $"McpOAuth:{serverName}";
+        var useDisplayString = $"Interactive OAuth sign-in for MCP server '{serverName}'";
+        var lineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(
+            ManifestIdentity: null,
+            ManifestContentHash: null,
+            SessionIdentity: this.sessionIdentityProvider?.Invoke());
+        var memories = this.memoryFactory.Build(lineage, secretName, useDisplayString);
+
+        // Interactive OAuth has no external credential source, so surface a single OAuth source rather
+        // than leaving the source ComboBox blank.
+        var oauthSource = new OAuthSecretSource();
         var request = new SecretRequest(
-            SecretName: $"McpOAuth:{serverName}",
-            UseDisplayString: $"Interactive OAuth sign-in for MCP server '{serverName}'",
-            Memories: [],
-            DefaultSecretSource: null,
-            CandidateSecretSources: []);
+            SecretName: secretName,
+            UseDisplayString: useDisplayString,
+            Memories: memories,
+            DefaultSecretSource: oauthSource,
+            CandidateSecretSources: [oauthSource]);
 
         var result = await this.consentProvider
             .RequestSecretsAsync([request], cancellationToken)

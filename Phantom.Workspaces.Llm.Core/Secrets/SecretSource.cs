@@ -12,6 +12,7 @@ namespace Phantom.Workspaces.Llm.Secrets;
 [JsonDerivedType(typeof(AwsLoginSecretSource), "aws-login")]
 [JsonDerivedType(typeof(AzureLoginSecretSource), "azure-login")]
 [JsonDerivedType(typeof(CredentialStoreSecretSource), "credential-store")]
+[JsonDerivedType(typeof(OAuthSecretSource), "oauth")]
 public abstract record SecretSource;
 
 /// <summary>
@@ -30,3 +31,11 @@ public sealed record AzureLoginSecretSource : SecretSource;
 
 /// <summary>The secret is obtained from the platform credential store under <paramref name="CredentialName"/>.</summary>
 public sealed record CredentialStoreSecretSource(string CredentialName) : SecretSource;
+
+/// <summary>
+/// The "secret" is obtained by an interactive OAuth sign-in (e.g. the MCP server OAuth flow). Carries
+/// no external credential name or token — it only marks the consent request as an interactive OAuth
+/// sign-in so the consent dialog's source ComboBox shows a meaningful entry instead of rendering
+/// blank. Holds no secret material by construction.
+/// </summary>
+public sealed record OAuthSecretSource : SecretSource;

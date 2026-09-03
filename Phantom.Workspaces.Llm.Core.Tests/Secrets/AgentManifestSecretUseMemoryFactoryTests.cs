@@ -142,6 +142,33 @@ public sealed class AgentManifestSecretUseMemoryFactoryTests
     }
 
     [Fact]
+    public void AgentManifestSecretUseMemoryFactory_NoManifestNoSessionLineage_ProducesOAuthScopeSet()
+    {
+        // The interactive-OAuth shape: no manifest lineage and (in production) no session identity.
+        var lineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(
+            ManifestIdentity: null,
+            ManifestContentHash: null,
+            SessionIdentity: null);
+
+        var memories = new AgentManifestSecretUseMemoryFactory()
+            .Build(lineage, "McpOAuth:github", "Interactive OAuth sign-in for MCP server 'github'");
+
+        var scopes = memories.Select(m => m.Scope).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                SecretUseScope.AllUses,
+                SecretUseScope.AnyManifest,
+                SecretUseScope.KeyInAnyManifest,
+                SecretUseScope.AlwaysAsk,
+            },
+            scopes);
+        Assert.Contains(memories, m => m.DisplayString == "All Uses");
+        Assert.Contains(memories, m => m.DisplayString == "Always Ask");
+        Assert.DoesNotContain(memories, m => m.Scope == SecretUseScope.SessionIdentity);
+    }
+
+    [Fact]
     public void AgentManifestSecretUseMemoryFactory_ManifestAndSessionLineage_BuildsUnionOfScopes()
     {
         var lineage = new AgentManifestSecretUseMemoryFactory.SecretUseLineage(

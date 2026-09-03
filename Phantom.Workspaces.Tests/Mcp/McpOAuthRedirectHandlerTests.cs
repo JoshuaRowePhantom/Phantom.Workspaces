@@ -1,9 +1,11 @@
 using System.Net;
 using System.Net.Http;
+using System.Security;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Mcp;
+using Phantom.Workspaces.Services.Secrets;
 
 namespace Phantom.Workspaces.Tests.Mcp;
 
@@ -124,6 +126,86 @@ public sealed class McpOAuthRedirectHandlerTests
 
         Assert.Equal(1, consent.CallCount);
         Assert.Equal(2, browser.OpenCount);
+    }
+
+    [Fact]
+    public async Task McpOAuthRedirectHandler_EnsureConsent_RequestIncludesScopeMemories()
+    {
+        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
+        var browser = new FakeSystemBrowserLauncher();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+        var consent = new FakeSecretProvider();
+        var handler = new McpOAuthRedirectHandler(browser, consent);
+
+        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        var request = Assert.Single(consent.RequestedRequests);
+        Assert.Equal("McpOAuth:server-a", request.SecretName);
+        Assert.NotEmpty(request.Memories);
+        Assert.Contains(request.Memories, memory => memory.DisplayString == "All Uses");
+        Assert.Contains(request.Memories, memory => memory.DisplayString == "Always Ask");
+
+        // The source ComboBox is populated with a single interactive-OAuth source instead of blank.
+        Assert.IsType<OAuthSecretSource>(request.DefaultSecretSource);
+        Assert.Contains(request.CandidateSecretSources, source => source is OAuthSecretSource);
+
+        // The consent key/memories must never embed the authorization code or any token material.
+        Assert.DoesNotContain(request.Memories, memory => memory.Hash.Contains("abc", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task McpOAuthRedirectHandler_EnsureConsent_WithSessionIdentity_IncludesSessionScope()
+    {
+        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
+        var browser = new FakeSystemBrowserLauncher();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+        var consent = new FakeSecretProvider();
+        var handler = new McpOAuthRedirectHandler(browser, consent, sessionIdentityProvider: () => "session-1");
+
+        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        var request = Assert.Single(consent.RequestedRequests);
+        Assert.Contains(request.Memories, memory => memory.Scope == SecretUseScope.SessionIdentity);
+        Assert.Contains(request.Memories, memory => memory.DisplayString == "This Session");
+    }
+
+    [Fact]
+    public async Task McpOAuthRedirectHandler_ConsentRemembered_DoesNotRepromptAcrossRestart()
+    {
+        // The shared allowed-secrets store stands in for the persisted allowed-secrets.json that
+        // survives a restart. Both "processes" read/write the same store via the real SecretProvider.
+        var allowedStore = new InMemoryAllowedSecretsStore();
+        var platformStore = new NoopPlatformSecretStore();
+        var dialog = new BroadScopeDialogHost();
+
+        // First "process": fresh handler + fresh SecretProvider. Consent is prompted once and the
+        // chosen broad (non-AlwaysAsk) scope is persisted to the shared store.
+        var browser1 = new FakeSystemBrowserLauncher();
+        var provider1 = new SecretProvider(allowedStore, platformStore, dialog);
+        var handler1 = new McpOAuthRedirectHandler(browser1, provider1);
+        var redirect1 = McpOAuthComposition.CreateLoopbackRedirectUri();
+        browser1.OnOpen = _ => SendCallbackAsync(redirect1, "code=code-1&state=xyz");
+        await handler1.HandleAsync("server-a", AuthorizationUri, redirect1, CancellationToken.None);
+        await browser1.LastCallbackTask!;
+
+        Assert.Equal(1, dialog.ShowCount);
+
+        // Second "process": brand-new handler (fresh consentedServers) and a brand-new SecretProvider,
+        // but the SAME persisted store. The remembered scope must auto-approve without re-prompting.
+        var browser2 = new FakeSystemBrowserLauncher();
+        var provider2 = new SecretProvider(allowedStore, platformStore, dialog);
+        var handler2 = new McpOAuthRedirectHandler(browser2, provider2);
+        var redirect2 = McpOAuthComposition.CreateLoopbackRedirectUri();
+        browser2.OnOpen = _ => SendCallbackAsync(redirect2, "code=code-2&state=xyz");
+        await handler2.HandleAsync("server-a", AuthorizationUri, redirect2, CancellationToken.None);
+        await browser2.LastCallbackTask!;
+
+        // No second prompt: consent survived the "restart" via the persisted store.
+        Assert.Equal(1, dialog.ShowCount);
+        Assert.Equal(1, browser1.OpenCount);
+        Assert.Equal(1, browser2.OpenCount);
     }
 
     [Fact]
@@ -299,6 +381,10 @@ public sealed class McpOAuthRedirectHandlerTests
 
         public List<string> RequestedSecretNames { get; } = [];
 
+        public List<SecretRequest> RequestedRequests { get; } = [];
+
+        public SecretRequest? LastRequest { get; private set; }
+
         public Task<RequestSecretsResult?> RequestSecretsAsync(
             IReadOnlyList<SecretRequest> requests,
             CancellationToken cancellationToken)
@@ -307,11 +393,73 @@ public sealed class McpOAuthRedirectHandlerTests
             foreach (var request in requests)
             {
                 this.RequestedSecretNames.Add(request.SecretName);
+                this.RequestedRequests.Add(request);
+                this.LastRequest = request;
             }
 
             this.onCalled?.Invoke();
             return Task.FromResult<RequestSecretsResult?>(
                 this.grantConsent ? new RequestSecretsResult([], []) : null);
+        }
+    }
+
+    private sealed class InMemoryAllowedSecretsStore : IAllowedSecretsStore
+    {
+        private readonly Dictionary<string, MemorizedSecret> records = new(StringComparer.Ordinal);
+
+        public Task<MemorizedSecret?> TryGetAsync(string hash, CancellationToken ct)
+            => Task.FromResult(this.records.TryGetValue(hash, out var record) ? record : null);
+
+        public Task PutAsync(string hash, MemorizedSecret record, CancellationToken ct)
+        {
+            this.records[hash] = record;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string hash, CancellationToken ct)
+        {
+            this.records.Remove(hash);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyDictionary<string, MemorizedSecret>> LoadAllAsync(CancellationToken ct)
+            => Task.FromResult<IReadOnlyDictionary<string, MemorizedSecret>>(
+                new Dictionary<string, MemorizedSecret>(this.records, StringComparer.Ordinal));
+    }
+
+    private sealed class NoopPlatformSecretStore : IPlatformSecretStore
+    {
+        public Task<SecureString?> ReadAsync(string name, CancellationToken ct)
+            => Task.FromResult<SecureString?>(null);
+
+        public Task WriteAsync(string name, SecureString value, CancellationToken ct)
+            => Task.CompletedTask;
+
+        public Task DeleteAsync(string name, CancellationToken ct)
+            => Task.CompletedTask;
+
+        public Task<IReadOnlyList<string>> EnumerateNamesAsync(string prefix, CancellationToken ct)
+            => Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    private sealed class BroadScopeDialogHost : ISecretUseDialogHost
+    {
+        public int ShowCount { get; private set; }
+
+        public Task<SecretUseDialogResult> ShowAsync(SecretUseDialogInput input, CancellationToken ct)
+        {
+            this.ShowCount++;
+            var rows = input.Rows
+                .Select(request =>
+                {
+                    // Choose the broadest non-AlwaysAsk scope (a persistable memory) so the grant is
+                    // remembered across the "restart".
+                    var chosen = request.Memories.First(memory => memory.Scope != SecretUseScope.AlwaysAsk);
+                    var source = request.DefaultSecretSource ?? request.CandidateSecretSources[0];
+                    return new SecretUseDialogRow(request, chosen, source);
+                })
+                .ToArray();
+            return Task.FromResult(new SecretUseDialogResult(true, rows));
         }
     }
 

@@ -46,6 +46,7 @@ public class SecretModelTests
             new AwsLoginSecretSource(),
             new AzureLoginSecretSource(),
             new CredentialStoreSecretSource("my-cred"),
+            new OAuthSecretSource(),
         };
 
         foreach (var source in sources)

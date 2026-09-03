@@ -81,6 +81,12 @@ public sealed class SecretUseDialogRowViewModel : ViewModelBase
 
     public IReadOnlyList<SecretUseMemory> AvailableMemories { get; }
 
+    /// <summary>
+    /// True when the row has at least one scope memory to offer. When false the scope ComboBox should
+    /// be hidden rather than rendered blank.
+    /// </summary>
+    public bool HasMemories => this.AvailableMemories.Count > 0;
+
     public SecretUseMemory SelectedMemory
     {
         get => this.selectedMemory;
@@ -88,6 +94,12 @@ public sealed class SecretUseDialogRowViewModel : ViewModelBase
     }
 
     public ObservableCollection<SecretSource> AvailableSources { get; }
+
+    /// <summary>
+    /// True when the row has at least one source to offer. When false the source ComboBox (and its
+    /// credential-picker button) should be hidden rather than rendered blank.
+    /// </summary>
+    public bool HasSources => this.AvailableSources.Count > 0;
 
     public SecretSource SelectedSource
     {
