@@ -1,6 +1,8 @@
 using System.Security;
 using System.Text.RegularExpressions;
 using AgentSchema;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm.Core.Tests.Secrets;
@@ -308,6 +310,33 @@ public sealed class AgentDefinitionSecretMaterializerTests
             .Single(m => m.Scope == SecretUseScope.SessionIdentity).Hash;
 
         Assert.NotEqual(sessionAHash, sessionBHash);
+    }
+
+    [Fact]
+    public async Task MaterializeAsync_AlreadyMaterializedDefinition_ReturnsUnchangedAndProviderNotCalled()
+    {
+        // #1405: the shared gate (AgentFactory.MaterializeSecretsIfNeededAsync) is idempotent. Once a
+        // definition has been materialized a SecretPlaceholderResolver is attached to services; a
+        // second pass through the gate must not re-scan the (now opaque-handle) definition or
+        // re-invoke the provider, regardless of the entry point that funnels into it.
+        var definition = WithModelSecret();
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GithubApiToken"] = ToSecureString("plain-secret-value");
+        var services = new AgentServices { SecretProvider = provider };
+
+        var (firstDefinition, firstServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            definition, services, manifest: null, agentSessionId: null, CancellationToken.None);
+
+        Assert.Equal(1, provider.CallCount);
+        Assert.NotNull(firstServices);
+        Assert.NotNull(firstServices!.SecretPlaceholderResolver);
+
+        var (secondDefinition, secondServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            firstDefinition, firstServices, manifest: null, agentSessionId: null, CancellationToken.None);
+
+        Assert.Equal(1, provider.CallCount);
+        Assert.Same(firstDefinition, secondDefinition);
+        Assert.Same(firstServices, secondServices);
     }
 
     private static AgentDefinition WithMcpKeySecret(string secret = "${SECRET:McpApiKey}") => LoadDefinition($$"""

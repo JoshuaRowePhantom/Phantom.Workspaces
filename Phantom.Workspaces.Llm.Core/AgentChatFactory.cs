@@ -367,11 +367,31 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     // thread-agnostic contexts such as agent tools creating sub-sessions; since the factory owns
     // the foreground scheduler, it schedules creation onto it so the invariant holds structurally
     // for every caller.
+    //
+    // #1405: the secret-materialization/consent gate runs here, on the foreground scheduler, so the
+    // GUI open-session path materializes ${SECRET:...} placeholders (and can surface the consent
+    // dialog on the UI thread) before the MCP transport is built. AgentFactory.CreateAgentChatAsync
+    // materializes on its own path; MaterializeSecretsIfNeededAsync is idempotent so a definition
+    // already carrying opaque handles is not re-scanned or re-prompted.
     private Task<AgentChat> CreateChatOnForegroundAsync(
         InternalCreateAgentChatRequest request,
         CancellationToken ct)
         => Task.Factory.StartNew(
-            () => AgentChat.CreateAsync(request),
+            async () =>
+            {
+                var (definition, services) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+                    request.AgentDefinition,
+                    request.AgentServices,
+                    manifest: null,
+                    agentSessionId: request.AgentSessionId,
+                    ct).ConfigureAwait(true);
+                var effectiveRequest = request with
+                {
+                    AgentDefinition = definition,
+                    AgentServices = services,
+                };
+                return await AgentChat.CreateAsync(effectiveRequest).ConfigureAwait(true);
+            },
             ct,
             TaskCreationOptions.DenyChildAttach,
             _foregroundScheduler).Unwrap();

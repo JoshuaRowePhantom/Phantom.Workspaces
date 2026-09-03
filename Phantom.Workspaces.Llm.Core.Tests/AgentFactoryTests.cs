@@ -11,6 +11,7 @@ using System.Security;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -124,6 +125,53 @@ public class AgentFactoryTests
         var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
         Assert.Equal(plaintext, client.ByokOptions!.ApiKey);
         Assert.Throws<ObjectDisposedException>(() => secure.AppendChar('x'));
+    }
+
+    [Fact]
+    public async Task CreateChatClientAsync_McpToolSecretPlaceholder_TransportReceivesResolvedSecretNotRawPlaceholder()
+    {
+        // #1405: the shared gate materializes an MCP tool's ${SECRET:GitHubToken} into an opaque
+        // handle registered with the resolver, so when McpTransportFactory builds the transport via
+        // ResolveRequiredSecretOrEnvAsync (the exact seam in the reported stack trace) the resolved
+        // secret — never the raw ${SECRET:GitHubToken} placeholder — reaches the transport.
+        const string plaintext = "resolved-github-token";
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "mcp-agent",
+          "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+          "tools": [
+            {
+              "kind": "mcp",
+              "name": "github-secret-gated",
+              "serverName": "github-secret-gated",
+              "connection": { "kind": "key", "endpoint": "http://127.0.0.1:1/", "apiKey": "${SECRET:GitHubToken}" },
+              "approvalMode": { "kind": "never" }
+            }
+          ]
+        }
+        """) ?? throw new InvalidOperationException("Failed to load definition.");
+
+        var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            definition,
+            new AgentServices { SecretProvider = provider },
+            manifest: null,
+            agentSessionId: null,
+            CancellationToken.None);
+
+        Assert.Equal(1, provider.CallCount);
+        var rewrittenApiKey = Regex.Match(materializedDefinition!.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
+        Assert.NotEqual("${SECRET:GitHubToken}", rewrittenApiKey);
+        Assert.DoesNotContain("${SECRET:GitHubToken}", materializedDefinition.ToJson(), StringComparison.Ordinal);
+
+        var resolved = await AgentFactory.ResolveRequiredSecretOrEnvAsync(
+            rewrittenApiKey,
+            materializedServices,
+            serverName: "github-secret-gated");
+
+        Assert.Equal(plaintext, resolved);
     }
 
     [Fact]

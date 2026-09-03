@@ -3,10 +3,12 @@ using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Security;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -914,17 +916,102 @@ public sealed class AgentChatFactoryTests
     }
 
     [Fact]
-    public async Task GetAsync_DefaultRegisterAsRunningAgent_AddsToRunningSessions()
+    public async Task GetAsync_DefinitionWithSecretPlaceholder_MaterializesBeforeCreatingChatClient()
     {
-        // Issue #1205 backwards-compat: default overload preserves existing behaviour for
-        // top-level restore callers (e.g. RunningAgentChat.AcquireLeaseAsync).
-        var sessionId = new AgentSessionId("session-1205-default");
-        var store = await CreatePopulatedStoreAsync(sessionId);
-        await using var factory = CreateFactory(store: store);
+        // #1405: the GUI foreground factory path (GetOrCreateAsync -> CreateChatOnForegroundAsync)
+        // must materialize ${SECRET:...} placeholders — invoking the SecretProvider and rewriting
+        // the definition to an opaque handle — before the chat client is built.
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString("resolved-token");
+        var services = new AgentServices
+        {
+            SecretProvider = provider,
+            ChatClientOverride = new DeterministicTestChatClient(),
+        };
+        await using var factory = CreateFactory();
+        var sessionId = new AgentSessionId("session-materialize-secret");
 
-        await using var lease = await factory.GetAsync(sessionId);
+        await using var lease = await factory.GetOrCreateAsync(sessionId, McpSecretDefinition(), services);
 
-        Assert.Single(factory.RunningSessions);
-        Assert.Equal(sessionId, factory.RunningSessions[0].SessionId);
+        Assert.Equal(1, provider.CallCount);
+        var json = lease.AgentChat.AgentDefinition!.ToJson();
+        Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
+        Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task GetAsync_AlreadyMaterializedDefinition_DoesNotRePromptOrReScan()
+    {
+        // #1405: idempotency — a definition already rewritten to opaque handles (with a resolver
+        // attached to services) must not be re-scanned or re-prompted when it flows through the
+        // foreground factory path again.
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString("resolved-token");
+        var baseServices = new AgentServices
+        {
+            SecretProvider = provider,
+            ChatClientOverride = new DeterministicTestChatClient(),
+        };
+
+        var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            McpSecretDefinition(), baseServices, manifest: null, agentSessionId: null, CancellationToken.None);
+        Assert.Equal(1, provider.CallCount);
+
+        await using var factory = CreateFactory();
+        var sessionId = new AgentSessionId("session-already-materialized");
+
+        await using var lease = await factory.GetOrCreateAsync(sessionId, materializedDefinition, materializedServices);
+
+        Assert.Equal(1, provider.CallCount);
+    }
+
+    private static AgentDefinition McpSecretDefinition() => AgentDefinitionLoader.LoadAgentFromJson("""
+        {
+          "kind": "prompt",
+          "name": "mcp-secret-agent",
+          "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+          "tools": [
+            {
+              "kind": "mcp",
+              "name": "github-secret-gated",
+              "serverName": "github-secret-gated",
+              "connection": { "kind": "key", "endpoint": "http://127.0.0.1:1/", "apiKey": "${SECRET:GitHubToken}" },
+              "approvalMode": { "kind": "never" }
+            }
+          ]
+        }
+        """);
+
+    private static SecureString ToSecureString(string value)
+    {
+        var secure = new SecureString();
+        foreach (var ch in value)
+        {
+            secure.AppendChar(ch);
+        }
+
+        secure.MakeReadOnly();
+        return secure;
+    }
+
+    private sealed class FakeSecretProvider : ISecretProvider
+    {
+        public int CallCount { get; private set; }
+        public Dictionary<string, SecureString> Secrets { get; } = [];
+
+        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
+        {
+            this.CallCount++;
+            var retrievers = requests
+                .Where(request => this.Secrets.ContainsKey(request.SecretName))
+                .Select(request => new SecretRetriever
+                {
+                    SecretName = request.SecretName,
+                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
+                })
+                .ToArray();
+
+            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
+        }
     }
 }

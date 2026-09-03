@@ -522,20 +522,12 @@ public static class AgentFactory
                 }, ct).ConfigureAwait(false)
             : createAgentChatRequest.AgentDefinition;
 
-        if (requestedAgentDefinition is not null
-            && services?.SecretProvider is ISecretProvider secretProvider)
-        {
-            var materialized = await new AgentDefinitionSecretMaterializer()
-                .MaterializeAsync(
-                    requestedAgentDefinition,
-                    secretProvider,
-                    ct,
-                    agentManifest,
-                    createAgentChatRequest.AgentSessionId)
-                .ConfigureAwait(false);
-            requestedAgentDefinition = materialized.Definition;
-            services = services with { SecretPlaceholderResolver = materialized.Resolver };
-        }
+        (requestedAgentDefinition, services) = await MaterializeSecretsIfNeededAsync(
+            requestedAgentDefinition,
+            services,
+            agentManifest,
+            createAgentChatRequest.AgentSessionId,
+            ct).ConfigureAwait(false);
 
         await EnforceTrustProfileAsync(
             requestedAgentDefinition,
@@ -626,6 +618,38 @@ public static class AgentFactory
             agentChatRef.Chat = chat;
 
         return chat;
+    }
+
+    // #1405: Shared, idempotent secret-materialization gate. The #1401 fix originally lived inline in
+    // CreateAgentChatAsync only; the GUI foreground open-session path (OpenAgentSessionShortcutHandler
+    // -> RunningAgentChatTable.AcquireAsync -> AgentChatFactory.GetOrCreateAsync) bypasses
+    // CreateAgentChatAsync, so ${SECRET:...} placeholders reached the MCP transport raw with no
+    // consent dialog. Routing every creation path through this single helper guarantees
+    // materialization/consent runs exactly once per creation regardless of entry point.
+    //
+    // Idempotent: AgentDefinitionSecretMaterializer.MaterializeAsync early-returns an empty resolver
+    // when the scanner finds zero ${SECRET:...} usages (an already-materialized definition carries
+    // only opaque handles), and the resolver guard below short-circuits when a resolver is already
+    // attached to services — so an already-materialized definition is never re-scanned or re-prompted.
+    internal static async Task<(AgentDefinition? Definition, AgentServices? Services)>
+        MaterializeSecretsIfNeededAsync(
+            AgentDefinition? definition,
+            AgentServices? services,
+            AgentManifest? manifest,
+            string? agentSessionId,
+            CancellationToken ct)
+    {
+        if (definition is null
+            || services?.SecretProvider is not ISecretProvider secretProvider
+            || services.SecretPlaceholderResolver is not null)
+        {
+            return (definition, services);
+        }
+
+        var materialized = await new AgentDefinitionSecretMaterializer()
+            .MaterializeAsync(definition, secretProvider, ct, manifest, agentSessionId)
+            .ConfigureAwait(false);
+        return (materialized.Definition, services with { SecretPlaceholderResolver = materialized.Resolver });
     }
 
     // Default persistence-store factory used when CreateAgentChatRequest.PersistenceStoreFactory is
