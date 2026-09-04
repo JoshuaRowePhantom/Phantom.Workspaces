@@ -87,10 +87,11 @@ to an explicitly named executor, and the split is expressed declaratively in the
      `HostingWorkspacesClientInstances = [<chosen uuid>]`); no trust-profile entity needs to be
      pre-authored or persisted.
    Both paths converge on a **trust profile** (explicit or implicit) whose `DefaultExecutionTarget`
-   is the connection-descriptor used as the executor binding. The chosen value recorded in the
-   session's `parameter-values` disambiguates the selection as a small JSON object identifying both
-   the kind and the id — `{"trust-profile":"<name-or-id>"}` or
+   is the connection-descriptor used as the executor binding. The chosen selection is recorded in the
+   session's typed `parameter-selections` map (`string→JsonElement`) as a small JSON object identifying
+   both the kind and the id — `{"trust-profile":"<name-or-id>"}` or
    `{"user-computer-profile":"<entity-id>"}` — kept lossless through `PhantomAgentSchema` round-trip.
+   (The `string→string` `parameter-values` map stays reserved for `${param}` text templating; see M7.)
 6. **MCP servers must actually execute on their bound executor.** `McpToolContextProvider` MUST
    connect through the transport router (`ExecutorTargetRouter` → `ExecutionTargetResolver` →
    `ITransportFactoryRegistry`) when its resolved client-instance is non-local; today it always
@@ -134,7 +135,7 @@ to an explicitly named executor, and the split is expressed declaratively in the
 ### Option A — Per-component executor binding via manifest `kind:"executor"` resources (CHOSEN)
 
 **Architecture:** Add a manifest `kind:"executor"` resource and an optional `executor` string on
-the model and on tools. A new resolver maps each executor resource (given `parameter-values` and
+the model and on tools. A new resolver maps each executor resource (given `parameter-selections` and
 trust context) to a transport **connection-descriptor** `JsonElement` (`{"type":"local"}`,
 `{"type":"user-computer-profile","entity-id":...}`, or — via the raw escape hatch — any inline
 connection-descriptor), reusing the shapes already produced by
@@ -349,7 +350,7 @@ dispatch, without changing callers or the manifest/session schema.
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResource.cs` — parsed model of a `kind:"executor"`
   manifest resource (convenience strategies + an optional inline `connection-descriptor`).
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResourceResolver.cs` — resolves an
-  `ExecutorResource` (+ `parameter-values` + trust context) to a **connection-descriptor**
+  `ExecutorResource` (+ `parameter-selections` + trust context) to a **connection-descriptor**
   (`JsonElement`), delegating to `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes.
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorBindings.cs` — immutable `name → connection-descriptor`
   map and the explicit session executor; derives the client-instance strings the existing
@@ -551,10 +552,10 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
    and the model reference them by name. Executor resources are NOT routed through `IToolResourceFactory`
    (which returns `Tool?`, the wrong type).
 3. `ExecutorResourceResolver.Resolve` turns each `ExecutorResource` into a **connection-descriptor**
-   (`JsonElement`) using the resolved `parameter-values` (including any `executor`
-   parameter the user chose) and trust context, delegating to `Llm.Trust.ExecutionTargetResolver` for
-   the local/profile shapes. The result is an `ExecutorBindings` (with `SessionExecutor` =
-   `{"type":"local"}` by default).
+   (`JsonElement`) using the `executor` selections read from `parameter-selections` (the typed
+   `string→JsonElement` channel — NOT `parameter-values`) and trust context, delegating to
+   `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes. The result is an `ExecutorBindings`
+   (with `SessionExecutor` = `{"type":"local"}` by default).
 4. For each component: the model's `executor` and each tool's `executor` are resolved through
    `ExecutorBindings.ResolveComponent` to a connection-descriptor; unset → `SessionExecutor`.
 5. `AgentChat` constructs each `McpToolContextProvider` with its bound connection-descriptor and the
@@ -565,7 +566,9 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
    to the legacy `ExecutorTarget` path. `DeferredTrustedExecutorSelector.SetTopology` is set from the
    same topology so `CustomTool` (gui-local) routing is unchanged.
 6. `ExecutorBindings.ToPersistableMap()` is written to the session's `executor-bindings`
-   (connection-descriptor objects).
+   (connection-descriptor objects), and the `executor` selections are persisted in the typed
+   `parameter-selections` root key (`string→JsonElement`), a sibling of `parameter-values` and
+   `executor-bindings`.
 
 **Runtime (per MCP server first use):**
 
@@ -584,16 +587,19 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
     reconstructed, so the same components bind to the same machines (Requirement 9). **(M6)** The
     persisted shape is a root key `executor-bindings = { "session": <descriptor>, "components": { <name>:
     <descriptor> } }` (session default `{"type":"local"}`), added alongside the EXISTING
-    `parameter-values` / `host-profile-entity-id` written by `AgentSessionEntityFactory.CreateEntityData`
+    `parameter-values` / `host-profile-entity-id` and the new `parameter-selections` root key written by
+    `AgentSessionEntityFactory.CreateEntityData`
     (`AgentSessionEntityFactory.cs:39-93`). **Back-compat rule:** if `executor-bindings.session` is
     absent but `host-profile-entity-id` is present, derive
     `SessionExecutor = {"type":"user-computer-profile","entity-id":<that id>}`. The new writer sets
     `executor-bindings` while continuing to honour legacy sessions.
-11. **(M7)** The `executor` launch-parameter value recorded in `parameter-values` — a JSON object
-    (`{"trust-profile":…}` / `{"user-computer-profile":…}`) — is stored as a **compact JSON-encoded
-    string** because `parameter-values` is `IReadOnlyDictionary<string,string>`
-    (`AgentSessionEntityFactory.cs:46,77-85`). The resolver (`ExecutorResourceResolver`, Commit 4)
-    parses that string back. The dictionary is NOT widened to `string→object`.
+11. **(M7)** The `executor` launch-parameter selection is recorded in the typed `parameter-selections`
+    map (`string→JsonElement`) — the selection object `{"trust-profile":…}` /
+    `{"user-computer-profile":…}` — persisted as a **sibling root key** alongside `parameter-values` and
+    `executor-bindings`. The resolver (`ExecutorResourceResolver`, Commit 4) reads `parameter-selections`
+    directly (no JSON-string parsing). `parameter-values` stays `IReadOnlyDictionary<string,string>` for
+    `${param}` text templating only (`AgentSessionEntityFactory.cs:46,77-85`); it is NOT widened to
+    `string→object`. The general typed-value widening is the non-blocking #1444.
 
 **Entity resolution (Commit 7):**
 
@@ -798,15 +804,32 @@ but `host-profile-entity-id` is present, derive
 `SessionExecutor = {"type":"user-computer-profile","entity-id":<that id>}`. The new writer sets
 `executor-bindings` while continuing to honour legacy sessions that carry only `host-profile-entity-id`.
 
-### M7 — `parameter-values` is `string→string`; the `executor` param value is JSON-encoded
+### M7 — decouple: `parameter-values` stays `string→string`; the `executor` selection lives in a typed `parameter-selections`
 
 `parameter-values` is `IReadOnlyDictionary<string,string>` in `AgentSessionEntityFactory`
-(`AgentSessionEntityFactory.cs:46,77-85`) and in the substitutor. The `executor` parameter's
-disambiguated value (`{"trust-profile":…}` / `{"user-computer-profile":…}`) is a JSON object.
+(`AgentSessionEntityFactory.cs:46,77-85`) and in the substitutor
+(`AgentDefinitionParameterSubstitutor.Substitute(AgentManifest, IReadOnlyDictionary<string,string>?)`,
+`AgentDefinitionParameterSubstitutor.cs:15-17,133-140`). That map exists for `${param}` **text**
+templating; an executor selection is a structured choice, not a text substitution, so it does **not**
+belong there.
 
-**Resolution (Commit 2 / #1434 recording + Commit 4 / #1436 parsing).** Store the `executor` param
-value as a **compact JSON-encoded string** in that map, and parse it back in the resolver. Do **not**
-widen the dictionary to `string→object`. State this encoding on both sides so the type does not clash.
+**Resolution — DECOUPLE.** Keep `parameter-values` string-only for templating (no change, no blast
+radius). Record the `executor` parameter's disambiguated selection in a **dedicated typed channel**: a
+`parameter-selections` map of `string` (parameter name) → `JsonElement` (selection), where the selection
+is `{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`. The executor
+PRE-PASS / `ExecutorResourceResolver` reads `parameter-selections` (NOT `parameter-values`) for
+`kind:"executor"` parameters, resolves each to a connection-descriptor, and writes the resolved
+descriptors into `executor-bindings` (session + components). `parameter-selections` is persisted as a
+**sibling root key** alongside `parameter-values` and `executor-bindings` on the agent-session entity
+(`AgentSessionEntityFactory.CreateEntityData`, `AgentSessionEntityFactory.cs:39-93`). Text/directory
+parameters continue to use `parameter-values` exactly as today.
+
+**Rationale.** Storing the selection as a JSON-encoded string inside `parameter-values` was rejected: it
+conflates structured selection with text templating, and widening the whole `string→string` pipeline to
+`string→object` would ripple through ~20 call sites (including the Mongo/Web persistence DTOs). That
+general widening is filed separately as **#1444** (typed parameter values) and is **non-blocking** — the
+executor feature does not depend on it. #1444 would later let `parameter-selections` fold into a unified
+typed `parameter-values`.
 
 ---
 
@@ -853,6 +876,9 @@ convention (read `Scenario2_GuiLocalToolRoutingTests`, `ExecutorTargetRouterTest
 - Unset `executor` inherits the session executor after resume.
 - Back-compat: a legacy session with only `host-profile-entity-id` (no `executor-bindings`)
   resolves to the single remote. → `AgentSessionExecutorBindingsTests`.
+- The `executor` selection round-trips in the typed `parameter-selections` root key
+  (`string→JsonElement`), a sibling of `parameter-values` (unchanged `string→string`) and
+  `executor-bindings` (M7). → `AgentSessionExecutorBindingsTests`.
 
 ### 4. Transport scenario tests (integration, hermetic)
 
@@ -888,8 +914,9 @@ Mirror `Scenario2_GuiLocalToolRoutingTests` (in-process `TransportRegistry` mach
 ### 8. Launchpad picker
 
 - The `executor` parameter lists **both** `trust-profile` entities and `user-computer-profile`
-  entities in a combined chooser and records the disambiguated value
-  (`{"trust-profile":...}` or `{"user-computer-profile":...}`) in `parameter-values`; selecting a
+  entities in a combined chooser and records the disambiguated selection
+  (`{"trust-profile":...}` or `{"user-computer-profile":...}`) in the typed `parameter-selections`
+  map (`string→JsonElement`); selecting a
   user-computer-profile round-trips through the implicit-trust-profile path.
   → `AgentManifestLaunchpadViewModelTests`.
 
@@ -943,9 +970,11 @@ and a `connection-descriptor`-strategy resource parse/round-trip).
 **Scope:** Add an `executor` parameter kind to the manifest parameter model and its
 documentation, plus value recording/substitution. The parameter offers two selectable option
 kinds — a **trust-profile entity** and a **user-computer-profile entity** (the latter synthesizing
-an implicit trust profile) — and records a **disambiguated** value in `parameter-values`
+an implicit trust profile) — and records a **disambiguated** selection in the typed
+`parameter-selections` map (`string→JsonElement`)
 (`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`), kept lossless
-through `PhantomAgentSchema`. Make parameter kind read from the manifest parameter `kind` field
+through `PhantomAgentSchema`. `parameter-values` stays `string→string` for `${param}` text templating
+(no change — see M7). Make parameter kind read from the manifest parameter `kind` field
 rather than being inferred purely by name (see Contradictions). *(NEW parameter kind.)*
 **Files:** the `AgentManifest` parameter model / substitutor
 (`Phantom.Workspaces.Llm.Core/AgentDefinitionParameterSubstitutor.cs` and the parameter property
@@ -968,13 +997,14 @@ the source-scan guard intact.
 ### Commit 4 — Executor-resource resolver (returns a connection-descriptor)
 
 **Scope:** Add `ExecutorResourceResolver` mapping an `ExecutorResource` (+ resolved
-`parameter-values` + trust context) to a transport **connection-descriptor** (`JsonElement`) for all
+`parameter-selections` + trust context) to a transport **connection-descriptor** (`JsonElement`) for all
 five `id` strategies (`local`, `parameter`, `user-computer-profile-entity`, `trust-profile`,
 `connection-descriptor`), with clear errors for unknown/unresolved. This is the **#1436 fix**: the
 resolver no longer returns a flat client-instance string — it returns the connection-descriptor that
 `ITransportFactoryRegistry.ConnectToAsync` already dispatches on, DELEGATING to the existing
 `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes. The `parameter` strategy reads the
-named `executor` parameter's recorded value, obtains the selected trust profile — the referenced
+named `executor` parameter's recorded selection from the typed `parameter-selections` map, obtains the
+selected trust profile — the referenced
 **trust-profile entity** (composed via `TrustProfileComposer`) OR the **implicit trust profile**
 synthesized from the chosen **user-computer-profile** — and returns that profile's
 `DefaultExecutionTarget` via `ExecutionTargetResolver.Resolve(TrustProfile?)`. The
@@ -992,11 +1022,15 @@ Add `ExecutorBindings` (session executor default `{"type":"local"}` + name→con
 ### Commit 5 — Explicit session executor + `executor-bindings` persistence + resume
 
 **Scope:** Make the session's overall executor explicit (default `{"type":"local"}`). Add
-`executor-bindings` (name→**connection-descriptor** objects) to `agent-session.json`. On build, write
-bindings; on resume, rebuild `ExecutorTopology` and set the deferred selector's topology from the
+`executor-bindings` (name→**connection-descriptor** objects) and the typed `parameter-selections` root
+key (`string→JsonElement`, a sibling of the unchanged `string→string` `parameter-values`) to
+`agent-session.json`. On build, write
+bindings and the `executor` selections; on resume, rebuild `ExecutorTopology` and set the deferred
+selector's topology from the
 bindings (deriving the client-instance strings for `local`/`user-computer-profile` shapes). Keep
 `host-profile-entity-id` as back-compat fallback (primary remote), with bindings as source of truth.
-*(NEW session field: `executor-bindings` storing connection-descriptor objects; EXISTING
+*(NEW session fields: `executor-bindings` storing connection-descriptor objects, and
+`parameter-selections` storing the typed `executor` selection; EXISTING
 `host-profile-entity-id` retained.)*
 **Files:** `Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json`; the session build/resume
 path that constructs `ExecutorTopology` and calls
@@ -1059,8 +1093,9 @@ implements the documented prefix search).
 **Scope:** Add an `Executor` value to `AgentManifestParameterKind` (renamed from the earlier
 `UserComputerProfile`) and a combined picker in the Launchpad that lists **both** `trust-profile`
 entities **and** `user-computer-profile` entities; the selection records the **disambiguated** value
-(`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`) in
-`parameter-values`. It is no longer a user-computer-profile-only picker. Honour the manifest
+(`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`) in the typed
+`parameter-selections` map (`string→JsonElement`, not the `string→string` `parameter-values`). It is no
+longer a user-computer-profile-only picker. Honour the manifest
 parameter `kind` field (see Contradiction #2 about name-based inference).
 **Files:** `Phantom.Workspaces/ViewModels/AgentManifestParameterKind.cs`,
 `Phantom.Workspaces/ViewModels/AgentManifestParameterRowViewModel.cs`,
