@@ -133,6 +133,7 @@ public sealed class ScheduledToolsRunningViewModelTests
 
         tool.Release.TrySetResult();
         await runTask;
+        await host.WaitForRunningExecutionsAsync();
 
         Assert.False(viewModel.HasRunningTools);
         Assert.False(Assert.Single(viewModel.Tools).IsRunning);
@@ -569,6 +570,7 @@ public sealed class ScheduledToolsRunningViewModelTests
         tool.Release.TrySetResult();
 
         await Task.WhenAll(refreshHistoryTask, runTask);
+        await host.WaitForRunningExecutionsAsync();
 
         Assert.False(exceptionCaught, "ObservableCollection was mutated from multiple threads");
     }
