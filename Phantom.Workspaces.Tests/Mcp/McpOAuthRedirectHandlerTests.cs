@@ -11,32 +11,33 @@ namespace Phantom.Workspaces.Tests.Mcp;
 
 public sealed class McpOAuthRedirectHandlerTests
 {
-    private static readonly Uri AuthorizationUri = new("https://auth.test/authorize?client_id=abc");
+    private static Uri AuthUri(string state) => new($"https://auth.test/authorize?client_id=abc&state={state}");
 
     [Fact]
     public async Task RedirectHandler_LaunchesBrowserAtAuthorizationUri()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        var authUri = AuthUri("xyz");
         browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
 
-        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await handler.HandleAsync("server-a", authUri, redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         Assert.Equal(1, browser.OpenCount);
-        Assert.Equal(AuthorizationUri, browser.LastUri);
+        Assert.Equal(authUri, browser.LastUri);
     }
 
     [Fact]
     public async Task RedirectHandler_ReturnsCapturedRedirectUriWithCode()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
         browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=the-code&state=the-state");
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
 
-        var captured = await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        var captured = await handler.HandleAsync("server-a", AuthUri("the-state"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         Assert.Equal("the-code", GetQueryValue(captured, "code"));
@@ -46,12 +47,12 @@ public sealed class McpOAuthRedirectHandlerTests
     [Fact]
     public async Task RedirectHandler_BindsListenerToRedirectUriLoopbackPort()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
         browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
 
-        var captured = await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        var captured = await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         Assert.Equal("127.0.0.1", captured.Host);
@@ -61,12 +62,12 @@ public sealed class McpOAuthRedirectHandlerTests
     [Fact]
     public async Task RedirectHandler_WritesCloseWindowResponse()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
         browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
 
-        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
         var body = await browser.LastCallbackTask!;
 
         Assert.Contains("close this window", body, StringComparison.OrdinalIgnoreCase);
@@ -75,12 +76,12 @@ public sealed class McpOAuthRedirectHandlerTests
     [Fact]
     public async Task RedirectHandler_WhenConsentDeclined_DoesNotLaunchBrowser()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(grantConsent: false));
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(grantConsent: false));
+        var redirectUri = handler.EnsureListenerBound();
 
         var exception = await Assert.ThrowsAsync<OperationCanceledException>(
-            () => handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None));
+            () => handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None));
 
         Assert.Equal("User declined MCP OAuth sign-in.", exception.Message);
         Assert.Equal(0, browser.OpenCount);
@@ -90,16 +91,16 @@ public sealed class McpOAuthRedirectHandlerTests
     public async Task RedirectHandler_RequestsConsentBeforeFirstAuthorization()
     {
         var events = new List<string>();
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var consent = new FakeSecretProvider(onCalled: () => events.Add("consent"));
         var browser = new FakeSystemBrowserLauncher
         {
             OnOpenSideEffect = () => events.Add("browser"),
         };
+        using var handler = new McpOAuthRedirectHandler(browser, consent);
+        var redirectUri = handler.EnsureListenerBound();
         browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
-        var handler = new McpOAuthRedirectHandler(browser, consent);
 
-        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         Assert.Equal(1, consent.CallCount);
@@ -112,16 +113,15 @@ public sealed class McpOAuthRedirectHandlerTests
     {
         var consent = new FakeSecretProvider();
         var browser = new FakeSystemBrowserLauncher();
-        var handler = new McpOAuthRedirectHandler(browser, consent);
+        using var handler = new McpOAuthRedirectHandler(browser, consent);
+        var redirectUri = handler.EnsureListenerBound();
 
-        var firstRedirect = McpOAuthComposition.CreateLoopbackRedirectUri();
-        browser.OnOpen = _ => SendCallbackAsync(firstRedirect, "code=code-1&state=xyz");
-        await handler.HandleAsync("server-a", AuthorizationUri, firstRedirect, CancellationToken.None);
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=code-1&state=s1");
+        await handler.HandleAsync("server-a", AuthUri("s1"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
-        var secondRedirect = McpOAuthComposition.CreateLoopbackRedirectUri();
-        browser.OnOpen = _ => SendCallbackAsync(secondRedirect, "code=code-2&state=xyz");
-        await handler.HandleAsync("server-a", AuthorizationUri, secondRedirect, CancellationToken.None);
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=code-2&state=s2");
+        await handler.HandleAsync("server-a", AuthUri("s2"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         Assert.Equal(1, consent.CallCount);
@@ -131,13 +131,13 @@ public sealed class McpOAuthRedirectHandlerTests
     [Fact]
     public async Task McpOAuthRedirectHandler_EnsureConsent_RequestIncludesScopeMemories()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
-        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
         var consent = new FakeSecretProvider();
-        var handler = new McpOAuthRedirectHandler(browser, consent);
+        using var handler = new McpOAuthRedirectHandler(browser, consent);
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
 
-        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         var request = Assert.Single(consent.RequestedRequests);
@@ -157,13 +157,13 @@ public sealed class McpOAuthRedirectHandlerTests
     [Fact]
     public async Task McpOAuthRedirectHandler_EnsureConsent_WithSessionIdentity_IncludesSessionScope()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
-        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
         var consent = new FakeSecretProvider();
-        var handler = new McpOAuthRedirectHandler(browser, consent, sessionIdentityProvider: () => "session-1");
+        using var handler = new McpOAuthRedirectHandler(browser, consent, sessionIdentityProvider: () => "session-1");
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
 
-        await handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None);
+        await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
         var request = Assert.Single(consent.RequestedRequests);
@@ -184,10 +184,10 @@ public sealed class McpOAuthRedirectHandlerTests
         // chosen broad (non-AlwaysAsk) scope is persisted to the shared store.
         var browser1 = new FakeSystemBrowserLauncher();
         var provider1 = new SecretProvider(allowedStore, platformStore, dialog);
-        var handler1 = new McpOAuthRedirectHandler(browser1, provider1);
-        var redirect1 = McpOAuthComposition.CreateLoopbackRedirectUri();
-        browser1.OnOpen = _ => SendCallbackAsync(redirect1, "code=code-1&state=xyz");
-        await handler1.HandleAsync("server-a", AuthorizationUri, redirect1, CancellationToken.None);
+        using var handler1 = new McpOAuthRedirectHandler(browser1, provider1);
+        var redirect1 = handler1.EnsureListenerBound();
+        browser1.OnOpen = _ => SendCallbackAsync(redirect1, "code=code-1&state=s1");
+        await handler1.HandleAsync("server-a", AuthUri("s1"), redirect1, CancellationToken.None);
         await browser1.LastCallbackTask!;
 
         Assert.Equal(1, dialog.ShowCount);
@@ -196,10 +196,10 @@ public sealed class McpOAuthRedirectHandlerTests
         // but the SAME persisted store. The remembered scope must auto-approve without re-prompting.
         var browser2 = new FakeSystemBrowserLauncher();
         var provider2 = new SecretProvider(allowedStore, platformStore, dialog);
-        var handler2 = new McpOAuthRedirectHandler(browser2, provider2);
-        var redirect2 = McpOAuthComposition.CreateLoopbackRedirectUri();
-        browser2.OnOpen = _ => SendCallbackAsync(redirect2, "code=code-2&state=xyz");
-        await handler2.HandleAsync("server-a", AuthorizationUri, redirect2, CancellationToken.None);
+        using var handler2 = new McpOAuthRedirectHandler(browser2, provider2);
+        var redirect2 = handler2.EnsureListenerBound();
+        browser2.OnOpen = _ => SendCallbackAsync(redirect2, "code=code-2&state=s2");
+        await handler2.HandleAsync("server-a", AuthUri("s2"), redirect2, CancellationToken.None);
         await browser2.LastCallbackTask!;
 
         // No second prompt: consent survived the "restart" via the persisted store.
@@ -209,43 +209,46 @@ public sealed class McpOAuthRedirectHandlerTests
     }
 
     [Fact]
-    public async Task RedirectHandler_WhenCancelled_ThrowsAndStopsListener()
+    public async Task RedirectHandler_WhenCancelled_ThrowsAndKeepsListenerAlive()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), Timeout.InfiniteTimeSpan);
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), Timeout.InfiniteTimeSpan);
+        var redirectUri = handler.EnsureListenerBound();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            () => handler.HandleAsync("server-a", AuthorizationUri, redirectUri, cts.Token));
+            () => handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, cts.Token));
 
-        AssertPortReleased(redirectUri);
+        // The shared listener is NOT torn down by a cancelled sign-in; its own state entry is removed.
+        Assert.True(handler.IsListenerBound);
+        Assert.Equal(0, handler.PendingCount);
     }
 
     [Fact]
-    public async Task RedirectHandler_WhenTimeoutElapses_ThrowsAndStopsListener()
+    public async Task RedirectHandler_WhenTimeoutElapses_ThrowsAndKeepsListenerAlive()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), TimeSpan.Zero);
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), TimeSpan.Zero);
+        var redirectUri = handler.EnsureListenerBound();
 
         await Assert.ThrowsAsync<TimeoutException>(
-            () => handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None));
+            () => handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None));
 
-        AssertPortReleased(redirectUri);
+        Assert.True(handler.IsListenerBound);
+        Assert.Equal(0, handler.PendingCount);
     }
 
     [Fact]
     public async Task RedirectHandler_WhenRedirectContainsErrorParam_SurfacesError()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
-        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "error=access_denied");
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "error=access_denied&state=xyz");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None));
+            () => handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None));
         await browser.LastCallbackTask!;
 
         Assert.Contains("access_denied", exception.Message, StringComparison.Ordinal);
@@ -271,7 +274,7 @@ public sealed class McpOAuthRedirectHandlerTests
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => redirectDelegate(AuthorizationUri, options.RedirectUri, cts.Token));
+            () => redirectDelegate(AuthUri("xyz"), options.RedirectUri, cts.Token));
 
         Assert.Equal(1, consent.CallCount);
     }
@@ -279,17 +282,17 @@ public sealed class McpOAuthRedirectHandlerTests
     [Fact]
     public async Task McpOAuthRedirectHandler_RedirectCarriesErrorParam_LogsAndSurfacesDetail()
     {
-        var redirectUri = McpOAuthComposition.CreateLoopbackRedirectUri();
         var browser = new FakeSystemBrowserLauncher();
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+        var redirectUri = handler.EnsureListenerBound();
         // The redirect carries error + error_description AND a code (which must never be logged).
         browser.OnOpen = _ => SendCallbackAsync(
             redirectUri,
             "error=access_denied&error_description=The%20user%20declined&code=must-not-be-logged&state=xyz");
-        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
-        var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => handler.HandleAsync("server-a", AuthorizationUri, redirectUri, CancellationToken.None));
+            () => handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None));
         await browser.LastCallbackTask!;
 
         // The decoded error/error_description are carried on the exception for the surfaced detail.
@@ -306,6 +309,220 @@ public sealed class McpOAuthRedirectHandlerTests
         Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(redirectUri.ToString(), StringComparison.Ordinal));
     }
 
+    // ---- Issue #1425: shared listener + state demultiplexing ----
+
+    [Fact]
+    public async Task RedirectHandler_ConcurrentSignInsForTwoServers_DoNotThrowListenerConflict()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=code-{state}&state={state}");
+        };
+
+        // Two servers authorize at the same time. Both reuse the one shared listener; neither throws
+        // an HttpListenerException prefix conflict.
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, CancellationToken.None);
+        var taskB = handler.HandleAsync("server-b", AuthUri("state-b"), redirectUri, CancellationToken.None);
+
+        var captured = await Task.WhenAll(taskA, taskB);
+
+        Assert.Equal("code-state-a", GetQueryValue(captured[0], "code"));
+        Assert.Equal("code-state-b", GetQueryValue(captured[1], "code"));
+        Assert.Equal(1, handler.ListenerStartCount);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_SecondSignInWhileFirstListenerOpen_DoesNotThrow()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+
+        // Server A signs in and stays pending (mode b): its loopback listener is still open.
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token);
+
+        // Server B starts its sign-in while A is still pending — it must not throw a prefix conflict.
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=b-code&state={state}");
+        };
+        var capturedB = await handler.HandleAsync("server-b", AuthUri("state-b"), redirectUri, CancellationToken.None);
+
+        Assert.Equal("b-code", GetQueryValue(capturedB, "code"));
+        Assert.Equal(1, handler.ListenerStartCount);
+        Assert.False(taskA.IsCompleted);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_SharedListener_BoundOnceAcrossMultipleSignIns()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        var boundPort = redirectUri.Port;
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=c&state={state}");
+        };
+
+        for (var i = 0; i < 3; i++)
+        {
+            await handler.HandleAsync($"server-{i}", AuthUri($"state-{i}"), redirectUri, CancellationToken.None);
+            await browser.LastCallbackTask!;
+        }
+
+        // Exactly one Start(), and the port is held continuously across every sign-in (no reserve-free).
+        Assert.Equal(1, handler.ListenerStartCount);
+        Assert.True(handler.IsListenerBound);
+        Assert.Equal(boundPort, redirectUri.Port);
+
+        using var probe = new HttpListener();
+        probe.Prefixes.Add(McpOAuthRedirectHandler.NormalizeLoopbackPrefix(redirectUri));
+        Assert.Throws<HttpListenerException>(() => probe.Start());
+    }
+
+    [Fact]
+    public async Task RedirectHandler_TwoPendingSignIns_RoutesCallbackToMatchingState()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token);
+        var taskB = handler.HandleAsync("server-b", AuthUri("state-b"), redirectUri, cts.Token);
+
+        // Deliver only server A's callback.
+        await SendCallbackAsync(redirectUri, "code=code-a&state=state-a");
+
+        var captured = await taskA;
+        Assert.Equal("code-a", GetQueryValue(captured, "code"));
+
+        // Server B's waiter is left untouched.
+        Assert.False(taskB.IsCompleted);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskB);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_CallbackWithUnknownState_DoesNotFaultPendingWaiters()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token);
+
+        // A callback carrying an unrecognized state is answered with the close page and dropped.
+        var body = await SendCallbackAsync(redirectUri, "code=stray&state=unknown-state");
+        Assert.Contains("close this window", body, StringComparison.OrdinalIgnoreCase);
+        Assert.False(taskA.IsCompleted);
+
+        // The matching callback still completes A afterwards.
+        await SendCallbackAsync(redirectUri, "code=code-a&state=state-a");
+        var captured = await taskA;
+        Assert.Equal("code-a", GetQueryValue(captured, "code"));
+
+        cts.Cancel();
+    }
+
+    [Fact]
+    public async Task RedirectHandler_ErrorRedirect_FaultsOnlyMatchingStateWaiter()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token);
+        var taskB = handler.HandleAsync("server-b", AuthUri("state-b"), redirectUri, cts.Token);
+
+        // An error redirect for server A (carrying a code that must NOT be logged), routed by state.
+        await SendCallbackAsync(
+            redirectUri,
+            "error=access_denied&error_description=nope&code=must-not-be-logged&state=state-a");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => taskA);
+        Assert.Equal("access_denied", exception.Data["oauth_error"]);
+        Assert.Equal("nope", exception.Data["oauth_error_description"]);
+        Assert.Contains("server-a", exception.Message, StringComparison.Ordinal);
+
+        // Only server A's waiter is faulted; server B is left pending.
+        Assert.False(taskB.IsCompleted);
+
+        // #1408 privacy: only error/error_description are logged, never the code or full callback URI.
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Error && entry.Message.Contains("access_denied", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("must-not-be-logged", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("code=", StringComparison.Ordinal));
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskB);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_TimeoutOrCancel_RemovesPendingStateAndKeepsListenerAlive()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), Timeout.InfiniteTimeSpan);
+        var redirectUri = handler.EnsureListenerBound();
+
+        using (var cts = new CancellationTokenSource())
+        {
+            cts.Cancel();
+            await Assert.ThrowsAsync<OperationCanceledException>(
+                () => handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token));
+        }
+
+        // The cancelled sign-in removed only its own state entry; the listener is untouched.
+        Assert.Equal(0, handler.PendingCount);
+        Assert.True(handler.IsListenerBound);
+
+        // The shared listener survives — a subsequent sign-in for another server still succeeds on it.
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=ok&state={state}");
+        };
+        var captured = await handler.HandleAsync("server-b", AuthUri("state-b"), redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        Assert.Equal("ok", GetQueryValue(captured, "code"));
+        Assert.Equal(1, handler.ListenerStartCount);
+    }
+
+    [Fact]
+    public void McpOAuthComposition_DoesNotReserveThenFreeAFixedPort()
+    {
+        var consent = new FakeSecretProvider();
+        var browser = new FakeSystemBrowserLauncher();
+
+        var options = McpOAuthComposition.CreateOptions(consent, browser);
+
+        Assert.NotNull(options.RedirectUri);
+        Assert.Equal("127.0.0.1", options.RedirectUri!.Host);
+
+        // The redirect URI is derived from a continuously-held shared listener rather than a
+        // reserve-then-free port: binding a fresh HttpListener to the same prefix conflicts because
+        // the composed handler still owns the port.
+        using var probe = new HttpListener();
+        probe.Prefixes.Add(McpOAuthRedirectHandler.NormalizeLoopbackPrefix(options.RedirectUri!));
+        Assert.Throws<HttpListenerException>(() => probe.Start());
+    }
+
     private static async Task<string> SendCallbackAsync(Uri redirectUri, string rawQuery)
     {
         using var client = new HttpClient();
@@ -316,14 +533,6 @@ public sealed class McpOAuthRedirectHandlerTests
         }.Uri;
         using var response = await client.GetAsync(target);
         return await response.Content.ReadAsStringAsync();
-    }
-
-    private static void AssertPortReleased(Uri redirectUri)
-    {
-        using var listener = new HttpListener();
-        listener.Prefixes.Add(McpOAuthRedirectHandler.NormalizeLoopbackPrefix(redirectUri));
-        listener.Start();
-        listener.Stop();
     }
 
     private static string? GetQueryValue(Uri uri, string key)

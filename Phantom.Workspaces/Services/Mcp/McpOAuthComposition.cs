@@ -1,5 +1,3 @@
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
@@ -38,11 +36,16 @@ public static class McpOAuthComposition
             browserLauncher,
             consentProvider,
             loggerFactory?.CreateLogger<McpOAuthRedirectHandler>());
+
+        // #1425: bind the single shared loopback listener now and derive the redirect URI from its
+        // actual bound prefix. The port is held continuously by the handler for the process lifetime
+        // (no reserve-then-free TOCTOU), and every server reuses this one URI + listener.
+        var redirectUri = handler.EnsureListenerBound();
         return new McpOAuthOptions
         {
             // #1385: interactive redirect delegate + loopback listener URI.
             RedirectDelegateProvider = handler.CreateRedirectDelegate,
-            RedirectUri = CreateLoopbackRedirectUri(),
+            RedirectUri = redirectUri,
 
             // #1384: persistent per-server token cache over the platform secret store. Returns null
             // per server when no real store is available (non-Windows) so the SDK in-memory cache is
@@ -53,25 +56,5 @@ public static class McpOAuthComposition
             // redirect URI above and persists tokens through MSAL's OS-backed cache keyed per server.
             EntraCredentialProvider = EntraInteractiveCredentialFactory.Create,
         };
-    }
-
-    /// <summary>
-    /// Reserves a free loopback TCP port and returns the <c>http://127.0.0.1:&lt;port&gt;/</c> redirect
-    /// URI. The handler binds its <see cref="HttpListener"/> to the same port when the SDK invokes the
-    /// delegate.
-    /// </summary>
-    internal static Uri CreateLoopbackRedirectUri()
-    {
-        var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        try
-        {
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            return new Uri($"http://127.0.0.1:{port}/");
-        }
-        finally
-        {
-            listener.Stop();
-        }
     }
 }

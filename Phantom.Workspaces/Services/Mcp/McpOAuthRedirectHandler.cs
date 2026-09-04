@@ -1,4 +1,6 @@
+using System.Collections.Concurrent;
 using System.Net;
+using System.Net.Sockets;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,6 +19,7 @@ namespace Phantom.Workspaces.Services.Mcp;
 /// <c>code</c> string the SDK expects.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Consent is remembered per MCP server for the process session (the in-process
 /// <see cref="consentedServers"/> fast-path) so silent token refreshes do not re-prompt the user.
 /// The consent request also carries scope memories keyed on <c>McpOAuth:{server}</c>, so an accepted
@@ -25,8 +28,18 @@ namespace Phantom.Workspaces.Services.Mcp;
 /// path and matched again on a fresh handler/process, suppressing re-prompting after restart. Only the
 /// GUI/desktop host wires this handler; headless hosts keep the failing "interactive OAuth is not
 /// configured" default from #1382.
+/// </para>
+/// <para>
+/// A <b>single</b> shared loopback <see cref="HttpListener"/> is bound exactly once (issue #1425) and
+/// kept alive for the process lifetime. Every MCP server reuses it — there is exactly one
+/// <see cref="HttpListener.Start"/> per process, so overlapping/concurrent sign-ins never collide on
+/// an identical prefix. A single accept loop demultiplexes each inbound callback to the correct pending
+/// authorization using the OAuth <c>state</c> query parameter, which the SDK generates uniquely per
+/// authorization request and echoes back on the redirect. Because the listener is bound continuously
+/// from first use, the port is never reserved-then-freed, removing the earlier TOCTOU window.
+/// </para>
 /// </remarks>
-public sealed class McpOAuthRedirectHandler
+public sealed class McpOAuthRedirectHandler : IDisposable
 {
     /// <summary>Overall time the loopback listener waits for the browser redirect before failing.</summary>
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
@@ -43,6 +56,15 @@ public sealed class McpOAuthRedirectHandler
     private readonly ILogger logger;
     private readonly object gate = new();
     private readonly HashSet<string> consentedServers = new(StringComparer.OrdinalIgnoreCase);
+
+    // Shared loopback listener (issue #1425): bound once, held for the process lifetime, reused by every
+    // server. `pending` maps each authorization's OAuth `state` to its waiter so the single accept loop
+    // can route concurrent callbacks to the right sign-in.
+    private readonly ConcurrentDictionary<string, PendingAuthorization> pending =
+        new(StringComparer.Ordinal);
+    private HttpListener? sharedListener;
+    private Uri? boundRedirectUri;
+    private int listenerStartCount;
 
     public McpOAuthRedirectHandler(
         ISystemBrowserLauncher browserLauncher,
@@ -70,6 +92,21 @@ public sealed class McpOAuthRedirectHandler
         this.logger = logger ?? (ILogger)NullLogger<McpOAuthRedirectHandler>.Instance;
     }
 
+    /// <summary>Number of times the shared listener has been started. Exactly one per process.</summary>
+    internal int ListenerStartCount
+    {
+        get { lock (this.gate) { return this.listenerStartCount; } }
+    }
+
+    /// <summary>True while the shared loopback listener is bound and listening.</summary>
+    internal bool IsListenerBound
+    {
+        get { lock (this.gate) { return this.sharedListener is { IsListening: true }; } }
+    }
+
+    /// <summary>Count of in-flight authorizations still awaiting their loopback callback.</summary>
+    internal int PendingCount => this.pending.Count;
+
     /// <summary>
     /// Factory matching the <c>Func&lt;string, AuthorizationRedirectDelegate&gt;</c> shape of
     /// <c>McpOAuthOptions.RedirectDelegateProvider</c>. The returned delegate runs the interactive flow
@@ -85,6 +122,14 @@ public sealed class McpOAuthRedirectHandler
             return GetQueryValue(captured, "code");
         };
     }
+
+    /// <summary>
+    /// Binds the single shared loopback <see cref="HttpListener"/> to an OS-assigned loopback port (if it
+    /// is not already bound) and returns its <c>http://127.0.0.1:&lt;port&gt;/</c> redirect URI. Used by
+    /// the composition root so <c>McpOAuthOptions.RedirectUri</c> is derived from the continuously-held
+    /// listener rather than a reserve-then-free port (issue #1425).
+    /// </summary>
+    internal Uri EnsureListenerBound() => this.EnsureListener(preferredRedirectUri: null);
 
     /// <summary>
     /// Runs the interactive authorization flow and returns the full loopback redirect URI (its query
@@ -103,25 +148,38 @@ public sealed class McpOAuthRedirectHandler
 
         await this.EnsureConsentAsync(serverName, cancellationToken).ConfigureAwait(false);
 
-        using var listener = new HttpListener();
-        listener.Prefixes.Add(NormalizeLoopbackPrefix(redirectUri));
-        listener.Start();
-        try
+        // Reuse the single shared listener — never a second Start(). The first sign-in in the process
+        // binds it; every subsequent server (concurrent or overlapping) demultiplexes on the same prefix.
+        this.EnsureListener(redirectUri);
+
+        // The SDK generates and echoes `state`, so it uniquely identifies this authorization on the
+        // shared listener. Register the waiter BEFORE opening the browser so a fast callback is not lost.
+        var state = GetQueryValue(authorizationUri, "state")
+            ?? throw new InvalidOperationException(
+                $"MCP OAuth authorization URI for server '{serverName}' did not include a state parameter.");
+
+        var authorization = this.pending.GetOrAdd(
+            state,
+            _ => new PendingAuthorization(
+                serverName,
+                new TaskCompletionSource<Uri>(TaskCreationOptions.RunContinuationsAsynchronously)));
+        var waiter = authorization.Completion;
+
+        using var timeoutSource = new CancellationTokenSource();
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, timeoutSource.Token);
+        if (this.timeout != Timeout.InfiniteTimeSpan)
         {
-            this.browserLauncher.Open(authorizationUri);
+            timeoutSource.CancelAfter(this.timeout);
+        }
 
-            using var timeoutSource = new CancellationTokenSource();
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken, timeoutSource.Token);
-            if (this.timeout != Timeout.InfiniteTimeSpan)
-            {
-                timeoutSource.CancelAfter(this.timeout);
-            }
+        this.browserLauncher.Open(authorizationUri);
 
-            HttpListenerContext context;
+        using (linked.Token.Register(() => waiter.TrySetCanceled(linked.Token)))
+        {
             try
             {
-                context = await listener.GetContextAsync().WaitAsync(linked.Token).ConfigureAwait(false);
+                return await waiter.Task.ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -138,43 +196,197 @@ public sealed class McpOAuthRedirectHandler
                 throw new TimeoutException(
                     $"Timed out waiting for the OAuth redirect from MCP server '{serverName}'.");
             }
+            finally
+            {
+                // A timed-out/cancelled/completed sign-in removes only its own entry; the shared listener
+                // stays alive for the other servers still using it (issue #1425).
+                this.pending.TryRemove(state, out _);
+            }
+        }
+    }
 
-            var requestUri = context.Request.Url
-                ?? throw new InvalidOperationException(
-                    $"MCP OAuth redirect for server '{serverName}' did not include a request URI.");
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        HttpListener? listener;
+        lock (this.gate)
+        {
+            listener = this.sharedListener;
+            this.sharedListener = null;
+        }
 
-            await WriteClosePageAsync(context.Response).ConfigureAwait(false);
+        if (listener is not null)
+        {
+            try
+            {
+                if (listener.IsListening)
+                {
+                    listener.Stop();
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            ((IDisposable)listener).Dispose();
+        }
+
+        foreach (var entry in this.pending.Values)
+        {
+            entry.Completion.TrySetCanceled();
+        }
+    }
+
+    /// <summary>
+    /// Idempotently binds the single shared loopback listener. When <paramref name="preferredRedirectUri"/>
+    /// is supplied its loopback port is used; otherwise an OS-assigned ephemeral port is chosen and held.
+    /// Exactly one <see cref="HttpListener.Start"/> occurs per process; later calls return the URI of the
+    /// already-bound listener.
+    /// </summary>
+    private Uri EnsureListener(Uri? preferredRedirectUri)
+    {
+        lock (this.gate)
+        {
+            if (this.sharedListener is { IsListening: true })
+            {
+                return this.boundRedirectUri!;
+            }
+
+            var (listener, uri) = BindLoopbackListener(preferredRedirectUri);
+            this.sharedListener = listener;
+            this.boundRedirectUri = uri;
+            this.listenerStartCount++;
+
+            // Fire-and-forget accept loop: its first `GetContextAsync` yields immediately, so starting it
+            // inside the lock does not block. It runs for the lifetime of the listener.
+            _ = this.AcceptLoopAsync(listener);
+            return uri;
+        }
+    }
+
+    /// <summary>
+    /// Creates and starts a loopback <see cref="HttpListener"/>. When a redirect URI is provided the
+    /// listener binds to its port; otherwise a free ephemeral port is reserved and the listener is bound
+    /// to it immediately (and held), so the port is never released between reservation and use.
+    /// </summary>
+    private static (HttpListener Listener, Uri RedirectUri) BindLoopbackListener(Uri? preferredRedirectUri)
+    {
+        if (preferredRedirectUri is not null)
+        {
+            var prefix = NormalizeLoopbackPrefix(preferredRedirectUri);
+            var listener = new HttpListener();
+            listener.Prefixes.Add(prefix);
+            listener.Start();
+            return (listener, new Uri(prefix));
+        }
+
+        const int maxAttempts = 16;
+        for (var attempt = 1; ; attempt++)
+        {
+            var reservation = new TcpListener(IPAddress.Loopback, 0);
+            reservation.Start();
+            int port;
+            try
+            {
+                port = ((IPEndPoint)reservation.LocalEndpoint).Port;
+            }
+            finally
+            {
+                reservation.Stop();
+            }
+
+            var prefix = $"http://127.0.0.1:{port}/";
+            var listener = new HttpListener();
+            listener.Prefixes.Add(prefix);
+            try
+            {
+                listener.Start();
+                return (listener, new Uri(prefix));
+            }
+            catch (HttpListenerException) when (attempt < maxAttempts)
+            {
+                // The reserved ephemeral port was taken in the narrow window before bind; try another.
+                ((IDisposable)listener).Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Single accept loop for the shared listener. Writes the close page for every callback, then routes
+    /// the result to the pending authorization matching the callback's OAuth <c>state</c>.
+    /// </summary>
+    private async Task AcceptLoopAsync(HttpListener listener)
+    {
+        while (listener.IsListening)
+        {
+            HttpListenerContext context;
+            try
+            {
+                context = await listener.GetContextAsync().ConfigureAwait(false);
+            }
+            catch (Exception) when (!listener.IsListening)
+            {
+                break;
+            }
+            catch (HttpListenerException)
+            {
+                break;
+            }
+            catch (ObjectDisposedException)
+            {
+                break;
+            }
+
+            var requestUri = context.Request.Url;
+
+            try
+            {
+                await WriteClosePageAsync(context.Response).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // Best-effort close page; still route the result below.
+            }
+
+            if (requestUri is null)
+            {
+                continue;
+            }
+
+            var state = GetQueryValue(requestUri, "state");
+            if (state is null || !this.pending.TryGetValue(state, out var authorization))
+            {
+                // Unknown/duplicate state: page already shown; drop it without faulting other waiters.
+                continue;
+            }
 
             var error = GetQueryValue(requestUri, "error");
             if (!string.IsNullOrEmpty(error))
             {
                 var errorDescription = GetQueryValue(requestUri, "error_description");
 
-                // Log ONLY the OAuth error/error_description codes. The full redirect URI must never
-                // be logged: its query carries the authorization `code`/`state` (issue #1408).
+                // Log ONLY the OAuth error/error_description codes. The full redirect URI must never be
+                // logged: its query carries the authorization `code`/`state` (issue #1408).
                 this.logger.LogError(
-                    "MCP OAuth redirect for '{ServerName}' returned error {Error}.", serverName, error);
+                    "MCP OAuth redirect for '{ServerName}' returned error {Error}.",
+                    authorization.ServerName,
+                    error);
 
                 // Carry the decoded error/error_description into the thrown exception (via Data) so the
                 // AgentChat catch can surface them as diagnostic detail items without re-parsing URIs.
                 var oauthException = new InvalidOperationException(
-                    $"MCP OAuth authorization failed for server '{serverName}': {error}.");
+                    $"MCP OAuth authorization failed for server '{authorization.ServerName}': {error}.");
                 oauthException.Data["oauth_error"] = error;
                 if (!string.IsNullOrEmpty(errorDescription))
                 {
                     oauthException.Data["oauth_error_description"] = errorDescription;
                 }
 
-                throw oauthException;
+                authorization.Completion.TrySetException(oauthException);
             }
-
-            return requestUri;
-        }
-        finally
-        {
-            if (listener.IsListening)
+            else
             {
-                listener.Stop();
+                authorization.Completion.TrySetResult(requestUri);
             }
         }
     }
@@ -278,4 +490,7 @@ public sealed class McpOAuthRedirectHandler
 
         return null;
     }
+
+    /// <summary>A pending interactive authorization awaiting its loopback callback, keyed by OAuth state.</summary>
+    private sealed record PendingAuthorization(string ServerName, TaskCompletionSource<Uri> Completion);
 }
