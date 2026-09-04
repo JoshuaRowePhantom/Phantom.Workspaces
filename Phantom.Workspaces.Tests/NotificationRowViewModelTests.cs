@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Windows.Input;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.ViewModels;
@@ -142,6 +143,57 @@ public sealed class NotificationRowViewModelTests
     {
         var row = MakeRow("done", isInteresting: false);
         Assert.Equal(ErrorStatus.None, row.Status.ErrorStatus);
+    }
+
+    [Fact]
+    public void ShowsAttentionIndicator_WhenInterestingAndUnread_IsTrue()
+    {
+        var row = MakeRow("done", isInteresting: true);
+        Assert.False(row.IsRead);
+        Assert.True(row.ShowsAttentionIndicator);
+    }
+
+    [Fact]
+    public void ShowsAttentionIndicator_WhenNotInteresting_IsFalse()
+    {
+        var row = MakeRow("done", isInteresting: false);
+        Assert.False(row.ShowsAttentionIndicator);
+    }
+
+    [Fact]
+    public void ShowsAttentionIndicator_WhenIsReadFlipsTrue_BecomesFalse()
+    {
+        var row = MakeRow("done", isInteresting: true);
+        Assert.True(row.ShowsAttentionIndicator);
+
+        row.IsRead = true;
+
+        Assert.False(row.ShowsAttentionIndicator);
+    }
+
+    [Fact]
+    public void ShowsAttentionIndicator_RaisesPropertyChanged_WhenIsReadChanges()
+    {
+        var row = MakeRow("done", isInteresting: true);
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.IsRead = true;
+
+        Assert.Contains(nameof(NotificationRowViewModel.ShowsAttentionIndicator), raised);
+    }
+
+    [Fact]
+    public void ShowsAttentionIndicator_RaisesPropertyChanged_WhenIsInterestingChanges()
+    {
+        var row = MakeRow("done", isInteresting: false);
+        var raised = new List<string?>();
+        row.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+        row.IsInteresting = true;
+
+        Assert.Contains(nameof(NotificationRowViewModel.ShowsAttentionIndicator), raised);
+        Assert.True(row.ShowsAttentionIndicator);
     }
 }
 

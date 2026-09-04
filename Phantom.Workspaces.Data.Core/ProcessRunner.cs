@@ -151,16 +151,23 @@ public static class ProcessRunner
     }
 
     /// <summary>
-    /// Runs a process and logs the combined stdout+stderr output via the supplied
-    /// <paramref name="logger"/>. Logs at Debug level on success (exit code 0), at Warning level
-    /// on non-zero exit, and at Error level on timeout.
+    /// Runs a process and logs its output via the supplied <paramref name="logger"/>. Standard
+    /// output and standard error are always logged as distinct fields so both streams are visible
+    /// on success and on failure. Logs at <paramref name="successLogLevel"/> (default
+    /// <see cref="LogLevel.Information"/>) on success (exit code 0), at Warning level on non-zero
+    /// exit, and at Error level on timeout. Callers that shell out to commands whose stdout may
+    /// contain secrets (for example <c>gh auth token</c>) should pass <see cref="LogLevel.Debug"/>
+    /// so the sensitive output is not surfaced at Information.
     /// </summary>
     public static async Task<ProcessResult> RunAndLogAsync(
         RunProcessParameters parameters,
         ILogger logger,
         string? operationDescription = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        LogLevel successLogLevel = LogLevel.Information)
     {
+        var description = operationDescription is null ? string.Empty : $" ({operationDescription})";
+
         ProcessResult result;
         try
         {
@@ -173,7 +180,7 @@ public static class ProcessRunner
                 "Process '{Command}' timed out after {Timeout}{Description}. {ExceptionMessage}",
                 parameters.Command,
                 parameters.Timeout,
-                operationDescription is null ? string.Empty : $" ({operationDescription})",
+                description,
                 ex.Message);
             throw;
         }
@@ -181,19 +188,25 @@ public static class ProcessRunner
         if (result.ExitCode != 0)
         {
             logger.LogWarning(
-                "Process '{Command}' exited with code {ExitCode}{Description}.\nOutput:\n{Output}",
+                "Process '{Command}' exited with code {ExitCode}{Description}."
+                + "\nStandard output:\n{StandardOutput}\nStandard error:\n{StandardError}",
                 parameters.Command,
                 result.ExitCode,
-                operationDescription is null ? string.Empty : $" ({operationDescription})",
-                result.StandardOutAndError);
+                description,
+                result.StandardOut,
+                result.StandardError);
         }
-        else if (!string.IsNullOrWhiteSpace(result.StandardOutAndError))
+        else if (!string.IsNullOrWhiteSpace(result.StandardOut)
+            || !string.IsNullOrWhiteSpace(result.StandardError))
         {
-            logger.LogDebug(
-                "Process '{Command}' completed successfully{Description}.\nOutput:\n{Output}",
+            logger.Log(
+                successLogLevel,
+                "Process '{Command}' completed successfully{Description}."
+                + "\nStandard output:\n{StandardOutput}\nStandard error:\n{StandardError}",
                 parameters.Command,
-                operationDescription is null ? string.Empty : $" ({operationDescription})",
-                result.StandardOutAndError);
+                description,
+                result.StandardOut,
+                result.StandardError);
         }
 
         return result;

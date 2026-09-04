@@ -10,7 +10,6 @@
     <StackPanel Classes="workspace-entity-card-content"
                 Classes.workspace-entity-deleted="{Binding IsDeleted}"
                 IsEnabled="{Binding IsInteractive}"
-                ClipToBounds="True"
                 Tapped="OnEntityCardTapped">
                 <DockPanel LastChildFill="True">
                     <Border DockPanel.Dock="Left"
@@ -18,35 +17,33 @@
                             Classes="entity-card-tree-type-bar"
                             Background="{Binding Entity.NonAbstractEntityTypeNames, Converter={x:Static converters:EntityTypeColorConverter.Instance}}"
                             VerticalAlignment="Stretch" />
-                    <WrapPanel Classes="workspace-entity-header-wrap"
-                               Orientation="Horizontal">
+                    <sharedControls:EntityCardHeaderPanel Classes="workspace-entity-header-wrap"
+                                                          ActionsMinWidth="100"
+                                                          ItemSpacing="4">
                     <StackPanel Classes="workspace-entity-header-row"
-                                MinWidth="100"
-                                Margin="0,0,12,0">
-                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title">
-                            <Run Text="{Binding DisplayNameBefore}" />
-                            <Run Text="{Binding DisplayNameMatch}" Background="#FFF59D" />
-                            <Run Text="{Binding DisplayNameAfter}" />
-                        </sharedControls:SafeSelectableTextBlock>
+                                 MinWidth="100"
+                                 Margin="0,0,12,0">
+                        <sharedControls:SafeSelectableTextBlock Classes="workspace-entity-title"
+                                   Text="{Binding DisplayName}"
+                                   SearchQuery="{Binding SearchQuery}" />
                         <sharedControls:SafeSelectableTextBlock Classes="muted"
-                                   Text="{Binding EntityTypeLabels}" />
+                                   Text="{Binding EntityTypeLabels}"
+                                   SearchQuery="{Binding SearchQuery}" />
                     </StackPanel>
-                    <WrapPanel Classes="workspace-entity-actions-row"
-                               MinWidth="100">
                         <ItemsControl IsVisible="{Binding HasBadges}"
-                                      IsEnabled="{Binding AreBadgesEnabled}"
-                                      ItemsSource="{Binding Badges.Badges}">
+                                       IsEnabled="{Binding AreBadgesEnabled}"
+                                       ItemsSource="{Binding Badges.Badges}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" />
+                                    <WrapPanel Orientation="Horizontal" ItemSpacing="4" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Button Content="{Binding Glyph}"
                                             ToolTip.Tip="{Binding Tooltip}"
-                                            Classes="workspace-entity-badge-button"
-                                            Classes.workspace-entity-badge-active="{Binding IsActive}"
+                                             Classes="entity-card-action-button entity-card-interest-button"
+                                             Classes.highlighted="{Binding IsActive}"
                                             Command="{Binding $parent[ItemsControl].DataContext.ToggleInterestCommand}"
                                             CommandParameter="{Binding}"
                                             Tapped="OnInteractiveChildTapped" />
@@ -58,7 +55,7 @@
                                       ItemsSource="{Binding StatusBadges.Badges}">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" />
+                                    <WrapPanel Orientation="Horizontal" ItemSpacing="4" />
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
@@ -74,7 +71,7 @@
                         </ItemsControl>
                         <Button Content="{Binding EditModeGlyph}"
                                 ToolTip.Tip="Toggle edit mode"
-                                Classes="workspace-entity-shortcut-button"
+                                Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowEditIndicator}"
                                 Command="{Binding ToggleEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
@@ -91,7 +88,7 @@
                                     <Button Content="{Binding Shortcut.Label}"
                                             ToolTip.Tip="{Binding Shortcut.HoverText}"
                                             IsEnabled="{Binding IsEnabled}"
-                                            Classes="workspace-entity-shortcut-button"
+                                            Classes="entity-card-action-button"
                                             Command="{Binding $parent[ItemsControl].DataContext.ActivateShortcutCommand}"
                                             CommandParameter="{Binding}"
                                             Tapped="OnInteractiveChildTapped" />
@@ -99,22 +96,21 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
                         <Button Content="{Binding JsonButtonText}"
-                                Classes="workspace-edit-indicator-button"
+                                Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowJsonButton}"
                                 Command="{Binding ToggleJsonViewCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                         <Button Content="💾"
-                                Classes="workspace-edit-action-button"
+                                  Classes="entity-card-action-button"
                                 IsVisible="{Binding ShowEditActions}"
                                 Command="{Binding SaveEditModeCommand}"
                                 Tapped="OnInteractiveChildTapped" />
                         <Button Content="✖"
-                                Classes="workspace-edit-action-button"
-                                IsVisible="{Binding ShowEditActions}"
-                                Command="{Binding DiscardEditModeCommand}"
-                                Tapped="OnInteractiveChildTapped" />
-                    </WrapPanel>
-                    </WrapPanel>
+                                 Classes="entity-card-action-button"
+                                 IsVisible="{Binding ShowEditActions}"
+                                 Command="{Binding DiscardEditModeCommand}"
+                                 Tapped="OnInteractiveChildTapped" />
+                    </sharedControls:EntityCardHeaderPanel>
                 </DockPanel>
                 <ItemsControl ItemsSource="{Binding FieldEditors}"
                               Classes="workspace-field-editor-list"
@@ -132,4 +128,8 @@
                            Classes.workspace-validation-error="{Binding Validation.HasError}" />
     </StackPanel>
 </UserControl>
+
+
+
+
 

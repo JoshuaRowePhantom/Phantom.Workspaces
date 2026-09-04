@@ -880,6 +880,31 @@ consumed at features\Phantom.Workspaces.Llm.Core\AgentDefinitionParameterSubstit
 `KeyInManifestContent` as the recommended default. The dialog view-model
 pre-selects the recommended default when it renders a row.
 
+**Session-scoped materialization (manifest-optional).** Secret
+materialization is gated on the presence of an `ISecretProvider`, **not** on a
+manifest being present. Real session launches pass a prebuilt `AgentDefinition`
+with no manifest, so the materializer accepts an optional `AgentManifest?` and
+an optional `agentSessionId`. When no manifest is available the manifest-keyed
+scopes (`ManifestIdentity`, `ManifestContent`, `KeyInManifestContent`) are
+omitted and two session-keyed scopes participate instead:
+
+- `SessionIdentity` — grant applies to any secret use within this session,
+  keyed on `agentSessionId`.
+- `KeyInSession` — grant applies to this specific key/use within this session.
+
+**Manifest lineage carried on the definition.** So that a session launched from
+a manifest can still honor a manifest-scoped grant, the origin manifest's
+identity is stamped onto `AgentDefinition.Metadata` when the definition is built
+from a manifest:
+
+- `origin-manifest-id` — the stable manifest `entity-id` (when present).
+- `origin-manifest-content-hash` — `SHA256(CanonicalJson.Encode(manifest.Template))`.
+
+`AgentManifestSecretUseMemoryFactory.CreateLineage(manifest, definition,
+agentSessionId)` reconstructs the `SecretUseLineage` (manifest identity, content
+hash, session identity) from either a live manifest or these metadata keys,
+falling back to the definition metadata when the manifest itself is absent.
+
 #### `MemorizedSecret`
 
 **Namespace:** `Phantom.Workspaces.Llm.Secrets`

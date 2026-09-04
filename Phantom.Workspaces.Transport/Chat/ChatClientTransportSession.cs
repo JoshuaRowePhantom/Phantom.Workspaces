@@ -9,6 +9,8 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
     private readonly IMessageChannel channel;
     private readonly CancellationTokenSource sessionCts;
     private readonly Task pumpTask;
+    private readonly ICopilotSdkSessionSink? sdkSessionSink;
+    private readonly Action<string>? sdkSessionEstablishedHandler;
     private CancellationTokenSource? turnCts;
     private int disposed;
 
@@ -17,6 +19,17 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
         this.chatClient = chatClient ?? throw new ArgumentNullException(nameof(chatClient));
         this.channel = channel ?? throw new ArgumentNullException(nameof(channel));
         this.sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        // Bridge the Copilot SDK session sink to the source: forward SessionEstablished so the
+        // source AgentChat can persist the SDK session id (issue #1319 / #3), and honour inbound
+        // set-resume frames by arming the local CopilotSdkChatClient.
+        this.sdkSessionSink = chatClient.GetService(typeof(ICopilotSdkSessionSink)) as ICopilotSdkSessionSink;
+        if (this.sdkSessionSink is not null)
+        {
+            this.sdkSessionEstablishedHandler = this.OnSdkSessionEstablished;
+            this.sdkSessionSink.SessionEstablished += this.sdkSessionEstablishedHandler;
+        }
+
         this.pumpTask = Task.Run(() => this.RunAsync(this.sessionCts.Token), CancellationToken.None);
     }
 
@@ -25,6 +38,11 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
         if (Interlocked.Exchange(ref this.disposed, 1) != 0)
         {
             return;
+        }
+
+        if (this.sdkSessionSink is not null && this.sdkSessionEstablishedHandler is not null)
+        {
+            this.sdkSessionSink.SessionEstablished -= this.sdkSessionEstablishedHandler;
         }
 
         await this.sessionCts.CancelAsync().ConfigureAwait(false);
@@ -37,6 +55,20 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
         await SuppressAsync(this.pumpTask).ConfigureAwait(false);
         await this.channel.DisposeAsync().ConfigureAwait(false);
         this.sessionCts.Dispose();
+    }
+
+    private void OnSdkSessionEstablished(string sessionId)
+    {
+        // Best-effort write; if the channel has closed we simply drop the notification.
+        try
+        {
+            _ = this.channel.Writer.WriteAsync(
+                CopilotSdkTransportFrames.BuildSessionEstablished(sessionId),
+                this.sessionCts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
     }
 
     private async Task RunAsync(CancellationToken ct)
@@ -64,6 +96,20 @@ public sealed class ChatClientTransportSession : IAsyncDisposable
                     if (this.turnCts is not null)
                     {
                         await this.turnCts.CancelAsync().ConfigureAwait(false);
+                    }
+                }
+                else if (string.Equals(type, CopilotSdkTransportFrames.SetResumeSessionIdType, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (this.sdkSessionSink is not null)
+                    {
+                        string? sid = null;
+                        if (frame.TryGetProperty(CopilotSdkTransportFrames.SessionIdProperty, out var sidElement)
+                            && sidElement.ValueKind == JsonValueKind.String)
+                        {
+                            sid = sidElement.GetString();
+                        }
+
+                        this.sdkSessionSink.SetResumeSessionId(sid);
                     }
                 }
             }

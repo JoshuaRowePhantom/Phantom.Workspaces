@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
+using System.Security;
 using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
@@ -412,6 +414,122 @@ public sealed class RunningAgentChatTableTests
 
         Assert.Equal(1, resolver.ResolveCallCount);
         Assert.Same(definition, factory.LastDefinition);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_McpToolWithSecretPlaceholder_MaterializesToOpaqueHandleAndInvokesSecretProvider()
+    {
+        // #1405: opening a session via the foreground RunningAgentChatTable path must materialize the
+        // ${SECRET:...} in an MCP tool connection — rewriting it to an opaque handle and invoking the
+        // SecretProvider — instead of passing the raw placeholder through to the MCP transport.
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString("resolved-token");
+        var services = new AgentServices
+        {
+            SecretProvider = provider,
+            ChatClientOverride = new DeterministicTestChatClient(),
+        };
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), services, TaskScheduler.Default);
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-mcp-secret");
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                AgentDefinition = McpSecretDefinition(),
+                AgentServices = services,
+                EntityName = "Entity",
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, provider.CallCount);
+        var json = lease.AgentChat.AgentDefinition!.ToJson();
+        Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
+        Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_DefinitionWithNoSecretUsages_DefinitionUnchangedAndProviderNotCalled()
+    {
+        // #1405: a definition without any ${SECRET:...} usages flows through the materialization gate
+        // unchanged and never invokes the SecretProvider.
+        var provider = new FakeSecretProvider();
+        var services = new AgentServices
+        {
+            SecretProvider = provider,
+            ChatClientOverride = new DeterministicTestChatClient(),
+        };
+        await using var factory = new AgentChatFactory(new InMemoryAgentPersistenceStore(), services, TaskScheduler.Default);
+        var table = new RunningAgentChatTable(factory);
+        var sessionId = new AgentSessionId("session-no-secret");
+        var definition = CreateTestDefinition("no-secret");
+        var originalJson = definition.ToJson();
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = sessionId,
+                AgentDefinition = definition,
+                AgentServices = services,
+                EntityName = "Entity",
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, provider.CallCount);
+        Assert.Equal(originalJson, lease.AgentChat.AgentDefinition!.ToJson());
+    }
+
+    private static AgentDefinition McpSecretDefinition()
+        => AgentDefinition.FromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "mcp-secret-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [
+                {
+                  "kind": "mcp",
+                  "name": "github-secret-gated",
+                  "serverName": "github-secret-gated",
+                  "connection": { "kind": "key", "endpoint": "http://127.0.0.1:1/", "apiKey": "${SECRET:GitHubToken}" },
+                  "approvalMode": { "kind": "never" }
+                }
+              ]
+            }
+            """);
+
+    private static SecureString ToSecureString(string value)
+    {
+        var secure = new SecureString();
+        foreach (var ch in value)
+        {
+            secure.AppendChar(ch);
+        }
+
+        secure.MakeReadOnly();
+        return secure;
+    }
+
+    private sealed class FakeSecretProvider : ISecretProvider
+    {
+        public int CallCount { get; private set; }
+        public Dictionary<string, SecureString> Secrets { get; } = [];
+
+        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
+        {
+            this.CallCount++;
+            var retrievers = requests
+                .Where(request => this.Secrets.ContainsKey(request.SecretName))
+                .Select(request => new SecretRetriever
+                {
+                    SecretName = request.SecretName,
+                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
+                })
+                .ToArray();
+
+            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
+        }
     }
 
     private static AgentDefinition CreateTestDefinition(string name)

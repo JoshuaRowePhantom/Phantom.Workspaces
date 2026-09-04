@@ -93,7 +93,8 @@ public static class GitHubAuthTokenResolver
                 parameters,
                 logger,
                 operationDescription: "resolve GitHub auth token via CLI",
-                cancellationToken: cancellationToken).ConfigureAwait(false);
+                cancellationToken: cancellationToken,
+                successLogLevel: LogLevel.Debug).ConfigureAwait(false);
 
             if (result.ExitCode != 0)
             {
@@ -115,7 +116,8 @@ public static class GitHubAuthTokenResolver
             var result = ProcessRunner.RunAndLogAsync(
                 parameters,
                 logger,
-                operationDescription: "resolve GitHub auth token via CLI")
+                operationDescription: "resolve GitHub auth token via CLI",
+                successLogLevel: LogLevel.Debug)
                 .GetAwaiter().GetResult();
 
             if (result.ExitCode != 0)

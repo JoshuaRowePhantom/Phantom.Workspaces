@@ -837,7 +837,7 @@ public sealed class SchemaValidatingDataAccessLayerTests : DataAccessLayerNonQue
 
         var failedResult = Assert.Single(result.EntityResults);
         Assert.Equal(UpdateState.Failed, failedResult.UpdateState);
-        Assert.Contains(failedResult.Errors, error => error.Message.Contains("json-schema", StringComparison.Ordinal));
+        Assert.Contains(failedResult.Errors, error => error.Message.Contains("does not conform to schema", StringComparison.Ordinal));
     }
 
     [Fact]

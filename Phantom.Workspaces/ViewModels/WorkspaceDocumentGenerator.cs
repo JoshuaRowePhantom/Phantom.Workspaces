@@ -11,26 +11,63 @@ namespace Phantom.Workspaces.ViewModels;
 /// </summary>
 public sealed class WorkspaceDocumentGenerator : DockItemContainerGenerator
 {
+    private readonly Func<string, WorkspaceDocument?>? getDocumentForTab;
     private readonly Action<WorkspaceDocument>? onPrepared;
     private readonly Action<string>? onCleared;
 
     public WorkspaceDocumentGenerator(
+        Func<string, WorkspaceDocument?>? getDocumentForTab = null,
         Action<WorkspaceDocument>? onPrepared = null,
         Action<string>? onCleared = null)
     {
+        this.getDocumentForTab = getDocumentForTab;
         this.onPrepared = onPrepared;
         this.onCleared = onCleared;
     }
 
     public override IDockable? CreateDocumentContainer(IItemsSourceDock dock, object item, int index)
     {
-        return item is WorkspaceTabViewModel ? new WorkspaceDocument() : null;
+        if (item is not WorkspaceTabViewModel tab)
+        {
+            return null;
+        }
+
+        // #1333/#1341: if this tab already has a document hosted in a DIFFERENT region of THIS pane
+        // (a restored non-primary split dock that was registered before this ItemsSource-bound
+        // primary dock was populated), do not fabricate a duplicate wrapper here. Returning null
+        // makes the Dock ItemsSource sync skip adding a container, leaving the tab in its own region
+        // and keeping the owning pane's registry pointing at the dock that actually hosts it.
+        // The lookup resolves against the OWNING PANE's registry, so it can no longer false-positive
+        // against a stale entry left by a different, already-closed pane (#1340 mechanism (A)).
+        var existing = this.getDocumentForTab?.Invoke(tab.Id);
+        if (existing is not null && !ReferenceEquals(existing.Owner, dock))
+        {
+            // #1340 defensive hardening: only defer to the existing registration when it is still
+            // genuinely hosted by its claimed owner (a live non-primary split region). If the entry
+            // is orphaned — its owner is not a dock, or that dock no longer lists the document in its
+            // VisibleDockables — treat it as stale and materialize a fresh document here instead of
+            // silently returning null (which would leave the tab invisible / "no documents open").
+            var ownerDock = existing.Owner as IDock;
+            var stillHosted = ownerDock?.VisibleDockables?.Contains(existing) == true;
+            if (stillHosted)
+            {
+                return null;
+            }
+        }
+
+        return new WorkspaceDocument();
     }
 
     public override void PrepareDocumentContainer(IItemsSourceDock dock, IDockable container, object item, int index)
     {
         if (container is WorkspaceDocument doc && item is WorkspaceTabViewModel tab)
         {
+            // #1335/#1334: wire the per-document header/status/notification services (via
+            // Initialize) at document-creation time, BEFORE the document is registered with the
+            // factory. Because Initialize runs first, documentsByTabId always receives the single
+            // fully-wired instance for this tab Id — there is no last-writer-wins race between a
+            // wired and an unwired duplicate, so GetDocumentForTab returns the currently-rendered,
+            // header-configured document.
             doc.Initialize(tab);
             this.onPrepared?.Invoke(doc);
         }

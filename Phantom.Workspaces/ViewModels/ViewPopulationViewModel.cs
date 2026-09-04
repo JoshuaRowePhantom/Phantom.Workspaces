@@ -19,11 +19,55 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
     private readonly List<SubscribedGet> _getSubscriptions = [];
     private readonly List<(SubscribedQuery Query, NotifyCollectionChangedEventHandler Handler)> _querySubscriptions = [];
 
+    private string? findQuery;
+    private bool hideUnmatched;
+
     public ObservableCollection<ViewEntityViewModel> Entities { get; } = [];
 
     public ObservableCollection<ViewEntityViewModel> RootEntities { get; } = [];
 
     internal CancellationToken CancellationToken => _cts.Token;
+
+    public void ApplyFind(string? query, bool hideUnmatched)
+    {
+        this.findQuery = query;
+        this.hideUnmatched = hideUnmatched;
+
+        foreach (var root in this.RootEntities)
+        {
+            FanOutSearchQuery(root, query);
+        }
+
+        foreach (var root in this.RootEntities)
+        {
+            root.RecomputeVisibility(hideUnmatched);
+        }
+
+        NormalizeSelectionIfHidden();
+    }
+
+    private static void FanOutSearchQuery(ViewEntityViewModel node, string? query)
+    {
+        node.EntityCardNode.Card.SearchQuery = query;
+        foreach (var child in node.Children)
+        {
+            FanOutSearchQuery(child, query);
+        }
+    }
+
+    internal void ReapplyFindAfterAssembly() =>
+        ApplyFind(this.findQuery, this.hideUnmatched);
+
+    private void NormalizeSelectionIfHidden()
+    {
+        foreach (var entity in this.Entities)
+        {
+            if (!entity.IsVisible && entity.EntityCardNode.Card.IsSelected)
+            {
+                entity.EntityCardNode.Card.IsSelected = false;
+            }
+        }
+    }
 
     internal void AddGetSubscription(SubscribedGet subscription) =>
         _getSubscriptions.Add(subscription);

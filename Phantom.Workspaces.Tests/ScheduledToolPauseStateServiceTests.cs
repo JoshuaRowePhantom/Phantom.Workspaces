@@ -145,12 +145,15 @@ public sealed class ScheduledToolPauseStateServiceTests
         var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([new BlockingTool(started)]), timeProvider: new FixedTimeProvider());
         var service = new ScheduledToolPauseStateService(dataAccessLayer, host);
 
-        var runTask = host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+        var dispatched = await host.RunDueToolsAsync(new EntityId(hostId), HostName, TestContext.Current.CancellationToken);
+        Assert.Equal(1, dispatched);
         await started.Task;
 
         await service.SetPausedAsync(new EntityId(hostId), paused: true, TestContext.Current.CancellationToken);
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runTask);
+        // Pausing issues a stop-all that cancels the still-running tool; draining awaits its cancellation.
+        await host.WaitForRunningExecutionsAsync();
+        Assert.Empty(host.GetRunningExecutions());
         Assert.True(service.IsPaused);
     }
 }

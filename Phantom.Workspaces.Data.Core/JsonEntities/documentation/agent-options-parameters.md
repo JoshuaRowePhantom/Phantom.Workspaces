@@ -90,9 +90,26 @@ Example manifest declaration:
 }
 ```
 
-### `trust-profile` (future)
+### `trust-profile`
 
-All manifests will eventually expose a `trust-profile` parameter (kind: `"string"`, required: false, default: `"default"`). The Launchpad will render a dropdown bound to available `llm-trust-profile` entities. This is out of scope for the current implementation.
+Names an `llm-trust-profile` entity that supplies the effective execution policy for the session. Currently declared on manifests that opt into the `[remote-copilot-sdk]` split topology (see `docs/examples/github-copilot-remote-chat.json`); other manifests may adopt it as trust-profile-driven execution rolls out.
+
+**Kind:** `"string"`. **Required:** manifest-defined (required for remote-hosting manifests; typically optional with a `"default"` default elsewhere).
+
+**How the value drives execution.** At session launch, `AgentFactory` resolves the parameter value to an `llm-trust-profile` entity and composes a runtime `TrustProfile` (`Phantom.Workspaces.Llm.Core/Trust/TrustProfile.cs`). The composed profile drives two knobs that together select the remote host:
+
+| `TrustProfile` field | Purpose | Source |
+|---|---|---|
+| `HostingWorkspacesClientInstances` (line 137) | Effective set of client instances this profile may run on. Each entry is a client-instance id, `TrustProfile.LocalClientInstance` (`"."`, line 131) for the source, or `TrustProfile.WildcardClientInstance` (`"*"`, line 134) for "any". A non-`"."` id is what opts the session into remote hosting — it becomes `ExecutorTopology.AgentExecutorClientInstance` and every `AgentExecutor`-classed tool routes to that instance. | Composed via `TrustProfileDefinition.HostingWorkspacesClientInstances` (line 99) from the entity. |
+| `DefaultExecutionTarget` (line 143) | `JsonElement?` connection descriptor used to reach the remote instance when the manifest does not override it. | Composed from `TrustProfileDefinition.DefaultExecutionTarget` (line 105). |
+
+The launcher writes the resolved host onto the resulting `agent-session` entity's `host-profile-entity-id` field (`Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json:24`) so the topology can be reconstructed on resume.
+
+**See also:**
+- `["documentation", "agent-options", "providers"]` § "Remote hosting" — the `github-copilot` / BYOK path.
+- `["documentation", "agent-options", "tools"]` § "Execution target of tool kinds" — the split topology table.
+- `docs/design/remote-chat-client-session.md` — master topology design.
+- `docs/design/llm-trust-profile.md` — trust-profile entity composition.
 
 ---
 

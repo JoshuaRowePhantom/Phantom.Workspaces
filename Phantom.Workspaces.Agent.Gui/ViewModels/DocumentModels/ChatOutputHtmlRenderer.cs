@@ -79,20 +79,41 @@ internal static class ChatOutputHtmlRenderer
 
     /// <summary>
     /// Builds the outer <c>details.chat-tool-group</c> element that groups a run of consecutive
-    /// tool-call messages. <paramref name="bodyContent"/> is the pre-rendered HTML of the first
-    /// message and is placed directly inside the body container.
+    /// tool-call messages, wrapped in a single <c>div.chat-message.chat-assistant-message</c> frame
+    /// with one role header (issue #1225). <paramref name="bodyContent"/> is the pre-rendered
+    /// grouped-member binding HTML placed directly inside the body container.
     /// <paramref name="toolNames"/> is the deduped, first-seen-order list of tool names in the group.
+    /// <paramref name="timestamp"/> is the first member's timestamp for the shared header.
     /// </summary>
-    public static string RenderToolCallGroup(string groupId, IReadOnlyList<string> toolNames, int callCount, string bodyContent)
+    public static string RenderToolCallGroup(
+        string groupId,
+        IReadOnlyList<string> toolNames,
+        int callCount,
+        string bodyContent,
+        DateTimeOffset? timestamp = null,
+        string? postGroupContent = null,
+        bool suppressRoleHeader = false)
     {
         var builder = new StringBuilder();
-        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(groupId).Append("\">");
+        builder.Append("<div class=\"chat-message ").Append(RoleClass("assistant")).Append("\" id=\"")
+            .Append(groupId).Append("\" data-sticky-base-level=\"1\">");
+        builder.Append(RenderHeader(groupId, "assistant", timestamp, suppressRoleHeader));
+        builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(groupId)).Append("\">");
+        builder.Append("<details class=\"chat-content chat-tool-group\" id=\"").Append(ToolGroupDetailsId(groupId)).Append("\">");
         builder.Append(RenderToolCallGroupSummary(groupId, toolNames, callCount));
         builder.Append("<div class=\"chat-tool-group-body\" id=\"").Append(ToolGroupBodyId(groupId)).Append("\">");
         builder.Append(bodyContent);
         builder.Append("</div></details>");
+        if (!string.IsNullOrEmpty(postGroupContent))
+        {
+            builder.Append(postGroupContent);
+        }
+
+        builder.Append("</div></div>");
         return builder.ToString();
     }
+
+    public static string ToolGroupDetailsId(string groupId) => $"{groupId}-details";
 
     /// <summary>
     /// Builds the <c>summary</c> element for a tool-call group. Always lists the unique tool names
@@ -314,13 +335,14 @@ internal static class ChatOutputHtmlRenderer
         string roleLabel,
         IReadOnlyList<(string ElementId, string Html)> contents,
         DateTimeOffset? timestamp = null,
-        string? jumpLinkHtml = null)
+        string? jumpLinkHtml = null,
+        bool suppressRoleHeader = false)
     {
         var builder = new StringBuilder();
         var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
             .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\">");
-        builder.Append(RenderHeader(messageId, roleLabel, timestamp));
+        builder.Append(RenderHeader(messageId, roleLabel, timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
         {
@@ -395,12 +417,20 @@ internal static class ChatOutputHtmlRenderer
     /// <summary>
     /// Returns an empty string for the <c>tool</c> role — results are bundled into the assistant
     /// message's tool-group hierarchy and need no separate role header.
+    /// When <paramref name="suppressed"/> is true (this message is a non-leader member of a role run
+    /// — see #1222) an empty placeholder <c>div.chat-header</c> is emitted preserving the stable id
+    /// so <see cref="HeaderId"/>-anchored Replace ops can flip it back on later.
     /// </summary>
-    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null)
+    public static string RenderHeader(string messageId, string roleLabel, DateTimeOffset? timestamp = null, bool suppressed = false)
     {
         if (string.Equals(roleLabel, "tool", StringComparison.OrdinalIgnoreCase))
         {
             return string.Empty;
+        }
+
+        if (suppressed)
+        {
+            return $"<div class=\"chat-header chat-header-suppressed\" id=\"{HeaderId(messageId)}\" hidden></div>";
         }
 
         var builder = new StringBuilder();
@@ -498,12 +528,21 @@ internal static class ChatOutputHtmlRenderer
                 return IsImageMediaType(data.MediaType)
                     ? TextBlock(contentId, "chat-meta", string.IsNullOrWhiteSpace(data.MediaType) ? "image" : data.MediaType, SerializeContentJson(data))
                     : TextBlock(contentId, "chat-monospace", string.IsNullOrWhiteSpace(data.MediaType) ? "[data]" : $"[{data.MediaType}]", SerializeContentJson(data));
+            case ErrorContent error when isDiagnostic && !string.IsNullOrWhiteSpace(error.Message):
+                return RenderCollapsible(
+                    contentId,
+                    "chat-diagnostic chat-error",
+                    DiagnosticHeader(error.Message!),
+                    DiagnosticBody(error.Message!),
+                    SerializeContentJson(error));
             case ErrorContent error:
                 return TextBlock(contentId, "chat-error", error.Message ?? string.Empty, SerializeContentJson(error));
             case UriContent uri:
                 return TextBlock(contentId, "chat-uri", uri.Uri.ToString(), SerializeContentJson(uri));
+            case UsageContent usage:
+                return UsageMarker(contentId, SerializeContentJson(usage));
             default:
-                return TextBlock(contentId, "chat-text", content.ToString() ?? string.Empty, SerializeContentJson(content));
+                return TextBlock(contentId, "chat-meta", $"[{content.GetType().Name}]", SerializeContentJson(content));
         }
     }
 
@@ -523,7 +562,8 @@ internal static class ChatOutputHtmlRenderer
             DataContent data => $"data:{data.MediaType}\u0001{data.Data.Length}",
             ErrorContent error => "error:" + error.Message,
             UriContent uri => "uri:" + uri.Uri,
-            _ => $"other:{content.GetType().FullName}\u0001{content}",
+            UsageContent usage => $"usage:{usage.Details.InputTokenCount}\u0001{usage.Details.OutputTokenCount}\u0001{usage.Details.TotalTokenCount}",
+            _ => $"other:{content.GetType().FullName}",
         };
     }
 
@@ -807,13 +847,15 @@ internal static class ChatOutputHtmlRenderer
             ? ToolResultOverflowSummary(resultJson)
             : FirstLine(resultJson);
 
-    // Body for the tool RESULT block. Small results render in full; oversized results render only
-    // the short "(N lines)" / "(N characters)" summary instead of the fully-expanded payload tree
-    // (issue #1069). The full payload stays available via data-details-target.
+    // Body for the tool RESULT block. #1280: always render the full escaped payload inside the
+    // <details> body so the user can inspect the actual returned text; the compact "(N lines)" /
+    // "(N characters)" header lives in the collapsed <summary>. The full payload remains
+    // available via data-details-target for the modal inspector as well.
     private static (string Html, bool Overflowed) RenderToolResultBody(string resultJson)
-        => ToolResultOverflows(resultJson)
-            ? (HtmlEscape(ToolResultOverflowSummary(resultJson)), true)
-            : (RenderToolPayload(resultJson), false);
+    {
+        var overflowed = ToolResultOverflows(resultJson);
+        return (RenderToolPayload(resultJson), overflowed);
+    }
 
     private static string DiagnosticHeader(string text)
     {
@@ -831,6 +873,9 @@ internal static class ChatOutputHtmlRenderer
 
     private static bool IsImageMediaType(string? mediaType)
         => !string.IsNullOrWhiteSpace(mediaType) && mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase);
+
+    private static string UsageMarker(string contentId, string detailsJson)
+        => $"<div class=\"chat-content chat-usage\" data-usage-inspect-target data-details-target=\"{HtmlEscape(detailsJson)}\" id=\"{contentId}\"></div>";
 
     private static string SerializeContentJson(AIContent content)
     {

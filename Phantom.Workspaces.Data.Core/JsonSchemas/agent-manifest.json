@@ -1,6 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-manifest.json",
-  "description": "Schema for agent manifest entities that store declarative agent configurations with tool resource references. Tool resources are resolved at runtime based on execution context (user, machine, workspace).",
+  "description": "Schema for agent manifest entities that store declarative agent configurations with tool resource references. Tool resources are resolved at runtime by strategy id: 'mcp-server-entity' resolves an mcp-server entity by entity name (the tool resource 'name' is appended to the MCP-server search prefixes machine profile, '${USER}/mcp-servers', then 'defaults/mcp-servers', and the first existing entity with an 'mcp-server' property wins); 'fixed' resolves a built-in toolset by name. Resolution depends on the resolving machine/user context.",
   "allOf": [
     {
       "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"

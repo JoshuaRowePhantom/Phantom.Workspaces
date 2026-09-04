@@ -22,8 +22,16 @@ public sealed class WebDataAccessRequestException : Exception
 
     /// <summary>
     /// Whether the failure indicates a connectivity problem worth reconnecting for: no response at all
-    /// (transport failure), a server/gateway error (status &gt;= 500), or an authentication failure
-    /// (status 401 — a stale token that can be resolved by refreshing and reconnecting).
+    /// (transport failure), a server/gateway error (status &gt;= 500), a service-unavailable (503) or
+    /// not-found (404) response — a known data endpoint answering 404 means the currently-resolved dev
+    /// tunnel target is not serving that route (stale/wrong relay, host not up yet), which re-resolving
+    /// the tunnel can fix — or an authentication failure (status 401 — a stale token that can be resolved
+    /// by refreshing and reconnecting).
     /// </summary>
-    public bool IsConnectivityFailure => this.StatusCode is null || this.StatusCode == HttpStatusCode.Unauthorized || (int)this.StatusCode >= 500;
+    public bool IsConnectivityFailure =>
+        this.StatusCode is null
+        || this.StatusCode == HttpStatusCode.Unauthorized
+        || this.StatusCode == HttpStatusCode.NotFound
+        || this.StatusCode == HttpStatusCode.ServiceUnavailable
+        || (int)this.StatusCode >= 500;
 }

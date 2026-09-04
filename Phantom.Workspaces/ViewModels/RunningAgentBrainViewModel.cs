@@ -8,6 +8,7 @@ using System.Windows.Input;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Navigation;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -18,12 +19,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 {
     private readonly IRunningAgentChatTable table;
     private readonly Func<IEnumerable<AgentTabInfo>> getAllAgentTabs;
-    private readonly Action<string, string?> activateTab;
-    private readonly Action<string> openAgentForSession;
+    private readonly ITabNavigator navigator;
     private readonly Action<Action> dispatch;
     private readonly TimeProvider timeProvider;
 
     private bool isAnyRunning;
+    private bool isAnyAgentPulsating;
     private bool isOpen;
     private bool _disposed;
 
@@ -32,6 +33,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         PropertyChangedEventHandler tabHandler,
         PropertyChangedEventHandler? agentHandler)> rowSubscriptions = [];
 
+    // Row IsThinking subscriptions: sessionKey → (row, handler). Kept in sync with `Rows` so the
+    // aggregate `IsAnyAgentPulsating` (issue #1305) recomputes whenever any row's IsThinking flips,
+    // including on row replacement (tab ↔ fallback) and row removal.
+    private readonly Dictionary<string, (RunningAgentRowViewModel Row, PropertyChangedEventHandler Handler)> rowThinkingSubscriptions
+        = new(StringComparer.Ordinal);
+
     // History subscriptions: sessionKey → (history, handler)
     private readonly Dictionary<string, (AgentChatHistoryCollection History, NotifyCollectionChangedEventHandler Handler)> historySubscriptions
         = new(StringComparer.Ordinal);
@@ -39,15 +46,13 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     public RunningAgentBrainViewModel(
         IRunningAgentChatTable table,
         Func<IEnumerable<AgentTabInfo>> getAllAgentTabs,
-        Action<string, string?> activateTab,
-        Action<string> openAgentForSession,
+        ITabNavigator navigator,
         Action<Action> dispatch,
         TimeProvider? timeProvider = null)
     {
         this.table = table;
         this.getAllAgentTabs = getAllAgentTabs;
-        this.activateTab = activateTab;
-        this.openAgentForSession = openAgentForSession;
+        this.navigator = navigator;
         this.dispatch = dispatch;
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ToggleOpenCommand = new RelayCommand(_ => this.ToggleOpen());
@@ -60,6 +65,17 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     {
         get => this.isAnyRunning;
         private set => this.SetProperty(ref this.isAnyRunning, value);
+    }
+
+    /// <summary>
+    /// True when at least one non-sub-agent row is currently in the "pulsating" (thinking / actively
+    /// working) state. Drives the toolbar brain's animation so it only pulsates when at least one
+    /// running agent is itself pulsating (issue #1305).
+    /// </summary>
+    public bool IsAnyAgentPulsating
+    {
+        get => this.isAnyAgentPulsating;
+        private set => this.SetProperty(ref this.isAnyAgentPulsating, value);
     }
 
     /// <summary>Whether the popup is open.</summary>
@@ -79,6 +95,33 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
     private void OnSessionsChanged(object? sender, NotifyCollectionChangedEventArgs e) =>
         this.dispatch(this.Refresh);
+
+    private void SubscribeRowThinking(RunningAgentRowViewModel row)
+    {
+        PropertyChangedEventHandler handler = (_, e) =>
+        {
+            if (e.PropertyName == nameof(RunningAgentRowViewModel.IsThinking))
+            {
+                this.RecomputeIsAnyAgentPulsating();
+            }
+        };
+        row.PropertyChanged += handler;
+        this.rowThinkingSubscriptions[row.SessionKey] = (row, handler);
+    }
+
+    private void UnsubscribeRowThinking(string sessionKey)
+    {
+        if (this.rowThinkingSubscriptions.TryGetValue(sessionKey, out var sub))
+        {
+            sub.Row.PropertyChanged -= sub.Handler;
+            this.rowThinkingSubscriptions.Remove(sessionKey);
+        }
+    }
+
+    private void RecomputeIsAnyAgentPulsating()
+    {
+        this.IsAnyAgentPulsating = this.Rows.Any(r => r.IsThinking);
+    }
 
     /// <summary>
     /// Rebuilds <see cref="Rows"/> from <see cref="IRunningAgentChatTable.RunningSessions"/>,
@@ -120,6 +163,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                 this.Rows.RemoveAt(rowIndex);
             }
 
+            this.UnsubscribeRowThinking(key);
             this.UnsubscribeRow(key);
         }
 
@@ -145,6 +189,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
                     ? this.CreateTabRow(sessionKey, tabInfo)
                     : this.CreateFallbackRow(session);
                 this.Rows.Add(row);
+                this.SubscribeRowThinking(row);
                 if (hasTab)
                 {
                     this.SubscribeRow(sessionKey, tabInfo.Tab);
@@ -153,17 +198,23 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             else if (hasTab && !existing.HasOpenTab)
             {
                 // Fallback → tab row: tab appeared for this session
+                this.UnsubscribeRowThinking(sessionKey);
                 this.UnsubscribeRow(sessionKey);
                 var rowIndex = this.IndexOfRow(sessionKey);
-                this.Rows[rowIndex] = this.CreateTabRow(sessionKey, tabInfo);
+                var replacement = this.CreateTabRow(sessionKey, tabInfo);
+                this.Rows[rowIndex] = replacement;
+                this.SubscribeRowThinking(replacement);
                 this.SubscribeRow(sessionKey, tabInfo.Tab);
             }
             else if (!hasTab && existing.HasOpenTab)
             {
                 // Tab row → fallback: tab disappeared but session is still running
+                this.UnsubscribeRowThinking(sessionKey);
                 this.UnsubscribeRow(sessionKey);
                 var rowIndex = this.IndexOfRow(sessionKey);
-                this.Rows[rowIndex] = this.CreateFallbackRow(session);
+                var replacement = this.CreateFallbackRow(session);
+                this.Rows[rowIndex] = replacement;
+                this.SubscribeRowThinking(replacement);
             }
             else if (hasTab)
             {
@@ -173,6 +224,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
 
         this.RaisePropertyChanged(nameof(this.HasRows));
         this.ResortRows();
+        this.RecomputeIsAnyAgentPulsating();
     }
 
     private RunningAgentRowViewModel CreateTabRow(string sessionKey, AgentTabInfo tabInfo)
@@ -180,10 +232,17 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         var capturedTabId = tabInfo.Tab.Id;
         var capturedPaneId = tabInfo.PaneId;
 
-        ICommand activateCmd = new RelayCommand(_ =>
+        ICommand activateCmd = new RelayCommand(async _ =>
         {
             this.IsOpen = false;
-            this.activateTab(capturedTabId, capturedPaneId);
+            await this.navigator.NavigateAsync(
+                new NavigationTarget
+                {
+                    DocumentTabId = capturedTabId,
+                    WorkspaceTabId = capturedPaneId,
+                    AgentSessionKey = sessionKey,
+                },
+                new NavigationOptions { OpenEntityIfNoTab = true });
         });
 
         return new RunningAgentRowViewModel(
@@ -199,10 +258,12 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
     {
         var capturedSessionKey = session.SessionId.Value;
 
-        ICommand activateCmd = new RelayCommand(_ =>
+        ICommand activateCmd = new RelayCommand(async _ =>
         {
             this.IsOpen = false;
-            this.openAgentForSession(capturedSessionKey);
+            await this.navigator.NavigateAsync(
+                new NavigationTarget { AgentSessionKey = capturedSessionKey },
+                new NavigationOptions { OpenEntityIfNoTab = true });
         });
 
         return new RunningAgentRowViewModel(
@@ -418,6 +479,13 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
         }
 
         this.rowSubscriptions.Clear();
+
+        foreach (var (row, handler) in this.rowThinkingSubscriptions.Values)
+        {
+            row.PropertyChanged -= handler;
+        }
+
+        this.rowThinkingSubscriptions.Clear();
 
         foreach (var (history, handler) in this.historySubscriptions.Values)
         {

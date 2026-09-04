@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Copilot;
 using Xunit;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -349,14 +350,16 @@ public sealed class CopilotSdkChatClientTests
 
         // Place the fake session into the client's private copilotSession field so the CAS inside
         // InvalidateCopilotSession succeeds (it requires copilotSession == session by reference).
+        // Wrap in RealCopilotSessionAdapter since copilotSession field is now ICopilotSession.
+        var wrappedSession = new RealCopilotSessionAdapter(fakeSession);
         typeof(CopilotSdkChatClient)
             .GetField("copilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(client, fakeSession);
+            .SetValue(client, wrappedSession);
 
         // Invoke the private method the interrupt path calls.
         typeof(CopilotSdkChatClient)
             .GetMethod("InvalidateCopilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(client, [fakeSession]);
+            .Invoke(client, [wrappedSession]);
 
         // After invalidation the resume id must be re-armed so the next turn resumes the session.
         var pendingResumeSessionId = (string?)typeof(CopilotSdkChatClient)
@@ -418,12 +421,130 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AgentChat_WithMcpTool_CopilotSessionConfigIncludesMcpTools()
+    {
+        // End-to-end guard for #1395: an agent configured with an MCP server must surface the MCP
+        // tools in the ChatOptions handed to a turn, and BuildSessionConfig (the Copilot SDK path)
+        // must forward them into sessionConfig.Tools. Drives a real loopback MCP server, so tagged
+        // Integration.
+        await using var server = await TestMcpServerProcess.StartAsync();
+        var client = new DeterministicTestChatClient();
+        var agentJson = $$"""
+            {
+              "kind": "prompt",
+              "name": "mcp-copilot",
+              "model": { "id": "test", "provider": "echo", "apiType": "Echo" },
+              "tools": [
+                {
+                  "kind": "mcp",
+                  "name": "test-mcp",
+                  "serverName": "test-mcp",
+                  "connection": { "kind": "Anonymous", "endpoint": "{{server.BoundUrl}}" }
+                }
+              ]
+            }
+            """;
+
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = AgentDefinitionLoader.LoadAgentFromJson(agentJson),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            DisplayNameOverride = "test-mcp",
+        });
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        var options = client.LastRequestOptions;
+        Assert.NotNull(options);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options);
+
+        Assert.NotNull(config.Tools);
+        Assert.Contains(config.Tools!, candidate => string.Equals(candidate.Name, "ping", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void BuildSessionConfig_IgnoresNonFunctionToolsAndMissingOptions()
     {
         var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options: null);
 
         Assert.Equal("gpt-test", config.Model);
         Assert.True(config.Tools is null || config.Tools.Count == 0);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_NoPolicy_LeavesFieldsUnset()
+    {
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: null);
+
+        Assert.Null(config.AvailableTools);
+        Assert.Null(config.ExcludedTools);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_AvailablePolicyList_SetsAvailableTools()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            ["builtin:a", "builtin:b", "custom:*", "mcp:*"],
+            ExcludedTools: null,
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Equal(["builtin:a", "builtin:b", "custom:*", "mcp:*"], config.AvailableTools);
+        Assert.Null(config.ExcludedTools);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_ExcludedPolicyStar_SetsExcludedToolsToBuiltinStar()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            AvailableTools: null,
+            ["builtin:*"],
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Null(config.AvailableTools);
+        Assert.Equal(["builtin:*"], config.ExcludedTools);
+    }
+
+    [Fact]
+    public void BuildSessionConfig_BothSlotsSet_AppliesBoth()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            ["builtin:a", "custom:*", "mcp:*"],
+            ["builtin:b"],
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Equal(["builtin:a", "custom:*", "mcp:*"], config.AvailableTools);
+        Assert.Equal(["builtin:b"], config.ExcludedTools);
     }
 
     [Fact]
@@ -454,6 +575,25 @@ public sealed class CopilotSdkChatClientTests
 
         Assert.Equal("gpt-test", config.Model);
         Assert.True(config.Tools is null || config.Tools.Count == 0);
+    }
+
+    [Fact]
+    public void BuildResumeSessionConfig_AppliesSamePolicy()
+    {
+        var policy = new CopilotBuiltinToolPolicy(
+            ["builtin:a", "custom:*", "mcp:*"],
+            ["builtin:b"],
+            CopilotClientMode.CopilotCli);
+
+        var config = CopilotSdkChatClient.BuildResumeSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: null,
+            modelOptions: null,
+            builtinToolPolicy: policy);
+
+        Assert.Equal(["builtin:a", "custom:*", "mcp:*"], config.AvailableTools);
+        Assert.Equal(["builtin:b"], config.ExcludedTools);
     }
 
     [Fact]
@@ -1078,32 +1218,102 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
-    public void SetModelId_ChangesModelId()
+    public async Task SetModelIdAsync_ChangesModelId()
     {
         using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
 
-        client.SetModelId("claude-4");
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
 
         Assert.Equal("claude-4", client.ModelId);
     }
 
     [Fact]
-    public void SetModelId_InvalidatesPreviousSession()
+    public async Task SetModelId_WithLiveSession_CallsSessionSetModelAsync_AndKeepsSession()
     {
+        // Issue #1418: switching the model must retune the LIVE session via SetModelAsync (retaining
+        // history), NOT tear it down. The cached session and its signature must remain intact.
+        var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
+        var fakeFactory = new Infrastructure.FakeCopilotClientFactory(fakeClient);
+
         using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        client.SetCopilotClientFactoryForTest(fakeFactory);
 
-        // Access the internal currentSessionSignature field via reflection to verify invalidation.
+        // Establish the live session.
+        await InvokeEnsureSessionAsync(client);
+
+        var sessionField = typeof(CopilotSdkChatClient).GetField(
+            "copilotSession", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.NotNull(sessionField.GetValue(client));
+
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
+
+        // The live session was retuned in place, not disposed/recreated.
+        Assert.Equal(1, fakeSession.SetModelAsyncCallCount);
+        Assert.Equal("claude-4", fakeSession.LastModelSet);
+        Assert.Same(fakeSession, sessionField.GetValue(client));
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Empty(fakeSession.ResumeSessionCalls);
+    }
+
+    [Fact]
+    public async Task SetModelId_WithLiveSession_RefreshesSignature_SoNextTurnReusesSession()
+    {
+        // After the in-place model change the cached signature must remain valid so the next turn
+        // REUSES the same session (no recreation, no resume) — preserving the conversation history.
+        var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
+        var fakeFactory = new Infrastructure.FakeCopilotClientFactory(fakeClient);
+
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        client.SetCopilotClientFactoryForTest(fakeFactory);
+
+        await InvokeEnsureSessionAsync(client);
+
         var signatureField = typeof(CopilotSdkChatClient).GetField(
-            "currentSessionSignature",
+            "currentSessionSignature", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var signatureBefore = signatureField.GetValue(client);
+        Assert.NotNull(signatureBefore);
+
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
+
+        // The signature is unchanged (the constructor model id is deliberately not part of it), so
+        // the session stays valid for reuse.
+        Assert.Equal(signatureBefore, signatureField.GetValue(client));
+
+        // Next turn reuses the existing session: no additional create/resume.
+        await InvokeEnsureSessionAsync(client);
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Empty(fakeSession.ResumeSessionCalls);
+    }
+
+    [Fact]
+    public async Task SetModelId_WithNoLiveSession_AppliesModelToNextCreatedSession()
+    {
+        var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
+        var fakeFactory = new Infrastructure.FakeCopilotClientFactory(fakeClient);
+
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        client.SetCopilotClientFactoryForTest(fakeFactory);
+
+        // No session yet: the model id is stashed for the next created session.
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
+        Assert.Equal(0, fakeSession.SetModelAsyncCallCount);
+
+        await InvokeEnsureSessionAsync(client);
+
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Equal("claude-4", fakeSession.CreateSessionConfigs[0].Model);
+        Assert.Empty(fakeSession.ResumeSessionCalls);
+    }
+
+    private static async Task InvokeEnsureSessionAsync(CopilotSdkChatClient client)
+    {
+        var ensure = typeof(CopilotSdkChatClient).GetMethod(
+            "EnsureSessionAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
-
-        // Pre-set a fake signature to simulate an established session.
-        signatureField.SetValue(client, "fake-session-signature");
-        Assert.NotNull(signatureField.GetValue(client));
-
-        client.SetModelId("new-model");
-
-        Assert.Null(signatureField.GetValue(client));
+        await (Task)ensure.Invoke(client, new object?[] { null, CancellationToken.None })!;
     }
 
     [Fact]
@@ -1238,9 +1448,11 @@ public sealed class CopilotSdkChatClientTests
         typeof(CopilotSession)
             .GetField("<SessionId>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(fakeSession, "test-copilot-session-id");
+        // Wrap in RealCopilotSessionAdapter since copilotSession field is now ICopilotSession.
+        var wrappedSession = new RealCopilotSessionAdapter(fakeSession);
         typeof(CopilotSdkChatClient)
             .GetField("copilotSession", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(client, fakeSession);
+            .SetValue(client, wrappedSession);
 
         Assert.False(client.SteeringSuspendedForTest);
 
@@ -1262,7 +1474,7 @@ public sealed class CopilotSdkChatClientTests
         // observe both writes; a stricter ordering is enforced by the source's line order.
         var task = (Task)typeof(CopilotSdkChatClient)
             .GetMethod("AbortAndInvalidateSessionAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .Invoke(client, [fakeSession, null])!;
+            .Invoke(client, [wrappedSession, null])!;
 
         // The task will fault because fakeSession.AbortAsync will throw (uninitialized) — that
         // exception is swallowed inside AbortAndInvalidateSessionAsync, so awaiting is safe.

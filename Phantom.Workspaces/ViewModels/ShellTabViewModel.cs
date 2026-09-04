@@ -83,7 +83,14 @@ public sealed class ShellTabViewModel : WorkspaceTabViewModel
     public ShellEntityOpenSpec Spec
     {
         get => this.spec;
-        private set => this.SetProperty(ref this.spec, value);
+        private set
+        {
+            if (this.SetProperty(ref this.spec, value))
+            {
+                this.RaisePropertyChanged(nameof(this.Arguments));
+                this.RaisePropertyChanged(nameof(this.WorkingDirectory));
+            }
+        }
     }
 
     /// <summary>Inline command-line text. Two-way bound to the top control bar and mirrored into <see cref="Spec"/>.</summary>
@@ -98,6 +105,12 @@ public sealed class ShellTabViewModel : WorkspaceTabViewModel
             }
         }
     }
+
+    /// <summary>The shell command arguments, surfaced as a space-joined string for the tab tooltip.</summary>
+    public string Arguments => string.Join(" ", this.Spec.CommandArguments);
+
+    /// <summary>The shell working directory (may be null), surfaced for the tab tooltip.</summary>
+    public string? WorkingDirectory => this.Spec.WorkingDirectory;
 
     /// <summary>Signals the running shell process (graceful stop). Keeps the tab/stream alive.</summary>
     public AsyncRelayCommand StopCommand { get; }

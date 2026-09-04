@@ -73,21 +73,33 @@ if ($TestNames -and $TestNames.Count -gt 0)
 
 if ($Mode -eq 'fast')
 {
-    $filterClauses += '(Category!=SlowGit)'
-    $filterClauses += '(Category!=SlowDocker)'
+    if (-not $TestNames -or $TestNames.Count -eq 0)
+    {
+        # RequiresLocalConsole: tests that assert on captured cmd.exe/pwsh output content
+        # via the ConPTY output pipe. On GitHub-hosted windows-latest the ConPTY output
+        # renders zero bytes (input works, child runs, but no output is emitted), so these
+        # tests deterministically fail there. They still run under -Mode full locally and
+        # in local stability, where ConPTY renders normally. Tracked by #1283.
+        $filterClauses += 'Category!=SlowDocker & Category!=SlowGit & Category!=Integration & Category!=WebView & Category!=SlowLayout & Category!=RequiresLocalConsole'
+    }
+    else
+    {
+        $filterClauses += '(Category!=SlowGit)'
+        $filterClauses += '(Category!=SlowDocker)'
+    }
 }
 
 # WebView integration tests require a real desktop browser host (native WebView2) and are
 # excluded by default. Run them with -IncludeWebView (or by targeting them with -TestNames)
 # whenever you touch WebView/browser-hosted rendering code.
-if (-not $IncludeWebView -and (-not $TestNames -or $TestNames.Count -eq 0))
+if ($Mode -ne 'fast' -and -not $IncludeWebView -and (-not $TestNames -or $TestNames.Count -eq 0))
 {
     $filterClauses += '(Category!=WebView)'
 }
 
 # Integration tests require network access, a valid GitHub token with tunnel scope
 # (PHANTOM_INTEGRATION_GITHUB_TOKEN), and may incur dev-tunnel relay costs.  Excluded by default.
-if (-not $IncludeIntegration -and (-not $TestNames -or $TestNames.Count -eq 0))
+if ($Mode -ne 'fast' -and -not $IncludeIntegration -and (-not $TestNames -or $TestNames.Count -eq 0))
 {
     $filterClauses += '(Category!=Integration)'
 }

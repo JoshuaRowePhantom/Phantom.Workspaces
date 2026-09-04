@@ -68,7 +68,7 @@ public static class AgentManifestLoader
         {
             ValidateJsonAgainstSchema(content, sourceLabel);
 
-            return AgentManifest.FromJson(content)
+            return PhantomAgentSchema.AgentManifestFromJson(content)
                 ?? throw new InvalidOperationException("Failed to deserialize agent manifest from JSON.");
         }
         catch (JsonException ex)
@@ -85,7 +85,7 @@ public static class AgentManifestLoader
     {
         try
         {
-            return AgentManifest.FromYaml(content)
+            return PhantomAgentSchema.AgentManifestFromYaml(content)
                 ?? throw new InvalidOperationException("Failed to deserialize agent manifest from YAML.");
         }
         catch (YamlException ex)

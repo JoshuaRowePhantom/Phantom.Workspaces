@@ -92,7 +92,9 @@
             "headers": {
               "type": "object",
               "description": "Extra request headers forwarded to the custom endpoint.",
-              "additionalProperties": { "type": "string" }
+              "additionalProperties": {
+                "type": "string"
+              }
             }
           }
         },
@@ -134,6 +136,9 @@
             "$ref": "#/$defs/mcpTool"
           },
           {
+            "$ref": "#/$defs/githubCliBuiltinToolsTool"
+          },
+          {
             "$ref": "#/$defs/tool"
           },
           {
@@ -156,7 +161,8 @@
           "type": "string"
         },
         "kind": {
-          "type": "string"
+          "type": "string",
+          "description": "Tool kind. Recognized provider-specific kinds include mcp, agent-definition, and github-cli-builtin-tools."
         },
         "description": {
           "type": "string"
@@ -168,6 +174,19 @@
             "additionalProperties": true
           }
         }
+      },
+      "not": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "github-cli-builtin-tools",
+              "mcp"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
       }
     },
     "mcpTool": {
@@ -177,6 +196,27 @@
         "kind",
         "connection",
         "serverName"
+      ],
+      "examples": [
+        {
+          "name": "example-oauth",
+          "kind": "mcp",
+          "description": "Example OAuth-authenticated MCP server",
+          "connection": {
+            "kind": "oauth",
+            "endpoint": "https://mcp.example.com/",
+            "clientId": "${SECRET:ExampleClientId}",
+            "scopes": [
+              "read",
+              "write"
+            ]
+          },
+          "serverName": "example",
+          "serverDescription": "Example remote MCP server authenticated with OAuth",
+          "approvalMode": {
+            "kind": "never"
+          }
+        }
       ],
       "properties": {
         "name": {
@@ -197,15 +237,126 @@
         },
         "connection": {
           "type": "object",
-          "additionalProperties": true,
           "required": [
             "kind"
           ],
-          "properties": {
-            "kind": {
-              "type": "string"
+          "description": "MCP server connection. Discriminated by 'kind'. Supported kinds: Anonymous, key, oauth.",
+          "oneOf": [
+            {
+              "title": "Anonymous",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "endpoint"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "Anonymous"
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "http(s):// MCP URL, or stdio://?command=<exe>&arg=<a>&cwd=<dir> for a local process."
+                }
+              },
+              "examples": [
+                {
+                  "kind": "Anonymous",
+                  "endpoint": "https://example.com/mcp/"
+                },
+                {
+                  "kind": "Anonymous",
+                  "endpoint": "stdio://?command=uvx&arg=some-mcp-server"
+                }
+              ]
+            },
+            {
+              "title": "ApiKey",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "endpoint",
+                "apiKey"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "key"
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "http(s):// MCP URL (stdio:// with an apiKey is rejected at runtime)."
+                },
+                "apiKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Bearer token. Supports ${ENV_VAR} and ${SECRET:Name}. Special-case ${GITHUB_TOKEN} falls back to gh auth token."
+                }
+              },
+              "examples": [
+                {
+                  "kind": "key",
+                  "endpoint": "https://api.githubcopilot.com/mcp/",
+                  "apiKey": "${GITHUB_TOKEN}"
+                }
+              ]
+            },
+            {
+              "title": "OAuth",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "endpoint"
+              ],
+              "properties": {
+                "kind": {
+                  "const": "oauth"
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "http(s):// MCP resource endpoint. OAuth metadata is discovered from it (RFC 9728/8414)."
+                },
+                "clientId": {
+                  "type": "string",
+                  "description": "Optional. Omit to use dynamic client registration (RFC 7591). Supports ${ENV_VAR}/${SECRET:Name}."
+                },
+                "clientSecret": {
+                  "type": "string",
+                  "description": "Optional. Omit for a public client (PKCE). Supports ${SECRET:Name}."
+                },
+                "tokenUrl": {
+                  "type": "string",
+                  "description": "Optional explicit token endpoint; normally discovered automatically."
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "OAuth scopes to request."
+                }
+              },
+              "examples": [
+                {
+                  "kind": "oauth",
+                  "endpoint": "https://mcp.example.com/",
+                  "scopes": [
+                    "read",
+                    "write"
+                  ]
+                },
+                {
+                  "kind": "oauth",
+                  "endpoint": "https://mcp.example.com/",
+                  "clientId": "${SECRET:ExampleClientId}",
+                  "scopes": [
+                    "api://example/.default"
+                  ]
+                }
+              ]
             }
-          }
+          ]
         },
         "serverName": {
           "type": "string",
@@ -320,6 +471,104 @@
             "type": "string"
           },
           "minItems": 1
+        }
+      ]
+    },
+    "builtinToolSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "tools"
+          ]
+        },
+        {
+          "required": [
+            "isolated"
+          ]
+        }
+      ],
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^(\\*|[a-zA-Z0-9_-]+|(builtin|custom|mcp):(\\*|[a-zA-Z0-9_-]+))$"
+          }
+        },
+        "isolated": {
+          "const": true
+        }
+      }
+    },
+    "githubCliBuiltinToolsTool": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "kind": {
+          "const": "github-cli-builtin-tools"
+        },
+        "description": {
+          "type": "string"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "available-tools": {
+          "$ref": "#/$defs/builtinToolSet"
+        },
+        "excluded-tools": {
+          "$ref": "#/$defs/builtinToolSet"
+        },
+        "client-mode": {
+          "enum": [
+            "empty",
+            "copilot-cli"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "client-mode": {
+                "const": "empty"
+              }
+            },
+            "required": [
+              "client-mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "available-tools"
+            ],
+            "properties": {
+              "available-tools": {
+                "not": {
+                  "properties": {
+                    "tools": {
+                      "maxItems": 0
+                    }
+                  },
+                  "required": [
+                    "tools"
+                  ]
+                }
+              }
+            }
+          }
         }
       ]
     }

@@ -14,6 +14,8 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
     private static readonly TimeSpan VectorIndexRemovalPollInterval = TimeSpan.FromSeconds(2);
 
     private readonly IMongoCollection<MongoDbEntityDocument> _entityCollection;
+    // #1411: one small document per entity version lives here instead of an unbounded inline array.
+    private readonly IMongoCollection<MongoDbEntityVersionDocument> _versionCollection;
     private readonly IMongoCollection<MongoDbQueueHead> _queueHeadCollection;
     private readonly Phantom.Workspaces.Data.Vector.IEmbeddingsProvider _embeddingsProvider;
     private readonly TimeProvider _timeProvider;
@@ -31,6 +33,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         }
 
         _entityCollection = database.GetCollection<MongoDbEntityDocument>($"{collectionName}_entities");
+        _versionCollection = database.GetCollection<MongoDbEntityVersionDocument>($"{collectionName}_versions");
         _queueHeadCollection = database.GetCollection<MongoDbQueueHead>($"{collectionName}_queue_heads");
         _embeddingsProvider = embeddingsProvider ?? new Phantom.Workspaces.Data.Vector.DeterministicEmbeddingsProvider();
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -44,6 +47,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var results = new List<EntityUpdateResult>();
         var pendingWrites = new List<MongoDbEntityDocument>();
+        var pendingVersionWrites = new List<MongoDbEntityVersionDocument>();
 
         var requestedEntityIds = request.Changes
             .Select(static change => ResolveEntityId(change))
@@ -79,7 +83,9 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             }
 
             currentEntities.TryGetValue(entityId.Value.ToString(), out var currentDocument);
-            var currentVersion = currentDocument?.Versions.LastOrDefault();
+            // #1411: the concurrency tag now comes from the current document's latest-version pointer,
+            // not from an inline Versions array (which no longer exists).
+            var currentVersion = GetCurrentVersion(currentDocument);
             var currentTag = currentVersion is null
                 ? (ConcurrencyTag?)null
                 : new ConcurrencyTag(currentVersion.VersionId.ToString());
@@ -130,12 +136,14 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var updatedDocument = currentDocument ?? new MongoDbEntityDocument
             {
                 Id = entityId.Value.ToString(),
-                Versions = [],
             };
 
-            updatedDocument.Versions.Add(new MongoDbEntityVersion
+            // #1411: append the new version as its own small document in the versions collection instead
+            // of growing an inline array on the entity document (which crossed the 16 MB BSON limit).
+            pendingVersionWrites.Add(new MongoDbEntityVersionDocument
             {
                 VersionId = nextVersionId,
+                EntityId = entityId.Value.ToString(),
                 TimestampUtc = nowUtc,
                 Data = nextDataBson,
             });
@@ -189,20 +197,126 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             });
         }
 
-        foreach (var pendingWrite in pendingWrites)
-        {
-            await _entityCollection
-                .ReplaceOneAsync(
-                    Builders<MongoDbEntityDocument>.Filter.Eq(static document => document.Id, pendingWrite.Id),
-                    pendingWrite,
-                    new ReplaceOptions { IsUpsert = true },
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
+        await WritePendingChangesAsync(pendingVersionWrites, pendingWrites, cancellationToken).ConfigureAwait(false);
 
         return new UpdateResult
         {
             EntityResults = results,
+        };
+    }
+
+    /// <summary>
+    /// #1411: persists new version documents and the recomputed current documents. Uses a
+    /// multi-document transaction when the deployment supports it (replica set / Atlas Local) so the
+    /// write is all-or-nothing; otherwise falls back to version-first ordering, so an interrupted
+    /// write leaves at worst an orphan version document (reconciled by later reads/writes) and never
+    /// a current pointer referencing a missing version.
+    /// </summary>
+    private async Task WritePendingChangesAsync(
+        List<MongoDbEntityVersionDocument> versionWrites,
+        List<MongoDbEntityDocument> currentWrites,
+        CancellationToken cancellationToken)
+    {
+        if (versionWrites.Count == 0 && currentWrites.Count == 0)
+        {
+            return;
+        }
+
+        var client = _entityCollection.Database.Client;
+        using var session = await client.StartSessionAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        try
+        {
+            session.StartTransaction();
+            await WriteVersionsThenCurrentAsync(session, versionWrites, currentWrites, cancellationToken).ConfigureAwait(false);
+            await session.CommitTransactionAsync(cancellationToken).ConfigureAwait(false);
+            return;
+        }
+        catch (Exception ex) when (IsTransactionUnsupported(ex))
+        {
+            try
+            {
+                if (session.IsInTransaction)
+                {
+                    await session.AbortTransactionAsync(cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (MongoException)
+            {
+                // Aborting a transaction that never began (standalone deployment) is expected here.
+            }
+        }
+
+        // Version-first ordering fallback for deployments without multi-document transactions.
+        await WriteVersionsThenCurrentAsync(null, versionWrites, currentWrites, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task WriteVersionsThenCurrentAsync(
+        IClientSessionHandle? session,
+        List<MongoDbEntityVersionDocument> versionWrites,
+        List<MongoDbEntityDocument> currentWrites,
+        CancellationToken cancellationToken)
+    {
+        // Insert versions first so a crash between the two writes can only orphan a version document,
+        // never lose the version a current pointer references.
+        if (versionWrites.Count > 0)
+        {
+            if (session is null)
+            {
+                await _versionCollection.InsertManyAsync(versionWrites, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _versionCollection.InsertManyAsync(session, versionWrites, cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        foreach (var currentWrite in currentWrites)
+        {
+            var filter = Builders<MongoDbEntityDocument>.Filter.Eq(static document => document.Id, currentWrite.Id);
+            var options = new ReplaceOptions { IsUpsert = true };
+            if (session is null)
+            {
+                await _entityCollection.ReplaceOneAsync(filter, currentWrite, options, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await _entityCollection.ReplaceOneAsync(session, filter, currentWrite, options, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    private static bool IsTransactionUnsupported(Exception exception)
+    {
+        if (exception is NotSupportedException)
+        {
+            return true;
+        }
+
+        var message = exception.Message;
+        return message.Contains("Transaction numbers are only allowed", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("Transactions are not supported", StringComparison.OrdinalIgnoreCase)
+            || (message.Contains("Transaction", StringComparison.OrdinalIgnoreCase)
+                && message.Contains("replica set", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// #1411: builds an in-memory version view of the current document from its latest-version pointer
+    /// (the inline Versions array no longer exists). Returns <see langword="null"/> for a brand-new
+    /// entity with no current projection.
+    /// </summary>
+    private static MongoDbEntityVersion? GetCurrentVersion(MongoDbEntityDocument? document)
+    {
+        var current = document?.Current;
+        if (current is null || string.IsNullOrEmpty(current.ModifiedVersion))
+        {
+            return null;
+        }
+
+        return new MongoDbEntityVersion
+        {
+            VersionId = ObjectId.TryParse(current.ModifiedVersion, out var parsed) ? parsed : ObjectId.Empty,
+            TimestampUtc = current.ModifiedTimeUtc,
+            Data = current.Data,
         };
     }
 
@@ -230,11 +344,9 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             .Find(new BsonDocumentFilterDefinition<MongoDbEntityDocument>(entityFilterDocument))
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
-        foreach (var document in entityDocuments)
-        {
-            EnsureBootstrapVersion(document, _timeProvider);
-        }
 
+        // #1412: history now lives in the versions collection; the current document is read directly
+        // and no longer needs an inline version bootstrapped for the read path.
         // If relationships are requested, also load relationship documents not already in the
         // entity result set so that ResolveRelationshipsForEntity can find them.
         List<MongoDbEntityDocument> allDocuments = entityDocuments;
@@ -253,10 +365,6 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 .Find(relationshipDocFilter)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
-            foreach (var document in relationshipDocs)
-            {
-                EnsureBootstrapVersion(document, _timeProvider);
-            }
             var extra = relationshipDocs.Where(d => !loadedIds.Contains(d.Id)).ToList();
             if (extra.Count > 0)
             {
@@ -273,14 +381,26 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 var matches = ResolveMatchingDocuments(allDocuments, getEntityRequest).ToArray();
                 foreach (var match in matches)
                 {
-                    var version = ResolveVersionAtTimestamp(match, timestamp);
-                    if (version is null)
+                    // #1412: a null timestamp reads the denormalized current projection directly; an
+                    // at-timestamp read resolves the bracketing version from the versions collection.
+                    EntitySnapshot? snapshot;
+                    if (timestamp is null)
+                    {
+                        snapshot = CreateSnapshotFromCurrent(match);
+                    }
+                    else
+                    {
+                        var version = await ResolveVersionAtTimestampAsync(match.Id, timestamp.Value, cancellationToken)
+                            .ConfigureAwait(false);
+                        snapshot = version is null ? null : CreateSnapshot(new EntityId(match.Id), version);
+                    }
+
+                    if (snapshot is null)
                     {
                         continue;
                     }
 
                     var entityId = new EntityId(match.Id);
-                    var snapshot = CreateSnapshot(entityId, version);
                     var relationshipRequests = getEntityRequest.RelationshipsToReturn ?? request.RelationshipsToReturn;
                     snapshot = snapshot with
                     {
@@ -599,7 +719,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
     }
 
     /// <summary>
-    /// Ensures the five required query indexes exist on the entity collection. This is idempotent and
+    /// Ensures the required query indexes exist on the entity collection. This is idempotent and
     /// should be called once on startup before serving any queries.
     /// </summary>
     public virtual async Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
@@ -611,22 +731,44 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.NameParentPrefixesField)),
             new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending(MongoDbGetFilterBuilder.ParticipantIdsField)),
             new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending("current.modified-time-utc")),
+            // #1360: supports server-side sort-by + top-N on tool-execution-result history (start-time).
+            new(Builders<MongoDbEntityDocument>.IndexKeys.Ascending("current.data.start-time")),
         };
 
         await _entityCollection.Indexes.CreateManyAsync(indexModels, cancellationToken).ConfigureAwait(false);
+
+        // #1411: indexes on the versions collection supporting point-in-time/history resolution
+        // (EntityId + TimestampUtc + _id) and export/changed-entities streaming (TimestampUtc + _id).
+        var versionIndexModels = new CreateIndexModel<MongoDbEntityVersionDocument>[]
+        {
+            new(Builders<MongoDbEntityVersionDocument>.IndexKeys
+                .Ascending(static version => version.EntityId)
+                .Ascending(static version => version.TimestampUtc)
+                .Ascending(static version => version.VersionId)),
+            new(Builders<MongoDbEntityVersionDocument>.IndexKeys
+                .Ascending(static version => version.TimestampUtc)
+                .Ascending(static version => version.VersionId)),
+        };
+
+        await _versionCollection.Indexes.CreateManyAsync(versionIndexModels, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Backfills <c>current.name-parent-prefixes</c> and <c>current.participant-ids</c> on any
-    /// documents that are missing those fields (written before this schema version), and removes the
-    /// obsolete <c>current.names</c> and <c>current.type-names</c> fields. Processes up to 500
-    /// documents per <c>bulkWrite</c> batch. Idempotent — safe to call multiple times.
+    /// documents that are missing those fields (written before this schema version), removes the
+    /// obsolete <c>current.names</c> and <c>current.type-names</c> fields, and (#1413) performs the
+    /// one-shot migration of legacy inline <c>Versions</c> arrays into the
+    /// <c>{collectionName}_versions</c> collection. Processes up to 500 documents per batch.
+    /// Idempotent and crash-safe — safe to call on every startup.
     /// </summary>
     public virtual async Task MigrateAsync(CancellationToken cancellationToken = default)
     {
         const int BatchSize = 500;
         var bsonCollection = _entityCollection.Database.GetCollection<BsonDocument>(
             _entityCollection.CollectionNamespace.CollectionName);
+
+        // #1413: move legacy inline versions into the versions collection and shrink oversized docs.
+        await MigrateInlineVersionsAsync(bsonCollection, BatchSize, cancellationToken).ConfigureAwait(false);
 
         // Find all non-deleted docs that are missing the new name-parent-prefixes field.
         var filter = new BsonDocument
@@ -646,7 +788,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             batch.AddRange(cursor.Current);
             while (batch.Count >= BatchSize)
             {
-                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], _timeProvider, cancellationToken)
+                await ApplyMigrationBatchAsync(bsonCollection, batch[..BatchSize], cancellationToken)
                     .ConfigureAwait(false);
                 batch.RemoveRange(0, BatchSize);
             }
@@ -654,14 +796,236 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         if (batch.Count > 0)
         {
-            await ApplyMigrationBatchAsync(bsonCollection, batch, _timeProvider, cancellationToken).ConfigureAwait(false);
+            await ApplyMigrationBatchAsync(bsonCollection, batch, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private static async Task ApplyMigrationBatchAsync(
+    /// <summary>
+    /// #1413: one-shot, idempotent, crash-safe migration of legacy inline <c>Versions</c> arrays into
+    /// the <c>{collectionName}_versions</c> collection. For each old-shape document, every inline
+    /// version is upserted (keyed by its VersionId) into the versions collection, then the inline
+    /// array is <c>$unset</c> — shrinking documents that had grown near the 16 MB BSON limit. If no
+    /// document carries an inline <c>Versions</c> array, this is a no-op.
+    /// </summary>
+    private async Task MigrateInlineVersionsAsync(
+        IMongoCollection<BsonDocument> collection,
+        int batchSize,
+        CancellationToken cancellationToken)
+    {
+        // Old-shape documents are exactly those that still carry an inline Versions array.
+        var oldShapeFilter = new BsonDocument("Versions", new BsonDocument("$exists", true));
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Project only _id so a single oversized (16 MB) document is never loaded whole here.
+            var idDocuments = await collection
+                .Find(oldShapeFilter)
+                .Project(new BsonDocument("_id", 1))
+                .Limit(batchSize)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (idDocuments.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var idDocument in idDocuments)
+            {
+                await MigrateEntityInlineVersionsAsync(collection, idDocument["_id"], cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+    }
+
+    private async Task MigrateEntityInlineVersionsAsync(
+        IMongoCollection<BsonDocument> collection,
+        BsonValue entityId,
+        CancellationToken cancellationToken)
+    {
+        // Oversized-document rescue: read the inline Versions array in $slice windows so even a
+        // document at the 16 MB ceiling can be migrated without loading it whole.
+        const int VersionSliceSize = 200;
+        var entityIdString = entityId.IsString ? entityId.AsString : entityId.ToString() ?? string.Empty;
+        var skip = 0;
+        var wroteAnyVersion = false;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var projection = new BsonDocument("Versions", new BsonDocument("$slice", new BsonArray { skip, VersionSliceSize }));
+            var sliced = await collection
+                .Find(new BsonDocument("_id", entityId))
+                .Project(projection)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (sliced is null
+                || !sliced.TryGetValue("Versions", out var versionsValue)
+                || versionsValue is not BsonArray versions
+                || versions.Count == 0)
+            {
+                break;
+            }
+
+            var writes = new List<WriteModel<MongoDbEntityVersionDocument>>(versions.Count);
+            foreach (var versionValue in versions)
+            {
+                if (versionValue is not BsonDocument version)
+                {
+                    continue;
+                }
+
+                var versionDocument = new MongoDbEntityVersionDocument
+                {
+                    VersionId = ReadInlineVersionId(version),
+                    EntityId = entityIdString,
+                    TimestampUtc = ReadInlineVersionTimestamp(version, _timeProvider),
+                    Data = version.TryGetValue("data", out var dataValue) && dataValue is BsonDocument dataDocument
+                        ? dataDocument
+                        : null,
+                };
+
+                // Upsert keyed by VersionId so re-running the migration never duplicates a version.
+                writes.Add(new ReplaceOneModel<MongoDbEntityVersionDocument>(
+                    Builders<MongoDbEntityVersionDocument>.Filter.Eq(static v => v.VersionId, versionDocument.VersionId),
+                    versionDocument)
+                {
+                    IsUpsert = true,
+                });
+            }
+
+            if (writes.Count > 0)
+            {
+                await _versionCollection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
+                wroteAnyVersion = true;
+            }
+
+            skip += versions.Count;
+            if (versions.Count < VersionSliceSize)
+            {
+                break;
+            }
+        }
+
+        // Data-loss guard (#1413 / protects #1412's read path): a legacy old-shape document can carry a
+        // valid `current` projection but an empty (or absent) inline Versions array, yielding zero version
+        // documents above. Because #1412 retired EnsureBootstrapVersion, such an entity would have no
+        // version document anywhere and would vanish from ExportAsync/history/point-in-time reads after the
+        // inline array is $unset. Synthesize one bootstrap version from `current` (keyed by the current
+        // latest-version pointer, so it is idempotent) before dropping the inline array.
+        if (!wroteAnyVersion)
+        {
+            var currentDoc = await collection
+                .Find(new BsonDocument("_id", entityId))
+                .Project(new BsonDocument("current", 1))
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+
+            if (currentDoc is not null
+                && currentDoc.TryGetValue("current", out var currentValue)
+                && currentValue is BsonDocument current)
+            {
+                await EnsureBootstrapVersionFromCurrentAsync(entityId, current, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // Copy-then-$unset: only after every version has been upserted do we drop the inline array, so
+        // an interrupted run leaves the (still old-shape) document to be re-migrated on next startup.
+        await collection.UpdateOneAsync(
+            new BsonDocument("_id", entityId),
+            new BsonDocument("$unset", new BsonDocument("Versions", string.Empty)),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #1413 (protects #1412's read path): synthesizes a single bootstrap version document in the
+    /// <c>{collectionName}_versions</c> collection from an entity's <c>current</c> projection, for legacy
+    /// documents that have a valid <c>current</c> but no recorded versions (an empty/absent inline array).
+    /// This keeps the entity readable/exportable now that all reads stream only from the versions
+    /// collection. The upsert is keyed by the <c>current.modified-version</c> pointer (the latest-version
+    /// ObjectId) so it is idempotent and, for documents that do have history, coincides with the real
+    /// latest version rather than creating a duplicate.
+    /// </summary>
+    private async Task EnsureBootstrapVersionFromCurrentAsync(
+        BsonValue entityId,
+        BsonDocument current,
+        CancellationToken cancellationToken)
+    {
+        if (!current.TryGetValue("modified-version", out var modifiedVersionValue)
+            || !current.TryGetValue("modified-time-utc", out var modifiedTimeValue)
+            || !modifiedTimeValue.IsValidDateTime)
+        {
+            return;
+        }
+
+        var versionIdString = modifiedVersionValue.IsString
+            ? modifiedVersionValue.AsString
+            : modifiedVersionValue.ToString();
+        if (string.IsNullOrEmpty(versionIdString) || !ObjectId.TryParse(versionIdString, out var versionId))
+        {
+            return;
+        }
+
+        var bootstrap = new MongoDbEntityVersionDocument
+        {
+            VersionId = versionId,
+            EntityId = entityId.IsString ? entityId.AsString : entityId.ToString() ?? string.Empty,
+            TimestampUtc = modifiedTimeValue.ToUniversalTime(),
+            Data = current.TryGetValue("data", out var dataValue) && dataValue is BsonDocument dataDocument
+                ? dataDocument
+                : null,
+        };
+
+        await _versionCollection.ReplaceOneAsync(
+            Builders<MongoDbEntityVersionDocument>.Filter.Eq(static v => v.VersionId, bootstrap.VersionId),
+            bootstrap,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static ObjectId ReadInlineVersionId(BsonDocument version)
+    {
+        if (version.TryGetValue("VersionId", out var value))
+        {
+            if (value.IsObjectId)
+            {
+                return value.AsObjectId;
+            }
+
+            if (value.IsString && ObjectId.TryParse(value.AsString, out var parsed))
+            {
+                return parsed;
+            }
+        }
+
+        return ObjectId.GenerateNewId();
+    }
+
+    private static DateTime ReadInlineVersionTimestamp(BsonDocument version, TimeProvider timeProvider)
+    {
+        if (version.TryGetValue("TimestampUtc", out var value))
+        {
+            if (value.IsValidDateTime)
+            {
+                return value.ToUniversalTime();
+            }
+
+            if (value.IsString && DateTime.TryParse(value.AsString, out var parsed))
+            {
+                return parsed.ToUniversalTime();
+            }
+        }
+
+        return timeProvider.GetUtcNow().UtcDateTime;
+    }
+
+    private async Task ApplyMigrationBatchAsync(
         IMongoCollection<BsonDocument> collection,
         List<BsonDocument> docs,
-        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var writes = new List<WriteModel<BsonDocument>>(docs.Count);
@@ -671,6 +1035,14 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             var id = doc["_id"];
             var current = doc["current"].AsBsonDocument;
             var data = current.Contains("data") && current["data"] is BsonDocument d ? d : null;
+
+            // Data-loss guard (#1413 / protects #1412's read path): pre-v760 documents store a valid
+            // `current` but only an empty lowercase `versions` array (never a typed `Versions` array), so
+            // MigrateInlineVersionsAsync — which matches the capital `Versions` field — never sees them.
+            // Synthesize a bootstrap version from `current` (idempotent upsert keyed by the latest-version
+            // pointer) so the entity remains readable/exportable from the versions collection, mirroring the
+            // pre-#1412 EnsureBootstrapVersion behaviour.
+            await EnsureBootstrapVersionFromCurrentAsync(id, current, cancellationToken).ConfigureAwait(false);
 
             // Compute name-parent-prefixes from data.names
             var prefixArray = new BsonArray();
@@ -713,26 +1085,10 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                     {
                         { "current.names", "" },
                         { "current.type-names", "" },
+                        { "versions", "" },
                     }
                 },
             };
-
-            var hasTypedVersions = doc.TryGetValue("Versions", out var versionsValue)
-                && versionsValue.IsBsonArray
-                && versionsValue.AsBsonArray.Count > 0;
-            if (!hasTypedVersions && data is not null)
-            {
-                update["$set"].AsBsonDocument["Versions"] = new BsonArray
-                {
-                    new BsonDocument
-                    {
-                        { "VersionId", ReadVersionId(current) },
-                        { "TimestampUtc", ReadTimestampUtc(current, timeProvider) },
-                        { "data", data.DeepClone() },
-                    },
-                };
-                update["$unset"].AsBsonDocument["versions"] = "";
-            }
 
             writes.Add(new UpdateOneModel<BsonDocument>(
                 new BsonDocumentFilterDefinition<BsonDocument>(new BsonDocument("_id", id)),
@@ -743,42 +1099,6 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         {
             await collection.BulkWriteAsync(writes, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-    }
-
-    private static ObjectId ReadVersionId(BsonDocument current)
-    {
-        if (current.TryGetValue("modified-version", out var value))
-        {
-            if (value.IsObjectId)
-            {
-                return value.AsObjectId;
-            }
-
-            if (value.IsString && ObjectId.TryParse(value.AsString, out var parsed))
-            {
-                return parsed;
-            }
-        }
-
-        return ObjectId.GenerateNewId();
-    }
-
-    private static DateTime ReadTimestampUtc(BsonDocument current, TimeProvider timeProvider)
-    {
-        if (current.TryGetValue("modified-time-utc", out var value))
-        {
-            if (value.IsValidDateTime)
-            {
-                return value.ToUniversalTime();
-            }
-
-            if (value.IsString && DateTime.TryParse(value.AsString, out var parsed))
-            {
-                return parsed.ToUniversalTime();
-            }
-        }
-
-        return timeProvider.GetUtcNow().UtcDateTime;
     }
 
     /// <summary>
@@ -1163,6 +1483,13 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         var filter = translator.TranslateToFilter(clause);
         var find = bsonCollection.Find(filter);
+        if (MongoDbQueryFilterBuilder.BuildSort(clause) is { } sort)
+        {
+            // Sort BEFORE limiting so the limit is a true top-N-by-order (mirrors ProcessQueueAsync),
+            // not an arbitrary subset.
+            find = find.Sort(sort);
+        }
+
         if (MongoDbQueryFilterBuilder.GetResultLimit(clause) is { } limit && limit >= 0)
         {
             find = find.Limit(limit);
@@ -1573,18 +1900,41 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var entities = await LoadEntitiesByIdAsync(request.EntityIds, cancellationToken).ConfigureAwait(false);
-        var history = request.EntityIds
-            .Where(entityId => entities.ContainsKey(entityId.ToString()))
-            .Select(entityId => new EntityHistoryEntry
-            {
-                EntityId = entityId,
-                UpdateTimes = entities[entityId.ToString()].Versions
+        var existing = await LoadEntitiesByIdAsync(request.EntityIds, cancellationToken).ConfigureAwait(false);
+        var ids = request.EntityIds.Select(static entityId => entityId.ToString()).ToArray();
+
+        // #1412: change times come from the versions collection, ordered by (TimestampUtc, VersionId).
+        var filter = Builders<MongoDbEntityVersionDocument>.Filter.In(static version => version.EntityId, ids);
+        var sort = Builders<MongoDbEntityVersionDocument>.Sort
+            .Ascending(static version => version.TimestampUtc)
+            .Ascending(static version => version.VersionId);
+        var versionDocuments = await _versionCollection
+            .Find(filter)
+            .Sort(sort)
+            .Project(Builders<MongoDbEntityVersionDocument>.Projection.Expression(static version => new VersionTime(
+                version.EntityId,
+                version.TimestampUtc,
+                version.VersionId)))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var timesByEntity = versionDocuments
+            .GroupBy(static version => version.EntityId, StringComparer.Ordinal)
+            .ToDictionary(
+                static group => group.Key,
+                static group => group
                     .Select(static version => new Timestamp(
                         new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero),
                         version.VersionId.ToString()))
-                    .Cast<Timestamp>()
                     .ToArray(),
+                StringComparer.Ordinal);
+
+        var history = request.EntityIds
+            .Where(entityId => existing.ContainsKey(entityId.ToString()))
+            .Select(entityId => new EntityHistoryEntry
+            {
+                EntityId = entityId,
+                UpdateTimes = timesByEntity.TryGetValue(entityId.ToString(), out var times) ? times : [],
             })
             .ToArray();
 
@@ -1598,34 +1948,37 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         ExportRequest request,
         CancellationToken cancellationToken = default)
     {
-        var allDocuments = await _entityCollection
-            .Find(FilterDefinition<MongoDbEntityDocument>.Empty)
+        var snapshotTime = request.SnapshotTime?.DateTime.UtcDateTime;
+
+        // #1412: stream the versions collection ordered by (TimestampUtc, VersionId), filtered by the
+        // snapshot time when supplied, instead of flattening inline arrays in-process.
+        var filter = snapshotTime is null
+            ? Builders<MongoDbEntityVersionDocument>.Filter.Empty
+            : Builders<MongoDbEntityVersionDocument>.Filter.Gte(static version => version.TimestampUtc, snapshotTime.Value);
+        var sort = Builders<MongoDbEntityVersionDocument>.Sort
+            .Ascending(static version => version.TimestampUtc)
+            .Ascending(static version => version.VersionId);
+        var versionDocuments = await _versionCollection
+            .Find(filter)
+            .Sort(sort)
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        var snapshotTime = request.SnapshotTime?.DateTime.UtcDateTime;
-        var versions = allDocuments
-            .SelectMany(document => document.Versions.Select(version => (Document: document, Version: version)))
-            .Where(tuple => snapshotTime is null || tuple.Version.TimestampUtc >= snapshotTime.Value)
-            .OrderBy(tuple => tuple.Version.TimestampUtc)
-            .ThenBy(tuple => tuple.Version.VersionId)
-            .ToArray();
-
-        var batches = versions.Select(tuple => new ExportChangeBatch
+        var batches = versionDocuments.Select(version => new ExportChangeBatch
         {
             ChangeTime = new Timestamp(
-                new DateTimeOffset(tuple.Version.TimestampUtc, TimeSpan.Zero),
-                tuple.Version.VersionId.ToString()),
+                new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero),
+                version.VersionId.ToString()),
             Entities =
             [
                 new QueryEntitySnapshot
                 {
-                    EntityId = new EntityId(tuple.Document.Id),
-                    ConcurrencyTag = new ConcurrencyTag(tuple.Version.VersionId.ToString()),
+                    EntityId = new EntityId(version.EntityId),
+                    ConcurrencyTag = new ConcurrencyTag(version.VersionId.ToString()),
                     ModifiedTime = new Timestamp(
-                        new DateTimeOffset(tuple.Version.TimestampUtc, TimeSpan.Zero),
-                        tuple.Version.VersionId.ToString()),
-                    Data = tuple.Version.Data is null ? null : MongoEntityData.ToJsonElement(tuple.Version.Data),
+                        new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero),
+                        version.VersionId.ToString()),
+                    Data = version.Data is null ? null : MongoEntityData.ToJsonElement(version.Data),
                     Relationships = [],
                     MatchingClauseIdentifiers = [],
                     ClassifiedTime = null,
@@ -1633,7 +1986,7 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             ],
         }).ToArray();
 
-        var finalVersion = versions.LastOrDefault().Version;
+        var finalVersion = versionDocuments.LastOrDefault();
         var finalSnapshot = finalVersion is null
             ? new Timestamp(_timeProvider.GetUtcNow(), ObjectId.GenerateNewId().ToString())
             : new Timestamp(new DateTimeOffset(finalVersion.TimestampUtc, TimeSpan.Zero), finalVersion.VersionId.ToString());
@@ -1662,13 +2015,18 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
                 continue;
             }
 
-            var hasChangeAfter = document.Versions.Any(version => IsAfter(version, entityTimestamp.Timestamp));
+            // #1412: existence query against the versions collection for any change strictly after the
+            // supplied (TimestampUtc, VersionId) boundary.
+            var hasChangeAfter = await HasVersionAfterAsync(
+                entityTimestamp.EntityId.ToString(),
+                entityTimestamp.Timestamp,
+                cancellationToken).ConfigureAwait(false);
             if (!hasChangeAfter)
             {
                 continue;
             }
 
-            var currentVersion = document.Versions.LastOrDefault();
+            var currentVersion = GetCurrentVersion(document);
             changed.Add(new ChangedEntitySnapshot
             {
                 Entity = currentVersion is null || currentVersion.Data is null
@@ -1682,6 +2040,8 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             Entities = changed,
         };
     }
+
+    private sealed record VersionTime(string EntityId, DateTime TimestampUtc, ObjectId VersionId);
 
     private async Task<Dictionary<string, MongoDbEntityDocument>> LoadEntitiesByIdAsync(
         IReadOnlyCollection<EntityId> entityIds,
@@ -1698,56 +2058,84 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         return documents.ToDictionary(static document => document.Id, StringComparer.Ordinal);
     }
 
-    private static bool IsAfter(
-        MongoDbEntityVersion version,
-        Timestamp timestamp)
+    // #1412: existence check against the versions collection for a change strictly after the given
+    // (TimestampUtc, VersionId) boundary. Tie-break on the version id (_id ObjectId) matches the
+    // in-process string.CompareOrdinal ordering used previously.
+    private async Task<bool> HasVersionAfterAsync(
+        string entityId,
+        Timestamp timestamp,
+        CancellationToken cancellationToken)
     {
         var requestedTime = timestamp.DateTime.UtcDateTime;
-        if (version.TimestampUtc > requestedTime)
+        var builder = Builders<MongoDbEntityVersionDocument>.Filter;
+
+        FilterDefinition<MongoDbEntityVersionDocument> afterBoundary;
+        if (ObjectId.TryParse(timestamp.ChangeId, out var changeId))
         {
-            return true;
+            afterBoundary = builder.Or(
+                builder.Gt(static version => version.TimestampUtc, requestedTime),
+                builder.And(
+                    builder.Eq(static version => version.TimestampUtc, requestedTime),
+                    builder.Gt(static version => version.VersionId, changeId)));
+        }
+        else
+        {
+            afterBoundary = builder.Gt(static version => version.TimestampUtc, requestedTime);
         }
 
-        return version.TimestampUtc == requestedTime
-               && string.CompareOrdinal(version.VersionId.ToString(), timestamp.ChangeId) > 0;
+        var filter = builder.And(builder.Eq(static version => version.EntityId, entityId), afterBoundary);
+        var match = await _versionCollection
+            .Find(filter)
+            .Limit(1)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return match is not null;
     }
 
-    private static MongoDbEntityVersion? ResolveVersionAtTimestamp(
-        MongoDbEntityDocument document,
-        Timestamp? timestamp)
+    // #1412: resolves the version bracketing a timestamp server-side, preserving the exact
+    // (TimestampUtc, VersionId) ordering and tie-break (primary TimestampUtc, tie-break _id ObjectId).
+    private async Task<MongoDbEntityVersion?> ResolveVersionAtTimestampAsync(
+        string entityId,
+        Timestamp timestamp,
+        CancellationToken cancellationToken)
     {
-        if (timestamp is null)
+        var requestedTime = timestamp.DateTime.UtcDateTime;
+        var builder = Builders<MongoDbEntityVersionDocument>.Filter;
+
+        FilterDefinition<MongoDbEntityVersionDocument> atOrBefore;
+        if (ObjectId.TryParse(timestamp.ChangeId, out var changeId))
         {
-            return document.Versions.LastOrDefault();
+            atOrBefore = builder.Or(
+                builder.Lt(static version => version.TimestampUtc, requestedTime),
+                builder.And(
+                    builder.Eq(static version => version.TimestampUtc, requestedTime),
+                    builder.Lte(static version => version.VersionId, changeId)));
+        }
+        else
+        {
+            atOrBefore = builder.Lt(static version => version.TimestampUtc, requestedTime);
         }
 
-        var requestedTime = timestamp.Value.DateTime.UtcDateTime;
-        return document.Versions
-            .Where(version => version.TimestampUtc < requestedTime
-                              || (version.TimestampUtc == requestedTime
-                                  && string.CompareOrdinal(version.VersionId.ToString(), timestamp.Value.ChangeId) <= 0))
-            .OrderBy(version => version.TimestampUtc)
-            .ThenBy(version => version.VersionId)
-            .LastOrDefault();
-    }
+        var filter = builder.And(builder.Eq(static version => version.EntityId, entityId), atOrBefore);
+        var sort = Builders<MongoDbEntityVersionDocument>.Sort
+            .Descending(static version => version.TimestampUtc)
+            .Descending(static version => version.VersionId);
 
-    private static void EnsureBootstrapVersion(MongoDbEntityDocument document, TimeProvider timeProvider)
-    {
-        if (document.Versions.Count > 0 || document.Current?.Data is null)
-        {
-            return;
-        }
+        var versionDocument = await _versionCollection
+            .Find(filter)
+            .Sort(sort)
+            .Limit(1)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
 
-        document.Versions.Add(new MongoDbEntityVersion
-        {
-            VersionId = ObjectId.TryParse(document.Current.ModifiedVersion, out var parsed)
-                ? parsed
-                : ObjectId.GenerateNewId(),
-            TimestampUtc = document.Current.ModifiedTimeUtc == default
-                ? timeProvider.GetUtcNow().UtcDateTime
-                : document.Current.ModifiedTimeUtc,
-            Data = document.Current.Data,
-        });
+        return versionDocument is null
+            ? null
+            : new MongoDbEntityVersion
+            {
+                VersionId = versionDocument.VersionId,
+                TimestampUtc = versionDocument.TimestampUtc,
+                Data = versionDocument.Data,
+            };
     }
 
     private static EntityId? ResolveEntityId(
@@ -1826,15 +2214,16 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             return allDocuments.Where(
                 document =>
                 {
-                    var version = document.Versions.LastOrDefault();
-                    if (version is null || version.Data is null)
+                    // #1412: match against the denormalized current projection (latest version data).
+                    var data = document.Current?.Data;
+                    if (data is null)
                     {
                         return false;
                     }
 
                     if (requestedTypes is not null && requestedTypes.Length > 0)
                     {
-                        return ReadTypeNames(version.Data).Intersect(requestedTypes, StringComparer.Ordinal).Any();
+                        return ReadTypeNames(data).Intersect(requestedTypes, StringComparer.Ordinal).Any();
                     }
 
                     return true;
@@ -1845,21 +2234,21 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
 
         return allDocuments.Where(document =>
         {
-            var version = document.Versions.LastOrDefault();
-            if (version is null || version.Data is null)
+            var data = document.Current?.Data;
+            if (data is null)
             {
                 return false;
             }
 
             if (requestedTypes is not null && requestedTypes.Length > 0)
             {
-                if (!ReadTypeNames(version.Data).Intersect(requestedTypes, StringComparer.Ordinal).Any())
+                if (!ReadTypeNames(data).Intersect(requestedTypes, StringComparer.Ordinal).Any())
                 {
                     return false;
                 }
             }
 
-            foreach (var components in ReadNameComponents(version.Data))
+            foreach (var components in ReadNameComponents(data))
             {
                 if (request.EnumerateChildren == EnumerateChildrenAction.EnumerateSelf
                     && components.SequenceEqual(requestedName, StringComparer.Ordinal))
@@ -1935,13 +2324,14 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         var relationships = new List<EntitySnapshot>();
         foreach (var document in allDocuments)
         {
-            var version = document.Versions.LastOrDefault();
-            if (version is null || version.Data is null)
+            // #1412: relationships are resolved from the current projection (latest version data).
+            var current = document.Current;
+            if (current?.Data is null)
             {
                 continue;
             }
 
-            var data = MongoEntityData.ToJsonElement(version.Data);
+            var data = MongoEntityData.ToJsonElement(current.Data);
             if (!TryGetParticipantEntityIds(data, out var participantIds) || !participantIds.Contains(entityId))
             {
                 continue;
@@ -1955,8 +2345,8 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
             relationships.Add(new EntitySnapshot
             {
                 EntityId = new EntityId(document.Id),
-                ConcurrencyTag = new ConcurrencyTag(version.VersionId.ToString()),
-                ModifiedTime = new Timestamp(new DateTimeOffset(version.TimestampUtc, TimeSpan.Zero), version.VersionId.ToString()),
+                ConcurrencyTag = new ConcurrencyTag(current.ModifiedVersion),
+                ModifiedTime = new Timestamp(new DateTimeOffset(current.ModifiedTimeUtc, TimeSpan.Zero), current.ModifiedVersion),
                 Data = data,
                 Relationships = [],
             });
@@ -2067,13 +2457,32 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         };
     }
 
+    // #1412: builds a snapshot straight from the current projection for null-timestamp ("now") reads,
+    // without touching the versions collection.
+    private static EntitySnapshot? CreateSnapshotFromCurrent(MongoDbEntityDocument document)
+    {
+        var current = document.Current;
+        if (current is null)
+        {
+            return null;
+        }
+
+        var versionId = current.ModifiedVersion;
+        return new EntitySnapshot
+        {
+            EntityId = new EntityId(document.Id),
+            ConcurrencyTag = new ConcurrencyTag(versionId),
+            ModifiedTime = new Timestamp(new DateTimeOffset(current.ModifiedTimeUtc, TimeSpan.Zero), versionId),
+            Data = current.Data is null ? null : MongoEntityData.ToJsonElement(current.Data),
+            Relationships = [],
+        };
+    }
+
     [BsonIgnoreExtraElements]
     private sealed class MongoDbEntityDocument
     {
         [BsonId]
         public string Id { get; init; } = string.Empty;
-
-        public List<MongoDbEntityVersion> Versions { get; init; } = [];
 
         /// <summary>
         /// Denormalized projection of the latest version, used for native query-clause evaluation
@@ -2082,6 +2491,29 @@ public class MongoDbEntityDataAccessLayer : IDataAccessLayer
         [BsonElement("current")]
         [BsonIgnoreIfNull]
         public MongoDbCurrentProjection? Current { get; set; }
+    }
+
+    /// <summary>
+    /// #1411: one document per entity version, stored in the <c>{collectionName}_versions</c>
+    /// collection. Keeps entity documents small (bounded) so they never approach the 16 MB BSON limit.
+    /// </summary>
+    [BsonIgnoreExtraElements]
+    private sealed class MongoDbEntityVersionDocument
+    {
+        /// <summary>The version/change id; the ObjectId encodes the creation time.</summary>
+        [BsonId]
+        public ObjectId VersionId { get; init; }
+
+        [BsonElement("EntityId")]
+        public string EntityId { get; init; } = string.Empty;
+
+        [BsonElement("TimestampUtc")]
+        public DateTime TimestampUtc { get; init; }
+
+        /// <summary>The entity data as native BSON; <see langword="null"/> for a tombstone (delete).</summary>
+        [BsonElement("Data")]
+        [BsonIgnoreIfNull]
+        public BsonDocument? Data { get; init; }
     }
 
     [BsonIgnoreExtraElements]

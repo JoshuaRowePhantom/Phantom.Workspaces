@@ -55,6 +55,59 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? SlashCommandRegistry { get; init; }
 
+    /// <summary>
+    /// An already-resolved host session context (user / computer / profile) the host hands in so the
+    /// running-agent / Copilot path can serve <c>get_current_session</c> with populated members instead
+    /// of a session-id-only context (issue #1236). Typed as <see langword="object"/> to avoid a reverse
+    /// project reference from <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>;
+    /// consuming code casts to <c>CurrentSessionContext</c>.
+    /// </summary>
+    public object? CurrentSessionContext { get; init; }
+
+    /// <summary>
+    /// Optional secret provider used by the core secret materialization seam. Typed as
+    /// <see langword="object"/> to avoid a reverse project reference from
+    /// <c>Phantom.Workspaces.Llm.Interfaces</c> to <c>Phantom.Workspaces.Llm.Core</c>; consuming
+    /// code casts to <c>ISecretProvider</c>.
+    /// </summary>
+    public object? SecretProvider { get; init; }
+
+    /// <summary>
+    /// Per-materialization secret placeholder resolver. Typed as <see langword="object"/> for the
+    /// same layering reason as <see cref="SecretProvider"/>; consuming code casts to
+    /// <c>ISecretPlaceholderResolver</c>.
+    /// </summary>
+    public object? SecretPlaceholderResolver { get; init; }
+
+    /// <summary>
+    /// Optional MCP OAuth seam bundle (redirect-delegate provider, optional redirect URI, optional
+    /// token-cache provider). Typed as <see langword="object"/> for the same layering reason as
+    /// <see cref="SecretProvider"/> — <c>Phantom.Workspaces.Llm.Interfaces</c> must not reference the
+    /// MCP SDK or <c>Phantom.Workspaces.Llm.Core</c>; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Mcp.McpOAuthOptions</c>. When null, the MCP transport factory uses
+    /// its safe default (a redirect delegate that throws a clear "interactive OAuth not configured"
+    /// error and a null token cache so the SDK uses its in-memory cache). Sub-items #1385 (interactive
+    /// redirect delegate) and #1384 (persistent token cache) populate this seam.
+    /// </summary>
+    public object? McpOAuthOptions { get; init; }
+
+    /// <summary>
+    /// Optional Copilot SDK client factory. Typed as object to avoid a reverse project reference
+    /// from Phantom.Workspaces.Llm.Interfaces to Phantom.Workspaces.Llm.Core; consuming code casts
+    /// to <c>ICopilotClientFactory</c>.
+    /// </summary>
+    public object? CopilotClientFactory { get; init; }
+
+    /// <summary>
+    /// Late-bound reference to the current <see cref="AgentChat"/> being constructed, used by the
+    /// named <c>agent-session</c> toolset factory (see <see cref="ToolsetFactory.CreateAgentSessionToolsetFactory(IToolsetFactory?)"/>)
+    /// to resolve the parent chat when its <c>agent_session_*</c> tools are invoked. Typed as
+    /// <see langword="object"/> for the same layering reason as <see cref="CurrentSessionContext"/>;
+    /// consuming code casts to <c>AgentChatRef</c>. Populated by <see cref="AgentChatFactory"/> /
+    /// <see cref="AgentFactory"/> during <c>AgentChat.CreateAsync</c> wiring. Introduced by #1306.
+    /// </summary>
+    public object? CurrentAgentChatRef { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

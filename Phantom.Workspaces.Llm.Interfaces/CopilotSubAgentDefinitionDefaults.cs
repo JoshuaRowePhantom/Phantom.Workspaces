@@ -79,7 +79,7 @@ public static class CopilotSubAgentDefinitionDefaults
         string? name)
     {
         var json = BuildJson(subAgentSessionId, displayName, description, name);
-        return AgentDefinition.FromJson(json)
+        return PhantomAgentSchema.AgentDefinitionFromJson(json)
             ?? throw new InvalidOperationException(
                 "Failed to parse the canonical hosted Copilot sub-agent AgentDefinition.");
     }

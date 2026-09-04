@@ -181,6 +181,22 @@ public sealed class WebViewModelTests
     }
 
     [Fact]
+    public void WebViewModel_ExplicitTitleSet_StopsFollowingPageTitle()
+    {
+        var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: false)
+        {
+            Id = "test-tab-explicit",
+            Title = "Initial",
+        };
+
+        vm.SetTitleExplicit("Pinned");
+        vm.SetPageTitle("Page Title From Browser");
+
+        Assert.True(vm.IsTitleExplicit);
+        Assert.Equal("Pinned", vm.Title);
+    }
+
+    [Fact]
     public void SetPageTitle_WhenTitleFixed_TooltipStillReflectsPageTitle()
     {
         var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: true)
@@ -192,6 +208,23 @@ public sealed class WebViewModelTests
         vm.SetPageTitle("Real Page Title");
 
         Assert.Contains("Real Page Title", vm.TabTooltip);
+        Assert.Contains("https://example.com", vm.TabTooltip);
+    }
+
+    [Fact]
+    public void SetPageTitle_WithLongTitle_RetainsFullTitleAndTooltip()
+    {
+        const string longTitle = "Consolidate duplicated JSON serializer options + default config-path logic (AllowedSecretsStore vs ConfigurationPersistenceService)";
+        var vm = new WebViewModel("https://example.com", tabService: null, titleFixed: false)
+        {
+            Id = "test-tab-long-title",
+            Title = "Initial",
+        };
+
+        vm.SetPageTitle(longTitle);
+
+        Assert.Equal(longTitle, vm.Title);
+        Assert.Contains(longTitle, vm.TabTooltip);
         Assert.Contains("https://example.com", vm.TabTooltip);
     }
 
@@ -563,6 +596,151 @@ public sealed class WebViewModelTests
             }
         }
         return null;
+    }
+
+    // --- #1325: restored browser tabs have their tabService wired ---
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_RestoredBrowserTab_HasTabServiceWired()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var restored = await InvokeCreateTabFromBrowserDescriptorAsync(
+            viewModel, "https://restored.example.com", "restored-web-1");
+
+        var webVm = Assert.IsType<WebViewModel>(restored);
+        Assert.Same(viewModel, GetTabService(webVm));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_RestoredBrowserTab_RaiseOpenNewWindow_InsertsNewTabInDock()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var restored = await InvokeCreateTabFromBrowserDescriptorAsync(
+            viewModel, "https://restored.example.com", "restored-web-2");
+        var webVm = Assert.IsType<WebViewModel>(restored);
+        await viewModel.OpenTabAsync(webVm);
+
+        // A restored tab must re-connect NewWindowRequested → OpenTabAsync.
+        webVm.RaiseOpenNewWindow("https://opened-from-restored.example.com");
+        await Task.Yield();
+
+        var documentDock = FindDocumentDockInLayout(viewModel.SelectedWorkspacePane.ContentLayout!);
+        Assert.NotNull(documentDock);
+        var docs = documentDock!.VisibleDockables!.OfType<WorkspaceDocument>().ToList();
+        var indexSource = docs.FindIndex(d => d.Id == "restored-web-2");
+        var indexNew = docs.FindIndex(d => d.TabViewModel is WebViewModel wv
+            && wv.AddressBarUrl == "https://opened-from-restored.example.com");
+
+        Assert.True(indexSource >= 0, "Restored source tab should be present");
+        Assert.True(indexNew >= 0, "New tab should be present");
+        Assert.Equal(indexSource + 1, indexNew);
+    }
+
+    // --- #1333: restored web tab anchors new-window opens on its own id ---
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task WebViewModel_RaiseOpenNewWindow_WithTabServiceFromRestore_CallsOpenTabAsyncWithSourceId()
+    {
+        var tabService = new RecordingTabService();
+        var restoredWebVm = new WebViewModel("https://restored.example.com", tabService)
+        {
+            Id = "restored-anchor-1",
+            Title = "Restored",
+        };
+
+        restoredWebVm.RaiseOpenNewWindow("https://mr9-new.example.com");
+        await tabService.OpenTabInvoked.Task;
+
+        Assert.Equal("restored-anchor-1", tabService.LastInsertAfterTabId);
+    }
+
+    private sealed class RecordingTabService : IWorkspaceTabService
+    {
+        public TaskCompletionSource OpenTabInvoked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public string? LastInsertAfterTabId { get; private set; }
+
+        public Task OpenTabAsync(WorkspaceTabViewModel tab, string? insertAfterTabId = null, bool focus = true, string? workspacePaneId = null)
+        {
+            this.LastInsertAfterTabId = insertAfterTabId;
+            this.OpenTabInvoked.TrySetResult();
+            return Task.CompletedTask;
+        }
+
+        public Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab) => Task.CompletedTask;
+
+        public void CloseTab(WorkspaceTabViewModel tab)
+        {
+        }
+
+        public Task<bool> TryFocusExistingWebTabAsync(string url) => Task.FromResult(false);
+    }
+
+    [Fact]
+    public void ConfiguredWebView_OnNewWindowRequested_WhenHandlerRuns_SetsArgsHandledTrue()
+    {
+        var vm = new WebViewModel("https://source.example.com", tabService: null)
+        {
+            Id = "web-handled-1",
+            Title = "Source",
+        };
+        var args = new FakeNewWindowArgs { Request = new Uri("https://popup.example.com"), Handled = false };
+
+        ConfiguredWebView.HandleNewWindowRequested(args, vm);
+
+        Assert.True(args.Handled);
+    }
+
+    [Fact]
+    public void ConfiguredWebView_OnNewWindowRequested_NullViewModel_DoesNotSetHandled()
+    {
+        var args = new FakeNewWindowArgs { Request = new Uri("https://popup.example.com"), Handled = false };
+
+        ConfiguredWebView.HandleNewWindowRequested(args, null);
+
+        Assert.False(args.Handled);
+    }
+
+    private sealed class FakeNewWindowArgs
+    {
+        public Uri? Request { get; set; }
+        public bool Handled { get; set; }
+    }
+
+    private static IWorkspaceTabService? GetTabService(WebViewModel webVm)
+    {
+        var field = typeof(WebViewModel).GetField(
+            "tabService",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (IWorkspaceTabService?)field!.GetValue(webVm);
+    }
+
+    private static async Task<WorkspaceTabViewModel?> InvokeCreateTabFromBrowserDescriptorAsync(
+        MainWindowViewModel viewModel,
+        string url,
+        string tabId)
+    {
+        var workspaceEntity = CreateExternalEntity(
+            Guid.NewGuid().ToString(),
+            "workspace",
+            new System.Collections.Generic.Dictionary<string, string>());
+        var descriptor = new BrowserDockTabDescriptor(url);
+
+        var method = typeof(MainWindowViewModel).GetMethod(
+            "CreateTabViewModelFromDescriptorAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var task = (Task<WorkspaceTabViewModel?>?)method!.Invoke(
+            viewModel,
+            [workspaceEntity, descriptor, tabId]);
+        Assert.NotNull(task);
+        return await task!;
     }
 
     // --- FocusUrlBarCommand ---

@@ -184,6 +184,29 @@ public sealed class WorkspaceDocumentSerializationTests
         Assert.Equal("https://roundtrip.example.com", restoredDesc.Url);
     }
 
+    [Fact]
+    public void WorkspaceDocument_Descriptor_BrowserKind_LongTitleRoundTripsLosslessly()
+    {
+        const string longTitle = "Consolidate duplicated JSON serializer options + default config-path logic (AllowedSecretsStore vs ConfigurationPersistenceService)";
+        var descriptor = new BrowserDockTabDescriptor("https://roundtrip.example.com/long-title")
+        {
+            Title = longTitle,
+            IsTitleExplicit = false,
+        };
+        var tab = new StubWorkspaceTab("tab-rt-browser-long-title", "Browser Round-trip");
+        var doc = new WorkspaceDocument(tab) { Descriptor = descriptor };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>));
+        var json = serializer.Serialize(doc);
+        var restored = serializer.Deserialize<WorkspaceDocument>(json);
+
+        Assert.NotNull(restored);
+        var restoredDesc = Assert.IsType<BrowserDockTabDescriptor>(restored!.Descriptor);
+        Assert.Equal("https://roundtrip.example.com/long-title", restoredDesc.Url);
+        Assert.Equal(longTitle, restoredDesc.Title);
+        Assert.False(restoredDesc.IsTitleExplicit);
+    }
+
     // ── ContextLocator wires tab view model after deserialization ─────────────
 
     [Fact]
@@ -483,6 +506,64 @@ public sealed class WorkspaceDocumentSerializationTests
         var restoredDesc = Assert.IsType<AgentSessionDockTabDescriptor>(restored!.Descriptor);
         Assert.Equal("Preserved Agent Session Title", restoredDesc.Title);
         Assert.Equal("22222222-2222-4222-2222-222222222222", restoredDesc.EntityId);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Deserialize_SyncsCachedTabHeaderFromDescriptorTitle()
+    {
+        const string fullTitle = "GitHub Copilot Workspace Assistant session";
+        var doc = new WorkspaceDocument
+        {
+            Id = "descriptor-title-tab",
+            Title = "GitHub Copilot Wo...",
+            Descriptor = new AgentSessionDockTabDescriptor("33333333-3333-4333-3333-333333333333")
+            {
+                Title = fullTitle,
+            },
+        };
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var restored = serializer.Deserialize<WorkspaceDocument>(serializer.Serialize(doc));
+
+        Assert.NotNull(restored);
+        Assert.Equal(fullTitle, restored!.EffectiveTabHeader.Title);
+        Assert.Equal(fullTitle, restored.Title);
+    }
+
+    [Fact]
+    public void WorkspaceDocument_Deserialize_FallsBackToBaseTitleWhenDescriptorMissing()
+    {
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        const string legacyJson = """
+            {
+              "Id": "legacy-title-tab",
+              "Title": "Legacy Title"
+            }
+            """;
+        var restored = serializer.Deserialize<WorkspaceDocument>(legacyJson);
+
+        Assert.NotNull(restored);
+        Assert.Equal("Legacy Title", restored!.EffectiveTabHeader.Title);
+    }
+
+    [Fact]
+    public void WorkspaceSave_PersistsFullUntruncatedTitleInDescriptorOnly()
+    {
+        const string longTitle = "GitHub Copilot Workspace Assistant session";
+        var tab = new WebViewModel("https://title.example.com")
+        {
+            Id = "long-browser-title",
+            Title = longTitle,
+        };
+        var doc = new WorkspaceDocument(tab);
+
+        var serializer = new DockSerializer(typeof(ObservableCollection<>), new WorkspaceDockTypeInfoResolver());
+        var json = serializer.Serialize(doc);
+
+        using var parsed = JsonDocument.Parse(json);
+        Assert.False(parsed.RootElement.TryGetProperty("Title", out _));
+        Assert.Equal(longTitle, parsed.RootElement.GetProperty("Descriptor").GetProperty("Title").GetString());
+        Assert.DoesNotContain("GitHub Copilot Wo...", json);
     }
 
     [Fact]

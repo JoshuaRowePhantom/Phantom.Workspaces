@@ -117,6 +117,27 @@ Resume a persisted session explicitly by session id:
 
 This example demonstrates using a commercial cloud model (GitHub Models) with persistent local storage (MongoDB).
 
+### github-copilot-remote-chat.json
+
+A GitHub Copilot chat agent configured for the `[remote-copilot-sdk]` split topology:
+- Uses the **`github-copilot`** provider and the Copilot SDK's `CopilotSdkChatClient`.
+- Router, steering middleware, and persistence run on the **source** Phantom.Workspaces instance.
+- The `CopilotSdkChatClient` and its Copilot CLI process — including the SDK built-in shell/filesystem tools — run on a **remote `user-computer-profile`** reached over the reverse-tunnel transport.
+- Tools split by execution target (see `["documentation", "agent-options", "tools"]` § "Execution target of tool kinds"):
+  - `workspace-gui`, `workspace-entity`, and source-targeted `current-session` calls execute on the **source** (`ExecutorTarget.GuiLocal`).
+  - `filesystem`, `github-cli-builtin-tools`, and the optional `mcp` GitHub tool execute on the **remote** profile (`ExecutorTarget.AgentExecutor`).
+- Selects the remote host through the `trust-profile` parameter: the resolved `llm-trust-profile` entity supplies `HostingWorkspacesClientInstances` (the remote client-instance id) and `DefaultExecutionTarget` (the connection descriptor). See `Phantom.Workspaces.Llm.Core/Trust/TrustProfile.cs`.
+- Persists `host-profile-entity-id` on the resulting `agent-session` entity so the topology can be reconstructed on resume.
+
+**Prerequisites:**
+- The remote `user-computer-profile` is enrolled and reachable via the reverse-tunnel transport.
+- An `llm-trust-profile` entity exists whose `HostingWorkspacesClientInstances` contains the remote profile's client-instance id.
+- `GITHUB_TOKEN` with Copilot access is available on the remote host (or the remote user is signed in to the Copilot CLI).
+
+**Parameter authoring.** The example uses `${working-directory}` and `${trust-profile}` placeholders in `model.options.additionalProperties`. The parameter *declarations* (`name`, `kind`, `required`) belong on the wrapping `agent-manifest`, not on the standalone AgentDefinition; the example carries them in a `metadata.parameters` block for LLM authoring reference. See `["documentation", "agent-configuration"]` § "Remote-hosted `agent-session`" for the manifest-side worked example and `["documentation", "agent-options", "parameters"]` for the `trust-profile` parameter reference.
+
+Design docs: `docs/design/remote-chat-client-session.md` (master topology) and `docs/design/github-copilot-provider-support.md` § "Remote hosting".
+
 ## Chat History Configuration
 
 Chat history is now configured directly within agent definitions as a **custom tool**:

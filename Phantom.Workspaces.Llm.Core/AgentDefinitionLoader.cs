@@ -68,8 +68,9 @@ public static class AgentDefinitionLoader
         {
             ValidateJsonAgainstSchema(content, sourceLabel);
 
-            return AgentDefinition.FromJson(content)
+            var agent = PhantomAgentSchema.AgentDefinitionFromJson(content)
                 ?? throw new InvalidOperationException("Failed to deserialize agent definition from JSON.");
+            return RehydrateGithubCliBuiltinTools(agent, content);
         }
         catch (JsonException ex)
         {
@@ -81,11 +82,109 @@ public static class AgentDefinitionLoader
         }
     }
 
+    private static AgentDefinition RehydrateGithubCliBuiltinTools(AgentDefinition agent, string content)
+    {
+        if (agent is not PromptAgent promptAgent || promptAgent.Tools is null)
+        {
+            return agent;
+        }
+
+        using var jsonDocument = JsonDocument.Parse(content);
+        if (!jsonDocument.RootElement.TryGetProperty("tools", out var toolsElement)
+            || toolsElement.ValueKind != JsonValueKind.Array)
+        {
+            return agent;
+        }
+
+        var rawTools = toolsElement.EnumerateArray().ToArray();
+        for (var i = 0; i < rawTools.Length && i < promptAgent.Tools.Count; i++)
+        {
+            var rawTool = rawTools[i];
+            if (rawTool.ValueKind != JsonValueKind.Object
+                || !rawTool.TryGetProperty("kind", out var kindElement)
+                || kindElement.ValueKind != JsonValueKind.String
+                || !string.Equals(kindElement.GetString(), GitHubCliBuiltinToolsTool.KindName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var existing = promptAgent.Tools[i];
+            promptAgent.Tools[i] = new GitHubCliBuiltinToolsTool
+            {
+                Kind = GitHubCliBuiltinToolsTool.KindName,
+                Name = existing.Name,
+                Description = existing.Description,
+                Bindings = existing.Bindings,
+                Connection = (existing as CustomTool)?.Connection!,
+                Options = (existing as CustomTool)?.Options!,
+                AvailableTools = ReadBuiltinToolSet(rawTool, "available-tools"),
+                ExcludedTools = ReadBuiltinToolSet(rawTool, "excluded-tools"),
+                ClientMode = ReadClientMode(rawTool),
+            };
+        }
+
+        return agent;
+    }
+
+    private static BuiltinToolSet? ReadBuiltinToolSet(JsonElement toolElement, string propertyName)
+    {
+        if (!TryGetToolPolicyProperty(toolElement, propertyName, out var selector)
+            || selector.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        IReadOnlyList<string>? tools = null;
+        if (selector.TryGetProperty("tools", out var toolsElement)
+            && toolsElement.ValueKind == JsonValueKind.Array)
+        {
+            tools = [.. toolsElement.EnumerateArray()
+                .Where(static element => element.ValueKind == JsonValueKind.String)
+                .Select(static element => element.GetString()!)];
+        }
+
+        var isolated = selector.TryGetProperty("isolated", out var isolatedElement)
+            && isolatedElement.ValueKind == JsonValueKind.True;
+
+        return new BuiltinToolSet(tools, isolated);
+    }
+
+    private static GitHub.Copilot.CopilotClientMode ReadClientMode(JsonElement toolElement)
+    {
+        if (!TryGetToolPolicyProperty(toolElement, "client-mode", out var modeElement)
+            || modeElement.ValueKind != JsonValueKind.String)
+        {
+            return GitHub.Copilot.CopilotClientMode.CopilotCli;
+        }
+
+        return string.Equals(modeElement.GetString(), "empty", StringComparison.OrdinalIgnoreCase)
+            ? GitHub.Copilot.CopilotClientMode.Empty
+            : GitHub.Copilot.CopilotClientMode.CopilotCli;
+    }
+
+    private static bool TryGetToolPolicyProperty(JsonElement toolElement, string propertyName, out JsonElement value)
+    {
+        if (toolElement.TryGetProperty(propertyName, out value))
+        {
+            return true;
+        }
+
+        if (toolElement.TryGetProperty("options", out var options)
+            && options.ValueKind == JsonValueKind.Object
+            && options.TryGetProperty(propertyName, out value))
+        {
+            return true;
+        }
+
+        value = default;
+        return false;
+    }
+
     private static AgentDefinition ParseYamlAgent(string content, string sourceLabel)
     {
         try
         {
-            return AgentDefinition.FromYaml(content)
+            return PhantomAgentSchema.AgentDefinitionFromYaml(content)
                 ?? throw new InvalidOperationException("Failed to deserialize agent definition from YAML.");
         }
         catch (YamlException ex)

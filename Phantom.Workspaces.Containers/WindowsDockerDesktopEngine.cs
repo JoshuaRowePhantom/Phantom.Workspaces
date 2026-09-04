@@ -8,7 +8,13 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
 {
     private readonly IDockerCommandRunner _commandRunner;
 
-    public WindowsDockerDesktopEngine()
+    internal IDockerCommandRunner CommandRunner => _commandRunner;
+
+    /// <summary>
+    /// Reserved for tests. Wires a <see cref="NullLogger{T}"/> so docker output is discarded;
+    /// production must use a logger-bearing constructor so stdout/stderr are surfaced (issue #1373).
+    /// </summary>
+    internal WindowsDockerDesktopEngine()
         : this(new DockerCommandRunner(NullLogger<DockerCommandRunner>.Instance))
     {
     }
@@ -69,6 +75,15 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
             definition.NetworkType.ToString().ToLowerInvariant(),
         };
 
+        // Pin a stable container hostname when the definition specifies one (issue #1415). This keeps
+        // the Atlas Local replica-set member identity constant across recreations/image refreshes,
+        // instead of defaulting to the ephemeral container id.
+        if (!string.IsNullOrWhiteSpace(definition.Hostname))
+        {
+            arguments.Add("--hostname");
+            arguments.Add(definition.Hostname);
+        }
+
         foreach (var environmentVariable in definition.EnvironmentVariables)
         {
             arguments.Add("-e");
@@ -96,6 +111,18 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
         arguments.Add(definition.ImageName);
 
         await RunAndEnsureSuccessAsync(arguments, cancellationToken).ConfigureAwait(false);
+    }
+
+    public override ValueTask PullAsync(
+        string imageName,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(imageName))
+        {
+            throw new ArgumentException("Image name is required.", nameof(imageName));
+        }
+
+        return RunAndEnsureSuccessAsync(["pull", imageName], cancellationToken);
     }
 
     public override ValueTask StartAsync(
@@ -145,9 +172,14 @@ public sealed class WindowsDockerDesktopEngine : DockerDesktopEngine
             return;
         }
 
+        var failureDetails = string.Join(
+            Environment.NewLine,
+            new[] { result.StandardOut, result.StandardError }
+                .Where(stream => !string.IsNullOrWhiteSpace(stream)));
+
         throw new InvalidOperationException(
             $"Docker command failed: docker {string.Join(' ', arguments)}{Environment.NewLine}" +
-            $"{result.StandardError}".TrimEnd());
+            failureDetails.TrimEnd());
     }
 
     private static void ValidateContainerName(string containerName)

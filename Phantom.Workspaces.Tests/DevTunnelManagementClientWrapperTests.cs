@@ -256,7 +256,11 @@ public sealed class DevTunnelManagementClientWrapperTests
         // Private mode re-fetches the tunnel for the connect token after the ACL update.
         management
             .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(tunnel);
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "tunnel-1",
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "t" },
+            });
 
         await wrapper.ApplyAccessModeAsync("tunnel-1", DevTunnelAccessMode.Private, TestContext.Current.CancellationToken);
 
@@ -343,9 +347,17 @@ public sealed class DevTunnelManagementClientWrapperTests
                     TunnelId = "wanted", ClusterId = "usw2",
                     Labels = [Marker, "my-tunnel"],
                     Ports = [new TunnelPort { PortNumber = 5280 }],
-                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
                 },
             ]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "wanted", ClusterId = "usw2",
+                Labels = [Marker, "my-tunnel"],
+                Ports = [new TunnelPort { PortNumber = 5280 }],
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
+            });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
@@ -354,20 +366,123 @@ public sealed class DevTunnelManagementClientWrapperTests
     }
 
     [Fact]
-    public async Task LookupByNameAsync_WhenNoAccessTokens_ReturnsNullConnectToken()
+    public async Task LookupByNameAsync_AfterListMatch_CallsGetTunnelAsyncWithConnectScope()
     {
+        var listElement = new Tunnel { TunnelId = "wanted", ClusterId = "usw2", Labels = [Marker, "my-tunnel"] };
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([listElement]);
+        Tunnel? passedToGet = null;
+        TunnelRequestOptions? capturedOptions = null;
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Tunnel, TunnelRequestOptions, CancellationToken>((t, opts, _) => { passedToGet = t; capturedOptions = opts; })
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "wanted",
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "ct" },
+            });
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
+
+        Assert.Same(listElement, passedToGet);
+        Assert.NotNull(capturedOptions);
+        Assert.NotNull(capturedOptions!.TokenScopes);
+        Assert.Contains(TunnelAccessScopes.Connect, capturedOptions.TokenScopes!);
+        Assert.True(capturedOptions.IncludePorts);
+        management.Verify(
+            client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task LookupByNameAsync_ReadsConnectTokenFromGetTunnelResult_NotFromListResult()
+    {
+        // The list result carries an old/empty AccessTokens map; the GetTunnelAsync result carries the
+        // fresh Connect token. The returned lookup token must come from GetTunnelAsync.
         var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
         management
             .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
             .ReturnsAsync(
             [
-                new Tunnel { TunnelId = "wanted", ClusterId = "usw2", Labels = [Marker, "my-tunnel"], Ports = [new TunnelPort { PortNumber = 5280 }] },
+                new Tunnel
+                {
+                    TunnelId = "wanted", ClusterId = "usw2",
+                    Labels = [Marker, "my-tunnel"],
+                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "stale-from-list" },
+                },
             ]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "wanted", ClusterId = "usw2",
+                Labels = [Marker, "my-tunnel"],
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "fresh-from-get" },
+            });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
 
-        Assert.Null(result.ConnectToken);
+        Assert.Equal("fresh-from-get", result.ConnectToken);
+    }
+
+    [Fact]
+    public async Task LookupByNameAsync_WhenGetTunnelReturnsNoConnectToken_ThrowsOwnershipError()
+    {
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([new Tunnel { TunnelId = "wanted", Labels = [Marker, "my-tunnel"] }]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel { TunnelId = "wanted", AccessTokens = null });
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken));
+
+        // Ownership-specific wording, deliberately distinct from the generic #1293 relay-side message.
+        Assert.Contains("Connect-scope tunnel access token", ex.Message);
+        Assert.Contains("does not own", ex.Message);
+        Assert.DoesNotContain("devtunnels.ms", ex.Message);
+    }
+
+    [Fact]
+    public async Task LookupByNameAsync_ListCallStillUsesOwnedTunnelsOnlyAndLabels()
+    {
+        // Regression guard for the pre-existing list behavior — the fix must not disturb the label
+        // and ownership filtering that the list call has always performed.
+        TunnelRequestOptions? capturedListOptions = null;
+        bool? capturedOwnedOnly = null;
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+            .Callback<string?, string?, TunnelRequestOptions, bool?, CancellationToken>((_, _, opts, owned, _) =>
+            {
+                capturedListOptions = opts;
+                capturedOwnedOnly = owned;
+            })
+            .ReturnsAsync([new Tunnel { TunnelId = "wanted", Labels = [Marker, "my-tunnel"] }]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "wanted",
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "ct" },
+            });
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
+
+        Assert.True(capturedOwnedOnly);
+        Assert.NotNull(capturedListOptions);
+        Assert.NotNull(capturedListOptions!.Labels);
+        Assert.Contains(Marker, capturedListOptions.Labels!);
+        Assert.Contains("my-tunnel", capturedListOptions.Labels!);
+        Assert.True(capturedListOptions.RequireAllLabels);
     }
 
     [Fact]
@@ -383,14 +498,50 @@ public sealed class DevTunnelManagementClientWrapperTests
                     TunnelId = "ours", ClusterId = "usw2",
                     Labels = [Marker],
                     Ports = [new TunnelPort { PortNumber = 5280 }],
-                    AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
                 },
             ]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "ours", ClusterId = "usw2",
+                Labels = [Marker],
+                Ports = [new TunnelPort { PortNumber = 5280 }],
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "tunnel-connect-token" },
+            });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal("tunnel-connect-token", result.ConnectToken);
+    }
+
+    [Fact]
+    public async Task DiscoverSingleAsync_Auto_UsesGetTunnelAsyncToObtainConnectToken()
+    {
+        var listElement = new Tunnel { TunnelId = "ours", ClusterId = "usw2", Labels = [Marker] };
+        var management = new Mock<ITunnelManagementClient>(MockBehavior.Strict);
+        management
+            .Setup(client => client.ListTunnelsAsync(null, null, It.IsAny<TunnelRequestOptions>(), true, It.IsAny<CancellationToken>()))
+            .ReturnsAsync([listElement]);
+        Tunnel? passedToGet = null;
+        TunnelRequestOptions? capturedOptions = null;
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .Callback<Tunnel, TunnelRequestOptions, CancellationToken>((t, opts, _) => { passedToGet = t; capturedOptions = opts; })
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "ours",
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "auto-ct" },
+            });
+        var wrapper = new DevTunnelManagementClientWrapper(management.Object);
+
+        var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken);
+
+        Assert.Same(listElement, passedToGet);
+        Assert.NotNull(capturedOptions);
+        Assert.Contains(TunnelAccessScopes.Connect, capturedOptions!.TokenScopes!);
+        Assert.Equal("auto-ct", result.ConnectToken);
     }
 
     [Fact]
@@ -404,6 +555,15 @@ public sealed class DevTunnelManagementClientWrapperTests
                 new Tunnel { TunnelId = "other", ClusterId = "usw2", Labels = [Marker, "other-tunnel"], Ports = [new TunnelPort { PortNumber = 1111 }] },
                 new Tunnel { TunnelId = "wanted", ClusterId = "usw2", Labels = [Marker, "my-tunnel"], Ports = [new TunnelPort { PortNumber = 5280 }] },
             ]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "wanted", ClusterId = "usw2",
+                Labels = [Marker, "my-tunnel"],
+                Ports = [new TunnelPort { PortNumber = 5280 }],
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "ct" },
+            });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         var result = await ((IDevTunnelLookupClient)wrapper).LookupByNameAsync("my-tunnel", TestContext.Current.CancellationToken);
@@ -437,6 +597,15 @@ public sealed class DevTunnelManagementClientWrapperTests
                 new Tunnel { TunnelId = "foreign", ClusterId = "usw2", Labels = ["something-else"], Ports = [new TunnelPort { PortNumber = 1 }] },
                 new Tunnel { TunnelId = "ours", ClusterId = "usw2", Labels = [Marker], Ports = [new TunnelPort { PortNumber = 5280 }] },
             ]);
+        management
+            .Setup(client => client.GetTunnelAsync(It.IsAny<Tunnel>(), It.IsAny<TunnelRequestOptions>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Tunnel
+            {
+                TunnelId = "ours", ClusterId = "usw2",
+                Labels = [Marker],
+                Ports = [new TunnelPort { PortNumber = 5280 }],
+                AccessTokens = new Dictionary<string, string> { [TunnelAccessScopes.Connect] = "ct" },
+            });
         var wrapper = new DevTunnelManagementClientWrapper(management.Object);
 
         var result = await ((IDevTunnelLookupClient)wrapper).DiscoverSingleAsync(TestContext.Current.CancellationToken);

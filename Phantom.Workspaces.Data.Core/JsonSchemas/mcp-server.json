@@ -1,6 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/mcp-server.json",
-  "description": "Schema for mcp-server entities that register Model Context Protocol servers. The 'mcp-server' property describes how to connect to and use the server.",
+  "description": "Schema for mcp-server entities that register Model Context Protocol servers. The 'mcp-server' property describes how to connect to and use the server. Manifest tool resources (type 'mcp-server-entity') resolve one of these entities by its entity name: the tool resource 'name' is appended to each MCP-server search prefix in priority order (machine profile, then '${USER}/mcp-servers', then 'defaults/mcp-servers') and the first existing entity with an 'mcp-server' property wins. The entity name (under a searched prefix) is the resolution key, not the 'serverName' field.",
   "allOf": [
     {
       "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"

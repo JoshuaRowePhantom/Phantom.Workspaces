@@ -230,7 +230,14 @@ The host runtime must be explicitly started by the `Phantom.Workspaces` process.
 2. Scheduler loop implementation
    - Use a single loop instance per opened workspace host.
    - Trigger one immediate run on startup, then repeat at a fixed poll interval.
-   - Serialize invocations so the loop never overlaps its own `RunDueToolsAsync` calls.
+   - Serialize invocations so the loop never overlaps its own `RunDueToolsAsync` calls. Overlap
+     prevention is about the *tick* only: `RunDueToolsAsync` dispatches each due tool as its own
+     tracked task and returns after dispatch (it returns the number of tools dispatched, not
+     completed), so a long-lived/blocking tool (e.g. `run-vscode-tunnel`, which never returns for the
+     tunnel's lifetime) never blocks the tick or starves other due tools. The existing
+     `runningRelationships` de-dup guard — cleared in each run task's completion continuation rather
+     than in the dispatch loop — keeps a still-running tool from being dispatched twice while letting
+     every other due tool run in parallel.
    - Check persisted pause state each tick and skip starting runs while paused.
    - Support a stop-all path that cancels in-flight scheduled tool executions.
 3. Shutdown/disposal

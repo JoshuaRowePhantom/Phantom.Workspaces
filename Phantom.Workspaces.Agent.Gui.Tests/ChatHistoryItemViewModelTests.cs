@@ -1,4 +1,5 @@
 ﻿using System.Linq;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.ComponentModel;
 using AgentSchema;
@@ -250,20 +251,58 @@ public sealed class ChatHistoryItemViewModelTests
         Assert.DoesNotContain(nameof(ChatHistoryItemViewModel.RenderableContents), changed);
     }
 
+    [Fact]
+    public async Task WaitForConditionAsync_PredicateThrowsThenCollectionChanges_CompletesOnNextNotification()
+    {
+        var collection = new ObservableCollection<int>();
+        var attempts = 0;
+
+        var wait = WaitForConditionAsync(
+            collection,
+            () =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new InvalidOperationException("Collection was modified; enumeration operation may not execute.");
+                }
+
+                return collection.Count == 1;
+            },
+            "predicate to recover after collection change");
+
+        collection.Add(1);
+
+        await wait;
+        Assert.Equal(2, attempts);
+    }
+
+    [Fact]
+    public void WaitForConditionAsync_PredicateAlwaysThrows_DoesNotCompleteAndDoesNotPropagate()
+    {
+        var collection = new ObservableCollection<int>();
+
+        var wait = WaitForConditionAsync(
+            collection,
+            () => throw new InvalidOperationException("Collection was modified; enumeration operation may not execute."),
+            "predicate to keep throwing");
+
+        collection.Add(1);
+
+        Assert.False(wait.IsCompleted);
+    }
+
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
         string description)
     {
-        if (condition())
-        {
-            return;
-        }
-
+        // The chat mutates History on its foreground scheduler. Initial samples here can
+        // race that mutation; CollectionChanged re-evaluates after the mutation completes.
         var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
         {
-            if (condition())
+            if (ConditionMet(condition))
             {
                 signal.TrySetResult();
             }
@@ -272,7 +311,7 @@ public sealed class ChatHistoryItemViewModelTests
         collection.CollectionChanged += OnCollectionChanged;
         try
         {
-            if (condition())
+            if (ConditionMet(condition))
             {
                 return;
             }
@@ -282,6 +321,18 @@ public sealed class ChatHistoryItemViewModelTests
         finally
         {
             collection.CollectionChanged -= OnCollectionChanged;
+        }
+    }
+
+    private static bool ConditionMet(Func<bool> condition)
+    {
+        try
+        {
+            return condition();
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 }

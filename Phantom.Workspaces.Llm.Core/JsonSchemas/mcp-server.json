@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://phantom-workspaces/schemas/mcp-server.json",
   "title": "MCP Server",
-  "description": "A registration for a Model Context Protocol (MCP) server. MCP server entities are referenced by name from agent manifest tool resources (type 'mcp-server-entity') and resolved into MCP tools at runtime. Storing servers as entities lets different machines and users register different servers (for example, machine-specific stdio commands) under the same logical name.",
+  "description": "A registration for a Model Context Protocol (MCP) server. MCP server entities are referenced from agent manifest tool resources (type 'mcp-server-entity') and resolved into MCP tools at runtime. Resolution keys off the mcp-server entity's name (its final name component under a searched prefix), not the 'serverName' field: the tool resource 'name' is appended to each search prefix (machine profile, then '${USER}/mcp-servers', then 'defaults/mcp-servers') and the first existing entity with an 'mcp-server' property wins. Storing servers as entities lets different machines and users register different servers (for example, machine-specific stdio commands) under the same logical name.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -13,7 +13,7 @@
     "serverName": {
       "type": "string",
       "minLength": 1,
-      "description": "The logical name of the MCP server (e.g., 'github'). Tool resources reference this name to resolve the server."
+      "description": "The logical name of the MCP server (e.g., 'github'). Used for discovery listings and to name the resulting MCP tool; it is NOT the manifest-resolution key. Manifest tool resources resolve an mcp-server entity by its entity name under a searched prefix, not by this field."
     },
     "serverDescription": {
       "type": "string",
@@ -25,27 +25,134 @@
     },
     "connection": {
       "type": "object",
-      "description": "How to connect to the MCP server. Remote servers use an http(s) endpoint with an optional API key. Local servers use a 'stdio://?command=<process>&arg=<value>&cwd=<dir>' endpoint.",
-      "additionalProperties": true,
       "required": [
         "kind"
       ],
-      "properties": {
-        "kind": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Connection kind. Common values: 'key' (API-key authenticated remote endpoint), 'Anonymous' (unauthenticated remote or stdio endpoint)."
+      "description": "MCP server connection. Discriminated by 'kind'. Only the Anonymous, key, and oauth kinds are supported at runtime; any other kind is rejected with an \"unsupported connection type\" error.",
+      "oneOf": [
+        {
+          "title": "Anonymous",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "endpoint"
+          ],
+          "properties": {
+            "kind": {
+              "const": "Anonymous"
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1,
+              "description": "http(s):// MCP URL, or stdio://?command=<exe>&arg=<a>&cwd=<dir> for a local process."
+            }
+          },
+          "examples": [
+            {
+              "kind": "Anonymous",
+              "endpoint": "https://example.com/mcp/"
+            },
+            {
+              "kind": "Anonymous",
+              "endpoint": "stdio://?command=uvx&arg=some-mcp-server"
+            }
+          ]
         },
-        "endpoint": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Endpoint URL. Use an http(s) URL for remote servers or a 'stdio://?command=...' URL for local stdio servers."
+        {
+          "title": "ApiKey",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "endpoint",
+            "apiKey"
+          ],
+          "properties": {
+            "kind": {
+              "const": "key"
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1,
+              "description": "http(s):// MCP URL (stdio:// with an apiKey is rejected at runtime)."
+            },
+            "apiKey": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Bearer token. '${ENV_VAR}' reads an environment variable and a literal value is used as-is. '${SECRET:Name}' is resolved via the secret store (rewritten to an opaque secret handle during agent-definition materialization, which triggers the secret-consent dialog). Special-case '${GITHUB_TOKEN}' falls back to gh auth token."
+            }
+          },
+          "examples": [
+            {
+              "kind": "key",
+              "endpoint": "https://api.githubcopilot.com/mcp/",
+              "apiKey": "${GITHUB_TOKEN}"
+            }
+          ]
         },
-        "apiKey": {
-          "type": "string",
-          "description": "API key or token for authenticated remote servers. Supports ${ENV_VAR} references. Prefer environment references over storing secrets directly."
+        {
+          "title": "OAuth",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "endpoint"
+          ],
+          "properties": {
+            "kind": {
+              "const": "oauth"
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1,
+              "description": "http(s):// MCP resource endpoint. OAuth metadata is discovered from it (RFC 9728/8414)."
+            },
+            "clientId": {
+              "type": "string",
+              "description": "Optional OAuth client id. Omit to use dynamic client registration (RFC 7591). '${ENV_VAR}' reads an environment variable, a literal value is used as-is, and '${SECRET:Name}' is resolved via the secret-aware resolver (secret store)."
+            },
+            "clientSecret": {
+              "type": "string",
+              "description": "Optional OAuth client secret. Omit for a public client (PKCE). '${ENV_VAR}' reads an environment variable, a literal value is used as-is, and '${SECRET:Name}' is resolved via the secret-aware resolver (secret store)."
+            },
+            "tokenUrl": {
+              "type": "string",
+              "description": "Optional explicit OAuth token endpoint; normally discovered automatically from 'endpoint'."
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "OAuth scopes to request."
+            },
+            "authenticationMode": {
+              "type": "string",
+              "description": "Optional OAuth authentication mode. Defaults to 'system' (the MCP SDK's resource-bound OAuth client). Set to 'entra-pinned' for host-pinned Microsoft Entra authentication: tokens are acquired directly from Entra using the v2 'scope' parameter (no RFC 8707 resource indicator) and attached only to the exact HTTPS origin derived from 'endpoint'. 'entra-pinned' requires 'authority' and at least one entry in 'scopes'."
+            },
+            "authority": {
+              "type": "string",
+              "description": "Microsoft Entra tenant authority used only in 'entra-pinned' mode (e.g. 'https://login.microsoftonline.com/<tenant>/v2.0'). The pinned bearer origin is derived from 'endpoint'; there is no separately editable origin field."
+            }
+          },
+          "examples": [
+            {
+              "kind": "oauth",
+              "endpoint": "https://mcp.example.com/",
+              "scopes": [
+                "read",
+                "write"
+              ]
+            },
+            {
+              "kind": "oauth",
+              "endpoint": "https://mcp.example.com/",
+              "clientId": "${SECRET:ExampleClientId}",
+              "scopes": [
+                "api://example/.default"
+              ]
+            }
+          ]
         }
-      }
+      ]
     },
     "approvalMode": {
       "type": "object",
@@ -82,6 +189,11 @@
         "type": "string"
       },
       "description": "Optional allow-list of tool names exposed by the server. When omitted, all tools are available."
+    },
+    "type": {
+      "enum": ["streamable", "sse", "auto"],
+      "default": "streamable",
+      "description": "MCP HTTP transport. 'streamable' = Streamable HTTP (modern, default); 'sse' = legacy HTTP+SSE; 'auto' = SDK auto-detect. Ignored for stdio:// endpoints."
     }
   }
 }

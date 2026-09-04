@@ -103,6 +103,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                         ForegroundScheduler = _foregroundScheduler,
                         CancellationToken = ct,
                     }, ct);
+                    PopulateAgentChatRef(effectiveServices, chat);
                     _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
                     newChat = chat;
                 }
@@ -169,6 +170,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                         ForegroundScheduler = _foregroundScheduler,
                         CancellationToken = ct,
                     }, ct);
+                    PopulateAgentChatRef(effectiveServices, chat);
                     _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
                     newChat = chat;
                 }
@@ -237,6 +239,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 ForegroundScheduler = _foregroundScheduler,
                 CancellationToken = ct,
             }, ct);
+            PopulateAgentChatRef(effectiveServices, chat);
             _entries[sessionId] = new Entry { AgentChat = chat, RefCount = 1 };
             newChat = chat;
         }
@@ -258,8 +261,23 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     // "preserve intentional override" branch is gone because a null override was the same silent
     // misroute (issue #1110) as no factory at all, and an intentional non-null override that
     // wasn't the outer factory would be wired past our sub-agent lifecycle bookkeeping.
+    //
+    // #1306: Also inject a fresh <see cref="AgentChatRef"/> as
+    // <see cref="AgentServices.CurrentAgentChatRef"/> so the named
+    // <c>agent-session</c> toolset registered via
+    // <see cref="ToolsetFactory.CreateAgentSessionToolsetFactory(IToolsetFactory?)"/> can resolve
+    // the parent chat when its tools are invoked. The caller populates <c>chatRef.Chat</c>
+    // after <see cref="AgentChat.CreateAsync"/> returns.
     private AgentServices WithSelfAsFactory(AgentServices baseServices)
-        => baseServices with { RunningAgentChatFactory = this };
+        => baseServices with { RunningAgentChatFactory = this, CurrentAgentChatRef = new AgentChatRef() };
+
+    private static void PopulateAgentChatRef(AgentServices effectiveServices, AgentChat chat)
+    {
+        if (effectiveServices.CurrentAgentChatRef is AgentChatRef chatRef)
+        {
+            chatRef.Chat = chat;
+        }
+    }
 
     private async ValueTask ReleaseAsync(AgentSessionId sessionId)
     {
@@ -349,11 +367,31 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     // thread-agnostic contexts such as agent tools creating sub-sessions; since the factory owns
     // the foreground scheduler, it schedules creation onto it so the invariant holds structurally
     // for every caller.
+    //
+    // #1405: the secret-materialization/consent gate runs here, on the foreground scheduler, so the
+    // GUI open-session path materializes ${SECRET:...} placeholders (and can surface the consent
+    // dialog on the UI thread) before the MCP transport is built. AgentFactory.CreateAgentChatAsync
+    // materializes on its own path; MaterializeSecretsIfNeededAsync is idempotent so a definition
+    // already carrying opaque handles is not re-scanned or re-prompted.
     private Task<AgentChat> CreateChatOnForegroundAsync(
         InternalCreateAgentChatRequest request,
         CancellationToken ct)
         => Task.Factory.StartNew(
-            () => AgentChat.CreateAsync(request),
+            async () =>
+            {
+                var (definition, services) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+                    request.AgentDefinition,
+                    request.AgentServices,
+                    manifest: null,
+                    agentSessionId: request.AgentSessionId,
+                    ct).ConfigureAwait(true);
+                var effectiveRequest = request with
+                {
+                    AgentDefinition = definition,
+                    AgentServices = services,
+                };
+                return await AgentChat.CreateAsync(effectiveRequest).ConfigureAwait(true);
+            },
             ct,
             TaskCreationOptions.DenyChildAttach,
             _foregroundScheduler).Unwrap();

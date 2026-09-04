@@ -20,10 +20,17 @@ jobs:
       AVALONIA_UI_LICENSE_KEY: ${{ secrets.AVALONIA_UI_LICENSE_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Set up build
         uses: ./.github/actions/setup-build
+
+      - name: Assert Copilot SDK version pin
+        shell: pwsh
+        run: .\packaging\validate\Assert-CopilotSdkVersion.ps1
 
       - name: Publish and package each architecture
         shell: pwsh
@@ -36,13 +43,18 @@ jobs:
             dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj `
               -c Release -r $rid -p:Version=$version -o $publishDir
             if ($LASTEXITCODE -ne 0) { throw "publish failed for $rid" }
+            # Issue #1376: assert the bundled Copilot runtime + CLI license ship in the payload.
+            # Run the startup smoke only for the host RID (win-x64 on the x64 runner).
+            $skipSmoke = $rid -ne 'win-x64'
+            .\packaging\validate\Assert-CopilotRuntimePayload.ps1 `
+              -PayloadDirectory $publishDir -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
           }
 
       - name: Upload validation assets
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: publish-validation-assets
           path: ${{ runner.temp }}/validation-assets

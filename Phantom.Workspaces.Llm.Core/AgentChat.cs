@@ -5,6 +5,7 @@ using System.Linq;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
 using MongoDB.Bson;
 using OllamaSharp;
@@ -14,6 +15,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using System.ClientModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 
@@ -38,6 +40,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly object sessionLock = new();
     private readonly InternalCreateAgentChatRequest request;
     private readonly TimeProvider timeProvider;
+    private readonly ILogger logger;
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
     private IChatClient? client;
@@ -129,6 +132,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        VerifyOnForegroundContext(request.ForegroundScheduler);
        this.request = request;
        this.timeProvider = request.TimeProvider;
+       this.logger = request.AgentServices?.LoggerFactory?.CreateLogger<AgentChat>()
+           ?? (ILogger)NullLogger<AgentChat>.Instance;
        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
@@ -211,7 +216,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        var resolvedAgentDefinition = this.request.AgentDefinition
            ?? (restoredAgentDefinitionJson is not null
-               ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
+               ? PhantomAgentSchema.AgentDefinitionFromJson(restoredAgentDefinitionJson.ToJson())
                : null);
        if (resolvedAgentDefinition is null && restoredAgent.HasValue)
        {
@@ -364,8 +369,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        // Resume the GitHub Copilot CLI session (and its model-visible history) after a restart by
        // replaying the stored SDK session id, and keep the persisted id current as new sessions are
-       // established (issue #3).
-       if (resolvedClient.GetService(typeof(CopilotSdkChatClient)) is CopilotSdkChatClient copilotSdkClient)
+       // established (issue #3). Uses the ICopilotSdkSessionSink capability so remote-hosted
+       // SDK sessions (behind ChatClientOverTransport) participate too (issue #1319).
+       if (resolvedClient.GetService(typeof(Phantom.Workspaces.Transport.Chat.ICopilotSdkSessionSink))
+               is Phantom.Workspaces.Transport.Chat.ICopilotSdkSessionSink copilotSdkClient)
        {
            var restoredCopilotSdkSessionId = restoredAgent?.CopilotSdkSessionId;
            if (!string.IsNullOrWhiteSpace(restoredCopilotSdkSessionId))
@@ -454,9 +461,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // dispatch when there is actual tool work: a tool-less agent performs no running-item
        // mutations, so skipping the dispatch keeps CreateAsync from blocking on a foreground
        // scheduler that defers execution until externally pumped (e.g. sub-agent restore tests).
-       var runtimeTools = AgentFactory.ExtractTools(resolvedAgentDefinition);
-       var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0
-           || (runtimeTools?.OfType<McpTool>().Any() ?? false);
+       var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0;
        if (hasToolWork)
        {
            await this.RunOnForegroundAsync(
@@ -488,12 +493,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     public event EventHandler? UsageChanged;
 
-    /// <summary>
-    /// Raised when a slash command or the host wants to display a one-off status message
-    /// in the chat area without persisting it to conversation history.
-    /// </summary>
-    public event EventHandler<string>? TransientNotification;
-    
     /// <summary>
     /// Fired when the completion state of this agent changes.
     /// Only relevant for sub-agents; root agents always remain in <see cref="AgentChatCompletionState.Running"/> state.
@@ -589,6 +588,22 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public long? TotalInputTokenCount { get; private set; }
 
     public long? TotalOutputTokenCount { get; private set; }
+
+    /// <summary>Session total of cache-read (prompt-cache hit) input tokens, when the provider reports them.</summary>
+    public long? TotalCacheReadTokenCount { get; private set; }
+
+    /// <summary>Session total of cache-write (prompt-cache fill) input tokens, when the provider reports them.</summary>
+    public long? TotalCacheWriteTokenCount { get; private set; }
+
+    /// <summary>Session total of reasoning tokens, when the provider reports them.</summary>
+    public long? TotalReasoningTokenCount { get; private set; }
+
+    /// <summary>Session total dollar cost in micro-USD, summed from provider-reported per-call cost.</summary>
+    public long? TotalSessionCostMicroUsd { get; private set; }
+
+    /// <summary>Session total dollar cost in USD, or <c>null</c> when no cost data is available.</summary>
+    public double? TotalSessionCostUsd
+        => this.TotalSessionCostMicroUsd is long micro ? micro / 1_000_000.0 : null;
 
     public IReadOnlyList<AgentChatToolItem> Tools => this.GetToolSnapshot();
 
@@ -795,17 +810,31 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     /// <summary>
-    /// Fires <see cref="TransientNotification"/> without touching <see cref="History"/>.
-    /// Used for slash-command status messages that should be shown as one-off inline notifications.
+    /// Adds a transient slash-command result to the visible chat history as a non-persisted
+    /// diagnostic note. The note is added to in-memory <see cref="History"/> only via
+    /// <see cref="AddHistoryItem"/>; it is never written to <c>ConfiguredStore</c>, so it does
+    /// not reappear after a reload (issue #1396).
     /// </summary>
-    public void RaiseTransientNotification(string text)
+    public void EnqueueTransientDiagnostic(string text)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
-        this.TransientNotification?.Invoke(this, text);
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                this.AddHistoryItem(new AgentChatHistoryItem
+                {
+                    Role = AgentChatHistoryItem.DiagnosticChatRole,
+                    Contents = [new TextContent(text)],
+                    Timestamp = this.timeProvider.GetUtcNow(),
+                });
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
     }
 
     /// <summary>
@@ -1010,6 +1039,23 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         lock (this.subAgentsLock)
         {
             return this.parentToolCallIdToAgentId.TryGetValue(parentToolCallId, out var agentId) ? agentId : null;
+        }
+    }
+
+    /// <summary>
+    /// Synchronously resolves a registered sub-agent by its session id from the authoritative
+    /// <see cref="subAgentTableMap"/>. The map is populated under <see cref="subAgentsLock"/> the
+    /// instant a sub-agent is registered (via <see cref="ISubAgentTable.Add"/> or lazy restore),
+    /// whereas the <see cref="SubAgents"/> observable collection is filled asynchronously on the
+    /// foreground scheduler and can lag under load. Resolving through the map closes a race
+    /// (issue #1386) where a just-registered or stop-with-disposed session was momentarily absent
+    /// from the observable collection and therefore reported "not found".
+    /// </summary>
+    internal SubAgent? TryGetRegisteredSubAgent(string sessionId)
+    {
+        lock (this.subAgentsLock)
+        {
+            return this.subAgentTableMap.TryGetValue(sessionId, out var subAgent) ? subAgent : null;
         }
     }
 
@@ -1602,25 +1648,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // Converts a slice of streaming updates into AgentChatHistoryItems. An empty slice
         // returns an empty array; no assistant placeholder is added here (that is handled by the
         // caller on the full snapshot).
-        private static async Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
-        {
-            if (updates.Length == 0)
-            {
-                return [];
-            }
-
-            var chatResponseUpdates = updates.ToAsyncEnumerable().AsChatResponseUpdatesAsync();
-            var chatResponse = await chatResponseUpdates.ToChatResponseAsync().ConfigureAwait(false);
-
-            return chatResponse.Messages
-                .Select(message => new AgentChatHistoryItem
-                {
-                    Role = message.Role,
-                    Contents = message.Contents.ToArray(),
-                    Timestamp = message.CreatedAt ?? chatResponse.CreatedAt ?? timeProvider.GetUtcNow(),
-                })
-                .ToArray();
-        }
+        private static Task<AgentChatHistoryItem[]> CoalesceSegmentAsync(AgentResponseUpdate[] updates, TimeProvider timeProvider)
+            => Task.FromResult(AgentResponseUpdateCoalescer.Coalesce(updates, timeProvider));
 
         /// <summary>
         /// For each position where the new item is structurally identical to the cached previous
@@ -2023,8 +2052,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     {
         var inputTokenCountToAdd = 0L;
         var outputTokenCountToAdd = 0L;
+        var cacheReadTokenCountToAdd = 0L;
+        var cacheWriteTokenCountToAdd = 0L;
+        var reasoningTokenCountToAdd = 0L;
+        var costMicroUsdToAdd = 0L;
         var hasInputTokenCount = false;
         var hasOutputTokenCount = false;
+        var hasCacheReadTokenCount = false;
+        var hasCacheWriteTokenCount = false;
+        var hasReasoningTokenCount = false;
+        var hasCost = false;
 
         foreach (var usageContent in update.Contents.OfType<UsageContent>())
         {
@@ -2039,10 +2076,42 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 outputTokenCountToAdd += outputTokenCount;
                 hasOutputTokenCount = true;
             }
+
+            var additionalCounts = usageContent.Details.AdditionalCounts;
+            if (additionalCounts is not null)
+            {
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.CacheReadTokensCountName, out var cacheRead))
+                {
+                    cacheReadTokenCountToAdd += cacheRead;
+                    hasCacheReadTokenCount = true;
+                }
+
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.CacheWriteTokensCountName, out var cacheWrite))
+                {
+                    cacheWriteTokenCountToAdd += cacheWrite;
+                    hasCacheWriteTokenCount = true;
+                }
+
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.ReasoningTokensCountName, out var reasoning))
+                {
+                    reasoningTokenCountToAdd += reasoning;
+                    hasReasoningTokenCount = true;
+                }
+
+                if (additionalCounts.TryGetValue(CopilotSdkStreamAdapter.CostMicroUsdCountName, out var costMicroUsd))
+                {
+                    costMicroUsdToAdd += costMicroUsd;
+                    hasCost = true;
+                }
+            }
         }
 
         var previousInputTokenCount = this.TotalInputTokenCount;
         var previousOutputTokenCount = this.TotalOutputTokenCount;
+        var previousCacheReadTokenCount = this.TotalCacheReadTokenCount;
+        var previousCacheWriteTokenCount = this.TotalCacheWriteTokenCount;
+        var previousReasoningTokenCount = this.TotalReasoningTokenCount;
+        var previousCostMicroUsd = this.TotalSessionCostMicroUsd;
 
         if (hasInputTokenCount)
         {
@@ -2054,8 +2123,32 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             this.TotalOutputTokenCount = (this.TotalOutputTokenCount ?? 0L) + outputTokenCountToAdd;
         }
 
+        if (hasCacheReadTokenCount)
+        {
+            this.TotalCacheReadTokenCount = (this.TotalCacheReadTokenCount ?? 0L) + cacheReadTokenCountToAdd;
+        }
+
+        if (hasCacheWriteTokenCount)
+        {
+            this.TotalCacheWriteTokenCount = (this.TotalCacheWriteTokenCount ?? 0L) + cacheWriteTokenCountToAdd;
+        }
+
+        if (hasReasoningTokenCount)
+        {
+            this.TotalReasoningTokenCount = (this.TotalReasoningTokenCount ?? 0L) + reasoningTokenCountToAdd;
+        }
+
+        if (hasCost)
+        {
+            this.TotalSessionCostMicroUsd = (this.TotalSessionCostMicroUsd ?? 0L) + costMicroUsdToAdd;
+        }
+
         if (this.TotalInputTokenCount != previousInputTokenCount
-            || this.TotalOutputTokenCount != previousOutputTokenCount)
+            || this.TotalOutputTokenCount != previousOutputTokenCount
+            || this.TotalCacheReadTokenCount != previousCacheReadTokenCount
+            || this.TotalCacheWriteTokenCount != previousCacheWriteTokenCount
+            || this.TotalReasoningTokenCount != previousReasoningTokenCount
+            || this.TotalSessionCostMicroUsd != previousCostMicroUsd)
         {
             this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
@@ -2218,16 +2311,28 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         await this.toolMutationLock.WaitAsync(cancellationToken);
         try
         {
-            var customToolTasks = this.runtimeContextProviderRegistrations.Select(registration => this.InitializeCustomToolRuntimeAsync(
-                registration.Tool,
-                registration.Provider,
-                registration.ErrorMessage,
-                cancellationToken));
-            var mcpToolTasks = agentTools.OfType<McpTool>().Select(tool => this.InitializeMcpRuntimeToolAsync(
-                tool,
-                this.request.AgentServices,
-                cancellationToken));
-            var results = await Task.WhenAll(customToolTasks.Concat(mcpToolTasks));
+            // MCP tools and custom toolsets now share a single source of truth: the runtime
+            // context provider registrations built by CreateRuntimeContextProviderRegistrationsAsync
+            // (issue #1395). Dispatching from the same registration list guarantees the provider
+            // that feeds the UI tool tree / diagnostic is the SAME instance already wired into
+            // chatOptions.AIContextProviders, so MCP tools reach the model.
+            var toolTasks = this.runtimeContextProviderRegistrations.Select(registration => registration.Tool switch
+            {
+                McpTool mcpTool => this.InitializeMcpRuntimeToolAsync(
+                    mcpTool,
+                    registration.Provider,
+                    cancellationToken),
+                CustomTool customTool => this.InitializeCustomToolRuntimeAsync(
+                    customTool,
+                    registration.Provider,
+                    registration.ErrorMessage,
+                    cancellationToken),
+                UnresolvedToolResourceTool unresolvedTool => this.InitializeUnresolvedToolResourceAsync(
+                    unresolvedTool,
+                    registration.ErrorMessage),
+                _ => Task.FromResult(new ToolInitializationResult([], [])),
+            });
+            var results = await Task.WhenAll(toolTasks);
             var roots = results.SelectMany(static result => result.Roots).ToList();
 
             this.ReplaceToolNodes(roots);
@@ -2269,7 +2374,9 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var customTools = agentTools.OfType<CustomTool>()
             .Where(tool => !string.Equals(tool.Kind, "chat-history", StringComparison.OrdinalIgnoreCase))
             .ToArray();
-        if (customTools.Length == 0)
+        var mcpTools = agentTools.OfType<McpTool>().ToArray();
+        var unresolvedTools = agentTools.OfType<UnresolvedToolResourceTool>().ToArray();
+        if (customTools.Length == 0 && mcpTools.Length == 0 && unresolvedTools.Length == 0)
         {
             return [];
         }
@@ -2286,8 +2393,63 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 Core.Transport.ExecutorTargetResolver.ForTool(tool));
         }).ToArray();
 
-        var registrations = await Task.WhenAll(providerTasks);
-        return registrations;
+        var customRegistrations = await Task.WhenAll(providerTasks);
+
+        // Construct the MCP provider ONCE here so the SAME instance both feeds the UI tool tree /
+        // diagnostic (InitializeMcpRuntimeToolAsync) AND is wired into chatOptions.AIContextProviders,
+        // exposing MCP tools to the model exactly like CustomTool toolsets (issue #1395). No network
+        // connection happens here — McpToolContextProvider.ProvideAIContextAsync connects lazily — so
+        // the registration/reference exists at construction time without blocking on the network.
+        var mcpRegistrations = mcpTools.Select(tool =>
+        {
+            var provider = new McpToolContextProvider(
+                tool,
+                services?.LoggerFactory,
+                Core.Transport.ExecutorTargetResolver.ForTool(tool),
+                services);
+            this.RegisterOwnedResource(provider);
+            return new RuntimeContextProviderRegistration(
+                tool,
+                provider,
+                null,
+                Core.Transport.ExecutorTargetResolver.ForTool(tool));
+        }).ToArray();
+
+        // Unresolved tool-resource placeholders register with a NULL provider (so they are never
+        // wired into chatOptions.AIContextProviders and thus never exposed to the model) plus an
+        // error message naming the missing resource. Including them here keeps hasToolWork true so
+        // InitializeMcpToolsAsync runs and emits the per-resource diagnostic (issue #1417).
+        var unresolvedRegistrations = unresolvedTools.Select(tool =>
+            new RuntimeContextProviderRegistration(
+                tool,
+                null,
+                $"Tool resource '{tool.ResourceId}:{tool.ResourceName}' could not be resolved; "
+                    + "the session loaded without it.",
+                Core.Transport.ExecutorTargetResolver.ForTool(tool))).ToArray();
+
+        return [.. customRegistrations, .. mcpRegistrations, .. unresolvedRegistrations];
+    }
+
+    private Task<ToolInitializationResult> InitializeUnresolvedToolResourceAsync(
+        UnresolvedToolResourceTool tool,
+        string? errorMessage)
+    {
+        // Emit a per-resource diagnostic naming the missing id:name and produce NO tool node and NO
+        // runtime tool. Because the registration carried a null provider, the placeholder is never
+        // wired into chatOptions.AIContextProviders, so it is never exposed to the model or the UI
+        // tool tree — the session still reaches a usable state with every resolved tool attached
+        // (issue #1417).
+        var errorText = errorMessage
+            ?? $"Tool resource '{tool.ResourceId}:{tool.ResourceName}' could not be resolved; "
+                + "the session loaded without it.";
+        var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = new AIContent[] { new ErrorContent(errorText) },
+            Timestamp = this.timeProvider.GetUtcNow(),
+        });
+        this.CompleteRunningItem(runningItem, true);
+        return Task.FromResult(new ToolInitializationResult([], []));
     }
 
     private async Task<ToolInitializationResult> InitializeCustomToolRuntimeAsync(
@@ -2422,7 +2584,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     private async Task<ToolInitializationResult> InitializeMcpRuntimeToolAsync(
         McpTool mcpTool,
-        AgentServices? services,
+        AIContextProvider? provider,
         CancellationToken cancellationToken)
     {
         var toolServerName = string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName;
@@ -2447,12 +2609,17 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 isEnabled: true,
                 status: null);
 
-            var provider = new McpToolContextProvider(
-                mcpTool,
-                services?.LoggerFactory,
-                Core.Transport.ExecutorTargetResolver.ForTool(mcpTool));
-            this.RegisterOwnedResource(provider);
+            if (provider is null)
+            {
+                throw new InvalidOperationException(
+                    $"No MCP tool provider was created for server '{displayName}'.");
+            }
 
+            // Enumerate through the SAME provider instance that was registered into
+            // chatOptions.AIContextProviders (issue #1395). This both builds the UI tool tree and,
+            // because the provider is already wired for exposure, guarantees the "Loaded tools"
+            // diagnostic below names exactly the tools the model can call — every child node is
+            // indexed enabled with a matching RuntimeTool.Name so it passes IsToolEnabledForRuntime.
             var mcpTools = await AIContextProviderToolReader.GetToolsAsync(
                 provider,
                 this.GetSession().Agent,
@@ -2492,7 +2659,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
         catch (Exception ex)
         {
-            var errorMessage = $"Failed to open MCP server '{displayName}': {ex}";
+            this.logger.LogError(ex, "Failed to open MCP server {ServerName}.", displayName);
+
+            var shortReason = ShortReason(ex);
+            var errorMessage = BuildMcpFailureDiagnostic(displayName, ex);
             this.UpdateRunningItem(runningItem, [new AgentChatHistoryItem
             {
                 Role = AgentChatHistoryItem.DiagnosticChatRole,
@@ -2509,7 +2679,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 runtimeTool: null,
                 parent: null,
                 isEnabled: false,
-                status: errorMessage);
+                status: $"Failed to open MCP server '{displayName}': {shortReason}");
             return new ToolInitializationResult([failedNode], []);
         }
         finally
@@ -2518,177 +2688,122 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
     }
 
-    private static IClientTransport CreateMcpTransport(
-        McpTool tool,
-        AgentServices? services)
+    /// <summary>
+    /// Builds the multi-line diagnostic for a failed MCP server open (issue #1408). The first line is
+    /// a concise header (<c>Failed to open MCP server '{name}': {short reason}</c>) so the chat
+    /// renderer's header/body split surfaces it as the collapsible summary; each remaining line is a
+    /// detail item: one per unwrapped exception in the chain, decoded OAuth <c>error</c>/
+    /// <c>error_description</c> when carried, and finally the stack trace. Only exception types,
+    /// messages, OAuth error codes, and the stack are emitted — never tokens, secrets, authorization
+    /// codes, or redirect URIs (issue #1408 privacy requirement).
+    /// </summary>
+    internal static string BuildMcpFailureDiagnostic(string displayName, Exception ex)
     {
-        return tool.Connection switch
-        {
-            AnonymousConnection anonymous => CreateTransportFromEndpoint(
-                anonymous.Endpoint,
-                apiKey: null,
-                tool.ServerName,
-                services?.LoggerFactory),
-            ApiKeyConnection apiKey => CreateTransportFromEndpoint(
-                apiKey.Endpoint,
-                AgentFactory.ResolveApiKey(apiKey.ApiKey, tool.ServerName),
-                tool.ServerName,
-                services?.LoggerFactory),
-            null => throw new InvalidOperationException($"MCP tool '{tool.Name}' must define a connection."),
-            _ => throw new InvalidOperationException(
-                $"MCP tool '{tool.Name}' has unsupported connection type '{tool.Connection.GetType().Name}'."),
-        };
-    }
+        var detail = new StringBuilder();
+        detail.Append($"Failed to open MCP server '{displayName}': {ShortReason(ex)}");
 
-    private static IClientTransport CreateTransportFromEndpoint(
-        string? endpoint,
-        string? apiKey,
-        string? serverName,
-        ILoggerFactory? loggerFactory)
-    {
-        if (string.IsNullOrWhiteSpace(endpoint))
+        foreach (var link in UnwrapExceptionChain(ex))
         {
-            throw new InvalidOperationException("MCP tool endpoint is required.");
+            detail.Append('\n').Append($"{link.GetType().FullName}: {link.Message}");
         }
 
-        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri))
+        if (TryDecodeOAuthError(ex, out var code, out var description))
         {
-            throw new InvalidOperationException($"MCP tool endpoint '{endpoint}' is not a valid absolute URI.");
-        }
-
-        if (string.Equals(endpointUri.Scheme, "stdio", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!string.IsNullOrWhiteSpace(apiKey))
+            detail.Append('\n').Append($"OAuth error: {code}");
+            if (!string.IsNullOrEmpty(description))
             {
-                throw new InvalidOperationException("MCP stdio transport does not support API key headers.");
+                detail.Append('\n').Append($"OAuth error_description: {description}");
             }
-
-            return CreateStdioTransport(endpointUri, serverName);
         }
 
-        return CreateHttpTransport(endpointUri, apiKey, serverName, loggerFactory);
+        if (!string.IsNullOrEmpty(ex.StackTrace))
+        {
+            detail.Append('\n').Append(ex.StackTrace);
+        }
+
+        return detail.ToString();
     }
 
-    private static IClientTransport CreateStdioTransport(Uri endpointUri, string? serverName)
+    /// <summary>
+    /// Enumerates the exception chain: yields <paramref name="ex"/>, then walks each
+    /// <see cref="Exception.InnerException"/>, flattening every
+    /// <see cref="AggregateException.InnerExceptions"/> member in order (issue #1408).
+    /// </summary>
+    internal static IEnumerable<Exception> UnwrapExceptionChain(Exception ex)
     {
-        var query = ParseUriQuery(endpointUri.Query);
-        var command = GetFirstNonEmptyValue(query, "command")
-            ?? (!string.IsNullOrWhiteSpace(endpointUri.Host) ? endpointUri.Host : null);
-        if (string.IsNullOrWhiteSpace(command))
+        if (ex is null)
         {
-            throw new InvalidOperationException(
-                "MCP stdio endpoint requires a command. Use stdio://?command=<process>.");
+            yield break;
         }
 
-        var options = new StdioClientTransportOptions
-        {
-            Command = command,
-        };
+        yield return ex;
 
-        if (!string.IsNullOrWhiteSpace(serverName))
+        if (ex is AggregateException aggregate)
         {
-            options.Name = serverName;
-        }
-
-        var argValues = GetAllValues(query, "arg");
-        if (argValues.Count > 0)
-        {
-            options.Arguments = [.. argValues];
-        }
-
-        var workingDirectory = GetFirstNonEmptyValue(query, "cwd");
-        if (!string.IsNullOrWhiteSpace(workingDirectory))
-        {
-            options.WorkingDirectory = workingDirectory;
-        }
-
-        return new StdioClientTransport(options);
-    }
-
-    private static IClientTransport CreateHttpTransport(
-        Uri endpointUri,
-        string? apiKey,
-        string? serverName,
-        ILoggerFactory? loggerFactory)
-    {
-        var transportOptions = new HttpClientTransportOptions
-        {
-            Endpoint = endpointUri,
-        };
-
-        if (!string.IsNullOrWhiteSpace(serverName))
-        {
-            transportOptions.Name = serverName;
-        }
-
-        if (!string.IsNullOrWhiteSpace(apiKey))
-        {
-            transportOptions.AdditionalHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            foreach (var inner in aggregate.InnerExceptions)
             {
-                ["Authorization"] = $"Bearer {apiKey}",
-            };
-        }
-
-        return new HttpClientTransport(transportOptions, loggerFactory);
-    }
-
-    private static Dictionary<string, List<string>> ParseUriQuery(string query)
-    {
-        var values = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-        if (string.IsNullOrWhiteSpace(query))
-        {
-            return values;
-        }
-
-        var segments = query.TrimStart('?')
-            .Split('&', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var segment in segments)
-        {
-            var separatorIndex = segment.IndexOf('=');
-            var encodedKey = separatorIndex >= 0 ? segment[..separatorIndex] : segment;
-            var encodedValue = separatorIndex >= 0 ? segment[(separatorIndex + 1)..] : string.Empty;
-
-            var key = Uri.UnescapeDataString(encodedKey);
-            var value = Uri.UnescapeDataString(encodedValue);
-            if (string.IsNullOrWhiteSpace(key))
-            {
-                continue;
+                foreach (var link in UnwrapExceptionChain(inner))
+                {
+                    yield return link;
+                }
             }
-
-            if (!values.TryGetValue(key, out var list))
+        }
+        else if (ex.InnerException is { } innerException)
+        {
+            foreach (var link in UnwrapExceptionChain(innerException))
             {
-                list = [];
-                values[key] = list;
+                yield return link;
             }
-
-            list.Add(value);
         }
-
-        return values;
     }
 
-    private static string? GetFirstNonEmptyValue(
-        IReadOnlyDictionary<string, List<string>> values,
-        string key)
+    /// <summary>
+    /// A concise single-line reason for the diagnostic header and failed-node status: the message of
+    /// the deepest (most specific) exception in the chain (issue #1408).
+    /// </summary>
+    internal static string ShortReason(Exception ex)
     {
-        if (!values.TryGetValue(key, out var candidates))
+        Exception deepest = ex;
+        foreach (var link in UnwrapExceptionChain(ex))
         {
-            return null;
+            deepest = link;
         }
 
-        return candidates.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        var message = string.IsNullOrEmpty(deepest.Message) ? deepest.GetType().Name : deepest.Message;
+        var newlineIndex = message.IndexOfAny(['\r', '\n']);
+        return newlineIndex >= 0 ? message[..newlineIndex] : message;
     }
 
-    private static IReadOnlyList<string> GetAllValues(
-        IReadOnlyDictionary<string, List<string>> values,
-        string key)
+    /// <summary>
+    /// Inspects the exception chain for a carried OAuth <c>error</c>/<c>error_description</c> (surfaced
+    /// via <see cref="Exception.Data"/> keys <c>oauth_error</c>/<c>oauth_error_description</c> by
+    /// <c>McpOAuthRedirectHandler</c>) and extracts ONLY those codes — never tokens, secrets,
+    /// authorization codes, or redirect URIs (issue #1408).
+    /// </summary>
+    internal static bool TryDecodeOAuthError(Exception ex, out string? code, out string? description)
     {
-        if (!values.TryGetValue(key, out var candidates))
+        code = null;
+        description = null;
+
+        foreach (var link in UnwrapExceptionChain(ex))
         {
-            return [];
+            if (link.Data.Contains("oauth_error")
+                && link.Data["oauth_error"] is string carriedCode
+                && !string.IsNullOrEmpty(carriedCode))
+            {
+                code = carriedCode;
+                if (link.Data.Contains("oauth_error_description")
+                    && link.Data["oauth_error_description"] is string carriedDescription
+                    && !string.IsNullOrEmpty(carriedDescription))
+                {
+                    description = carriedDescription;
+                }
+
+                return true;
+            }
         }
 
-        return candidates.Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+        return false;
     }
 
     private static string BuildCustomToolId(Tool tool)
@@ -2848,7 +2963,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         IReadOnlyList<AITool> RuntimeTools);
 
     private sealed record RuntimeContextProviderRegistration(
-        CustomTool Tool,
+        Tool Tool,
         AIContextProvider? Provider,
         string? ErrorMessage,
         Core.Transport.ExecutorTarget ExecutorTarget);

@@ -145,9 +145,46 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
 
-        Assert.True(result.IsSuccess);
+        // #1355: a not-found discovery is a failure, and still upserts no stale entity.
+        Assert.False(result.IsSuccess);
         var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
         Assert.Null(entity);
+    }
+
+    [Fact]
+    public async Task Discovery_NoRunningTunnel_ReturnsFailure()
+    {
+        var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("no tunnel running", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task Discovery_RunningTunnelFound_ReturnsSuccess()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "found-name",
+            TunnelUrl: "https://vscode.dev/tunnel/found-name",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.True(result.IsSuccess);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.NotNull(entity);
+        Assert.Equal("found-name", entity!.Value.GetProperty("tunnel-name").GetString());
     }
 
     [Fact]
@@ -338,5 +375,164 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
 
         Assert.NotEmpty(invocations);
         Assert.Contains(invocations, args => args.Contains("tunnel") && args.Contains("status"));
+    }
+
+    // ---- #1239: discovery tool reports resolved tunnel status -------------------------------
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_TunnelDiscovered_ResultContentSummarizesStatus()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "cli-reported-name",
+            TunnelUrl: "https://vscode.dev/tunnel/cli-reported-name",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(result.ResultContent);
+        Assert.Contains("cli-reported-name", result.ResultContent);
+        Assert.Contains("https://vscode.dev/tunnel/cli-reported-name", result.ResultContent);
+        Assert.Contains("True", result.ResultContent);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_TunnelDiscovered_LogsInformationSummary()
+    {
+        var logger = new TestLogger<VsCodeTunnelDiscoveryTool>();
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "cli-reported-name",
+            TunnelUrl: "https://vscode.dev/tunnel/cli-reported-name",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver,
+            logger: logger);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Information
+                && e.Message.Contains("cli-reported-name")
+                && e.Message == result.ResultContent);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_NoRunningTunnel_ResultContentSaysNoTunnel()
+    {
+        var logger = new TestLogger<VsCodeTunnelDiscoveryTool>();
+        var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver,
+            logger: logger);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        // #1355: no tunnel is a failure; the informative message is surfaced via ErrorMessage
+        // and still logged at Information.
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("no tunnel running", result.ErrorMessage);
+        Assert.Contains(
+            logger.Entries,
+            e => e.Level == LogLevel.Information && e.Message == result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_TunnelDiscovered_ResultContentExcludesRawCliOutput()
+    {
+        var logger = new TestLogger<VsCodeTunnelDiscoveryTool>();
+        var resolver = new FakeStatusResolver(new VsCodeTunnelResolution(
+            Status: new VsCodeTunnelStatus(
+                TunnelName: "cli-reported-name",
+                TunnelUrl: "https://vscode.dev/tunnel/cli-reported-name",
+                IsConnected: true),
+            CliResult: new VsCodeCliResult(0, "RAW-STDOUT-MARKER", "RAW-STDERR-MARKER"),
+            CliLaunchError: null));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver,
+            logger: logger);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.NotNull(result.ResultContent);
+        Assert.DoesNotContain("RAW-STDOUT-MARKER", result.ResultContent);
+        Assert.DoesNotContain("RAW-STDERR-MARKER", result.ResultContent);
+        Assert.DoesNotContain(
+            logger.Entries,
+            e => e.Message.Contains("RAW-STDOUT-MARKER") || e.Message.Contains("RAW-STDERR-MARKER"));
+    }
+
+    [Fact]
+    public async Task VsCodeTunnelDiscoveryTool_ResolverThrows_FailureResultUnchanged()
+    {
+        var logger = new TestLogger<VsCodeTunnelDiscoveryTool>();
+        var resolver = new FakeStatusResolver((_, _) =>
+            Task.FromException<VsCodeTunnelResolution>(new InvalidOperationException("boom")));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver,
+            logger: logger);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.ResultContent);
+        Assert.DoesNotContain(logger.Entries, e => e.Level == LogLevel.Information);
+    }
+
+    // ---- #1359: schema-correct running/not-running via the shared resolver ------------------
+
+    [Fact]
+    public async Task Discovery_TunnelConnected_UpsertsTunnelEntityAndReportsSuccess()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "daemon",
+            TunnelUrl: "https://vscode.dev/tunnel/daemon",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        Assert.True(result.IsSuccess);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.NotNull(entity);
+        Assert.Equal("daemon", entity!.Value.GetProperty("tunnel-name").GetString());
+        Assert.Equal("https://vscode.dev/tunnel/daemon", entity.Value.GetProperty("tunnel-url").GetString());
+        Assert.True(entity.Value.GetProperty("active").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Discovery_TunnelNull_ReportsNotFound()
+    {
+        var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        var result = await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        // A `{"tunnel":null,...}` status is reported as no tunnel found (aligned with #1355),
+        // not as a discovered tunnel.
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+        Assert.Contains("no tunnel running", result.ErrorMessage);
+        var entity = await GetEntityByNameAsync(dataAccessLayer, ExpectedEntityName);
+        Assert.Null(entity);
     }
 }

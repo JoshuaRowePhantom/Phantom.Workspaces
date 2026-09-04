@@ -32,6 +32,7 @@ public sealed class ScheduledToolHost
     private readonly HashSet<EntityId> runningRelationships = new();
     private readonly Dictionary<EntityId, RunningScheduledTool> runningExecutions = new();
     private readonly Dictionary<EntityId, CancellationTokenSource> runningCancellations = new();
+    private readonly HashSet<Task> inFlightRuns = new();
     private readonly object runningLock = new();
 
     public ScheduledToolHost(
@@ -67,8 +68,11 @@ public sealed class ScheduledToolHost
         => this.registry.TryGetTool(toolType, out tool!);
 
     /// <summary>
-    /// Evaluates all tool-relationships targeting the host and runs the tools whose schedules are
-    /// due. Returns the number of tools that ran.
+    /// Evaluates all tool-relationships targeting the host and dispatches the tools whose schedules
+    /// are due. Each due tool runs as its own tracked <see cref="Task"/>, so a long-lived (blocking)
+    /// tool never starves the others; the method returns the number of tools <em>dispatched</em> this
+    /// tick without awaiting their completion. The <c>runningRelationships</c> guard prevents a
+    /// relationship whose previous run is still in flight from being dispatched again.
     /// </summary>
     public async Task<int> RunDueToolsAsync(
         EntityId hostEntityId,
@@ -87,7 +91,7 @@ public sealed class ScheduledToolHost
 
         var relationships = await this.DiscoverToolRelationshipsForHostAsync(hostEntityId, cancellationToken).ConfigureAwait(false);
 
-        var ranCount = 0;
+        var dispatchedCount = 0;
         foreach (var relationship in relationships)
         {
             // A relationship that is individually paused is skipped even when its schedule is due.
@@ -96,7 +100,9 @@ public sealed class ScheduledToolHost
                 continue;
             }
 
-            // Do not start a relationship that is already running.
+            // Do not start a relationship that is already running. The guard is cleared in the run
+            // task's continuation (see DispatchRun), so it stays set for the entire lifetime of a
+            // still-running tool and re-dispatch on later ticks is correctly suppressed.
             lock (this.runningLock)
             {
                 if (!this.runningRelationships.Add(relationship.RelationshipId))
@@ -105,6 +111,7 @@ public sealed class ScheduledToolHost
                 }
             }
 
+            var dispatched = false;
             try
             {
                 if (!await this.IsDueAsync(relationship, now, cancellationToken).ConfigureAwait(false))
@@ -115,21 +122,91 @@ public sealed class ScheduledToolHost
                 // Mark the start before launching so the next evaluation sees the new last-started.
                 await this.UpdateLastStartedAsync(relationship.RelationshipId, now, cancellationToken).ConfigureAwait(false);
 
-                if (await this.RunToolAsync(relationship, hostEntityId, hostNameComponents, cancellationToken).ConfigureAwait(false))
-                {
-                    ranCount++;
-                }
+                // Start the run as its own tracked task; DO NOT await it here, so a long-lived tool
+                // cannot block this loop or the periodic tick.
+                this.DispatchRun(relationship, hostEntityId, hostNameComponents, cancellationToken);
+                dispatched = true;
+                dispatchedCount++;
             }
             finally
             {
-                lock (this.runningLock)
+                // If we did not hand ownership to a run task (not due, or the due/last-started work
+                // threw), release the guard here. When a run was dispatched, its continuation clears
+                // the guard instead.
+                if (!dispatched)
                 {
-                    this.runningRelationships.Remove(relationship.RelationshipId);
+                    lock (this.runningLock)
+                    {
+                        this.runningRelationships.Remove(relationship.RelationshipId);
+                    }
                 }
             }
         }
 
-        return ranCount;
+        return dispatchedCount;
+    }
+
+    // Starts a single tool run on its own task and arranges cleanup once it finishes. The run's
+    // running-state (runningExecutions/runningCancellations) is managed inside RunToolAsync; here we
+    // only track the task for draining and clear the per-relationship de-dup guard on completion.
+    private void DispatchRun(
+        ToolRelationship relationship,
+        EntityId hostEntityId,
+        IReadOnlyList<string> hostNameComponents,
+        CancellationToken cancellationToken)
+    {
+        lock (this.runningLock)
+        {
+            var runTask = Task.Run(() => this.RunToolAsync(relationship, hostEntityId, hostNameComponents, cancellationToken));
+
+            Task tracked = null!;
+            tracked = runTask.ContinueWith(
+                completed =>
+                {
+                    // Observe any fault so a fire-and-forget run never surfaces as an unobserved
+                    // TaskScheduler exception (which would pop a fatal crash dialog). RunToolAsync has
+                    // already logged and recorded the failure; a cancelled run has no Exception.
+                    if (completed.Exception is { } exception)
+                    {
+                        this.logger.LogError(exception, "Scheduled tool run faulted; continuing.");
+                    }
+
+                    lock (this.runningLock)
+                    {
+                        this.runningRelationships.Remove(relationship.RelationshipId);
+                        this.inFlightRuns.Remove(tracked);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+
+            this.inFlightRuns.Add(tracked);
+        }
+    }
+
+    /// <summary>
+    /// Awaits every scheduled-tool run currently in flight on this host, including their cleanup
+    /// continuations. Individual run faults and cancellations are already observed and recorded by the
+    /// run tasks, so this never throws. Intended for graceful drain and deterministic tests.
+    /// </summary>
+    public async Task WaitForRunningExecutionsAsync()
+    {
+        while (true)
+        {
+            Task[] tasks;
+            lock (this.runningLock)
+            {
+                tasks = this.inFlightRuns.ToArray();
+            }
+
+            if (tasks.Length == 0)
+            {
+                return;
+            }
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -486,7 +563,7 @@ public sealed class ScheduledToolHost
                 continue;
             }
 
-            if (await this.TryReconcileOrphanAsync(snapshot, data, cancellationToken).ConfigureAwait(false))
+            if (await this.TryReconcileOrphanAsync(snapshot, data, hostNameComponents, cancellationToken).ConfigureAwait(false))
             {
                 reconciled++;
             }
@@ -504,6 +581,7 @@ public sealed class ScheduledToolHost
     private async Task<bool> TryReconcileOrphanAsync(
         EntitySnapshot snapshot,
         JsonElement data,
+        IReadOnlyList<string> hostNameComponents,
         CancellationToken cancellationToken)
     {
         try
@@ -511,6 +589,13 @@ public sealed class ScheduledToolHost
             var node = JsonNode.Parse(data.GetRawText())!.AsObject();
             node["status"] = "failed";
             node["end-time"] = this.timeProvider.GetUtcNow().ToString("o", CultureInfo.InvariantCulture);
+
+            // #1360: backfill the queryable host-label on legacy results that predate it, so the
+            // reconciled run remains visible to host-filtered run-history queries.
+            if (node["host-label"] is null)
+            {
+                node["host-label"] = string.Join(" / ", hostNameComponents);
+            }
 
             const string reconciliationMessage = "run did not complete (process terminated or completion write failed); reconciled on startup";
 

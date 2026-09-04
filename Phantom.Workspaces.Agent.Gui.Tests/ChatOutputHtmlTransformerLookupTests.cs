@@ -442,4 +442,33 @@ public sealed class ChatOutputHtmlTransformerLookupTests
         Assert.NotNull(slot0Again);
         Assert.NotNull(slot1Again);
     }
+
+    [Fact]
+    public void FindGroupablePredecessor_AcrossMultipleAssistantTurns_ReturnsFirstToolCallSlot()
+    {
+        // Three consecutive tool-call turns with grouping-transparent result-only messages
+        // interspersed: predecessor lookup must cross all of them back to the first tool-call slot.
+        var source = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("tool_a", "call-1"),
+            ToolResultMessage("call-1", "result-1"),
+            ToolCallMessage("tool_b", "call-2"),
+            ToolResultMessage("call-2", "result-2"),
+            ToolCallMessage("tool_c", "call-3"),
+        };
+        var target = new List<RenderSlot>();
+        var sink = new RecordingSink();
+        using var transformer = MakeTransformer(source, target, sink);
+
+        var predecessor = transformer.FindGroupablePredecessor(4);
+
+        // The predecessor is the nearest groupable slot (index 2), which already belongs to the
+        // group rooted at index 0. All three tool calls end up in the same group, proving the
+        // lookup crosses AgentChatHistoryItem boundaries via grouping-transparent result messages.
+        Assert.NotNull(predecessor);
+        Assert.Same(target[2], predecessor);
+        Assert.NotNull(target[0].Group);
+        Assert.Same(target[0].Group, target[2].Group);
+        Assert.Same(target[0].Group, target[4].Group);
+    }
 }

@@ -80,6 +80,36 @@ public class LocalTransportTests
         Assert.Equal(message.GetRawText(), response.GetRawText());
     }
 
+    [Fact]
+    public async Task LocalTransport_ConnectToStreamAsync_WaitsForStreamListener()
+    {
+        // Verifies ConnectToStreamAsync does not complete until the stream listener
+        // has accepted the request and returned its lease. Before the fix, the client
+        // stream was returned immediately while listener.OnStreamOpenAsync ran on a
+        // background task, causing first-write races.
+        var listenerStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var proceedToComplete = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new TransportRegistry();
+        registry.Register(new DelayedStreamListener(listenerStarted, proceedToComplete));
+        await using var transport = new LocalTransport(registry);
+
+        var connectTask = transport.ConnectToStreamAsync(JsonDocument.Parse("{}").RootElement);
+
+        // Wait for the listener to be invoked. If ConnectToStreamAsync completed immediately
+        // (before the fix), this await would hang because the listener never gets called.
+        await listenerStarted.Task;
+
+        // The listener is now running but blocked. ConnectToStreamAsync should not be complete yet.
+        Assert.False(connectTask.IsCompleted, "ConnectToStreamAsync should not complete before listener returns.");
+
+        // Release the listener so it can return.
+        proceedToComplete.SetResult(true);
+
+        // Now the connect completes and returns a stream ready for I/O.
+        await using var stream = await connectTask;
+        Assert.NotNull(stream);
+    }
+
     private sealed class EchoListener : ITransportListener
     {
         public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
@@ -134,6 +164,25 @@ public class LocalTransportTests
 
     private sealed class DummyDisposable : IAsyncDisposable
     {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class DelayedStreamListener(
+        TaskCompletionSource<bool> listenerStarted,
+        TaskCompletionSource<bool> proceedToComplete) : ITransportListener
+    {
+        public Task<IAsyncDisposable?> OnChannelOpenAsync(JsonElement request, IMessageChannel channel, CancellationToken ct = default)
+            => Task.FromResult<IAsyncDisposable?>(null);
+
+        public async Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
+        {
+            // Signal that the listener has been invoked.
+            listenerStarted.SetResult(true);
+            // Wait for the test to verify the connect is not complete, then proceed.
+            await proceedToComplete.Task;
+            return new DummyDisposable();
+        }
+
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

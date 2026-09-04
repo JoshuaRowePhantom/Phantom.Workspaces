@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Logging;
 using Phantom.Workspaces.Services.Updates;
 
@@ -13,7 +15,12 @@ public sealed class ApplicationServices
         IUpdateController? updateController = null,
         ILoggerFactory? loggerFactory = null,
         ILogDirectoryProvider? logDirectoryProvider = null,
-        ConfigurationPersistenceService? configurationPersistence = null)
+        ConfigurationPersistenceService? configurationPersistence = null,
+        ISecretProvider? secretProvider = null,
+        ICredentialPicker? credentialPicker = null,
+        IAllowedSecretsStore? allowedSecretsStore = null,
+        IPlatformSecretStore? platformSecretStore = null,
+        object? mcpOAuthOptions = null)
     {
         this.RunningAgentChats = runningAgentChats;
         this.AgentPersistenceStoreCache = agentPersistenceStoreCache;
@@ -21,6 +28,49 @@ public sealed class ApplicationServices
         this.LoggerFactory = loggerFactory;
         this.LogDirectoryProvider = logDirectoryProvider;
         this.ConfigurationPersistence = configurationPersistence;
+        if (secretProvider is null || credentialPicker is null || allowedSecretsStore is null || platformSecretStore is null)
+        {
+            var defaults = CreateDefaultSecretServices();
+            secretProvider ??= defaults.SecretProvider;
+            credentialPicker ??= defaults.CredentialPicker;
+            allowedSecretsStore ??= defaults.AllowedSecretsStore;
+            platformSecretStore ??= defaults.PlatformSecretStore;
+        }
+
+        this.SecretProvider = secretProvider;
+        this.CredentialPicker = credentialPicker;
+        this.AllowedSecretsStore = allowedSecretsStore;
+        this.PlatformSecretStore = platformSecretStore;
+        this.McpOAuthOptions = mcpOAuthOptions;
+    }
+
+    internal static (ISecretProvider SecretProvider, ICredentialPicker CredentialPicker, IAllowedSecretsStore AllowedSecretsStore, IPlatformSecretStore PlatformSecretStore) CreateDefaultSecretServices()
+    {
+        IPlatformSecretStore platformStore;
+        if (OperatingSystem.IsWindows())
+        {
+            platformStore = new WindowsCredentialManagerSecretStore();
+        }
+        else
+        {
+            platformStore = new NullPlatformSecretStore();
+        }
+
+        var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
+        var hwndProvider = new AvaloniaHwndProvider();
+        ICredentialPicker credentialPicker;
+        if (OperatingSystem.IsWindows())
+        {
+            credentialPicker = new WindowsCredentialPicker(hwndProvider);
+        }
+        else
+        {
+            credentialPicker = new NullCredentialPicker();
+        }
+
+        var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
+        var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
+        return (secretProvider, credentialPicker, allowedSecretsStore, platformStore);
     }
 
     public IRunningAgentChatTable RunningAgentChats { get; }
@@ -44,6 +94,29 @@ public sealed class ApplicationServices
     /// the pinned AI-usage metric selection). Null in tests that don't exercise persistence.
     /// </summary>
     public ConfigurationPersistenceService? ConfigurationPersistence { get; }
+
+
+    /// <summary>The process-wide provider that materializes manifest secret requests.</summary>
+    public ISecretProvider SecretProvider { get; }
+
+    /// <summary>The process-wide picker for choosing or creating platform credentials.</summary>
+    public ICredentialPicker CredentialPicker { get; }
+
+    /// <summary>The process-wide store for remembered secret-use grants.</summary>
+    public IAllowedSecretsStore AllowedSecretsStore { get; }
+
+    /// <summary>The process-wide platform credential store.</summary>
+    public IPlatformSecretStore PlatformSecretStore { get; }
+
+    /// <summary>
+    /// The single process-wide MCP OAuth options bundle (interactive redirect handler + loopback
+    /// listener + token cache), built once by <c>App.axaml.cs</c> via <c>McpOAuthComposition</c> and
+    /// threaded to every GUI session-launch path through the shared <see cref="AgentServicesComposition"/>
+    /// so interactive MCP OAuth works on session launch (issue #1402). Typed as <see langword="object"/>
+    /// to match <c>AgentServices.McpOAuthOptions</c> and avoid a Core dependency. Null in headless
+    /// hosts (CLI / Web.Server / tests), which intentionally keep the failing default.
+    /// </summary>
+    public object? McpOAuthOptions { get; }
 
     /// <summary>
     /// The canonical URL-opening service (#1172). Populated post-construction by <c>App.axaml.cs</c>

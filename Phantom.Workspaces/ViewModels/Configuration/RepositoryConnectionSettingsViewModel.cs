@@ -20,13 +20,26 @@ public sealed class RepositoryConnectionSettingsViewModel : ViewModelBase
 
     /// <summary>Creates a view model initialized from an existing profile.</summary>
     public RepositoryConnectionSettingsViewModel(DataAccessConnectionProfile profile)
+        : this(profile, sharedRemoteAccess: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a view model initialized from an existing profile, optionally sharing the
+    /// <see cref="DevTunnelWebSettingsViewModel.TunnelName"/> with the wizard/settings-level
+    /// <see cref="RemoteAccessSettingsViewModel"/>. Used by the wizard so its DevTunnelWeb sub-view
+    /// and the Remote-access section observe the same underlying tunnel name.
+    /// </summary>
+    public RepositoryConnectionSettingsViewModel(
+        DataAccessConnectionProfile profile,
+        RemoteAccessSettingsViewModel? sharedRemoteAccess)
     {
         ArgumentNullException.ThrowIfNull(profile);
         this.mode = profile.Mode;
         this.LocalMongoContainer = new LocalMongoContainerSettingsViewModel(profile);
         this.RemoteMongo = new RemoteMongoSettingsViewModel(profile);
         this.Web = new WebSettingsViewModel(profile);
-        this.DevTunnelWeb = new DevTunnelWebSettingsViewModel(profile);
+        this.DevTunnelWeb = new DevTunnelWebSettingsViewModel(profile, sharedRemoteAccess);
 
         this.LocalMongoContainer.PropertyChanged += this.OnActiveSettingsChanged;
         this.RemoteMongo.PropertyChanged += this.OnActiveSettingsChanged;

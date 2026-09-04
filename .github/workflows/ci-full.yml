@@ -3,11 +3,10 @@ name: CI (full)
 # Runs the full suite that the fast PR gate skips: the Windows-only integration
 # tests on windows-latest and the cross-platform Docker/data-layer tests on
 # ubuntu-latest (MongoDB Atlas Local is a Linux container that cannot run on
-# hosted windows-latest). Scheduled nightly, on demand, and gated before release.
+# hosted windows-latest). Run on demand and gated before release; the nightly
+# schedule was removed so runs only happen intentionally (e.g. before a tag).
 
 on:
-  schedule:
-    - cron: "0 6 * * *"
   workflow_dispatch:
 
 concurrency:
@@ -21,11 +20,15 @@ jobs:
   windows-full:
     name: Windows build + integration tests (windows-latest)
     runs-on: windows-latest
+    timeout-minutes: 120
     env:
       AVALONIA_UI_LICENSE_KEY: ${{ secrets.AVALONIA_UI_LICENSE_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Set up build
         uses: ./.github/actions/setup-build
@@ -35,16 +38,20 @@ jobs:
         run: dotnet build Phantom.Workspaces.slnx -c Release --no-restore
 
       # windows-latest cannot start the Linux MongoDB container, so exclude the
-      # SlowDocker tests here; they run in the ubuntu-latest job below.
-      - name: Run Windows suite (excluding SlowDocker)
+      # SlowDocker tests here; they run in the ubuntu-latest job below. Also exclude
+      # RequiresLocalConsole: the hosted windows-latest ConPTY renders no cmd.exe/pwsh
+      # output bytes even though input and process exit work, so tests that assert on
+      # captured shell output cannot pass on the hosted runner. They still run under
+      # local -Mode full and local stability. Tracked by #1283.
+      - name: Run Windows suite (excluding SlowDocker and RequiresLocalConsole)
         shell: pwsh
         run: |
           dotnet test Phantom.Workspaces.slnx --no-restore --nologo -v minimal `
-            --filter "Category!=SlowDocker"
+            --filter "Category!=SlowDocker & Category!=RequiresLocalConsole"
 
       - name: Upload Windows test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-full-windows-logs
           path: scripts/test-results.log
@@ -53,11 +60,15 @@ jobs:
   linux-data-layer:
     name: Linux Docker/data-layer tests (ubuntu-latest)
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     env:
       AVALONIA_UI_LICENSE_KEY: ${{ secrets.AVALONIA_UI_LICENSE_KEY }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Set up build
         uses: ./.github/actions/setup-build
@@ -70,7 +81,7 @@ jobs:
 
       - name: Upload Linux test logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-full-linux-logs
           path: scripts/test-results.log

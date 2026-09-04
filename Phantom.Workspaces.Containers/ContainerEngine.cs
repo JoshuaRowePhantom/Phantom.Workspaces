@@ -9,6 +9,10 @@ public abstract class ContainerEngine : IAsyncDisposable
         ContainerDefinition definition,
         CancellationToken cancellationToken = default);
 
+    public abstract ValueTask PullAsync(
+        string imageName,
+        CancellationToken cancellationToken = default);
+
     public abstract ValueTask StartAsync(
         string containerName,
         CancellationToken cancellationToken = default);

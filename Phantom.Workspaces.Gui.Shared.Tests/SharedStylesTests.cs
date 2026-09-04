@@ -635,7 +635,10 @@ public sealed class SharedStylesTests
     {
         var styles = ReadSharedStylesText();
         var template = ExtractStyle(styles, EntityCardTreeTemplateSelector);
-        Assert.Contains("RowDefinitions=\"Auto,*\"", template, StringComparison.Ordinal);
+        // Issue #1347: the items row must be Auto (not *) so the header Auto row measures cleanly
+        // under the pixel-virtualizing VirtualizingStackPanel and vertical ExtentHeight accumulates.
+        Assert.Contains("RowDefinitions=\"Auto,Auto\"", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("RowDefinitions=\"Auto,*\"", template, StringComparison.Ordinal);
         Assert.Contains("ColumnDefinitions=\"20,*\"", template, StringComparison.Ordinal);
     }
 
@@ -978,7 +981,7 @@ public sealed class SharedStylesTests
     }
 
     [Fact]
-    public void EntityCardControl_HeaderAndActionsRow_MinWidthIsHundred()
+    public void EntityCardControl_HeaderAndActionsRegion_MinWidthIsHundred()
     {
         // Issue #1213: header wrap layout restores the 100px min-width floor on both the
         // display-name column and the actions row so they reflow together as a unit.
@@ -990,82 +993,237 @@ public sealed class SharedStylesTests
         var header = card[headerStart..headerEnd];
         Assert.Contains("MinWidth=\"100\"", header, StringComparison.Ordinal);
 
-        var actionsStart = card.IndexOf("Classes=\"workspace-entity-actions-row\"", StringComparison.Ordinal);
-        Assert.True(actionsStart >= 0, "Actions row must be a WrapPanel so action buttons wrap.");
-        var actionsEnd = card.IndexOf(">", actionsStart, StringComparison.Ordinal);
-        var actions = card[actionsStart..actionsEnd];
-        Assert.Contains("MinWidth=\"100\"", actions, StringComparison.Ordinal);
-
-        var styles = ReadSharedStylesText();
-        Assert.Contains("<Style Selector=\"WrapPanel.workspace-entity-actions-row\">", styles, StringComparison.Ordinal);
+        Assert.Contains("<sharedControls:EntityCardHeaderPanel", card, StringComparison.Ordinal);
+        Assert.Contains("ActionsMinWidth=\"100\"", card, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void EntityCardHeaderWrapPanel_IsWrapPanel_NotThreeColumnGrid()
+    public void EntityCardHeaderPanel_IsCustomPanel_NotWrapPanelOrGrid()
     {
-        // Issue #1213: the header container must be a wrap-capable layout so the display-name
-        // block and the actions row reflow together, not a fixed 3-column Grid.
+        // Issue #1264: the header container must own right-anchored action layout; stock
+        // WrapPanel/Grid cannot keep the rightmost actions pinned while earlier actions overflow.
         var card = ReadEntityCardControlText();
         Assert.DoesNotContain("ColumnDefinitions=\"Auto,*,Auto\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("<WrapPanel Classes=\"workspace-entity-header-wrap\"", card, StringComparison.Ordinal);
+        Assert.Contains("<sharedControls:EntityCardHeaderPanel", card, StringComparison.Ordinal);
         Assert.Contains("Classes=\"workspace-entity-header-wrap\"", card, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void EntityCardHeaderRow_HasMinWidthHundred_MatchingActionsRow()
+    public void EntityCardHeaderRow_HasMinWidthHundred_MatchingActionsRegion()
     {
         // Issue #1213: the display-name column min-width floor (100) matches the actions row.
         var styles = ReadSharedStylesText();
         var headerRow = ExtractStyle(styles, "StackPanel.workspace-entity-header-row");
         Assert.Contains("<Setter Property=\"MinWidth\" Value=\"100\" />", headerRow, StringComparison.Ordinal);
-        var actionsRow = ExtractStyle(styles, "WrapPanel.workspace-entity-actions-row");
-        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"100\" />", actionsRow, StringComparison.Ordinal);
+        var card = ReadEntityCardControlText();
+        Assert.Contains("ActionsMinWidth=\"100\"", card, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void EntityCardHeaderWrapPanel_StyleExists_IsHorizontalStretch()
+    public void EntityCardHeaderPanel_StyleExists_IsStretch()
     {
-        // Issue #1213: the header wrap panel is a horizontal, stretched wrap layout.
+        // Issue #1264: the custom panel stretches to the full card width so it can right-anchor
+        // actions against a shared edge.
         var styles = ReadSharedStylesText();
-        var wrap = ExtractStyle(styles, "WrapPanel.workspace-entity-header-wrap");
-        Assert.Contains("<Setter Property=\"Orientation\" Value=\"Horizontal\" />", wrap, StringComparison.Ordinal);
+        var wrap = ExtractStyle(styles, "controls|EntityCardHeaderPanel.workspace-entity-header-wrap");
         Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", wrap, StringComparison.Ordinal);
     }
 
-    // Issue #1213 — behavioural/rendering coverage for the header wrap layout. These render the
+    [Fact]
+    public void EntityCardActionButton_Style_SetsUniformFootprint()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button");
+
+        Assert.Contains("<Setter Property=\"Width\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Height\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Margin\" Value=\"0\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Background\" Value=\"Transparent\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"BorderThickness\" Value=\"0\" />", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_ActionButtons_UseSharedActionButtonClass()
+    {
+        var card = ReadEntityCardControlText();
+
+        Assert.Contains("Classes=\"entity-card-action-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-entity-shortcut-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-edit-indicator-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-edit-action-button\"", card, StringComparison.Ordinal);
+        Assert.DoesNotContain("Classes=\"workspace-entity-badge-button\"", card, StringComparison.Ordinal);
+    }
+
+    // ── Issue #1300: Interest badge buttons expand to their content ─────────────
+
+    [Fact]
+    public void EntityCardInterestButton_Style_DoesNotClampWidth()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button.entity-card-interest-button");
+
+        Assert.Contains("<Setter Property=\"Width\" Value=\"NaN\" />", style, StringComparison.Ordinal);
+        Assert.DoesNotContain("MaxWidth", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardInterestButton_Style_HasHorizontalPadding()
+    {
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button.entity-card-interest-button");
+
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"6,0\" />", style, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_InterestBadgeButtons_CarryInterestButtonClass()
+    {
+        var card = ReadEntityCardControlText();
+
+        Assert.Contains("Classes=\"entity-card-action-button entity-card-interest-button\"", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardControl_InterestBadgeButtons_ContentBindingUnchanged()
+    {
+        // Guardrail: issue #1300 must be width-only — the Interest button's Content and Tooltip
+        // bindings stay exactly as they were.
+        var card = ReadEntityCardControlText();
+
+        Assert.Contains("Content=\"{Binding Glyph}\"", card, StringComparison.Ordinal);
+        Assert.Contains("ToolTip.Tip=\"{Binding Tooltip}\"", card, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EntityCardActionButton_NonInterestButtons_StillUseUniformFootprint()
+    {
+        // Regression guard: the base entity-card-action-button style keeps its 28×28 footprint
+        // (only the added .entity-card-interest-button style releases the width clamp).
+        var styles = ReadSharedStylesText();
+        var style = ExtractStyle(styles, "Button.entity-card-action-button");
+
+        Assert.Contains("<Setter Property=\"Width\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"MinWidth\" Value=\"28\" />", style, StringComparison.Ordinal);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", style, StringComparison.Ordinal);
+    }
+
+    // Issue #1300 (verification retry): realized-control rendering assertion — realizes a Button
+    // with the SHIPPED entity-card-action-button + entity-card-interest-button styles applied and
+    // asserts the resulting Button width (not the raw AXAML text) fits multi-character glyph
+    // content without clipping. Mirrors the LayoutEntityCardHeader realized-control pattern below.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardInterestButton_WithMultiCharGlyph_RendersFullTextWithoutClipping()
+    {
+        var sharedStyles = LoadSharedStyles();
+        var baseStyle = sharedStyles
+            .OfType<Style>()
+            .First(s => s.Selector?.ToString() == "Button.entity-card-action-button");
+        var interestStyle = sharedStyles
+            .OfType<Style>()
+            .First(s => s.Selector?.ToString() == "Button.entity-card-action-button.entity-card-interest-button");
+        const string multiCharGlyph = "WIP";
+
+        var interestButton = new Button
+        {
+            Name = "InterestButton",
+            Content = multiCharGlyph,
+        };
+        interestButton.Classes.Add("entity-card-action-button");
+        interestButton.Classes.Add("entity-card-interest-button");
+        var plainButton = new Button
+        {
+            Name = "PlainActionButton",
+            Content = "X",
+        };
+        plainButton.Classes.Add("entity-card-action-button");
+        var stack = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+        };
+        stack.Children.Add(interestButton);
+        stack.Children.Add(plainButton);
+
+        var window = new Window
+        {
+            SizeToContent = SizeToContent.WidthAndHeight,
+            Content = stack,
+        };
+        window.Styles.Add(baseStyle);
+        window.Styles.Add(interestStyle);
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            // Measure the desired text width so we can assert the button is wide enough to
+            // show the full multi-character glyph without clipping.
+            var textBlock = new TextBlock
+            {
+                Text = multiCharGlyph,
+                FontFamily = interestButton.FontFamily,
+                FontSize = interestButton.FontSize,
+                FontWeight = interestButton.FontWeight,
+                FontStyle = interestButton.FontStyle,
+            };
+            textBlock.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var desiredTextWidth = textBlock.DesiredSize.Width;
+
+            // The interest button must grow past the 28-px clamp and comfortably fit the text.
+            Assert.True(
+                interestButton.Bounds.Width > 28,
+                $"Interest button width ({interestButton.Bounds.Width}) must exceed the 28-px "
+                + $"action-button clamp when rendering multi-character glyph '{multiCharGlyph}'.");
+            Assert.True(
+                interestButton.Bounds.Width >= desiredTextWidth,
+                $"Interest button width ({interestButton.Bounds.Width}) must fit the text's "
+                + $"desired width ({desiredTextWidth}) so glyph '{multiCharGlyph}' is not clipped.");
+
+            // Regression guard: the neighboring non-interest action button on the same style
+            // still resolves to the uniform 28-px footprint.
+            Assert.Equal(28, plainButton.Bounds.Width, precision: 1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1213 — behavioural/rendering coverage for the header wrap layout.These render the
     // shipped header styles (extracted verbatim from SharedStyles.axaml) around a header structure
     // that mirrors EntityCardControl.axaml, then run layout at narrow/wide widths and assert the
     // actual reflow behaviour, not merely the static style declarations.
 
     private static readonly string[] HeaderWrapStyleSelectors =
     {
-        "WrapPanel.workspace-entity-header-wrap",
+        "controls|EntityCardHeaderPanel.workspace-entity-header-wrap",
         "StackPanel.workspace-entity-header-row",
         "StackPanel.workspace-entity-header-row > :is(TextBlock)",
         ":is(TextBlock).workspace-entity-title",
-        "WrapPanel.workspace-entity-actions-row",
     };
 
     private const string HeaderCardTitleText = "worktree, system-defined entity display name";
 
-    private static (Window Window, WrapPanel HeaderWrap, StackPanel HeaderRow, TextBlock Title, WrapPanel ActionsRow)
+    private static (Window Window, EntityCardHeaderPanel HeaderWrap, StackPanel HeaderRow, TextBlock Title, Border Action)
         LayoutEntityCardHeader(double width, double height, string title = HeaderCardTitleText)
     {
         var styles = ReadSharedStylesText();
         var injected = string.Concat(HeaderWrapStyleSelectors.Select(s => ExtractStyle(styles, s)));
         var xaml = $$"""
-            <Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+            <Window xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls">
               <Window.Styles>
                 {{injected}}
               </Window.Styles>
-              <WrapPanel Name="HeaderWrap" Classes="workspace-entity-header-wrap"
-                         Orientation="Horizontal" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+              <controls:EntityCardHeaderPanel Name="HeaderWrap" Classes="workspace-entity-header-wrap"
+                                              ActionsMinWidth="100"
+                                              HorizontalAlignment="Stretch" VerticalAlignment="Top">
                 <StackPanel Name="HeaderRow" Classes="workspace-entity-header-row" MinWidth="100" Margin="0,0,12,0">
                   <TextBlock Name="Title" Classes="workspace-entity-title" Text="{{title}}" />
                 </StackPanel>
-                <WrapPanel Name="ActionsRow" Classes="workspace-entity-actions-row" MinWidth="100">
-                  <Border Width="90" Height="24" />
-                </WrapPanel>
-              </WrapPanel>
+                <Border Name="Action" Width="90" Height="24" />
+              </controls:EntityCardHeaderPanel>
             </Window>
             """;
         var window = (Window)AvaloniaRuntimeXamlLoader.Load(xaml);
@@ -1075,25 +1233,27 @@ public sealed class SharedStylesTests
         window.Show();
         Dispatcher.UIThread.RunJobs();
 
-        var headerWrap = window.GetVisualDescendants().OfType<WrapPanel>().First(p => p.Name == "HeaderWrap");
+        var headerWrap = window.GetVisualDescendants().OfType<EntityCardHeaderPanel>().First(p => p.Name == "HeaderWrap");
         var headerRow = window.GetVisualDescendants().OfType<StackPanel>().First(p => p.Name == "HeaderRow");
         var titleBlock = window.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "Title");
-        var actionsRow = window.GetVisualDescendants().OfType<WrapPanel>().First(p => p.Name == "ActionsRow");
-        return (window, headerWrap, headerRow, titleBlock, actionsRow);
+        var action = window.GetVisualDescendants().OfType<Border>().First(p => p.Name == "Action");
+        return (window, headerWrap, headerRow, titleBlock, action);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void EntityCardHeader_WhenNarrow_ActionsRowWrapsBelowDisplayName()
+    public void EntityCardHeader_WhenNarrow_ActionStaysTopRight()
     {
-        // When the viewport is narrower than display-name + actions on one line, the actions row
-        // moves to a new row of the header wrap panel (not squeezed beside a starved text column).
-        var (window, _, headerRow, _, actionsRow) = LayoutEntityCardHeader(width: 180, height: 400);
+        // Issue #1264: the last source-order action stays pinned to the card's top-right while
+        // the display name wraps in the remaining left-side width.
+        var (window, _, headerRow, _, action) = LayoutEntityCardHeader(width: 180, height: 400);
         try
         {
             Assert.True(
-                actionsRow.Bounds.Y >= headerRow.Bounds.Bottom - 1,
-                $"Actions row (Y={actionsRow.Bounds.Y}) should wrap below the header row " +
-                $"(bottom={headerRow.Bounds.Bottom}).");
+                Math.Abs(action.Bounds.Right - 180) < 1,
+                $"Action right edge ({action.Bounds.Right}) should align with the card right edge.");
+            Assert.True(
+                Math.Abs(action.Bounds.Y - headerRow.Bounds.Y) < 5,
+                $"Action (Y={action.Bounds.Y}) should stay on the first row with the header row (Y={headerRow.Bounds.Y}).");
         }
         finally
         {
@@ -1105,7 +1265,7 @@ public sealed class SharedStylesTests
     public void EntityCardHeader_WhenNarrow_DisplayNameWrapsOnWordBoundaries()
     {
         // The title TextBlock breaks at whitespace, not mid-word, when the header wraps.
-        var (window, _, _, title, _) = LayoutEntityCardHeader(width: 180, height: 400);
+        var (window, _, _, title, _) = LayoutEntityCardHeader(width: 240, height: 400);
         try
         {
             Assert.Equal(Avalonia.Media.TextWrapping.Wrap, title.TextWrapping);
@@ -1141,19 +1301,100 @@ public sealed class SharedStylesTests
     [AvaloniaFact(Timeout = 15_000)]
     public void EntityCardHeader_WhenWide_DisplayNameAndActionsShareOneRow()
     {
-        // With ample width the header remains a single row: display-name StackPanel and actions
-        // WrapPanel are laid out side-by-side.
-        var (window, _, headerRow, _, actionsRow) = LayoutEntityCardHeader(width: 1400, height: 400);
+        // With ample width the header remains a single row and actions are right-aligned to the
+        // full card edge, not merely placed after the display-name's desired width.
+        var (window, _, headerRow, _, action) = LayoutEntityCardHeader(width: 1400, height: 400);
         try
         {
             Assert.True(
-                Math.Abs(actionsRow.Bounds.Y - headerRow.Bounds.Y) < 5,
-                $"Header row (Y={headerRow.Bounds.Y}) and actions row (Y={actionsRow.Bounds.Y}) " +
+                Math.Abs(action.Bounds.Y - headerRow.Bounds.Y) < 5,
+                $"Header row (Y={headerRow.Bounds.Y}) and action (Y={action.Bounds.Y}) " +
                 "should share one row when wide.");
             Assert.True(
-                actionsRow.Bounds.X >= headerRow.Bounds.Right - 1,
-                $"Actions row (X={actionsRow.Bounds.X}) should sit to the right of the header row " +
-                $"(right={headerRow.Bounds.Right}).");
+                Math.Abs(action.Bounds.Right - 1400) < 1,
+                $"Action right edge ({action.Bounds.Right}) should align with the card right edge.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_ActionsRow_RightEdgeAlignsAcrossCards()
+    {
+        // Issue #1264: the user-visible outcome — action buttons form a consistent right-hand column
+        // across every card regardless of display-name width. Two stacked headers with very different
+        // display-name lengths must right-align their actions to the same edge at a shared viewport.
+        var styles = ReadSharedStylesText();
+        var injected = string.Concat(HeaderWrapStyleSelectors.Select(s => ExtractStyle(styles, s)));
+        var xaml = $$"""
+            <Window xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:controls="using:Phantom.Workspaces.Gui.Shared.Controls">
+              <Window.Styles>
+                {{injected}}
+              </Window.Styles>
+              <StackPanel>
+                <controls:EntityCardHeaderPanel Classes="workspace-entity-header-wrap"
+                                                ActionsMinWidth="100" HorizontalAlignment="Stretch">
+                  <StackPanel Classes="workspace-entity-header-row" MinWidth="100" Margin="0,0,12,0">
+                    <TextBlock Classes="workspace-entity-title" Text="short" />
+                  </StackPanel>
+                  <Border Name="ActionA" Width="90" Height="24" />
+                </controls:EntityCardHeaderPanel>
+                <controls:EntityCardHeaderPanel Classes="workspace-entity-header-wrap"
+                                                ActionsMinWidth="100" HorizontalAlignment="Stretch">
+                  <StackPanel Classes="workspace-entity-header-row" MinWidth="100" Margin="0,0,12,0">
+                    <TextBlock Classes="workspace-entity-title"
+                               Text="a considerably longer system-defined display name that differs" />
+                  </StackPanel>
+                  <Border Name="ActionB" Width="90" Height="24" />
+                </controls:EntityCardHeaderPanel>
+              </StackPanel>
+            </Window>
+            """;
+        var window = (Window)AvaloniaRuntimeXamlLoader.Load(xaml);
+        window.SizeToContent = SizeToContent.Manual;
+        window.Width = 800;
+        window.Height = 400;
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+        try
+        {
+            var actionA = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "ActionA");
+            var actionB = window.GetVisualDescendants().OfType<Border>().First(b => b.Name == "ActionB");
+
+            Assert.Equal(actionA.Bounds.Right, actionB.Bounds.Right, precision: 1);
+            Assert.Equal(800, actionA.Bounds.Right, precision: 1);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_DisplayName_WrapsWithinRemainingSpaceWhenNarrow()
+    {
+        // Issue #1264: at a narrow viewport the title actually reflows onto multiple lines within
+        // the space that remains beside the right-anchored first-row action — a behavioural check,
+        // not merely TextWrapping=Wrap.
+        var (window, _, headerRow, title, action) = LayoutEntityCardHeader(width: 240, height: 400);
+        try
+        {
+            Assert.True(
+                title.TextLayout.TextLines.Count >= 2,
+                $"Expected the title to wrap; got {title.TextLayout.TextLines.Count} line(s).");
+
+            // The display column must not overlap the first-row action, and every rendered title line
+            // fits within the display column's width (PanelWidth − FirstRowActionsWidth).
+            Assert.True(
+                headerRow.Bounds.Right <= action.Bounds.X + 0.5,
+                $"Display column (right={headerRow.Bounds.Right}) must not overlap the action (X={action.Bounds.X}).");
+            Assert.True(
+                title.Bounds.Width <= headerRow.Bounds.Width + 0.5,
+                $"Title width ({title.Bounds.Width}) must stay within the display column ({headerRow.Bounds.Width}).");
         }
         finally
         {
@@ -1659,7 +1900,7 @@ public sealed class SharedStylesTests
           <Setter Property="MinWidth" Value="160" />
           <Setter Property="Template">
             <ControlTemplate>
-              <Grid RowDefinitions="Auto,*" ColumnDefinitions="20,*" HorizontalAlignment="Stretch">
+              <Grid RowDefinitions="Auto,Auto" ColumnDefinitions="20,*" HorizontalAlignment="Stretch">
                 <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Padding="6" BorderThickness="1" HorizontalAlignment="Stretch">
                   <ContentControl HorizontalAlignment="Stretch"
                                   Content="{TemplateBinding Header}"

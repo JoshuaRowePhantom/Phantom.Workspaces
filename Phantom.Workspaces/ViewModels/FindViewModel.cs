@@ -33,7 +33,8 @@ public sealed class FindViewModel : ViewModelBase
         public MatchWhere Where { get; }
     }
 
-    private readonly EntityListViewModel list;
+    private ViewPopulationViewModel? population;
+    private readonly EntityListViewModel? legacyList;
     private readonly Action<EntityCardViewModel>? bringIntoView;
     private readonly List<Match> matches = new();
     private readonly HashSet<EntityCardViewModel> sessionOpenedJsonCards = new();
@@ -44,10 +45,10 @@ public sealed class FindViewModel : ViewModelBase
     private EntityCardViewModel? restoreTarget;
 
     public FindViewModel(
-        EntityListViewModel list,
+        ViewPopulationViewModel? population = null,
         Action<EntityCardViewModel>? bringIntoView = null)
     {
-        this.list = list;
+        this.population = population;
         this.bringIntoView = bringIntoView;
         this.OpenCommand = new RelayCommand(_ => this.Open());
         this.CloseCommand = new RelayCommand(_ => this.Close());
@@ -59,7 +60,27 @@ public sealed class FindViewModel : ViewModelBase
             _ => this.matches.Count > 0);
     }
 
-    public EntityListViewModel List => this.list;
+    /// <summary>
+    /// Legacy constructor for the entity-browser tab path, which still operates on
+    /// <see cref="EntityListViewModel"/>. Out of scope for #1256.
+    /// </summary>
+    public FindViewModel(
+        EntityListViewModel list,
+        Action<EntityCardViewModel>? bringIntoView = null)
+    {
+        this.legacyList = list;
+        this.bringIntoView = bringIntoView;
+        this.OpenCommand = new RelayCommand(_ => this.Open());
+        this.CloseCommand = new RelayCommand(_ => this.Close());
+        this.NextCommand = new RelayCommand(
+            _ => this.Move(+1),
+            _ => this.matches.Count > 0);
+        this.PreviousCommand = new RelayCommand(
+            _ => this.Move(-1),
+            _ => this.matches.Count > 0);
+    }
+
+    public ViewPopulationViewModel? Population => this.population;
 
     public RelayCommand OpenCommand { get; }
 
@@ -136,6 +157,36 @@ public sealed class FindViewModel : ViewModelBase
 
     public EntityCardViewModel? CurrentCard => this.CurrentMatch?.Node.Card;
 
+    /// <summary>
+    /// Replaces the active population target. Called by MainWindowViewModel when
+    /// CurrentViewPopulation swaps.
+    /// </summary>
+    public void SetPopulation(ViewPopulationViewModel? newPopulation)
+    {
+        this.population = newPopulation;
+        this.ReapplyToPopulation();
+    }
+
+    /// <summary>
+    /// Re-applies the active find state (query + hide-unmatched) to the current population.
+    /// </summary>
+    public void ReapplyToPopulation()
+    {
+        if (this.population is null)
+        {
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(this.query))
+        {
+            this.Recompute(previousShortened: false);
+        }
+        else
+        {
+            this.population.ApplyFind(null, this.hideUnmatched);
+        }
+    }
+
     public void Open()
     {
         if (this.IsOpen)
@@ -143,15 +194,27 @@ public sealed class FindViewModel : ViewModelBase
             return;
         }
 
-        // Capture the card that was selected before the session started, so backspace can
-        // restore it as the query shortens.
         this.restoreTarget = null;
-        foreach (var item in this.list.Items)
+        if (this.population is not null)
         {
-            if (item.Node.Card.IsSelected)
+            foreach (var entity in this.population.Entities)
             {
-                this.restoreTarget = item.Node.Card;
-                break;
+                if (entity.EntityCardNode.Card.IsSelected)
+                {
+                    this.restoreTarget = entity.EntityCardNode.Card;
+                    break;
+                }
+            }
+        }
+        else if (this.legacyList is not null)
+        {
+            foreach (var item in this.legacyList.Items)
+            {
+                if (item.Node.Card.IsSelected)
+                {
+                    this.restoreTarget = item.Node.Card;
+                    break;
+                }
             }
         }
 
@@ -160,10 +223,17 @@ public sealed class FindViewModel : ViewModelBase
 
     public void Close()
     {
-        // Restore all visibility, but keep the current selection on the found item.
-        this.list.ClearFindFilter();
+        // Restore all visibility.
+        if (this.population is not null)
+        {
+            this.population.ApplyFind(null, false);
+        }
+        else
+        {
+            this.legacyList?.ClearFindFilter();
+        }
 
-        // Revert only session-opened JSON views. Do not touch cards the user had open before.
+        // Revert only session-opened JSON views.
         foreach (var card in this.sessionOpenedJsonCards)
         {
             if (card != this.CurrentCard)
@@ -175,7 +245,6 @@ public sealed class FindViewModel : ViewModelBase
 
         this.IsOpen = false;
 
-        // Leave selection on the last found item, kept in view.
         if (this.CurrentCard is { } card2)
         {
             this.bringIntoView?.Invoke(card2);
@@ -207,9 +276,6 @@ public sealed class FindViewModel : ViewModelBase
 
         var displayName = card.DisplayName;
         var entityType = card.EntityType;
-        // #1200: guard against empty display-name / entity-type explicitly. "".Contains(query)
-        // is always false for non-empty query, so an empty display name would silently zero
-        // the card-text branch even if the primary fix regresses.
         var inCardText =
             (!string.IsNullOrEmpty(displayName) && displayName.Contains(query, StringComparison.OrdinalIgnoreCase))
             || (!string.IsNullOrEmpty(entityType) && entityType.Contains(query, StringComparison.OrdinalIgnoreCase));
@@ -229,24 +295,48 @@ public sealed class FindViewModel : ViewModelBase
 
     private void Recompute(bool previousShortened)
     {
+        if (this.population is null && this.legacyList is null)
+        {
+            return;
+        }
+
         var previousCard = this.CurrentCard;
 
         this.matches.Clear();
-        foreach (var node in this.list.EnumerateInOrder())
+
+        if (this.population is not null)
         {
-            var where = ComputeMatchWhere(node.Card, this.query);
-            if (where != MatchWhere.None)
+            foreach (var node in EnumerateNodes(this.population))
             {
-                this.matches.Add(new Match(node, where));
+                var where = ComputeMatchWhere(node.Card, this.query);
+                if (where != MatchWhere.None)
+                {
+                    this.matches.Add(new Match(node, where));
+                }
             }
 
-            // Highlight the match query on every card so the highlight run appears / disappears.
-            node.Card.MatchQuery = this.query;
+            // Fan out search query and recompute visibility via the population.
+            this.population.ApplyFind(
+                string.IsNullOrEmpty(this.query) ? null : this.query,
+                this.hideUnmatched);
+        }
+        else if (this.legacyList is not null)
+        {
+            foreach (var node in this.legacyList.EnumerateInOrder())
+            {
+                var where = ComputeMatchWhere(node.Card, this.query);
+                if (where != MatchWhere.None)
+                {
+                    this.matches.Add(new Match(node, where));
+                }
+
+                node.Card.SearchQuery = this.query;
+            }
+
+            this.LegacyApplyFilter();
         }
 
-        // Restore-current-on-backspace: if the previously current entity is now (again) a match
-        // and the user is deleting characters, restore selection to it. Otherwise, prefer the
-        // pre-session restore target if it is a match again.
+        // Restore-current-on-backspace.
         int idx = -1;
         if (previousShortened)
         {
@@ -268,7 +358,6 @@ public sealed class FindViewModel : ViewModelBase
 
         this.currentIndex = idx;
 
-        this.ApplyFilter();
         this.Activate();
 
         this.NextCommand.RaiseCanExecuteChanged();
@@ -281,28 +370,54 @@ public sealed class FindViewModel : ViewModelBase
 
     private void ApplyFilter()
     {
+        if (this.population is not null)
+        {
+            this.population.ApplyFind(
+                string.IsNullOrEmpty(this.query) ? null : this.query,
+                this.hideUnmatched);
+        }
+        else if (this.legacyList is not null)
+        {
+            this.LegacyApplyFilter();
+        }
+    }
+
+    private void LegacyApplyFilter()
+    {
         if (string.IsNullOrEmpty(this.query))
         {
-            this.list.ClearFindFilter();
+            this.legacyList!.ClearFindFilter();
             return;
         }
 
-        this.list.ApplyFindFilter(this.matches, this.hideUnmatched);
+        this.legacyList!.ApplyFindFilter(this.matches, this.hideUnmatched);
     }
 
     private void Activate()
     {
-        // Clear IsSelected on every card in the list to reset prior selection.
-        foreach (var item in this.list.Items)
+        if (this.population is not null)
         {
-            if (item.Node.Card.IsSelected && item.Node.Card != this.CurrentCard)
+            foreach (var entity in this.population.Entities)
             {
-                item.Node.Card.IsSelected = false;
+                var card = entity.EntityCardNode.Card;
+                if (card.IsSelected && card != this.CurrentCard)
+                {
+                    card.IsSelected = false;
+                }
+            }
+        }
+        else if (this.legacyList is not null)
+        {
+            foreach (var item in this.legacyList.Items)
+            {
+                if (item.Node.Card.IsSelected && item.Node.Card != this.CurrentCard)
+                {
+                    item.Node.Card.IsSelected = false;
+                }
             }
         }
 
-        // Revert any session-opened JSON views for cards other than the new current, so
-        // navigating away restores card view (only for cards the session opened).
+        // Revert any session-opened JSON views for cards other than the new current.
         var current = this.CurrentCard;
         var toRevert = new List<EntityCardViewModel>();
         foreach (var opened in this.sessionOpenedJsonCards)
@@ -335,5 +450,28 @@ public sealed class FindViewModel : ViewModelBase
         }
 
         this.bringIntoView?.Invoke(match.Node.Card);
+    }
+
+    private static IEnumerable<EntityListNodeViewModel> EnumerateNodes(ViewPopulationViewModel population)
+    {
+        foreach (var root in population.RootEntities)
+        {
+            foreach (var node in EnumerateDepthFirst(root))
+            {
+                yield return node;
+            }
+        }
+    }
+
+    private static IEnumerable<EntityListNodeViewModel> EnumerateDepthFirst(ViewEntityViewModel entity)
+    {
+        yield return entity.EntityCardNode;
+        foreach (var child in entity.Children)
+        {
+            foreach (var node in EnumerateDepthFirst(child))
+            {
+                yield return node;
+            }
+        }
     }
 }

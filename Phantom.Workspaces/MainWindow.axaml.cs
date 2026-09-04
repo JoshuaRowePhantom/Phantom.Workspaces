@@ -6,6 +6,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
 using Phantom.Workspaces.ViewModels.Configuration;
@@ -14,6 +15,9 @@ namespace Phantom.Workspaces;
 
 public partial class MainWindow : Window
 {
+    private bool ctrlIsDown;
+    private bool navStackIntentSeenWhileCtrlDown;
+
     public MainWindow()
         : this(new MainWindowViewModel(new UnknownRepositorySource()))
     {
@@ -25,6 +29,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         AddDockDataTemplates();
         this.DataContext = viewModel;
+        viewModel.OpenCredentialManagerRequested += this.OnOpenCredentialManagerRequested;
         this.AddHandler(InputElement.KeyDownEvent, this.OnPreviewKeyDown, RoutingStrategies.Tunnel);
         this.AddHandler(InputElement.KeyUpEvent, this.OnPreviewKeyUp, RoutingStrategies.Tunnel);
         this.Deactivated += (_, _) =>
@@ -60,8 +65,21 @@ public partial class MainWindow : Window
 
         if (e.Key is Key.LeftCtrl or Key.RightCtrl)
         {
-            viewModel.NavStackPopup.OpenAtCurrentPosition();
+            this.ctrlIsDown = true;
+            this.navStackIntentSeenWhileCtrlDown = false;
             return;
+        }
+
+        if (this.ctrlIsDown
+            && (e.Key is Key.Tab or Key.Up or Key.Down)
+            && (e.KeyModifiers & KeyModifiers.Control) != 0)
+        {
+            if (!viewModel.NavStackPopup.IsOpen)
+            {
+                viewModel.NavStackPopup.OpenAtCurrentPosition();
+            }
+
+            this.navStackIntentSeenWhileCtrlDown = true;
         }
 
         // Ctrl+Up / Ctrl+Down: move the nav-stack popup selection without navigating.
@@ -213,17 +231,61 @@ public partial class MainWindow : Window
         scheduledTasksViewModel.Dispose();
     }
 
+    private void OnOpenCredentialManagerClicked(
+        object? sender,
+        RoutedEventArgs e)
+    {
+        if (this.DataContext is MainWindowViewModel viewModel)
+        {
+            viewModel.OpenCredentialManagerCommand.Execute(null);
+        }
+    }
+
+    private async void OnOpenCredentialManagerRequested()
+    {
+        await this.OpenCredentialManagerAsync();
+    }
+
+    /// <summary>The most recently opened credential-manager dialog window (test observation, #1267).</summary>
+    internal CredentialManagerDialogWindow? LastCredentialManagerDialog { get; private set; }
+
+    private async Task OpenCredentialManagerAsync()
+    {
+        if (this.DataContext is not MainWindowViewModel viewModel)
+        {
+            return;
+        }
+
+        var services = viewModel.ApplicationServices;
+        var managerViewModel = new CredentialManagerDialogViewModel(
+            services.AllowedSecretsStore,
+            services.PlatformSecretStore,
+            services.CredentialPicker,
+            new SecretMemoryEnumerator(services.AllowedSecretsStore, services.PlatformSecretStore));
+        await managerViewModel.LoadAsync();
+
+        var window = new CredentialManagerDialogWindow(managerViewModel);
+        this.LastCredentialManagerDialog = window;
+        await window.ShowDialog(this);
+    }
+
     private void OnPreviewKeyUp(object? sender, KeyEventArgs e)
     {
         if (this.DataContext is not MainWindowViewModel viewModel) return;
 
         if (e.Key is Key.LeftCtrl or Key.RightCtrl)
         {
-            var historyIndex = viewModel.NavStackPopup.CommitAndBeginFade();
-            if (historyIndex >= 0)
+            this.ctrlIsDown = false;
+            if (this.navStackIntentSeenWhileCtrlDown)
             {
-                viewModel.NavigateToHistoryEntry(historyIndex);
+                var historyIndex = viewModel.NavStackPopup.CommitAndBeginFade();
+                if (historyIndex >= 0)
+                {
+                    viewModel.NavigateToHistoryEntry(historyIndex);
+                }
             }
+
+            this.navStackIntentSeenWhileCtrlDown = false;
             return;
         }
 

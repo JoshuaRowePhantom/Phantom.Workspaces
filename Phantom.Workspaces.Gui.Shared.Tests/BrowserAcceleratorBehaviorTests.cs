@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Windows.Input;
@@ -494,6 +495,210 @@ public sealed class BrowserAcceleratorBehaviorTests
             System.Diagnostics.Trace.Listeners.Remove(listener);
             listener.Dispose();
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Non-captured accelerator keys (#1255) — gestures declared in NonCapturedAcceleratorKeys must
+    // be left for the hosted WebView2 page (e.g. Ctrl+F -> in-page find) rather than forwarded into
+    // the Avalonia routed pipeline / ancestor KeyBinding walk.
+    // ---------------------------------------------------------------------------------------------
+
+    [AvaloniaFact]
+    public void Dispatch_WhenGestureIsInNonCapturedList_DoesNotRaiseRoutedKeyDown()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+        BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(
+            host,
+            new List<KeyGesture> { new(Key.F, KeyModifiers.Control) });
+
+        KeyEventArgs? seen = null;
+        host.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) => seen = e,
+            RoutingStrategies.Bubble);
+
+        host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+
+        Assert.Null(seen);
+    }
+
+    [AvaloniaFact]
+    public void Dispatch_WhenGestureIsInNonCapturedList_DoesNotInvokeAncestorKeyBinding()
+    {
+        var host = new TestBrowserHost();
+        var findCommand = new RecordingCommand();
+        var window = new Window
+        {
+            Content = host,
+            KeyBindings =
+            {
+                new KeyBinding
+                {
+                    Gesture = new KeyGesture(Key.F, KeyModifiers.Control),
+                    Command = findCommand,
+                },
+            },
+        };
+        window.Show();
+        try
+        {
+            BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+            BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(
+                host,
+                new List<KeyGesture> { new(Key.F, KeyModifiers.Control) });
+
+            host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+
+            Assert.Equal(0, findCommand.InvokeCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Dispatch_WhenGestureIsInNonCapturedList_LeavesEventHandledFalse()
+    {
+        var host = new TestBrowserHost();
+        var window = new Window
+        {
+            Content = host,
+            KeyBindings =
+            {
+                new KeyBinding
+                {
+                    Gesture = new KeyGesture(Key.F, KeyModifiers.Control),
+                    Command = new RecordingCommand(),
+                },
+            },
+        };
+        window.Show();
+        try
+        {
+            BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+            BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(
+                host,
+                new List<KeyGesture> { new(Key.F, KeyModifiers.Control) });
+
+            var args = new AcceleratorKeyEventArgs(KindKeyDown, Key.F, KeyModifiers.Control);
+            host.RaiseAccelerator(args);
+
+            Assert.False(args.Handled);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Dispatch_WhenGestureIsNotInNonCapturedList_StillForwardsToAncestorKeyBinding()
+    {
+        var host = new TestBrowserHost();
+        var closeCommand = new RecordingCommand();
+        var window = new Window
+        {
+            Content = host,
+            KeyBindings =
+            {
+                new KeyBinding
+                {
+                    Gesture = new KeyGesture(Key.W, KeyModifiers.Control),
+                    Command = closeCommand,
+                },
+            },
+        };
+        window.Show();
+        try
+        {
+            BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+            BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(
+                host,
+                new List<KeyGesture> { new(Key.F, KeyModifiers.Control) });
+
+            // Ctrl+W is not in the non-captured list, so it must still fire the ancestor binding.
+            host.RaiseAccelerator(KindKeyDown, Key.W, KeyModifiers.Control);
+
+            Assert.Equal(1, closeCommand.InvokeCount);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact]
+    public void Dispatch_WhenNonCapturedListIsNull_ForwardsAllGesturesAsBefore()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+        KeyEventArgs? seen = null;
+        host.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) => seen = e,
+            RoutingStrategies.Bubble);
+
+        host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+
+        Assert.NotNull(seen);
+        Assert.Equal(Key.F, seen!.Key);
+    }
+
+    [AvaloniaFact]
+    public void Dispatch_WhenNonCapturedListIsEmpty_ForwardsAllGesturesAsBefore()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+        BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(host, new List<KeyGesture>());
+
+        KeyEventArgs? seen = null;
+        host.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, e) => seen = e,
+            RoutingStrategies.Bubble);
+
+        host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+
+        Assert.NotNull(seen);
+    }
+
+    [AvaloniaFact]
+    public void NonCapturedAcceleratorKeys_WhenPropertyUpdatedAtRuntime_TakesEffectOnNextDispatch()
+    {
+        var host = new TestBrowserHost();
+        var parent = new StackPanel();
+        parent.Children.Add(host);
+        BrowserAcceleratorBehavior.SetIsEnabled(host, true);
+
+        var count = 0;
+        host.AddHandler(
+            InputElement.KeyDownEvent,
+            (_, _) => count++,
+            RoutingStrategies.Bubble);
+
+        // Initially not exempted: Ctrl+F is forwarded.
+        host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+        Assert.Equal(1, count);
+
+        // Now exempt Ctrl+F: no further routed KeyDown.
+        var list = new List<KeyGesture> { new(Key.F, KeyModifiers.Control) };
+        BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(host, list);
+        host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+        Assert.Equal(1, count);
+
+        // Remove the exemption again: forwarding resumes without re-attaching.
+        list.Clear();
+        host.RaiseAccelerator(KindKeyDown, Key.F, KeyModifiers.Control);
+        Assert.Equal(2, count);
     }
 }
 

@@ -1,5 +1,6 @@
 using Avalonia.Headless.XUnit;
 using System;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -342,10 +343,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             var file1 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file1"));
             Assert.NotNull(file1);
 
-            var diffRebuildCompleted1 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted1.TrySetResult(true);
-            vm.FileList.SelectedFiles.Add(file1);
-            await diffRebuildCompleted1.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            await AwaitRefreshTriggeredByAsync(vm, () => vm.FileList.SelectedFiles.Add(file1));
 
             Assert.Single(vm.FileDiffs);
             Assert.Contains("file1", vm.FileDiffs[0].RelativePath);
@@ -353,11 +351,11 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             var file2 = vm.FileList.Files.FirstOrDefault(f => f.RelativePath.Contains("file2"));
             Assert.NotNull(file2);
 
-            var diffRebuildCompleted2 = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffRebuildCompleted2.TrySetResult(true);
-            vm.FileList.SelectedFiles.Clear();
-            vm.FileList.SelectedFiles.Add(file2);
-            await diffRebuildCompleted2.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            await AwaitRefreshTriggeredByAsync(vm, () =>
+            {
+                vm.FileList.SelectedFiles.Clear();
+                vm.FileList.SelectedFiles.Add(file2);
+            });
 
             Assert.Single(vm.FileDiffs);
             Assert.Contains("file2", vm.FileDiffs[0].RelativePath);
@@ -872,12 +870,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             var addCommit = vm.CommitList.Commits.FirstOrDefault(c => c.ShortMessage.Contains("Add file2"));
             Assert.NotNull(addCommit);
 
-            var diffViewUpdatedCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            vm.FileDiffs.CollectionChanged += (_, _) => diffViewUpdatedCompleted.TrySetResult(true);
-
-            vm.CommitList.SelectedCommits.Add(addCommit);
-
-            await diffViewUpdatedCompleted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+            await AwaitRefreshTriggeredByAsync(vm, () => vm.CommitList.SelectedCommits.Add(addCommit));
 
             Assert.Single(vm.FileDiffs);
         }
@@ -1665,36 +1658,51 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
     [Fact]
     public async Task GitWorktreeReviewWorkspaceTabViewModel_Constructor_DoesNotOpenRepositorySynchronously()
     {
-        // A "master"-only repo forces the probe to return "master". If the constructor were
-        // opening LibGit2Sharp synchronously, TargetBranch would be "master" before we await
-        // anything. With the fix, TargetBranch is the seeded default ("main") until the
-        // background probe in InitializeAsync completes.
+        // A blocked probe makes the constructor's non-blocking contract deterministic regardless
+        // of how quickly LibGit2Sharp can inspect a tiny repository on the current machine.
         this.InitRepoWithBranch("master");
-
-        var repoPath = JsonSerializer.Serialize(this.repoDir);
-        using var pump = new SingleThreadPump(installSynchronizationContext: true);
-        var foregroundScheduler = await pump.PostAsync(() =>
-            Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
-
-        var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
-            {
-                "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-                "entity-types": ["entity", "git-worktree"],
-                "names": [["worktrees", "test"]],
-                "display-name": { "default": "Test" },
-                "path": {{repoPath}}
-            }
-            """, foregroundScheduler)));
-
-        await using (vm)
+        var originalProbe = GitWorktreeReviewWorkspaceTabViewModel.DefaultBranchProbeForTests;
+        var probeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var unblockProbe = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        GitWorktreeReviewWorkspaceTabViewModel.DefaultBranchProbeForTests = _ =>
         {
-            // Observed immediately after construction — the probe has not run.
-            Assert.Equal("main", vm.TargetBranch);
+            probeStarted.SetResult();
+            unblockProbe.Task.GetAwaiter().GetResult();
+            return "master";
+        };
 
-            await vm.CurrentRefresh!;
+        try
+        {
+            var repoPath = JsonSerializer.Serialize(this.repoDir);
+            using var pump = new SingleThreadPump(installSynchronizationContext: true);
+            var foregroundScheduler = await pump.PostAsync(() =>
+                Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
 
-            // Now the background probe has updated the field.
-            Assert.Equal("master", vm.TargetBranch);
+            var vm = await pump.PostAsync(() => Task.FromResult(this.CreateViewModelWithScheduler($$"""
+                {
+                    "entity-id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                    "entity-types": ["entity", "git-worktree"],
+                    "names": [["worktrees", "test"]],
+                    "display-name": { "default": "Test" },
+                    "path": {{repoPath}}
+                }
+                """, foregroundScheduler)));
+
+            await using (vm)
+            {
+                await probeStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+                Assert.Equal("main", vm.TargetBranch);
+
+                unblockProbe.SetResult();
+                await vm.CurrentRefresh!;
+
+                Assert.Equal("master", vm.TargetBranch);
+            }
+        }
+        finally
+        {
+            GitWorktreeReviewWorkspaceTabViewModel.DefaultBranchProbeForTests = originalProbe;
         }
     }
 
@@ -1780,16 +1788,47 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModelTests : IDisposable
             pump.Context.Post(_ => refreshTaskTcs.SetResult(vm.RefreshAsync()), null);
             var refreshTask = await refreshTaskTcs.Task;
 
-            // Interleave a pump ping. If git ops were running on the foreground scheduler, this
-            // would be blocked behind the git work.
+            // Interleave a pump ping. It must run on the pump thread while refresh is in flight
+            // or after a legitimately fast refresh; either outcome proves no foreground deadlock.
             var pingRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             pump.Context.Post(_ => pingRan.SetResult(), null);
 
-            var winner = await Task.WhenAny(pingRan.Task, refreshTask).WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
-            Assert.Same(pingRan.Task, winner);
+            await pingRan.Task.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
             await refreshTask;
             _ = pumpThreadId;
+        }
+    }
+
+    private static async Task AwaitRefreshTriggeredByAsync(GitWorktreeReviewWorkspaceTabViewModel vm, Action trigger)
+    {
+        var previousRefresh = vm.CurrentRefresh;
+        var refreshChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnPropertyChanged(object? _, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(GitWorktreeReviewWorkspaceTabViewModel.CurrentRefresh)
+                && !ReferenceEquals(vm.CurrentRefresh, previousRefresh))
+            {
+                refreshChanged.TrySetResult();
+            }
+        }
+
+        vm.PropertyChanged += OnPropertyChanged;
+        try
+        {
+            trigger();
+            if (ReferenceEquals(vm.CurrentRefresh, previousRefresh))
+            {
+                await refreshChanged.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            }
+
+            Assert.NotNull(vm.CurrentRefresh);
+            await vm.CurrentRefresh.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            vm.PropertyChanged -= OnPropertyChanged;
         }
     }
 

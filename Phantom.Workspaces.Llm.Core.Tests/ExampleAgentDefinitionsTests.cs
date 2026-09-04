@@ -3,6 +3,8 @@ using AgentSchema;
 using Xunit;
 using System.Reflection;
 using System.Linq;
+using System.Text.Json;
+using Phantom.Workspaces.Llm.Core.Transport;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
@@ -193,6 +195,49 @@ public class ExampleAgentDefinitionsTests
         Assert.Equal("github-copilot-chat", promptAgent.Name);
         Assert.Equal("gpt-4.1-mini", promptAgent.Model?.Id);
         Assert.Equal("github-copilot", promptAgent.Model?.Provider);
+    }
+
+    [Fact]
+    public void LoadGithubCopilotRemoteChat_ValidatesSuccessfully()
+    {
+        var json = GetEmbeddedResourceContent("github-copilot-remote-chat.json");
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
+
+        Assert.NotNull(agent);
+        Assert.Equal("prompt", agent.Kind);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        Assert.Equal("github-copilot-remote-chat", promptAgent.Name);
+        Assert.Equal("github-copilot", promptAgent.Model?.Provider);
+
+        // Parameter placeholders live in model.options.additionalProperties because AgentDefinition
+        // has no top-level parameters block; the declared parameters (working-directory, trust-profile)
+        // live in the wrapping agent-manifest (see agent-configuration.md remote-hosting example).
+        var additional = promptAgent.Model?.Options?.AdditionalProperties;
+        Assert.NotNull(additional);
+        Assert.Equal("${working-directory}", additional!["working-directory"]?.ToString());
+        Assert.Equal("${trust-profile}", additional["trust-profile"]?.ToString());
+
+        // Parameter declarations for the remote-hosting topology are documented in the metadata block
+        // so a human or LLM reading the example can copy them onto the wrapping agent-manifest.
+        using var document = JsonDocument.Parse(json);
+        var parametersDoc = document.RootElement
+            .GetProperty("metadata")
+            .GetProperty("parameters")
+            .GetProperty("properties");
+        var declared = parametersDoc.EnumerateArray()
+            .Select(p => (Name: p.GetProperty("name").GetString(), Required: p.GetProperty("required").GetBoolean()))
+            .ToList();
+        Assert.Contains(declared, p => p.Name == "working-directory" && p.Required);
+        Assert.Contains(declared, p => p.Name == "trust-profile" && p.Required);
+
+        // Split executor topology: at least one tool must classify as GuiLocal (workspace-gui /
+        // workspace-entity) and at least one must classify as AgentExecutor (filesystem, mcp, function...).
+        Assert.NotNull(promptAgent.Tools);
+        var kinds = promptAgent.Tools!.Select(t => t.Kind).ToList();
+        Assert.Contains(kinds, k => ExecutorTargetResolver.ForKind(k) == ExecutorTarget.GuiLocal);
+        Assert.Contains(kinds, k => ExecutorTargetResolver.ForKind(k) == ExecutorTarget.AgentExecutor);
+        Assert.Contains("workspace-gui", kinds);
     }
 
     [Fact]

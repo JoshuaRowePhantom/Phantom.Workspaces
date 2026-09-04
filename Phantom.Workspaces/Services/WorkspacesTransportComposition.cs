@@ -3,9 +3,12 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core;
 using Phantom.Workspaces.Llm.Core.Transport;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
@@ -34,13 +37,30 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
     public WorkspacesTransportComposition(
         IDataAccessLayer dataAccessLayer,
         WorkspaceEntitySession workspaceEntitySession,
-        IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null)
+        IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null,
+        AgentServices? agentServices = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
 
         this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
         this.LocalListeners = new TransportRegistry();
+
+        // Issue #1314: register the server-side chat-client transport listener in the production
+        // composition so that an incoming `chat-client` channel carrying an `agent-definition`
+        // is served by building an executor IChatClient per channel via AgentFactory. Mirrors the
+        // production listener registration pattern from docs/design/unified-transport-production-cutover.md.
+        // The listener owns the per-channel client lifetime (see ChatClientTransportListener).
+        this.LocalListeners.Register(new ChatClientTransportListener(
+            async (definition, ct) =>
+            {
+                var result = await AgentFactory.CreateChatClientAsync(
+                    definition,
+                    agentServices,
+                    queueManager: null,
+                    cancellationToken: ct).ConfigureAwait(false);
+                return result.ChatClient;
+            }));
 
         var registry = new TransportFactoryRegistry();
         this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);

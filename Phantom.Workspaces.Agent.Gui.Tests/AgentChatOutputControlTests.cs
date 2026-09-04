@@ -51,9 +51,32 @@ public sealed class AgentChatOutputControlTests
 
         Assert.Contains("CopyGutter.init(document);", html, StringComparison.Ordinal);
         Assert.Contains("InspectGutter.init(document);", html, StringComparison.Ordinal);
+        Assert.Contains("UsageInspectGutter.init(document);", html, StringComparison.Ordinal);
         Assert.Contains("inspect-gutter-btn", html, StringComparison.Ordinal);
+        Assert.Contains("usage-gutter-btn", html, StringComparison.Ordinal);
         // The inspect gutter still relies on the co-located data-details-target attribute.
         Assert.Contains("data-details-target", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_UsageInspectGutter_AlwaysAttachesHashToUsageRow()
+    {
+        var html = ReadShellHtml();
+
+        Assert.Contains("marker.appendChild(makeButton(marker));", html, StringComparison.Ordinal);
+        Assert.Contains("marker.classList.add(\"chat-content-row\");", html, StringComparison.Ordinal);
+        Assert.Contains(".chat-content.chat-usage", html, StringComparison.Ordinal);
+        Assert.DoesNotContain(".chat-usage-marker { display: none; }", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_UsageInspectGutter_DoesNotQueryDescendantInspectButtons()
+    {
+        var html = ReadShellHtml();
+
+        Assert.DoesNotContain("prev.querySelector(\".inspect-gutter-btn\")", html, StringComparison.Ordinal);
+        Assert.Contains("prev.hasAttribute(\"data-inspect-target\")", html, StringComparison.Ordinal);
+        Assert.Contains("prev.children[i].classList.contains(\"inspect-gutter-btn\")", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -930,6 +953,105 @@ public sealed class AgentChatOutputControlTests
                 catch (JsonException) { return false; }
             }),
             "Expected no 'scroll' command when AutoScrollEnabled is re-enabled via SetAutoScrollFromPage (atBottom suppression).");
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_HasStructuralProgrammaticMutationGate()
+    {
+        // #1259: host-driven DOM mutations must be wrapped in a structural programmatic-mutation gate
+        // so the scroll listener never latches auto-scroll off for a programmatic append, independently
+        // of the (idle-stale) #1202 userInteractedSinceStuck heuristic.
+        var html = ReadShellHtml();
+
+        Assert.Contains("var programmaticMutationDepth = 0;", html, StringComparison.Ordinal);
+        Assert.Contains("function beginProgrammatic()", html, StringComparison.Ordinal);
+        Assert.Contains("function endProgrammatic()", html, StringComparison.Ordinal);
+        // The scroll listener must short-circuit while a programmatic mutation is in flight.
+        Assert.Contains("if (programmaticMutationDepth > 0) {", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputShellHtml_ScrollCommand_ResetsStaleUserInteractionFlag()
+    {
+        // #1259 secondary hardening: an explicit host "scroll" command must reset the #1202 stale flag
+        // so the heuristic safety net is re-armed after a host-driven scroll.
+        var html = ReadShellHtml();
+
+        // The reset must be co-located with the scroll command handling.
+        var scrollCaseIndex = html.IndexOf("case \"scroll\":", StringComparison.Ordinal);
+        Assert.True(scrollCaseIndex >= 0, "Expected a 'scroll' command case in applyCommand.");
+        var resetIndex = html.IndexOf("userInteractedSinceStuck = false;", scrollCaseIndex, StringComparison.Ordinal);
+        var scrollToBottomIndex = html.IndexOf("scrollToBottom();", scrollCaseIndex, StringComparison.Ordinal);
+        Assert.True(resetIndex >= 0, "Expected the scroll command to reset userInteractedSinceStuck.");
+        Assert.True(
+            resetIndex < scrollToBottomIndex,
+            "Expected userInteractedSinceStuck to be reset before scrollToBottom in the scroll command.");
+    }
+
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task UserScrollUp_AfterQueueSubmit_DisablesAutoScroll()
+    {
+        // #1259 regression guard (#518): a GENUINE user scroll-up — modelled as a scrollState
+        // { atBottom:false } delivered OUTSIDE any programmatic-mutation gate — must still latch
+        // AutoScrollEnabled=false. The structural gate only suppresses programmatic transients; it must
+        // not swallow real user scroll reports.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        Assert.True(viewModel.AutoScrollEnabled, "Precondition: auto-scroll starts enabled.");
+
+        // Act: the page reports the user scrolled away from the bottom.
+        browser.FireMessage("""{"type":"scrollState","atBottom":false}""");
+
+        Assert.False(viewModel.AutoScrollEnabled, "A genuine user scroll-up must disable auto-scroll.");
+    }
+
+    [Trait("Category", "SlowLayout")]
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task UserScrollBackToBottom_ReEnablesAutoScroll()
+    {
+        // #1259 regression guard: after a user-driven disable, a subsequent scrollState { atBottom:true }
+        // must re-enable AutoScrollEnabled (existing SetAutoScrollFromPage behaviour). Guards against the
+        // new gate over-suppressing legitimate re-enable reports.
+        var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var control = new AgentChatOutputControl();
+        var browserField = typeof(AgentChatOutputControl)
+            .GetField("browser", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(browserField);
+        var browser = Assert.IsType<HeadlessControllableBrowser>(browserField!.GetValue(control));
+
+        var isAttachedField = typeof(AgentChatOutputControl)
+            .GetField("isAttached", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(isAttachedField);
+        isAttachedField!.SetValue(control, true);
+
+        control.DataContext = viewModel;
+        browser.FireMessage("""{"type":"scrollState","atBottom":false}""");
+        Assert.False(viewModel.AutoScrollEnabled, "Precondition: user scroll-up disabled auto-scroll.");
+
+        // Act: the user scrolls back to the bottom.
+        browser.FireMessage("""{"type":"scrollState","atBottom":true}""");
+
+        Assert.True(viewModel.AutoScrollEnabled, "Scrolling back to the bottom must re-enable auto-scroll.");
     }
 
     [AvaloniaFact(Timeout = 15_000)]

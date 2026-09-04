@@ -1120,4 +1120,52 @@ public sealed class ViewHierarchyAssemblerTests
             failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static e => e.Message)));
         return new EntityId(guid);
     }
+
+    [AvaloniaFact]
+    public void ViewHierarchyAssembler_AssemblesUnderActiveFind_AppliesSearchQueryAndVisibility()
+    {
+        // Simulates nodes being added to a population that already has an active find query.
+        // ReapplyFindAfterAssembly should fan out SearchQuery and set IsVisible.
+        var mwvm = new MainWindowViewModel(new UnknownRepositorySource());
+        var pop = new ViewPopulationViewModel();
+
+        // Activate find state on the population before adding nodes.
+        pop.ApplyFind("match", hideUnmatched: true);
+
+        // Now add nodes (simulating assembly inserting them).
+        var matchEntity = CreateTestEntity("match-entity", "workspace");
+        var noMatchEntity = CreateTestEntity("noname", "task");
+
+        var matchVm = new ViewEntityViewModel(matchEntity, mwvm, new ShortcutManager(), 0);
+        var noMatchVm = new ViewEntityViewModel(noMatchEntity, mwvm, new ShortcutManager(), 0);
+
+        pop.Entities.Add(matchVm);
+        pop.RootEntities.Add(matchVm);
+        pop.Entities.Add(noMatchVm);
+        pop.RootEntities.Add(noMatchVm);
+
+        // ReapplyFindAfterAssembly re-applies the stored find state.
+        pop.ReapplyFindAfterAssembly();
+
+        Assert.Equal("match", matchVm.EntityCardNode.Card.SearchQuery);
+        Assert.Equal("match", noMatchVm.EntityCardNode.Card.SearchQuery);
+        Assert.True(matchVm.EntityCardNode.Card.Matches);
+        Assert.False(noMatchVm.EntityCardNode.Card.Matches);
+        Assert.True(matchVm.IsVisible);
+        Assert.False(noMatchVm.IsVisible);
+    }
+
+    private static SubscribedEntityViewModel CreateTestEntity(string displayName, string entityType)
+    {
+        var entityId = Guid.NewGuid();
+        var snapshot = new EntitySnapshot
+        {
+            EntityId = new EntityId(entityId.ToString()),
+            ConcurrencyTag = new ConcurrencyTag("1"),
+            ModifiedTime = new Timestamp(DateTimeOffset.UtcNow, Guid.NewGuid().ToString()),
+            Data = JsonDocument.Parse($$"""{"display-name":{"default":"{{displayName}}"},"entity-types":["entity","{{entityType}}"],"names":[["{{displayName}}"]]}""").RootElement.Clone(),
+            Relationships = Array.Empty<EntitySnapshot>(),
+        };
+        return new SubscribedEntityViewModel(snapshot, deleteEntityAsync: _ => Task.CompletedTask);
+    }
 }

@@ -421,6 +421,165 @@ public sealed class MongoDbEntityDataAccessLayerSlowTests : DataAccessLayerNonQu
         Assert.True(currentBson.Contains("name-parent-prefixes"), "New 'name-parent-prefixes' field should exist");
     }
 
+    // #1412: point-in-time reads resolve the bracketing version from the versions collection.
+    [Fact]
+    public async Task MongoDbEntityDataAccessLayer_GetAtTimestamp_ResolvesVersionFromVersionsCollection()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dal = CreateDataAccessLayer();
+        var entityId = new EntityId(Guid.NewGuid());
+
+        var v1 = await UpdateEntityAsync(dal, entityId, null, "one");
+        var v2 = await UpdateEntityAsync(dal, entityId, v1.ConcurrencyTag, "two");
+
+        var atV1 = await GetAtAsync(dal, entityId, v1.ModifiedTime);
+        Assert.Contains("\"one\"", atV1.Data?.GetRawText(), StringComparison.Ordinal);
+
+        var atV2 = await GetAtAsync(dal, entityId, v2.ModifiedTime);
+        Assert.Contains("\"two\"", atV2.Data?.GetRawText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MongoDbEntityDataAccessLayer_GetHistory_ReturnsAllVersionsFromVersionsCollection()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dal = CreateDataAccessLayer();
+        var entityId = new EntityId(Guid.NewGuid());
+
+        var v1 = await UpdateEntityAsync(dal, entityId, null, "one");
+        var v2 = await UpdateEntityAsync(dal, entityId, v1.ConcurrencyTag, "two");
+        var v3 = await UpdateEntityAsync(dal, entityId, v2.ConcurrencyTag, "three");
+
+        var history = await dal.GetHistoryAsync(new GetHistoryRequest { EntityIds = [entityId] });
+        var entry = Assert.Single(history.History);
+        Assert.Equal(entityId, entry.EntityId);
+        Assert.Equal(3, entry.UpdateTimes.Count);
+        Assert.Equal(
+            new[] { v1.ModifiedTime.ChangeId, v2.ModifiedTime.ChangeId, v3.ModifiedTime.ChangeId },
+            entry.UpdateTimes.Select(static t => t.ChangeId).ToArray());
+    }
+
+    [Fact]
+    public async Task MongoDbEntityDataAccessLayer_Export_StreamsVersionsFromVersionsCollection()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dal = CreateDataAccessLayer();
+        var entityId = new EntityId(Guid.NewGuid());
+
+        var v1 = await UpdateEntityAsync(dal, entityId, null, "one");
+        var v2 = await UpdateEntityAsync(dal, entityId, v1.ConcurrencyTag, "two");
+        var v3 = await UpdateEntityAsync(dal, entityId, v2.ConcurrencyTag, "three");
+
+#pragma warning disable CS0618 // ExportAsync is intentionally exercised here to verify the versions-collection stream.
+        var all = await dal.ExportAsync(new ExportRequest());
+        Assert.Equal(3, all.ChangeBatches.Count);
+        Assert.Equal(
+            new[] { v1.ModifiedTime.ChangeId, v2.ModifiedTime.ChangeId, v3.ModifiedTime.ChangeId },
+            all.ChangeBatches.Select(static b => b.ChangeTime.ChangeId).ToArray());
+
+        var fromV2 = await dal.ExportAsync(new ExportRequest { SnapshotTime = v2.ModifiedTime });
+#pragma warning restore CS0618
+        Assert.Equal(
+            new[] { v2.ModifiedTime.ChangeId, v3.ModifiedTime.ChangeId },
+            fromV2.ChangeBatches.Select(static b => b.ChangeTime.ChangeId).ToArray());
+    }
+
+    [Fact]
+    public async Task MongoDbEntityDataAccessLayer_GetChangedEntities_UsesVersionsCollection()
+    {
+        await _fixture.ResetCollectionAsync();
+        var dal = CreateDataAccessLayer();
+        var entityId = new EntityId(Guid.NewGuid());
+
+        var v1 = await UpdateEntityAsync(dal, entityId, null, "one");
+        var v2 = await UpdateEntityAsync(dal, entityId, v1.ConcurrencyTag, "two");
+
+        var changedSinceV1 = await dal.GetChangedEntitiesAsync(new GetChangedEntitiesRequest
+        {
+            EntityIdTimestamps = [new EntityIdTimestamp { EntityId = entityId, Timestamp = v1.ModifiedTime }],
+        });
+        var changed = Assert.Single(changedSinceV1.Entities);
+        Assert.NotNull(changed.Entity);
+        Assert.Contains("\"two\"", changed.Entity!.Data?.GetRawText(), StringComparison.Ordinal);
+
+        var changedSinceV2 = await dal.GetChangedEntitiesAsync(new GetChangedEntitiesRequest
+        {
+            EntityIdTimestamps = [new EntityIdTimestamp { EntityId = entityId, Timestamp = v2.ModifiedTime }],
+        });
+        Assert.Empty(changedSinceV2.Entities);
+    }
+
+    // #1412: two versions sharing a TimestampUtc must be disambiguated by VersionId (_id ObjectId).
+    [Fact]
+    public async Task MongoDbEntityDataAccessLayer_GetAtExactTimestampTie_UsesVersionIdTieBreak()
+    {
+        await _fixture.ResetCollectionAsync();
+        var fixedTime = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var dal = new MongoDbEntityDataAccessLayer(
+            _fixture.Database,
+            MongoDbTestDatabaseFixture.EntityCollectionName,
+            timeProvider: new FixedTimeProvider(fixedTime));
+        var entityId = new EntityId(Guid.NewGuid());
+
+        var v1 = await UpdateEntityAsync(dal, entityId, null, "one");
+        var v2 = await UpdateEntityAsync(dal, entityId, v1.ConcurrencyTag, "two");
+
+        // Both versions share the fixed TimestampUtc but have distinct VersionIds.
+        Assert.Equal(v1.ModifiedTime.DateTime, v2.ModifiedTime.DateTime);
+        Assert.NotEqual(v1.ModifiedTime.ChangeId, v2.ModifiedTime.ChangeId);
+
+        var atV1 = await GetAtAsync(dal, entityId, v1.ModifiedTime);
+        Assert.Contains("\"one\"", atV1.Data?.GetRawText(), StringComparison.Ordinal);
+
+        var atV2 = await GetAtAsync(dal, entityId, v2.ModifiedTime);
+        Assert.Contains("\"two\"", atV2.Data?.GetRawText(), StringComparison.Ordinal);
+    }
+
+    private async Task<EntitySnapshot> UpdateEntityAsync(
+        IDataAccessLayer dal,
+        EntityId entityId,
+        ConcurrencyTag? concurrencyTag,
+        string name)
+    {
+        var result = await dal.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "test" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = entityId,
+                    ConcurrencyTag = concurrencyTag,
+                    Data = ParseEntityData(entityId, name),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        var entityResult = Assert.Single(result.EntityResults);
+        Assert.NotEqual(UpdateState.Failed, entityResult.UpdateState);
+        Assert.NotNull(entityResult.CurrentEntity);
+        return entityResult.CurrentEntity!;
+    }
+
+    private static async Task<EntitySnapshot> GetAtAsync(
+        IDataAccessLayer dal,
+        EntityId entityId,
+        Timestamp timestamp)
+    {
+        var result = await dal.GetAsync(new GetRequest
+        {
+            Entities = [new GetEntityRequest { EntityId = entityId }],
+            Timestamps = [timestamp],
+        });
+        return Assert.Single(Assert.Single(result.Batches).Entities);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
+    }
+
     protected override IDataAccessLayer CreateDataAccessLayer()
     {
         return new MongoDbEntityDataAccessLayer(_fixture.Database, MongoDbTestDatabaseFixture.EntityCollectionName);

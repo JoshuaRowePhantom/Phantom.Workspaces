@@ -147,6 +147,32 @@ public sealed class WindowsDockerDesktopEngineTests
         Assert.Equal(LogLevel.Warning, entry.Level);
     }
 
+    [Fact]
+    public async Task WindowsDockerDesktopEngine_PullAsync_RunsDockerPullWithImageName()
+    {
+        var runner = new RecordingDockerCommandRunner();
+        var engine = new WindowsDockerDesktopEngine(runner);
+
+        await engine.PullAsync("test/sleep:latest");
+
+        Assert.Single(runner.Commands);
+        Assert.Equal(["pull", "test/sleep:latest"], runner.Commands[0]);
+    }
+
+    [Fact]
+    public async Task WindowsDockerDesktopEngine_PullAsync_WhenDockerPullFails_ThrowsInvalidOperationException()
+    {
+        var runner = new RecordingDockerCommandRunner();
+        runner.Results.Enqueue(new ProcessResult(1, string.Empty, "manifest unknown", "manifest unknown"));
+        var engine = new WindowsDockerDesktopEngine(runner);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await engine.PullAsync("test/sleep:latest"));
+
+        Assert.Contains("pull test/sleep:latest", exception.Message);
+        Assert.Contains("manifest unknown", exception.Message);
+    }
+
     private sealed class RecordingDockerCommandRunner : IDockerCommandRunner
     {
         public List<IReadOnlyList<string>> Commands { get; } = [];

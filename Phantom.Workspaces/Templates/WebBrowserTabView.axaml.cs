@@ -2,7 +2,9 @@ using System;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Data;
+using Avalonia.Input;
 using Phantom.Workspaces.Controls;
+using Phantom.Workspaces.Gui.Shared.Controls;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Templates;
@@ -24,6 +26,14 @@ public partial class WebBrowserTabView : UserControl
         {
             webViewHost.Child = this.webViewControl;
         }
+
+        // Leave Ctrl+F for the hosted page's in-page find rather than capturing it for the app's
+        // global entity-find bar (issue #1255). The universal SharedStyles selector already enables
+        // BrowserAcceleratorBehavior forwarding on the underlying AcceleratorAwareWebView.
+        BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(this.webViewControl, new System.Collections.Generic.List<KeyGesture>
+        {
+            new(Key.F, KeyModifiers.Control),
+        });
 
         this.DataContextChanged += OnDataContextChanged;
     }

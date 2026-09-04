@@ -12,6 +12,12 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
     public ObservableCollection<GitCommitModel> Commits { get; } = new();
     public ObservableCollection<GitCommitModel> SelectedCommits { get; } = new();
 
+    // Test-only hook (see InternalsVisibleTo(Phantom.Workspaces.Tests)): invoked at the top of the
+    // Task.Run-scheduled build task in RefreshAsync so tests can capture the managed thread id on
+    // which git status + log actually runs, without depending on pump-queue enqueue ordering.
+    // See #1284.
+    internal static Action? GitWorkStartedForTests { get; set; }
+
     // #1210: `foregroundScheduler` is required so that git I/O runs on the thread pool and only the
     // final ObservableCollection mutations are marshalled back to the UI thread. See AgentViewModel
     // (#1122) for the reference pattern.
@@ -26,6 +32,8 @@ public sealed class GitWorktreeCommitListViewModel : ViewModelBase
 
         var buildTask = Task.Run(() =>
         {
+            GitWorkStartedForTests?.Invoke();
+
             var commitsList = new System.Collections.Generic.List<GitCommitModel>();
             bool unstaged = false;
             bool staged = false;

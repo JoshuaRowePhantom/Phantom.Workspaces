@@ -319,6 +319,128 @@ public class AgentChatHistoryPromotionTests
         });
     }
 
+    [Fact]
+    public async Task AgentChat_WhenAssistantTurnHasPreambleThenToolCall_HistoryContainsBoth()
+    {
+        // Regression for #1221: an assistant turn that streams TextContent immediately followed by
+        // a FunctionCallContent (both with MessageId = null, exactly as the Copilot adapter emits)
+        // must retain BOTH the preamble text and the tool call, in that order, in History.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("Here's the situation:")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool", null)], FinishReason = new ChatFinishReason("stop") });
+        stream.Complete();
+
+        await using var chat = await CreateChatAsync(client);
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForHistoryCountAsync(chat.History, 2, "user + assistant preamble+tool call");
+
+        Assert.Equal(2, chat.History.Count);
+        var assistant = chat.History[1];
+        Assert.Equal(ChatRole.Assistant, assistant.Role);
+        Assert.Collection(
+            assistant.Contents,
+            c => Assert.Equal("Here's the situation:", Assert.IsType<TextContent>(c).Text),
+            c => Assert.Equal("c1", Assert.IsType<FunctionCallContent>(c).CallId));
+    }
+
+    [Fact]
+    public async Task AgentChat_WhenAssistantTurnStreamsMultipleTextDeltasBeforeToolCall_HistoryConcatenatesText()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("I've recovered ")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("the queue state ")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("and dispatched...")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool", null)], FinishReason = new ChatFinishReason("stop") });
+        stream.Complete();
+
+        await using var chat = await CreateChatAsync(client);
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForHistoryCountAsync(chat.History, 2, "user + concatenated assistant text + tool call");
+
+        Assert.Equal(2, chat.History.Count);
+        var assistant = chat.History[1];
+        Assert.Collection(
+            assistant.Contents,
+            c => Assert.Equal("I've recovered the queue state and dispatched...", Assert.IsType<TextContent>(c).Text),
+            c => Assert.Equal("c1", Assert.IsType<FunctionCallContent>(c).CallId));
+    }
+
+    [Fact]
+    public async Task AgentChat_WhenDispatchingSubAgent_ParentHistoryRetainsPreambleText()
+    {
+        // Mirrors the exact reported sequence: parent streams preamble text and then dispatches a
+        // sub-agent via a tool call. The parent's History must retain the preamble.
+        const string Preamble = "I've recovered the queue state and dispatched the recovered in-progress item. Here's the situation:";
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent(Preamble)] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("dispatch1", "dispatch_sub_agent", null)], FinishReason = new ChatFinishReason("stop") });
+        stream.Complete();
+
+        await using var chat = await CreateChatAsync(client);
+
+        chat.EnqueueUserMessage("go");
+        await WaitForHistoryCountAsync(chat.History, 2, "parent history retains preamble");
+
+        var assistant = chat.History[1];
+        Assert.Equal(Preamble, GetText(assistant));
+        Assert.Contains(assistant.Contents, c => c is FunctionCallContent { CallId: "dispatch1" });
+    }
+
+    [Fact]
+    public async Task AgentChat_WhenAssistantTurnStreamsOnlyToolCall_HistoryContainsToolCallOnly()
+    {
+        // Regression guard: a tool-only turn still promotes exactly one FunctionCallContent-only
+        // assistant item — no phantom text is synthesized where none was streamed.
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "tool", null)], FinishReason = new ChatFinishReason("stop") });
+        stream.Complete();
+
+        await using var chat = await CreateChatAsync(client);
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForHistoryCountAsync(chat.History, 2, "user + tool-only assistant");
+
+        Assert.Equal(2, chat.History.Count);
+        var assistant = chat.History[1];
+        Assert.Equal(ChatRole.Assistant, assistant.Role);
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(assistant.Contents));
+        Assert.Equal("c1", call.CallId);
+        Assert.Equal(string.Empty, GetText(assistant));
+    }
+
+    [Fact]
+    public async Task AgentChat_WhenMultipleAssistantMessagesSeparatedByToolResult_HistoryHasSeparateItems()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("calling"), new FunctionCallContent("c1", "tool", null)] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "ok")] });
+        stream.EnqueueUpdate(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("done")], FinishReason = new ChatFinishReason("stop") });
+        stream.Complete();
+
+        await using var chat = await CreateChatAsync(client);
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForHistoryCountAsync(chat.History, 4, "user + assistant(call) + tool + assistant(done)");
+
+        Assert.Equal(4, chat.History.Count);
+        Assert.Equal([ChatRole.User, ChatRole.Assistant, ChatRole.Tool, ChatRole.Assistant],
+            chat.History.Select(h => h.Role).ToArray());
+
+        Assert.Collection(
+            chat.History[1].Contents,
+            c => Assert.Equal("calling", Assert.IsType<TextContent>(c).Text),
+            c => Assert.Equal("c1", Assert.IsType<FunctionCallContent>(c).CallId));
+        Assert.Equal("c1", Assert.IsType<FunctionResultContent>(Assert.Single(chat.History[2].Contents)).CallId);
+        Assert.Equal("done", GetText(chat.History[3]));
+    }
+
     private static async Task<AgentChat> CreateChatAsync(IChatClient client, TaskScheduler? foregroundScheduler = null)
     {
         return await AgentChat.CreateAsync(new InternalCreateAgentChatRequest

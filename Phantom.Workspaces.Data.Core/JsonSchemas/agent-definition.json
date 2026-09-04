@@ -1,6 +1,6 @@
 {
   "$id": "https://schemas.workspaces.phantom.to/workspaces/data/core/agent-definition.json",
-  "description": "Schema for agent definition entities that store reusable agent configuration documents.",
+  "description": "Schema for agent definition entities that store reusable agent configuration documents. MCP tools referenced via 'mcp-server-entity' tool resources are resolved by entity name under the MCP-server search prefixes (machine profile, '${USER}/mcp-servers', then 'defaults/mcp-servers'), the same rules used for agent manifests.",
   "allOf": [
     {
       "$ref": "https://schemas.workspaces.phantom.to/workspaces/data/core/entity.json"

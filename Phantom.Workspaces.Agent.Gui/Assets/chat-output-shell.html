@@ -417,25 +417,44 @@
     .chat-content-row:hover .inspect-gutter-btn { opacity: 0.6; }
     .inspect-gutter-btn:hover { opacity: 1; }
 
-    /* Running sub-agents panel styles */
-    .running-subagents-panel {
-      margin: 1em 0;
-    }
-    
-    .running-subagents-header {
-      margin: 0 0 0.5em 0;
-      font-size: 1em;
-      font-weight: 600;
+    .usage-gutter-btn {
+      position: absolute;
+      right: -3.6em;
+      top: 1.7em;
+      opacity: 0.3;
+      cursor: pointer;
+      transition: opacity 0.15s;
+      background: transparent;
+      border: none;
+      color: inherit;
+      font-size: inherit;
+      font-family: inherit;
+      padding: 0;
     }
 
-    /* Parent agent panel styles */
+    .chat-content-row:hover .usage-gutter-btn { opacity: 0.6; }
+    .usage-gutter-btn:hover { opacity: 1; }
+    .chat-content.chat-usage {
+      position: relative;
+      min-height: 1.6em;
+    }
+
+    /* Running sub-agents panel styles (#1274): compact divider from content above; participate
+       in normal page flow by default; self-scroll only when content would exceed 1/4 of the chat
+       view height. */
+    .running-subagents-panel,
     .running-parent-agent-panel {
-      margin: 1em 0;
+      margin: 0.5em 0 0 0;
+      padding-top: 0.35em;
+      border-top: 1px solid var(--chat-meta);
+      max-height: 25vh;
+      overflow-y: auto;
     }
 
+    .running-subagents-header,
     .running-parent-agent-header {
-      margin: 0 0 0.5em 0;
-      font-size: 1em;
+      margin: 0 0 0.25em 0;
+      font-size: 0.9em;
       font-weight: 600;
     }
     
@@ -637,6 +656,77 @@
     })();
   </script>
   <script>
+    /* usage-inspect-gutter.js — attaches UsageContent payload markers to inspect gutters. */
+    var UsageInspectGutter = (function () {
+      "use strict";
+
+      function postToHost(message) {
+        if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
+          window.chrome.webview.postMessage(JSON.stringify(message));
+        }
+      }
+
+      function init(root) {
+        root.querySelectorAll("[data-usage-inspect-target]").forEach(attach);
+        var observer = new MutationObserver(function (mutations) {
+          mutations.forEach(function (mutation) {
+            mutation.addedNodes.forEach(function (node) {
+              if (node.nodeType !== 1) { return; }
+              if (node.hasAttribute("data-usage-inspect-target")) { attach(node); }
+              node.querySelectorAll("[data-usage-inspect-target]").forEach(attach);
+            });
+          });
+        });
+        observer.observe(root, { childList: true, subtree: true });
+      }
+
+      function attach(marker) {
+        if (marker._usageGutterAttached) { return; }
+        marker._usageGutterAttached = true;
+        marker.classList.add("chat-content-row");
+
+        marker.appendChild(makeButton(marker));
+
+        var prev = marker.previousElementSibling;
+        if (!prev || !prev.hasAttribute || !prev.hasAttribute("data-inspect-target")) {
+          return;
+        }
+
+        var host = null;
+        for (var i = 0; i < prev.children.length; i++) {
+          if (prev.children[i].classList && prev.children[i].classList.contains("inspect-gutter-btn")) {
+            host = prev.children[i];
+            break;
+          }
+        }
+
+        if (host && host.parentNode) {
+          host.parentNode.insertBefore(makeButton(marker), host.nextSibling);
+        }
+      }
+
+      function makeButton(marker) {
+        var btn = document.createElement("button");
+        btn.className = "usage-gutter-btn";
+        btn.setAttribute("aria-label", "Open token usage details");
+        btn.textContent = "#";
+
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          postToHost({
+            type: "inspect",
+            contentId: marker.id,
+            contentJson: marker.getAttribute("data-details-target") || ""
+          });
+        });
+
+        return btn;
+      }
+
+      return { init: init };
+    })();
+  </script>
+  <script>
     /* tool-group-expand-collapse.js — bulk expand/collapse for tool groups.
      * Call ToolGroupExpandCollapse.init(root) to wire up all [data-tool-expand-toggle] elements.
      * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
@@ -759,56 +849,81 @@
         window.addEventListener(evt, function () { userInteractedSinceStuck = true; }, { passive: true, capture: true });
       });
 
+      // Issue #1259: a STRUCTURAL programmatic-mutation gate. Every host-driven DOM mutation is
+      // wrapped in beginProgrammatic/endProgrammatic; while the depth is > 0 the scroll listener
+      // treats any atBottom=false transient as programmatic and never latches auto-scroll off,
+      // independently of the (idle-stale) userInteractedSinceStuck heuristic.
+      var programmaticMutationDepth = 0;
+      function beginProgrammatic() { programmaticMutationDepth++; }
+      function endProgrammatic() {
+        // Defer the decrement to the next task so the scroll event fired by the mutation (dispatched
+        // asynchronously after layout) still observes depth > 0.
+        setTimeout(function () {
+          if (programmaticMutationDepth > 0) { programmaticMutationDepth--; }
+        }, 0);
+      }
+
       function applyCommand(command) {
-        switch (command.type) {
-          case "update": {
-            var target = document.getElementById(command.path);
-            if (!target) {
-              postToHost({ type: "commandFailed", path: command.path });
-              return;
+        // Gate every host-driven mutation that can grow document.body.scrollHeight (issue #1259).
+        var isProgrammaticMutation =
+          command.type === "update" || command.type === "remove" || command.type === "scroll";
+        if (isProgrammaticMutation) { beginProgrammatic(); }
+        try {
+          switch (command.type) {
+            case "update": {
+              var target = document.getElementById(command.path);
+              if (!target) {
+                postToHost({ type: "commandFailed", path: command.path });
+                return;
+              }
+              switch (command.location) {
+                case "replace":
+                  target.outerHTML = command.content;
+                  break;
+                case "before":
+                  target.insertAdjacentHTML("beforebegin", command.content);
+                  break;
+                case "after":
+                  target.insertAdjacentHTML("afterend", command.content);
+                  break;
+                case "append":
+                  target.insertAdjacentHTML("beforeend", command.content);
+                  break;
+                case "prepend":
+                  target.insertAdjacentHTML("afterbegin", command.content);
+                  break;
+              }
+              break;
             }
-            switch (command.location) {
-              case "replace":
-                target.outerHTML = command.content;
-                break;
-              case "before":
-                target.insertAdjacentHTML("beforebegin", command.content);
-                break;
-              case "after":
-                target.insertAdjacentHTML("afterend", command.content);
-                break;
-              case "append":
-                target.insertAdjacentHTML("beforeend", command.content);
-                break;
-              case "prepend":
-                target.insertAdjacentHTML("afterbegin", command.content);
-                break;
+            case "remove": {
+              var element = document.getElementById(command.path);
+              if (element) {
+                element.remove();
+              }
+              break;
             }
-            break;
+            case "scroll":
+              // Issue #1259 secondary hardening: an explicit host scroll re-establishes the
+              // "user has not interacted since last stuck" invariant the #1202 guard depends on.
+              userInteractedSinceStuck = false;
+              scrollToBottom();
+              break;
+            case "theme": {
+              // Support both className (new Campbell-based approach) and variables (legacy).
+              if (command.className) {
+                document.body.className = command.className;
+              }
+              if (command.variables) {
+                var root = document.documentElement;
+                Object.keys(command.variables).forEach(function (key) {
+                  root.style.setProperty(key, command.variables[key]);
+                });
+              }
+              break;
+            }
           }
-          case "remove": {
-            var element = document.getElementById(command.path);
-            if (element) {
-              element.remove();
-            }
-            break;
-          }
-          case "scroll":
-            scrollToBottom();
-            break;
-          case "theme": {
-            // Support both className (new Campbell-based approach) and variables (legacy).
-            if (command.className) {
-              document.body.className = command.className;
-            }
-            if (command.variables) {
-              var root = document.documentElement;
-              Object.keys(command.variables).forEach(function (key) {
-                root.style.setProperty(key, command.variables[key]);
-              });
-            }
-            break;
-          }
+        } finally {
+          if (isProgrammaticMutation) { endProgrammatic(); }
         }
       }
 
@@ -824,11 +939,19 @@
 
       window.addEventListener("scroll", function () {
         var atBottom = isNearBottom();
+        // Issue #1259: while a host-driven mutation is in flight, the scrollHeight grew because the
+        // host appended content — never a user gesture. Re-stick if we were at the bottom and do NOT
+        // post scrollState, so AutoScrollEnabled is preserved across the idle -> dequeue -> append path.
+        if (programmaticMutationDepth > 0) {
+          if (wasAtBottom && !atBottom) {
+            scrollToBottom();
+          }
+          return;
+        }
         // Issue #1202: a programmatic DOM append (e.g. RunningSubAgentsHtmlTransformer appending
         // the sub-agent panel) grows document.body.scrollHeight before the browser rescrolls, so
         // the transient scroll event reports atBottom=false even though the user never scrolled.
-        // If the user has not interacted since we were last at the bottom, treat this as a
-        // programmatic transient: re-stick to the new bottom and do NOT tell the host we left it.
+        // Retained as a secondary safety net behind the structural gate above.
         if (!userInteractedSinceStuck && wasAtBottom && !atBottom) {
           scrollToBottom();
           return;
@@ -863,6 +986,7 @@
       // Initialise gutter components once the host bridge is wired up.
       CopyGutter.init(document);
       InspectGutter.init(document);
+      UsageInspectGutter.init(document);
       ToolGroupExpandCollapse.init(document);
       TimestampFormatter.init(document);
     })();

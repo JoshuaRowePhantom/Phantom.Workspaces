@@ -84,9 +84,17 @@ public sealed class NotificationRowViewModel : ViewModelBase
             {
                 this.status.ErrorStatus = newError;
                 this.RaisePropertyChanged();
+                this.RaisePropertyChanged(nameof(this.ShowsAttentionIndicator));
             }
         }
     }
+
+    /// <summary>
+    /// The row's "!" attention indicator: an interesting notification that has not yet been read.
+    /// Marking the notification read (e.g. via tab activation) clears it, keeping this surface in
+    /// sync with the tab-header indicator which is driven by <c>!IsRead</c>.
+    /// </summary>
+    public bool ShowsAttentionIndicator => this.IsInteresting && !this.IsRead;
 
     public DateTime When
     {
@@ -97,7 +105,13 @@ public sealed class NotificationRowViewModel : ViewModelBase
     public bool IsRead
     {
         get => this.isRead;
-        set => this.SetProperty(ref this.isRead, value);
+        set
+        {
+            if (this.SetProperty(ref this.isRead, value))
+            {
+                this.RaisePropertyChanged(nameof(this.ShowsAttentionIndicator));
+            }
+        }
     }
 
     public bool IsSnoozed

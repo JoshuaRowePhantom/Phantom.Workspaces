@@ -3,7 +3,7 @@
   <!-- Single source of truth for the product version, consumed by the assembly version,
        the app.manifest identity (kept in sync), and the release tag. -->
   <PropertyGroup>
-    <Version>0.1.0</Version>
+    <Version>0.0.1</Version>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
 </Project>

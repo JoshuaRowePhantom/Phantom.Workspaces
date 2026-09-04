@@ -372,6 +372,71 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UsageEventWithCost_PopulatesCostMicroUsdAdditionalCount()
+    {
+#pragma warning disable GHCP001 // AssistantUsageData.Cost is evaluation-only.
+        var updates = await TranslateAsync(new AssistantUsageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantUsageData
+            {
+                Model = "test-model",
+                InputTokens = 100,
+                OutputTokens = 40,
+                Cost = 1.23,
+            },
+        });
+#pragma warning restore GHCP001
+
+        var update = Assert.Single(updates);
+        var usage = Assert.IsType<UsageContent>(Assert.Single(update.Contents));
+        Assert.Equal(1_230_000, usage.Details.AdditionalCounts![CopilotSdkStreamAdapter.CostMicroUsdCountName]);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UsageEventWithoutCost_OmitsCostAdditionalCount()
+    {
+        var updates = await TranslateAsync(new AssistantUsageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantUsageData
+            {
+                Model = "test-model",
+                InputTokens = 100,
+                OutputTokens = 40,
+            },
+        });
+
+        var update = Assert.Single(updates);
+        var usage = Assert.IsType<UsageContent>(Assert.Single(update.Contents));
+        Assert.True(
+            usage.Details.AdditionalCounts is null
+            || !usage.Details.AdditionalCounts.ContainsKey(CopilotSdkStreamAdapter.CostMicroUsdCountName));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UsageEvent_MapsCacheReadAndWriteTokens()
+    {
+        var updates = await TranslateAsync(new AssistantUsageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantUsageData
+            {
+                Model = "test-model",
+                InputTokens = 100,
+                OutputTokens = 40,
+                CacheReadTokens = 30,
+                CacheWriteTokens = 12,
+            },
+        });
+
+        var update = Assert.Single(updates);
+        var usage = Assert.IsType<UsageContent>(Assert.Single(update.Contents));
+        Assert.Equal(30, usage.Details.AdditionalCounts![CopilotSdkStreamAdapter.CacheReadTokensCountName]);
+        Assert.Equal(12, usage.Details.AdditionalCounts[CopilotSdkStreamAdapter.CacheWriteTokensCountName]);
+    }
+
+    [Fact]
     public async Task TranslateCopilotSdkSessionEvents_UsageEventWithNullCounts_YieldsEmptyDetails()
     {
         var updates = await TranslateAsync(new AssistantUsageEvent
@@ -516,16 +581,186 @@ public sealed class CopilotSdkStreamAdapterTests
         Assert.Contains("kaboom", exception.Message);
     }
 
-    [Fact]
-    public async Task TranslateCopilotSdkSessionEvents_UnknownEvent_Dropped()
+    /// <summary>
+    /// Fix #1323: known-benign SDK lifecycle / metadata events that fell through #1312's default
+    /// arm (and sprayed <c>[unknown-copilot-sdk-event: ...]</c> placeholders into the transcript)
+    /// must now be consumed silently — feeding one on its own yields no <see cref="ChatResponseUpdate"/>.
+    /// </summary>
+    public static IEnumerable<object[]> BenignLifecycleEvents()
     {
-        var updates = await TranslateAsync(
+        yield return new object[]
+        {
+            new AssistantStreamingDeltaEvent { Data = new AssistantStreamingDeltaData { TotalResponseSizeBytes = 42 } },
+        };
+        yield return new object[]
+        {
+            new AssistantMessageStartEvent { Data = new AssistantMessageStartData { MessageId = "msg-1" } },
+        };
+        yield return new object[]
+        {
             new AssistantTurnStartEvent { Data = new AssistantTurnStartData { TurnId = "1", InteractionId = "i-1" } },
+        };
+        yield return new object[]
+        {
+            new UserMessageEvent { Data = new UserMessageData { Content = "hi" } },
+        };
+        yield return new object[]
+        {
+            new PendingMessagesModifiedEvent { Data = new PendingMessagesModifiedData() },
+        };
+        yield return new object[]
+        {
+            new SessionToolsUpdatedEvent { Data = new SessionToolsUpdatedData { Model = "gpt" } },
+        };
+        yield return new object[]
+        {
+            new SessionSkillsLoadedEvent { Data = new SessionSkillsLoadedData { Skills = Array.Empty<SkillsLoadedSkill>() } },
+        };
+        yield return new object[]
+        {
+            new SessionCustomAgentsUpdatedEvent
+            {
+                Data = new SessionCustomAgentsUpdatedData
+                {
+                    Agents = Array.Empty<CustomAgentsUpdatedAgent>(),
+                    Errors = Array.Empty<string>(),
+                    Warnings = Array.Empty<string>(),
+                },
+            },
+        };
+        yield return new object[]
+        {
+            new SessionUsageInfoEvent
+            {
+                Data = new SessionUsageInfoData { CurrentTokens = 1, MessagesLength = 1, TokenLimit = 100 },
+            },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(BenignLifecycleEvents))]
+    public async Task TranslateCopilotSdkSessionEvents_BenignLifecycleEvent_IsConsumedSilently(SessionEvent benignEvent)
+    {
+        // Fix #1323: each known-benign lifecycle / metadata event is consumed by an explicit case
+        // arm and yields no user-visible ChatResponseUpdate.
+        var updates = await TranslateAsync(benignEvent);
+
+        Assert.Empty(updates);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_AssistantStreamingDeltaEvent_ProducesNoVisibleContent()
+    {
+        // Fix #1323: the per-chunk streaming byte-count ping (AssistantStreamingDeltaEvent) was the
+        // primary source of char-by-char placeholder noise; it must produce zero visible content.
+        var updates = await TranslateAsync(
+            new AssistantStreamingDeltaEvent { Data = new AssistantStreamingDeltaData { TotalResponseSizeBytes = 7 } });
+
+        Assert.Empty(updates);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_InterleavedStreamingDeltaAndText_ProducesOnlyText()
+    {
+        // Fix #1323 regression test for the reported screenshot: streaming-delta pings interleaved
+        // with real assistant text must produce ONLY the real text, with no placeholder noise.
+        var updates = await TranslateAsync(
+            new AssistantStreamingDeltaEvent { Data = new AssistantStreamingDeltaData { TotalResponseSizeBytes = 1 } },
+            DeltaEvent(string.Empty, "Hi"),
+            new AssistantStreamingDeltaEvent { Data = new AssistantStreamingDeltaData { TotalResponseSizeBytes = 2 } },
+            DeltaEvent(string.Empty, " there"));
+
+        Assert.Equal(2, updates.Count);
+        Assert.Equal("Hi", Assert.IsType<TextContent>(Assert.Single(updates[0].Contents)).Text);
+        Assert.Equal(" there", Assert.IsType<TextContent>(Assert.Single(updates[1].Contents)).Text);
+        Assert.DoesNotContain(
+            updates,
+            u => u.Contents.OfType<TextContent>().Any(
+                t => t.Text.Contains(CopilotSdkStreamAdapter.UnknownCopilotSdkEventContentType, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnmappedEvent_DoesNotEmitUserVisiblePlaceholderText()
+    {
+        // Fix #1323: a genuinely-unrecognised SessionEvent subclass reaches the default arm, which
+        // must NOT emit any placeholder TextContent; subsequent real events must still translate.
+        var updates = await TranslateAsync(
+            new UnknownTestEvent(),
             DeltaEvent(string.Empty, "still works"));
 
         var update = Assert.Single(updates);
-        var text = Assert.IsType<TextContent>(Assert.Single(update.Contents));
-        Assert.Equal("still works", text.Text);
+        Assert.Equal("still works", Assert.IsType<TextContent>(Assert.Single(update.Contents)).Text);
+        Assert.DoesNotContain(
+            updates,
+            u => u.Contents.OfType<TextContent>().Any(
+                t => t.Text.Contains(CopilotSdkStreamAdapter.UnknownCopilotSdkEventContentType, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnmappedEvent_LogsDebugWithTypeAndAgentId()
+    {
+        // Fix #1323: observability is preserved — the default arm logs at Debug (not Warning) with
+        // the runtime type name and the originating AgentId.
+        var logger = new RecordingLogger();
+        var channel = Channel.CreateUnbounded<SessionEvent>();
+        channel.Writer.TryWrite(new UnknownTestEvent { AgentId = "agent-42" });
+        channel.Writer.Complete();
+
+        await foreach (var _ in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(
+                           channel.Reader, logger, CancellationToken.None))
+        {
+        }
+
+        Assert.DoesNotContain(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Warning);
+        var debug = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Debug);
+        Assert.Contains(nameof(UnknownTestEvent), debug.Message, StringComparison.Ordinal);
+        Assert.Contains("agent-42", debug.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_UnmappedEventRootAgent_LogsRootMarker()
+    {
+        // Fix #1323: root-agent unmapped events (AgentId null/empty) still log a stable marker at Debug.
+        var logger = new RecordingLogger();
+        var channel = Channel.CreateUnbounded<SessionEvent>();
+        channel.Writer.TryWrite(new UnknownTestEvent { AgentId = string.Empty });
+        channel.Writer.Complete();
+
+        await foreach (var _ in CopilotSdkStreamAdapter.TranslateCopilotSdkSessionEvents(
+                           channel.Reader, logger, CancellationToken.None))
+        {
+        }
+
+        var debug = Assert.Single(logger.Entries, e => e.Level == Microsoft.Extensions.Logging.LogLevel.Debug);
+        Assert.Contains("<root>", debug.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Records log entries for #1312 default-arm assertions.</summary>
+    private sealed class RecordingLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public List<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            this.Entries.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
+    /// <summary>
+    /// A genuinely-unrecognised <see cref="SessionEvent"/> subclass used to exercise the #1323
+    /// default arm (log at Debug, emit no transcript content).
+    /// </summary>
+    private sealed class UnknownTestEvent : SessionEvent
+    {
     }
 
     [Fact]
@@ -539,5 +774,71 @@ public sealed class CopilotSdkStreamAdapterTests
         Assert.Equal(3, updates.Count);
         var texts = updates.Select(u => ((TextContent)u.Contents.Single()).Text).ToList();
         Assert.Equal(["one", "two", "three"], texts);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolExecutionStartEventRootAgentId_EmitsUpdateWithoutParentToolCallIdProperty()
+    {
+        // Fix #1318: a ToolExecutionStartEvent with AgentId == null must map to a
+        // ChatResponseUpdate whose FunctionCallContent does NOT carry
+        // ParentToolCallIdPropertyName, so CopilotSubAgentRouter routes it to the root/session
+        // sink where it renders as a child of the SDK session node in AgentChat history.
+        var updates = await TranslateAsync(new ToolExecutionStartEvent
+        {
+            AgentId = null,
+            Data = new ToolExecutionStartData { ToolCallId = "sh-1", ToolName = "powershell" },
+        });
+
+        var call = Assert.IsType<FunctionCallContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Null(CopilotSdkStreamAdapter.GetParentToolCallId(call));
+        Assert.Equal("powershell", call.Name);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolExecutionCompleteEventRootAgentId_EmitsUpdateWithoutParentToolCallIdProperty()
+    {
+        // Fix #1318: mirror of the above for ToolExecutionCompleteEvent — root-AgentId completes
+        // land on the root/session sink.
+        var updates = await TranslateAsync(new ToolExecutionCompleteEvent
+        {
+            AgentId = null,
+            Data = new ToolExecutionCompleteData
+            {
+                ToolCallId = "sh-1",
+                Success = true,
+                Result = new ToolExecutionCompleteResult { Content = "ok" },
+            },
+        });
+
+        var result = Assert.IsType<FunctionResultContent>(Assert.Single(Assert.Single(updates).Contents));
+        Assert.Null(CopilotSdkStreamAdapter.GetParentToolCallId(result));
+        Assert.Equal("sh-1", result.CallId);
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_ToolExecutionEventsWithAgentId_SetParentToolCallIdProperty()
+    {
+        // Fix #1318 regression guard: sub-agent-tagged tool events must still carry
+        // ParentToolCallIdPropertyName so the router forwards them to the correct sub-agent sink.
+        var updates = await TranslateAsync(
+            new ToolExecutionStartEvent
+            {
+                AgentId = "agent-77",
+                Data = new ToolExecutionStartData { ToolCallId = "call-77", ToolName = "my_tool" },
+            },
+            new ToolExecutionCompleteEvent
+            {
+                AgentId = "agent-77",
+                Data = new ToolExecutionCompleteData
+                {
+                    ToolCallId = "call-77",
+                    Success = true,
+                    Result = new ToolExecutionCompleteResult { Content = "ok" },
+                },
+            });
+
+        Assert.Equal(2, updates.Count);
+        Assert.Equal("agent-77", CopilotSdkStreamAdapter.GetParentToolCallId(Assert.Single(updates[0].Contents)));
+        Assert.Equal("agent-77", CopilotSdkStreamAdapter.GetParentToolCallId(Assert.Single(updates[1].Contents)));
     }
 }

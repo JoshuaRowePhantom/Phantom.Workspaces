@@ -56,19 +56,32 @@ public sealed class ToolRowViewModel : ViewModelBase
 {
     private string? lastRunStatus;
     private bool isExpanded;
+    private bool isEndOfHistory;
     private readonly Func<CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadRecentRuns;
+    private readonly Func<DateTimeOffset, DateTimeOffset, CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>>? loadWindow;
+    private readonly Func<DateTimeOffset, CancellationToken, Task<bool>>? hasOlderRuns;
+    private readonly TimeProvider timeProvider;
     private readonly TaskScheduler? foregroundScheduler;
+    private DateTimeOffset currentWindowStart;
+    private bool isLoadingWindow;
 
     public ToolRowViewModel(
         string toolType,
         string host,
         Func<CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadRecentRuns,
-        TaskScheduler? foregroundScheduler = null)
+        TaskScheduler? foregroundScheduler = null,
+        Func<DateTimeOffset, DateTimeOffset, CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>>? loadWindow = null,
+        Func<DateTimeOffset, CancellationToken, Task<bool>>? hasOlderRuns = null,
+        TimeProvider? timeProvider = null)
     {
         this.ToolType = toolType ?? throw new ArgumentNullException(nameof(toolType));
         this.Host = host ?? throw new ArgumentNullException(nameof(host));
         this.loadRecentRuns = loadRecentRuns ?? throw new ArgumentNullException(nameof(loadRecentRuns));
+        this.loadWindow = loadWindow;
+        this.hasOlderRuns = hasOlderRuns;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.foregroundScheduler = foregroundScheduler;
+        this.currentWindowStart = this.timeProvider.GetUtcNow();
         this.ExpandCommand = new RelayCommand(_ => this.OnExpandCommandExecuted());
     }
 
@@ -166,6 +179,115 @@ public sealed class ToolRowViewModel : ViewModelBase
             TaskContinuationOptions.OnlyOnRanToCompletion,
             scheduler).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// #1357: True once paging has reached the oldest run (no older runs remain); further
+    /// <see cref="LoadNextWindowAsync"/> calls become no-ops.
+    /// </summary>
+    public bool IsEndOfHistory
+    {
+        get => this.isEndOfHistory;
+        private set => this.SetProperty(ref this.isEndOfHistory, value);
+    }
+
+    /// <summary>#1357: The (exclusive) upper boundary of the next-older history window to page in.</summary>
+    internal DateTimeOffset CurrentWindowStart => this.currentWindowStart;
+
+    /// <summary>
+    /// #1357: Loads the most-recent ~1-hour window of run history (bounded by time and count),
+    /// replacing <see cref="RecentRuns"/>, and records whether older runs remain.
+    /// </summary>
+    public async Task LoadInitialWindowAsync(CancellationToken cancellationToken = default)
+    {
+        if (this.loadWindow is null)
+        {
+            return;
+        }
+
+        var upper = this.timeProvider.GetUtcNow();
+        var lower = upper - ScheduledToolsRunningViewModel.HistoryPageWindow;
+        var scheduler = ScheduledToolsRunningViewModel.ResolveForegroundScheduler(this.foregroundScheduler);
+
+        var loadTask = Task.Run(
+            async () => await this.loadWindow(lower, upper, cancellationToken).ConfigureAwait(false),
+            cancellationToken);
+
+        await loadTask.ContinueWith(
+            t =>
+            {
+                this.RecentRuns.Clear();
+                foreach (var run in t.Result)
+                {
+                    this.RecentRuns.Add(run);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnRanToCompletion,
+            scheduler).ConfigureAwait(false);
+
+        this.currentWindowStart = lower;
+        this.IsEndOfHistory = false;
+        await this.UpdateEndOfHistoryAsync(lower, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// #1357: Loads the next-older ~1-hour window and APPENDS it to <see cref="RecentRuns"/> (does
+    /// not clear existing items). Re-entrant calls (from overlapping scroll events) and calls past
+    /// the end of history are no-ops.
+    /// </summary>
+    public async Task LoadNextWindowAsync(CancellationToken cancellationToken = default)
+    {
+        if (this.loadWindow is null || this.isEndOfHistory || this.isLoadingWindow)
+        {
+            return;
+        }
+
+        // Set the re-entrancy guard synchronously, before the first await, so overlapping scroll
+        // events observe it and return without starting a second load of the same window.
+        this.isLoadingWindow = true;
+        try
+        {
+            var upper = this.currentWindowStart;
+            var lower = upper - ScheduledToolsRunningViewModel.HistoryPageWindow;
+            var scheduler = ScheduledToolsRunningViewModel.ResolveForegroundScheduler(this.foregroundScheduler);
+
+            var loadTask = Task.Run(
+                async () => await this.loadWindow(lower, upper, cancellationToken).ConfigureAwait(false),
+                cancellationToken);
+
+            await loadTask.ContinueWith(
+                t =>
+                {
+                    foreach (var run in t.Result)
+                    {
+                        this.RecentRuns.Add(run);
+                    }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnRanToCompletion,
+                scheduler).ConfigureAwait(false);
+
+            this.currentWindowStart = lower;
+            await this.UpdateEndOfHistoryAsync(lower, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            this.isLoadingWindow = false;
+        }
+    }
+
+    private async Task UpdateEndOfHistoryAsync(DateTimeOffset upperExclusive, CancellationToken cancellationToken)
+    {
+        if (this.hasOlderRuns is null)
+        {
+            return;
+        }
+
+        var hasOlder = await Task.Run(
+            async () => await this.hasOlderRuns(upperExclusive, cancellationToken).ConfigureAwait(false),
+            cancellationToken).ConfigureAwait(false);
+        this.IsEndOfHistory = !hasOlder;
+    }
 }
 
 /// <summary>
@@ -175,10 +297,23 @@ public sealed class ToolRowViewModel : ViewModelBase
 /// </summary>
 public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
 {
+    /// <summary>
+    /// #1358: upper bound on the number of <c>tool-execution-result</c> entities a single history
+    /// query materialises, so refresh work is O(recent window) rather than O(entire history).
+    /// </summary>
+    internal const int RecentHistoryResultLimit = 500;
+
+    /// <summary>
+    /// #1357: the duration of a single history paging window. Each scroll-driven page loads
+    /// approximately this much older history and appends it.
+    /// </summary>
+    internal static readonly TimeSpan HistoryPageWindow = TimeSpan.FromHours(1);
+
     private readonly ScheduledToolHost host;
     private readonly IDataAccessLayer dataAccessLayer;
     private readonly Action<Action> dispatch;
     private readonly TaskScheduler? foregroundScheduler;
+    private readonly TimeProvider timeProvider;
 
     /// <param name="host">The host whose running and historical tool executions are displayed.</param>
     /// <param name="dataAccessLayer">Used to query <c>tool-execution-result</c> entities for run history.</param>
@@ -198,12 +333,14 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
         ScheduledToolHost host,
         IDataAccessLayer dataAccessLayer,
         Action<Action>? dispatch = null,
-        TaskScheduler? foregroundScheduler = null)
+        TaskScheduler? foregroundScheduler = null,
+        TimeProvider? timeProvider = null)
     {
         this.host = host ?? throw new ArgumentNullException(nameof(host));
         this.dataAccessLayer = dataAccessLayer ?? throw new ArgumentNullException(nameof(dataAccessLayer));
         this.dispatch = dispatch ?? (action => action());
         this.foregroundScheduler = foregroundScheduler;
+        this.timeProvider = timeProvider ?? TimeProvider.System;
         this.host.RunningExecutionsChanged += this.OnRunningExecutionsChanged;
         this.Refresh();
     }
@@ -292,9 +429,18 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                             new TopLevelQueryClause
                             {
                                 ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
-                                Clause = new EntityTypeQueryClause
+                                // #1358: bound the recent-history window so refresh work is
+                                // O(window), not O(entire history).
+                                Clause = new TopQueryClause
                                 {
-                                    EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                                    ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                                    // #1360: order by start-time descending server-side so the bounded
+                                    // window always contains the most-recent runs, not an arbitrary page.
+                                    SortSpecifications = StartTimeDescendingSort,
+                                    Clause = new EntityTypeQueryClause
+                                    {
+                                        EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                                    },
                                 },
                             },
                         ],
@@ -371,12 +517,77 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
             toolType,
             host,
             cancellationToken => this.LoadRecentRunsForToolAsync(capturedHost, capturedToolType, cancellationToken),
-            this.foregroundScheduler);
+            this.foregroundScheduler,
+            // #1357: time-windowed paging loaders.
+            (lowerInclusive, upperExclusive, cancellationToken) => this.LoadWindowForToolAsync(
+                capturedHost, capturedToolType, lowerInclusive, upperExclusive, cancellationToken),
+            (upperExclusive, cancellationToken) => this.HasOlderRunsForToolAsync(
+                capturedToolType, upperExclusive, cancellationToken),
+            this.timeProvider);
     }
 
     private async Task<IReadOnlyList<RunSummaryViewModel>> LoadRecentRunsForToolAsync(
         string hostLabel,
         string toolType,
+        CancellationToken cancellationToken)
+    {
+        // #1358/#1360: filter by tool AND host at the query (so other tools'/hosts' runs are never
+        // materialised and cannot starve the window) and return the most-recent runs via a
+        // server-side start-time-descending sort bounded to a recent window.
+        var queryResult = await this.dataAccessLayer.QueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
+                        Clause = new TopQueryClause
+                        {
+                            ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                            SortSpecifications = StartTimeDescendingSort,
+                            Clause = BuildToolHistoryClause(toolType, BuildHostLabelClause(hostLabel)),
+                        },
+                    },
+                ],
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return ParseRuns(queryResult)
+            .Where(r => string.Equals(r.HostLabel, hostLabel, StringComparison.Ordinal))
+            .OrderByDescending(r => r.StartTime)
+            .Select(ToRunSummary)
+            .ToArray();
+    }
+
+    private static IEnumerable<ParsedTopLevelRun> ParseRuns(QueryResult queryResult)
+    {
+        return queryResult.Batches
+            .SelectMany(batch => batch.Entities)
+            .Select(entity => entity.Data)
+            .OfType<JsonElement>()
+            .Select(ParseTopLevelRun)
+            .Where(r => r is not null)
+            .Select(r => r!.Value);
+    }
+
+    private static RunSummaryViewModel ToRunSummary(ParsedTopLevelRun r) => new(
+        r.StartTime,
+        r.EndTime.HasValue ? r.EndTime.Value - r.StartTime : null,
+        r.Status ?? "running",
+        r.Message);
+
+    /// <summary>
+    /// #1357: Loads the runs for a tool whose <c>start-time</c> falls in the half-open window
+    /// <c>[lowerInclusive, upperExclusive)</c>, bounded both by time (server-side clauses) and by
+    /// count (<see cref="RecentHistoryResultLimit"/>). #1360: host is filtered and results are ordered
+    /// (start-time descending) server-side so a busy hour's window is not starved by other hosts.
+    /// </summary>
+    private async Task<IReadOnlyList<RunSummaryViewModel>> LoadWindowForToolAsync(
+        string hostLabel,
+        string toolType,
+        DateTimeOffset lowerInclusive,
+        DateTimeOffset upperExclusive,
         CancellationToken cancellationToken)
     {
         var queryResult = await this.dataAccessLayer.QueryAsync(
@@ -387,31 +598,128 @@ public sealed class ScheduledToolsRunningViewModel : ViewModelBase, IDisposable
                     new TopLevelQueryClause
                     {
                         ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
-                        Clause = new EntityTypeQueryClause
+                        Clause = new TopQueryClause
                         {
-                            EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+                            ResultLimit = new QueryResultLimit(RecentHistoryResultLimit),
+                            SortSpecifications = StartTimeDescendingSort,
+                            Clause = BuildToolHistoryClause(
+                                toolType,
+                                BuildHostLabelClause(hostLabel),
+                                BuildStartTimeClause(lowerInclusive, FieldComparisonOperator.GreaterThanOrEqualTo),
+                                BuildStartTimeClause(upperExclusive, FieldComparisonOperator.LessThan)),
                         },
                     },
                 ],
             },
             cancellationToken).ConfigureAwait(false);
 
-        return queryResult.Batches
-            .SelectMany(batch => batch.Entities)
-            .Select(entity => entity.Data)
-            .OfType<JsonElement>()
-            .Select(ParseTopLevelRun)
-            .Where(r => r is not null)
-            .Select(r => r!.Value)
-            .Where(r => string.Equals(r.HostLabel, hostLabel, StringComparison.Ordinal)
-                     && string.Equals(r.ToolName, toolType, StringComparison.Ordinal))
+        return ParseRuns(queryResult)
+            .Where(r => string.Equals(r.HostLabel, hostLabel, StringComparison.Ordinal))
             .OrderByDescending(r => r.StartTime)
-            .Select(r => new RunSummaryViewModel(
-                r.StartTime,
-                r.EndTime.HasValue ? r.EndTime.Value - r.StartTime : null,
-                r.Status ?? "running",
-                r.Message))
+            .Select(ToRunSummary)
             .ToArray();
+    }
+
+    /// <summary>
+    /// #1357: Returns whether any run for the tool started strictly before <paramref name="upperExclusive"/>,
+    /// used to detect the end of history so paging can stop. Bounded to a single entity (<c>Top(1)</c>).
+    /// Filters by tool only (not host) so a host whose in-memory refinement is empty does not stop paging
+    /// prematurely while older runs still exist.
+    /// </summary>
+    private async Task<bool> HasOlderRunsForToolAsync(
+        string toolType,
+        DateTimeOffset upperExclusive,
+        CancellationToken cancellationToken)
+    {
+        var queryResult = await this.dataAccessLayer.QueryAsync(
+            new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier("tool-execution-results"),
+                        Clause = new TopQueryClause
+                        {
+                            ResultLimit = new QueryResultLimit(1),
+                            Clause = BuildToolHistoryClause(
+                                toolType,
+                                BuildStartTimeClause(upperExclusive, FieldComparisonOperator.LessThan)),
+                        },
+                    },
+                ],
+            },
+            cancellationToken).ConfigureAwait(false);
+
+        return queryResult.Batches.SelectMany(batch => batch.Entities).Any();
+    }
+
+    /// <summary>
+    /// Builds a clause matching top-level <c>tool-execution-result</c> entities for a specific tool
+    /// (filtered by the <c>tool-name</c> field), optionally AND-ed with additional clauses (e.g. a
+    /// <c>start-time</c> window; see <see cref="BuildStartTimeClause"/>).
+    /// </summary>
+    private static QueryClause BuildToolHistoryClause(string toolType, params QueryClause[] additionalClauses)
+    {
+        var clauses = new List<QueryClause>
+        {
+            new EntityTypeQueryClause
+            {
+                EntityTypeNames = new EntityTypeNameSet([ToolExecutionResultWriter.ToolExecutionResultEntityType]),
+            },
+            new EntityFieldQueryClause
+            {
+                FieldPath = new FieldPath("tool-name"),
+                ComparisonOperator = FieldComparisonOperator.Equals,
+                Value = JsonSerializer.SerializeToElement(toolType),
+            },
+        };
+        clauses.AddRange(additionalClauses);
+        return new AndQueryClause { Clauses = clauses };
+    }
+
+    /// <summary>
+    /// #1357: Builds a <c>start-time</c> field clause. The value is formatted identically to how
+    /// <see cref="ToolExecutionResultWriter"/> stores it (round-trip "O", UTC), so ordinal string
+    /// comparison in the query layer is monotonic in time.
+    /// </summary>
+    private static EntityFieldQueryClause BuildStartTimeClause(DateTimeOffset value, FieldComparisonOperator comparisonOperator)
+    {
+        return new EntityFieldQueryClause
+        {
+            FieldPath = new FieldPath("start-time"),
+            ComparisonOperator = comparisonOperator,
+            Value = JsonSerializer.SerializeToElement(
+                value.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)),
+        };
+    }
+
+    /// <summary>
+    /// #1360: A server-side sort by <c>start-time</c> descending, applied before the top-N limit so a
+    /// bounded/windowed query returns the most-recent runs rather than an arbitrary page.
+    /// </summary>
+    private static readonly IReadOnlyList<SortSpecification> StartTimeDescendingSort =
+    [
+        new SortSpecification
+        {
+            FieldPath = new FieldPath("start-time"),
+            Direction = SortDirection.Descending,
+        },
+    ];
+
+    /// <summary>
+    /// #1360: Builds a <c>host-label</c> field clause so the run-history query is filtered to a single
+    /// host server-side, preventing a per-tool/per-host window from being starved by other hosts' runs.
+    /// The value matches how <see cref="ToolExecutionResultWriter"/> stores <c>host-label</c>.
+    /// </summary>
+    private static EntityFieldQueryClause BuildHostLabelClause(string hostLabel)
+    {
+        return new EntityFieldQueryClause
+        {
+            FieldPath = new FieldPath("host-label"),
+            ComparisonOperator = FieldComparisonOperator.Equals,
+            Value = JsonSerializer.SerializeToElement(hostLabel),
+        };
     }
 
     private static ParsedTopLevelRun? ParseTopLevelRun(JsonElement entity)

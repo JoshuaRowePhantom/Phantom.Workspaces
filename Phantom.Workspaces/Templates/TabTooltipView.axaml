@@ -1,0 +1,93 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Templates.TabTooltipView">
+
+    <!-- #1235: Rich per-content-type tab tooltip. The per-type templates live on this
+         UserControl's local DataTemplates so the inner ContentControl resolves THEM,
+         not the ambient WorkspaceDataTemplates tab-content views (which would otherwise
+         render the heavy browser/terminal/entity controls inside the tooltip). Local
+         DataTemplates are checked before Window/Application scope. Concrete-type matches
+         win over the WorkspaceTabViewModel fallback by declaration order. -->
+    <UserControl.DataTemplates>
+
+        <!-- Browser tab: full title + URL. -->
+        <DataTemplate DataType="vm:WebViewModel" x:CompileBindings="False">
+            <StackPanel MaxWidth="480" Spacing="2">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" TextWrapping="Wrap" />
+                <TextBlock Text="Browser tab" Classes="muted" />
+                <TextBlock Text="{Binding AddressBarUrl}" TextWrapping="Wrap" />
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- Shell tab: command + arguments + working directory. -->
+        <DataTemplate DataType="vm:ShellTabViewModel" x:CompileBindings="False">
+            <StackPanel MaxWidth="520" Spacing="2">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" TextWrapping="Wrap" />
+                <TextBlock Text="Shell tab" Classes="muted" />
+                <TextBlock TextWrapping="Wrap">
+                    <Run Text="Command: " FontWeight="SemiBold" />
+                    <Run Text="{Binding CommandLine}" />
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap"
+                           IsVisible="{Binding Arguments, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <Run Text="Arguments: " FontWeight="SemiBold" />
+                    <Run Text="{Binding Arguments}" />
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap"
+                           IsVisible="{Binding WorkingDirectory, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <Run Text="Working directory: " FontWeight="SemiBold" />
+                    <Run Text="{Binding WorkingDirectory}" />
+                </TextBlock>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- Entity tab: display name + entity id. -->
+        <DataTemplate DataType="vm:EntityWorkspaceTabViewModel" x:CompileBindings="False">
+            <StackPanel MaxWidth="480" Spacing="2">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" TextWrapping="Wrap" />
+                <TextBlock Text="Entity tab" Classes="muted" />
+                <TextBlock TextWrapping="Wrap">
+                    <Run Text="Name: " FontWeight="SemiBold" />
+                    <Run Text="{Binding Entity.DisplayName}" />
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap">
+                    <Run Text="Id: " FontWeight="SemiBold" />
+                    <Run Text="{Binding Entity.EntityId}" />
+                </TextBlock>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- Agent chat tab: agent + session id + state. -->
+        <DataTemplate DataType="vm:AgentSessionWorkspaceTabViewModel" x:CompileBindings="False">
+            <StackPanel MaxWidth="480" Spacing="2">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" TextWrapping="Wrap" />
+                <TextBlock Text="Agent chat" Classes="muted" />
+                <TextBlock TextWrapping="Wrap">
+                    <Run Text="Agent: " FontWeight="SemiBold" />
+                    <Run Text="{Binding Agent.DisplayName}" />
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap"
+                           IsVisible="{Binding AgentSessionId, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                    <Run Text="Session: " FontWeight="SemiBold" />
+                    <Run Text="{Binding AgentSessionId}" />
+                </TextBlock>
+                <TextBlock TextWrapping="Wrap">
+                    <Run Text="State: " FontWeight="SemiBold" />
+                    <Run Text="{Binding State}" />
+                </TextBlock>
+            </StackPanel>
+        </DataTemplate>
+
+        <!-- Fallback for unknown/future tab kinds: title + optional plain-text TabTooltip. -->
+        <DataTemplate DataType="vm:WorkspaceTabViewModel" x:CompileBindings="False">
+            <StackPanel MaxWidth="480" Spacing="2">
+                <TextBlock Text="{Binding Title}" FontWeight="Bold" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding TabTooltip}" TextWrapping="Wrap"
+                           IsVisible="{Binding TabTooltip, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.DataTemplates>
+
+    <ContentControl Content="{Binding}" x:CompileBindings="False" />
+</UserControl>

@@ -1,4 +1,5 @@
 using AgentSchema;
+using System.Collections.Specialized;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 
@@ -72,6 +73,7 @@ public sealed class AgentViewModelEditorTreeTests
     [Fact]
     public async Task ToolsNavItem_ChildrenUpdate_Incrementally()
     {
+        Assert.True(File.Exists(TestMcpServerProcess.GetMcpExecutablePathForTests()));
         await using var server = await TestMcpServerProcess.StartAsync();
         var chat = await CreateChatWithMcpAsync(server.BoundUrl);
         using var loggerFactory = new ObservableLoggerFactory();
@@ -83,6 +85,7 @@ public sealed class AgentViewModelEditorTreeTests
         var subAgentsNav = root.Children.First(c => c.Id == "chat-sub-agents");
 
         await WaitForMcpToolsLoadedAsync(chat);
+        await WaitForChildrenCountAsync(toolsNav, expectedCount: 1);
 
         Assert.Single(toolsNav.Children);
         Assert.Empty(chatDetailsNav.Children);
@@ -327,6 +330,7 @@ public sealed class AgentViewModelEditorTreeTests
 
         var subAgentChat = (AgentChat)chat.SubAgents.First(s => s.AgentId == "sub-agent-1");
         await WaitForMcpToolsLoadedAsync(subAgentChat);
+        await WaitForChildrenCountAsync(subAgentToolsNav, expectedCount: 1);
 
         Assert.Single(subAgentToolsNav.Children);
     }
@@ -624,6 +628,40 @@ public sealed class AgentViewModelEditorTreeTests
         finally
         {
             chat.ToolsChanged -= OnToolsChanged;
+        }
+    }
+
+    private static async Task WaitForChildrenCountAsync(AgentEditorNavigationItemViewModel item, int expectedCount)
+    {
+        if (item.Children.Count == expectedCount)
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnChildrenChanged(object? _, NotifyCollectionChangedEventArgs __)
+        {
+            if (item.Children.Count == expectedCount)
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        ((INotifyCollectionChanged)item.Children).CollectionChanged += OnChildrenChanged;
+        try
+        {
+            if (item.Children.Count == expectedCount)
+            {
+                return;
+            }
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(30));
+            await signal.Task.WaitAsync(cts.Token);
+        }
+        finally
+        {
+            ((INotifyCollectionChanged)item.Children).CollectionChanged -= OnChildrenChanged;
         }
     }
 }

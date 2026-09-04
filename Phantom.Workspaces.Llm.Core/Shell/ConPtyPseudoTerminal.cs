@@ -37,6 +37,18 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         ref SECURITY_ATTRIBUTES lpPipeAttributes, uint nSize);
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateNamedPipeW(
+        string lpName, uint dwOpenMode, uint dwPipeMode,
+        uint nMaxInstances, uint nOutBufferSize, uint nInBufferSize,
+        uint nDefaultTimeOut, ref SECURITY_ATTRIBUTES lpSecurityAttributes);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+        ref SECURITY_ATTRIBUTES lpSecurityAttributes, uint dwCreationDisposition,
+        uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcessW(
         string? lpApplicationName,
         string lpCommandLine,
@@ -77,6 +89,16 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     private const uint PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     private const uint HANDLE_FLAG_INHERIT           = 0x00000001;
     private const uint FILE_FLAG_OVERLAPPED = 0x40000000;
+
+    private const uint PIPE_ACCESS_INBOUND = 0x00000001;
+    private const uint PIPE_ACCESS_OUTBOUND = 0x00000002;
+    private const uint PIPE_TYPE_BYTE = 0x00000000;
+    private const uint PIPE_READMODE_BYTE = 0x00000000;
+    private const uint PIPE_WAIT = 0x00000000;
+    private const uint GENERIC_READ = 0x80000000;
+    private const uint GENERIC_WRITE = 0x40000000;
+    private const uint OPEN_EXISTING = 3;
+    private const uint FILE_ATTRIBUTE_NORMAL = 0x00000080;
 
     // ── Structures ──────────────────────────────────────────────────────────
 
@@ -173,14 +195,14 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        // PTY input pipe: ConPTY reads from inputPtySide (synchronous), caller writes to inputWrite (synchronous)
-        var (inputPtySide, inputWrite) = CreatePtyPipe(callerReads: false);
+        // PTY input pipe: ConPTY reads from inputPtySide (synchronous), caller writes to inputWrite (overlapped/async)
+        var (inputPtySide, inputWrite) = CreateOverlappedPtyPipe(callerReads: false);
 
-        // PTY output pipe: ConPTY writes to outputPtySide (synchronous), caller reads from outputRead (synchronous)
+        // PTY output pipe: ConPTY writes to outputPtySide (synchronous), caller reads from outputRead (overlapped/async)
         SafeFileHandle outputPtySide, outputRead;
         try
         {
-            (outputPtySide, outputRead) = CreatePtyPipe(callerReads: true);
+            (outputPtySide, outputRead) = CreateOverlappedPtyPipe(callerReads: true);
         }
         catch
         {
@@ -269,10 +291,10 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         _hThread = hThread;
         ProcessId = pi.dwProcessId;
 
-        // Anonymous pipes from CreatePipe are synchronous. Use isAsync: false.
-        // FileStream will use threadpool-based async for ReadAsync/WriteAsync calls.
-        Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: false);
-        Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: false);
+        // Caller-side pipe handles are created with FILE_FLAG_OVERLAPPED. Use isAsync: true
+        // so FileStream uses true async I/O with deterministic cancellation and ordering.
+        Output = new FileStream(outputRead, FileAccess.Read, bufferSize: 4096, isAsync: true);
+        Input = new FileStream(inputWrite, FileAccess.Write, bufferSize: 4096, isAsync: true);
     }
 
     // ── IPseudoTerminal ─────────────────────────────────────────────────────
@@ -291,25 +313,37 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
         waitHandle.SafeWaitHandle = new SafeWaitHandle(_hProcess.DangerousGetHandle(), ownsHandle: false);
 
         RegisteredWaitHandle? registration = null;
+        CancellationTokenRegistration cancellationRegistration = default;
+        int completed = 0;
+
+        void Complete(Action completeTask)
+        {
+            if (Interlocked.Exchange(ref completed, 1) != 0)
+            {
+                return;
+            }
+
+            registration?.Unregister(null);
+            cancellationRegistration.Dispose();
+            waitHandle.Dispose();
+            completeTask();
+        }
+
         registration = ThreadPool.RegisterWaitForSingleObject(
             waitHandle,
             (_, timedOut) =>
             {
-                registration?.Unregister(null);
-                waitHandle.Dispose();
                 GetExitCodeProcess(_hProcess, out uint code);
                 GC.KeepAlive(_hProcess);
-                tcs.TrySetResult((int)code);
+                Complete(() => tcs.TrySetResult((int)code));
             },
             state: null,
             millisecondsTimeOutInterval: -1,
             executeOnlyOnce: true);
 
-        ct.Register(() =>
+        cancellationRegistration = ct.Register(() =>
         {
-            registration?.Unregister(null);
-            waitHandle.Dispose();
-            tcs.TrySetCanceled(ct);
+            Complete(() => tcs.TrySetCanceled(ct));
         });
 
         return tcs.Task;
@@ -333,10 +367,11 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
     // ── Helpers ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Creates an anonymous pipe pair (per the documented ConPTY sample). Both ends are
-    /// synchronous; FileStream(isAsync:false) will use threadpool for async operations.
+    /// Creates a pipe pair where the ConPTY-owned end is synchronous (as required by ConPTY)
+    /// and the caller-owned end is overlapped/async (created with FILE_FLAG_OVERLAPPED).
+    /// Uses a uniquely named pipe via CreateNamedPipeW/CreateFileW to enable mixed sync/async modes.
     /// </summary>
-    private static (SafeFileHandle PtySide, SafeFileHandle CallerSide) CreatePtyPipe(
+    private static (SafeFileHandle PtySide, SafeFileHandle CallerSide) CreateOverlappedPtyPipe(
         bool callerReads)
     {
         var sa = new SECURITY_ATTRIBUTES
@@ -346,28 +381,68 @@ internal sealed class ConPtyPseudoTerminal : IPseudoTerminal
             bInheritHandle = 0  // not inheritable
         };
 
-        SafeFileHandle read, write;
-        if (!CreatePipe(out read, out write, ref sa, 0))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "CreatePipe failed.");
+        // Create a unique name for this pipe. ConPTY does not care about the pipe implementation
+        // as long as it can read/write synchronously from its end.
+        var pipeName = $@"\\.\pipe\ConPTY-{Guid.NewGuid():N}";
 
-        // PtySide = synchronous end for ConPTY, CallerSide = synchronous end for caller
-        SafeFileHandle ptySide, callerSide;
+        SafeFileHandle serverHandle, clientHandle;
+
         if (callerReads)
         {
-            ptySide = write;      // ConPTY writes rendered output
-            callerSide = read;    // caller reads
+            // ConPTY writes (server, synchronous), caller reads (client, overlapped)
+            serverHandle = CreateNamedPipeW(
+                pipeName,
+                PIPE_ACCESS_OUTBOUND,  // server writes
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1, 4096, 4096, 0, ref sa);
+
+            if (serverHandle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateNamedPipeW failed (output server).");
+
+            clientHandle = CreateFileW(
+                pipeName,
+                GENERIC_READ,  // client reads
+                0, ref sa,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,  // async
+                IntPtr.Zero);
+
+            if (clientHandle.IsInvalid)
+            {
+                serverHandle.Dispose();
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFileW failed (output client).");
+            }
+
+            return (PtySide: serverHandle, CallerSide: clientHandle);
         }
         else
         {
-            ptySide = read;       // ConPTY reads stdin
-            callerSide = write;   // caller writes
+            // ConPTY reads (server, synchronous), caller writes (client, overlapped)
+            serverHandle = CreateNamedPipeW(
+                pipeName,
+                PIPE_ACCESS_INBOUND,  // server reads
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                1, 4096, 4096, 0, ref sa);
+
+            if (serverHandle.IsInvalid)
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateNamedPipeW failed (input server).");
+
+            clientHandle = CreateFileW(
+                pipeName,
+                GENERIC_WRITE,  // client writes
+                0, ref sa,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,  // async
+                IntPtr.Zero);
+
+            if (clientHandle.IsInvalid)
+            {
+                serverHandle.Dispose();
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "CreateFileW failed (input client).");
+            }
+
+            return (PtySide: serverHandle, CallerSide: clientHandle);
         }
-
-        // Explicitly clear inherit flags (belt-and-suspenders with bInheritHandle=0)
-        SetHandleInformation(ptySide, HANDLE_FLAG_INHERIT, 0);
-        SetHandleInformation(callerSide, HANDLE_FLAG_INHERIT, 0);
-
-        return (ptySide, callerSide);
     }
 
     /// <summary>

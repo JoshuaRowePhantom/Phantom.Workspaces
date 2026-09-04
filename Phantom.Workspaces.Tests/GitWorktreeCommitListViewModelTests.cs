@@ -178,24 +178,32 @@ public sealed class GitWorktreeCommitListViewModelTests : IDisposable
         }
 
         using var pump = new SingleThreadPump(installSynchronizationContext: true);
+        var pumpThreadId = pump.ThreadId;
         var foregroundScheduler = await pump.PostAsync(() =>
             Task.FromResult(TaskScheduler.FromCurrentSynchronizationContext()));
         var vm = new GitWorktreeCommitListViewModel();
 
-        var refreshTaskTcs = new TaskCompletionSource<Task>(TaskCreationOptions.RunContinuationsAsynchronously);
-        pump.Context.Post(_ => refreshTaskTcs.SetResult(
-            vm.RefreshAsync(this.repoDir, targetBranchName, foregroundScheduler, TestContext.Current.CancellationToken)), null);
-        var refreshTask = await refreshTaskTcs.Task;
+        // Capture the managed thread id of the Task.Run-scheduled git work via the test hook.
+        // Asserting this differs from the pump thread proves the git status + log did not run on
+        // the foreground scheduler — the actual behaviour the test name claims — without relying
+        // on the pump queue's FIFO ordering between an externally-timed continuation and a
+        // locally-posted ping. See #1284.
+        int? gitWorkThreadId = null;
+        GitWorktreeCommitListViewModel.GitWorkStartedForTests = () =>
+            gitWorkThreadId = Environment.CurrentManagedThreadId;
+        try
+        {
+            var refreshTask = await pump.PostAsync(() => Task.FromResult(
+                vm.RefreshAsync(this.repoDir, targetBranchName, foregroundScheduler, TestContext.Current.CancellationToken)));
+            await refreshTask.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            GitWorktreeCommitListViewModel.GitWorkStartedForTests = null;
+        }
 
-        // The pump ping must run before RefreshAsync completes, proving git ops did not run on
-        // the pump-thread foreground scheduler.
-        var pingRan = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        pump.Context.Post(_ => pingRan.SetResult(), null);
-
-        var winner = await Task.WhenAny(pingRan.Task, refreshTask).WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
-        Assert.Same(pingRan.Task, winner);
-
-        await refreshTask;
+        Assert.NotNull(gitWorkThreadId);
+        Assert.NotEqual(pumpThreadId, gitWorkThreadId!.Value);
         Assert.NotEmpty(vm.Commits);
     }
 

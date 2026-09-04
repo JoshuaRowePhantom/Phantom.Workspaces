@@ -37,20 +37,25 @@
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       AllowAutoHide="False">
-            <ContentControl Classes="entity-card-shell entity-card-single-host"
-                            DataContext="{Binding EntityCardNode}"
-                            Content="{Binding}"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Top"
-                            Margin="0,12,0,0"
-                            MinWidth="160">
-                <ContentControl.MaxWidth>
-                    <MultiBinding Converter="{x:Static converters:SingleEntityMaxWidthConverter.Instance}">
-                        <Binding Path="$parent[ScrollViewer].Viewport.Width" />
-                        <Binding Path="$parent[ScrollViewer].Bounds.Width" />
-                    </MultiBinding>
-                </ContentControl.MaxWidth>
-            </ContentControl>
+            <!-- Issue #1343: the 12px top gap lives on this wrapping Grid, so the ScrollViewer
+                 measures its finite arranged height against the real (possibly over-tall) content
+                 height and a vertical scrollbar engages when the card exceeds the viewport. The
+                 inner ContentControl is intentionally NOT top-aligned. -->
+            <Grid RowDefinitions="Auto" Margin="0,12,0,0">
+                <ContentControl Grid.Row="0"
+                                Classes="entity-card-shell entity-card-single-host"
+                                DataContext="{Binding EntityCardNode}"
+                                Content="{Binding}"
+                                HorizontalAlignment="Center"
+                                MinWidth="160">
+                    <ContentControl.MaxWidth>
+                        <MultiBinding Converter="{x:Static converters:SingleEntityMaxWidthConverter.Instance}">
+                            <Binding Path="$parent[ScrollViewer].Viewport.Width" />
+                            <Binding Path="$parent[ScrollViewer].Bounds.Width" />
+                        </MultiBinding>
+                    </ContentControl.MaxWidth>
+                </ContentControl>
+            </Grid>
         </ScrollViewer>
     </DataTemplate>
 
@@ -124,7 +129,7 @@
                         Margin="4,0,0,0" />
                 <TextBox Grid.Column="2"
                          Text="{Binding CommandLine, Mode=TwoWay}"
-                         Watermark="command line"
+                         PlaceholderText="command line"
                          Margin="4,0,0,0" />
                 <Button Grid.Column="3"
                         Content="…"
@@ -158,7 +163,7 @@
             <!-- Edit mode: search box plus candidate results. -->
             <TextBox Grid.Column="1" Grid.Row="0"
                      Text="{Binding SearchText, Mode=TwoWay}"
-                     Watermark="{Binding ResolvedDisplayName}"
+                     PlaceholderText="{Binding ResolvedDisplayName}"
                      IsVisible="{Binding IsEditMode}"
                      Classes="workspace-field-value" />
             <ItemsControl Grid.Column="1" Grid.Row="1"
@@ -206,6 +211,7 @@
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding Value}"
+                       SearchQuery="{Binding $parent[entityControls:EntityCardControl].((vm:EntityCardViewModel)DataContext).SearchQuery}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
             <TextBox Grid.Column="1"
@@ -222,6 +228,7 @@
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding DisplayValue}"
+                       SearchQuery="{Binding $parent[entityControls:EntityCardControl].((vm:EntityCardViewModel)DataContext).SearchQuery}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
             <ToggleSwitch Grid.Column="1"
@@ -240,6 +247,7 @@
             <controls:SafeSelectableTextBlock Text="{Binding FieldName}" Classes="muted workspace-field-label" />
             <controls:SafeSelectableTextBlock Grid.Column="1"
                        Text="{Binding Value}"
+                       SearchQuery="{Binding $parent[entityControls:EntityCardControl].((vm:EntityCardViewModel)DataContext).SearchQuery}"
                        Classes="workspace-field-read-value"
                        IsVisible="{Binding IsReadMode}" />
             <TextBox Grid.Column="1"
@@ -463,27 +471,15 @@
             </TabControl>
         </Grid>
     </DataTemplate>
-    <!-- Tab header item templates (top-level so they are individually testable and visible to the full
-         template-resolution chain inside ItemsControl after Dock pane moves) -->
-    <DataTemplate DataType="vm:FaviconTabHeaderItemViewModel">
-        <!-- Show the globe glyph; favicon image loading is a future enhancement -->
-        <TextBlock Text="🌐" />
-    </DataTemplate>
-
-    <DataTemplate DataType="vm:IconTabHeaderItemViewModel">
-        <TextBlock Text="{Binding Icon}" />
-    </DataTemplate>
-
-    <!-- #1196: AgentRunningIndicator / NotificationIndicator DataTemplates
-         are defined once as keyed resources in TabHeaderItemTemplates.axaml
-         (merged into App.axaml). The outer tab-header body is likewise a single
-         keyed resource (TabHeaderTemplate) referenced explicitly via
-         ContentControl.ContentTemplate on each DocumentControl.HeaderTemplate,
-         so no implicit vm:TabHeaderViewModel DataTemplate is needed here. -->
-
-    <DataTemplate DataType="vm:StatusTabHeaderItemViewModel">
-        <entityControls:StatusControl Item="{Binding Status}" />
-    </DataTemplate>
+    <!-- #1196 / #1324: All tab-header per-item DataTemplates (AgentRunningIndicator,
+         NotificationIndicator, Icon, Favicon, Status) are defined once as keyed
+         resources in TabHeaderItemTemplates.axaml (merged into App.axaml) and are
+         referenced from the keyed TabHeaderTemplate / WebTabHeaderTemplate bodies,
+         which every outer AND inner DockControl scope consumes identically. They are
+         intentionally NOT declared here as implicit top-level templates: the inner
+         nested DockControl (AutoCreateDataTemplates="False") cannot walk up to this
+         ancestor scope (#1130), so implicit copies here were unreachable from inner
+         tabs and produced no icon/favicon/status visuals. -->
 
     <DataTemplate DataType="vm:GitWorktreeReviewWorkspaceTabViewModel">
         <templates:GitWorktreeReviewView />
@@ -507,3 +503,4 @@
         </ItemsControl>
     </DataTemplate>
 </DataTemplates>
+

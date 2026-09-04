@@ -131,14 +131,14 @@ public static class CopilotToolEventMapper
             return string.Empty;
         }
 
-        if (!string.IsNullOrEmpty(result.Content))
-        {
-            return result.Content;
-        }
-
         if (!string.IsNullOrEmpty(result.DetailedContent))
         {
             return result.DetailedContent;
+        }
+
+        if (!string.IsNullOrEmpty(result.Content))
+        {
+            return result.Content;
         }
 
         if (result.Contents is { Length: > 0 })

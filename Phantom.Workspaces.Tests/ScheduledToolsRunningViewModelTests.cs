@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Globalization;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -21,6 +22,15 @@ public sealed class ScheduledToolsRunningViewModelTests
     private sealed class FixedTimeProvider : TimeProvider
     {
         private DateTimeOffset now = new(2026, 6, 17, 9, 30, 0, TimeSpan.Zero);
+
+        public FixedTimeProvider()
+        {
+        }
+
+        public FixedTimeProvider(DateTimeOffset now)
+        {
+            this.now = now;
+        }
 
         public DateTimeOffset Advance(TimeSpan by)
         {
@@ -123,6 +133,7 @@ public sealed class ScheduledToolsRunningViewModelTests
 
         tool.Release.TrySetResult();
         await runTask;
+        await host.WaitForRunningExecutionsAsync();
 
         Assert.False(viewModel.HasRunningTools);
         Assert.False(Assert.Single(viewModel.Tools).IsRunning);
@@ -559,6 +570,7 @@ public sealed class ScheduledToolsRunningViewModelTests
         tool.Release.TrySetResult();
 
         await Task.WhenAll(refreshHistoryTask, runTask);
+        await host.WaitForRunningExecutionsAsync();
 
         Assert.False(exceptionCaught, "ObservableCollection was mutated from multiple threads");
     }
@@ -877,5 +889,453 @@ public sealed class ScheduledToolsRunningViewModelTests
         // RecentRuns mutations must be marshaled onto the foreground scheduler.
         Assert.NotEmpty(mutationThreadIds);
         Assert.All(mutationThreadIds, id => Assert.Equal(scheduler.ExecutionThreadId, id));
+    }
+
+    // --- #1358: history queries must be bounded and filtered, not load the entire table ---
+
+    private sealed class RecordingDataAccessLayer : IDataAccessLayer
+    {
+        private readonly IDataAccessLayer inner;
+
+        public RecordingDataAccessLayer(IDataAccessLayer inner) => this.inner = inner;
+
+        public List<QueryRequest> QueryRequests { get; } = new();
+
+        public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
+        {
+            this.QueryRequests.Add(request);
+            return this.inner.QueryAsync(request, cancellationToken);
+        }
+
+        public Task<UpdateResult> UpdateAsync(UpdateRequest request, CancellationToken cancellationToken = default)
+            => this.inner.UpdateAsync(request, cancellationToken);
+
+        public Task<GetResult> GetAsync(GetRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetAsync(request, cancellationToken);
+
+        public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetHistoryAsync(request, cancellationToken);
+
+#pragma warning disable CS0618 // forwarding call to the obsolete member is intentional
+        public Task<ExportResult> ExportAsync(ExportRequest request, CancellationToken cancellationToken = default)
+            => this.inner.ExportAsync(request, cancellationToken);
+#pragma warning restore CS0618
+
+        public Task<GetChangedEntitiesResult> GetChangedEntitiesAsync(GetChangedEntitiesRequest request, CancellationToken cancellationToken = default)
+            => this.inner.GetChangedEntitiesAsync(request, cancellationToken);
+    }
+
+    private static bool ClauseTreeContains(QueryClause clause, Func<QueryClause, bool> predicate)
+    {
+        if (predicate(clause))
+        {
+            return true;
+        }
+
+        return clause switch
+        {
+            TopQueryClause top => ClauseTreeContains(top.Clause, predicate),
+            AndQueryClause and => and.Clauses.Any(c => ClauseTreeContains(c, predicate)),
+            OrQueryClause or => or.Clauses.Any(c => ClauseTreeContains(c, predicate)),
+            NotQueryClause not => ClauseTreeContains(not.Clause, predicate),
+            _ => false,
+        };
+    }
+
+    private static IEnumerable<QueryRequest> HistoryQueries(RecordingDataAccessLayer dal)
+        => dal.QueryRequests.Where(r => r.Clauses.Any(c => c.ClauseIdentifier.Value == "tool-execution-results"));
+
+    private static bool IsBounded(QueryRequest request)
+        => request.Clauses.Any(c => ClauseTreeContains(c.Clause, cl => cl is TopQueryClause));
+
+    private static bool FiltersToolName(QueryRequest request, string toolType)
+        => request.Clauses.Any(c => ClauseTreeContains(
+            c.Clause,
+            cl => cl is EntityFieldQueryClause f
+                && f.FieldPath.Components.SequenceEqual(new[] { "tool-name" })
+                && f.ComparisonOperator == FieldComparisonOperator.Equals
+                && f.Value is JsonElement v
+                && v.ValueKind == JsonValueKind.String
+                && v.GetString() == toolType));
+
+    [Fact]
+    public async Task RefreshHistoryAsync_WithLargeHistory_LoadsOnlyBoundedRecentWindow()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        for (var i = 0; i < 30; i++)
+        {
+            await WriteRunAsync(inner, timeProvider, "stub", success: true);
+        }
+
+        var dataAccessLayer = new RecordingDataAccessLayer(inner);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var historyQueries = HistoryQueries(dataAccessLayer).ToArray();
+        Assert.NotEmpty(historyQueries);
+        Assert.All(historyQueries, r => Assert.True(IsBounded(r)));
+        Assert.Single(viewModel.Tools);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForToolAsync_FiltersByToolInQuery_DoesNotMaterializeOtherToolsRuns()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        await WriteRunAsync(inner, timeProvider, "stub", success: true);
+        await WriteRunAsync(inner, timeProvider, "other-tool", success: false);
+
+        var dataAccessLayer = new RecordingDataAccessLayer(inner);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = viewModel.Tools.Single(r => r.ToolType == "stub");
+        dataAccessLayer.QueryRequests.Clear();
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        // The load query filters by tool at the query and is bounded.
+        Assert.Contains(dataAccessLayer.QueryRequests, r => FiltersToolName(r, "stub"));
+        Assert.All(HistoryQueries(dataAccessLayer), r => Assert.True(IsBounded(r)));
+
+        // Only the "stub" tool's run is materialised — "other-tool" never appears.
+        var run = Assert.Single(row.RecentRuns);
+        Assert.Equal("succeeded", run.Status);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_WithLargeHistory_CompletesWithinBound()
+    {
+        var inner = new InMemoryDataAccessLayer();
+        var timeProvider = new FixedTimeProvider();
+        for (var i = 0; i < 40; i++)
+        {
+            await WriteRunAsync(inner, timeProvider, "stub", success: i % 2 == 0);
+        }
+
+        var dataAccessLayer = new RecordingDataAccessLayer(inner);
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+
+        // Completes (returns) against a bounded query rather than an unbounded materialisation.
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        Assert.All(HistoryQueries(dataAccessLayer), r => Assert.True(IsBounded(r)));
+        var row = Assert.Single(viewModel.Tools);
+        Assert.NotNull(row.LastRunStatus);
+    }
+
+    // --- #1357: incremental time-windowed (~1 hour) paging of run history on scroll ---
+
+    private static ToolRowViewModel CreateWindowedRow(
+        IReadOnlyList<RunSummaryViewModel> allRuns,
+        TimeProvider timeProvider,
+        List<(DateTimeOffset Lower, DateTimeOffset Upper)>? requestedWindows = null,
+        Func<DateTimeOffset, DateTimeOffset, CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>>? loadWindowOverride = null,
+        Func<DateTimeOffset, CancellationToken, Task<bool>>? hasOlderRunsOverride = null)
+    {
+        Func<DateTimeOffset, DateTimeOffset, CancellationToken, Task<IReadOnlyList<RunSummaryViewModel>>> loadWindow =
+            loadWindowOverride ?? ((lower, upper, _) =>
+            {
+                requestedWindows?.Add((lower, upper));
+                IReadOnlyList<RunSummaryViewModel> page = allRuns
+                    .Where(r => r.StartedAt >= lower && r.StartedAt < upper)
+                    .OrderByDescending(r => r.StartedAt)
+                    .ToArray();
+                return Task.FromResult(page);
+            });
+
+        Func<DateTimeOffset, CancellationToken, Task<bool>> hasOlderRuns =
+            hasOlderRunsOverride ?? ((upperExclusive, _) =>
+                Task.FromResult(allRuns.Any(r => r.StartedAt < upperExclusive)));
+
+        return new ToolRowViewModel(
+            "stub",
+            HostLabel,
+            _ => Task.FromResult<IReadOnlyList<RunSummaryViewModel>>(Array.Empty<RunSummaryViewModel>()),
+            foregroundScheduler: null,
+            loadWindow: loadWindow,
+            hasOlderRuns: hasOlderRuns,
+            timeProvider: timeProvider);
+    }
+
+    private static RunSummaryViewModel RunAt(DateTimeOffset startedAt, string status = "succeeded")
+        => new(startedAt, TimeSpan.FromSeconds(1), status, null);
+
+    [Fact]
+    public async Task InitialLoad_LoadsOnlyMostRecentOneHourWindow()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var now = timeProvider.GetUtcNow();
+        var allRuns = new[]
+        {
+            RunAt(now - TimeSpan.FromMinutes(15)), // recent hour
+            RunAt(now - TimeSpan.FromMinutes(45)), // recent hour
+            RunAt(now - TimeSpan.FromMinutes(90)), // older hour — must be excluded
+            RunAt(now - TimeSpan.FromMinutes(200)), // much older — must be excluded
+        };
+        var requestedWindows = new List<(DateTimeOffset Lower, DateTimeOffset Upper)>();
+        var row = CreateWindowedRow(allRuns, timeProvider, requestedWindows);
+
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+
+        // Only the most-recent ~1-hour window was queried, not the entire history.
+        var window = Assert.Single(requestedWindows);
+        Assert.Equal(now, window.Upper);
+        Assert.Equal(now - TimeSpan.FromHours(1), window.Lower);
+        Assert.Equal(TimeSpan.FromHours(1), window.Upper - window.Lower);
+
+        // Only the two runs inside the most-recent hour are materialised.
+        Assert.Equal(2, row.RecentRuns.Count);
+        Assert.All(row.RecentRuns, r => Assert.True(r.StartedAt >= now - TimeSpan.FromHours(1)));
+        Assert.Equal(now - TimeSpan.FromHours(1), row.CurrentWindowStart);
+    }
+
+    [Fact]
+    public async Task LoadNextWindow_AdvancesByApproximatelyOneHour_AppendsOlderRuns()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var now = timeProvider.GetUtcNow();
+        var allRuns = new[]
+        {
+            RunAt(now - TimeSpan.FromMinutes(15)), // hour 1
+            RunAt(now - TimeSpan.FromMinutes(45)), // hour 1
+            RunAt(now - TimeSpan.FromMinutes(75)), // hour 2
+            RunAt(now - TimeSpan.FromMinutes(105)), // hour 2
+        };
+        var requestedWindows = new List<(DateTimeOffset Lower, DateTimeOffset Upper)>();
+        var row = CreateWindowedRow(allRuns, timeProvider, requestedWindows);
+
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, row.RecentRuns.Count);
+        var firstPage = row.RecentRuns.ToArray();
+        var windowStartAfterInitial = row.CurrentWindowStart;
+
+        await row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+
+        // The window advanced by exactly one hour (its new upper equals the previous lower).
+        Assert.Equal(2, requestedWindows.Count);
+        Assert.Equal(windowStartAfterInitial, requestedWindows[1].Upper);
+        Assert.Equal(TimeSpan.FromHours(1), requestedWindows[1].Upper - requestedWindows[1].Lower);
+        Assert.Equal(windowStartAfterInitial - TimeSpan.FromHours(1), row.CurrentWindowStart);
+
+        // Older runs are appended; the initial page is preserved (not cleared).
+        Assert.Equal(4, row.RecentRuns.Count);
+        Assert.Equal(firstPage[0], row.RecentRuns[0]);
+        Assert.Equal(firstPage[1], row.RecentRuns[1]);
+        Assert.All(row.RecentRuns.Skip(2), r => Assert.True(r.StartedAt < windowStartAfterInitial));
+    }
+
+    [Fact]
+    public async Task LoadNextWindow_WhenHistoryExhausted_StopsPagingAndFlagsEnd()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var now = timeProvider.GetUtcNow();
+        // All history lives within the two most-recent hours; nothing older than that remains.
+        var allRuns = new[]
+        {
+            RunAt(now - TimeSpan.FromMinutes(20)), // hour 1
+            RunAt(now - TimeSpan.FromMinutes(80)), // hour 2 (oldest)
+        };
+        var requestedWindows = new List<(DateTimeOffset Lower, DateTimeOffset Upper)>();
+        var row = CreateWindowedRow(allRuns, timeProvider, requestedWindows);
+
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+        Assert.False(row.IsEndOfHistory); // an older run (hour 2) still remains
+
+        await row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+        var windowsAfterPaging = requestedWindows.Count;
+        var runsAfterPaging = row.RecentRuns.Count;
+
+        // The oldest run has now been paged in; no older runs remain.
+        Assert.True(row.IsEndOfHistory);
+        Assert.Equal(2, row.RecentRuns.Count);
+
+        // A further scroll trigger past the end of history is a no-op: no new query, no new items.
+        await row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(windowsAfterPaging, requestedWindows.Count);
+        Assert.Equal(runsAfterPaging, row.RecentRuns.Count);
+    }
+
+    [Fact]
+    public async Task LoadNextWindow_ConcurrentScrollTriggers_DoesNotDoubleLoad()
+    {
+        var timeProvider = new FixedTimeProvider();
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var loadCount = 0;
+
+        var row = CreateWindowedRow(
+            Array.Empty<RunSummaryViewModel>(),
+            timeProvider,
+            loadWindowOverride: async (_, _, _) =>
+            {
+                Interlocked.Increment(ref loadCount);
+                await gate.Task;
+                return (IReadOnlyList<RunSummaryViewModel>)Array.Empty<RunSummaryViewModel>();
+            },
+            hasOlderRunsOverride: (_, _) => Task.FromResult(true));
+
+        // Fire two overlapping scroll-driven loads while the first is still in flight.
+        var first = row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+        var second = row.LoadNextWindowAsync(TestContext.Current.CancellationToken);
+
+        gate.SetResult();
+        await Task.WhenAll(first, second);
+
+        // The re-entrancy guard collapsed the second trigger; the window loaded exactly once.
+        Assert.Equal(1, loadCount);
+    }
+
+    [Fact]
+    public async Task RefreshHistoryAsync_MoreRunsThanLimit_ShowsMostRecentRuns()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostA = new[] { "computer", "host-a" };
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        // 500 older successful runs — enough to fill the entire result limit by themselves.
+        for (var i = 0; i < 500; i++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(i), "succeeded");
+        }
+
+        // The single most-recent run failed; the bounded (top-N) query must not drop it.
+        await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(100_000), "failed");
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools);
+        Assert.Equal("failed", row.LastRunStatus);
+    }
+
+    [Fact]
+    public async Task LoadRecentRunsForTool_ManyOtherHostRuns_StillShowsSelectedHostRuns()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostA = new[] { "computer", "host-a" };
+        var hostB = new[] { "computer", "host-b" };
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        // Selected host A: ten older runs...
+        for (var i = 0; i < 10; i++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(i), "succeeded");
+        }
+
+        // ...plus one very recent run so a row for host A is created from history.
+        await SeedRunAsync(dataAccessLayer, hostA, "stub", t0.AddSeconds(100_000), "succeeded");
+
+        // Other host B floods the same tool with 500 more-recent runs (filling the limit), which
+        // would starve host A's older runs if the host filter were only applied in memory.
+        for (var j = 0; j < 500; j++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostB, "stub", t0.AddSeconds(1_000 + j), "succeeded");
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools, r => r.Host == "computer / host-a");
+        await row.LoadRecentRunsAsync(TestContext.Current.CancellationToken);
+
+        // All eleven of host A's runs are returned despite host B's flood filling the limit.
+        Assert.Equal(11, row.RecentRuns.Count);
+    }
+
+    [Fact]
+    public async Task LoadWindowForTool_BusyHour_ReturnsSelectedHostRunsWithinWindow()
+    {
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var hostA = new[] { "computer", "host-a" };
+        var hostB = new[] { "computer", "host-b" };
+        var t0 = new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        var now = t0.AddSeconds(100_000);
+        var timeProvider = new FixedTimeProvider(now);
+
+        // Host A: five runs in the older part of the [now - 1h, now) window.
+        for (var i = 0; i < 5; i++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostA, "stub", now.AddSeconds(-3_000 - i), "succeeded");
+        }
+
+        // Host A: one run AFTER the window so a row is created from history without being in-window.
+        await SeedRunAsync(dataAccessLayer, hostA, "stub", now.AddSeconds(50_000), "succeeded");
+
+        // Host B saturates the window with 500 more-recent-in-window runs (filling the limit),
+        // which would starve host A's in-window runs if host filtering were only in memory.
+        for (var j = 0; j < 500; j++)
+        {
+            await SeedRunAsync(dataAccessLayer, hostB, "stub", now.AddSeconds(-100 - j), "succeeded");
+        }
+
+        var host = new ScheduledToolHost(dataAccessLayer, new ScheduledToolRegistry([]));
+        using var viewModel = new ScheduledToolsRunningViewModel(host, dataAccessLayer, timeProvider: timeProvider);
+        await viewModel.RefreshHistoryAsync(TestContext.Current.CancellationToken);
+
+        var row = Assert.Single(viewModel.Tools, r => r.Host == "computer / host-a");
+        await row.LoadInitialWindowAsync(TestContext.Current.CancellationToken);
+
+        // Host A's five in-window runs are returned even though host B saturated the window.
+        Assert.Equal(5, row.RecentRuns.Count);
+    }
+
+    /// <summary>
+    /// Seeds a completed tool-execution-result entity directly (mirroring
+    /// <see cref="ToolExecutionResultWriter"/>'s shape, including the queryable <c>host-label</c>)
+    /// so tests can create large, precisely-timed run histories cheaply.
+    /// </summary>
+    private static async Task SeedRunAsync(
+        IDataAccessLayer dataAccessLayer,
+        IReadOnlyList<string> hostComponents,
+        string toolName,
+        DateTimeOffset startTime,
+        string status)
+    {
+        var guid = Guid.NewGuid();
+        var stamp = startTime.ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ", CultureInfo.InvariantCulture);
+        var nameComponents = hostComponents
+            .Append(ToolExecutionResultWriter.ToolExecutionsSegment)
+            .Append(toolName)
+            .Append(stamp)
+            .ToArray();
+        var hostLabel = string.Join(" / ", hostComponents);
+        var startIso = startTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture);
+        var namesJson = JsonSerializer.Serialize(new[] { nameComponents });
+
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{guid}}",
+              "entity-types": ["entity", "tool-execution-result"],
+              "names": {{namesJson}},
+              "tool-name": {{JsonSerializer.Serialize(toolName)}},
+              "host-label": {{JsonSerializer.Serialize(hostLabel)}},
+              "start-time": {{JsonSerializer.Serialize(startIso)}},
+              "status": {{JsonSerializer.Serialize(status)}}
+            }
+            """);
+
+        var result = await dataAccessLayer.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "seed run" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = new EntityId(guid),
+                    ConcurrencyTag = null,
+                    Data = document.RootElement.Clone(),
+                    EntityChangeMode = EntityChangeMode.Replace,
+                },
+            ],
+        });
+
+        Assert.DoesNotContain(result.EntityResults, r => r.UpdateState == UpdateState.Failed);
     }
 }

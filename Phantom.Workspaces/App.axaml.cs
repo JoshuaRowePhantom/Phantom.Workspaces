@@ -9,7 +9,9 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Services.Updates;
 using Phantom.Workspaces.Templates;
 using Phantom.Workspaces.ViewModels;
@@ -263,6 +265,11 @@ public partial class App : Application
                 configurationFilePath);
             var loggerFactory = Services.Logging.LoggingBootstrap.CreateLoggerFactory(logDirectoryProvider);
 
+            // #1373: install the process-wide ambient docker logger factory so the production
+            // MongoDbConnectionBroker default path (used by the persistence/edit-store factories)
+            // logs docker stdout/stderr through the real GUI host logger instead of discarding it.
+            Containers.DockerCommandRunnerLogging.LoggerFactory = loggerFactory;
+
             // #1093: route global uncaught/unobserved exceptions through the #1086 file facility now
             // that the logger factory exists (the crash-dialog handlers installed in Program.Main stay
             // in place; this adds the missing logging half).
@@ -271,13 +278,54 @@ public partial class App : Application
             var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
             var agentPersistenceStore = await agentPersistenceStoreCache.GetOrCreateAsync(repositorySource);
             var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
-            var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), foregroundScheduler);
+
+            IPlatformSecretStore platformStore;
+            if (OperatingSystem.IsWindows())
+            {
+                platformStore = new WindowsCredentialManagerSecretStore();
+            }
+            else
+            {
+                platformStore = new NullPlatformSecretStore();
+            }
+
+            var allowedSecretsStore = new AllowedSecretsStore(new AllowedSecretsStoreConfiguration());
+            var hwndProvider = new AvaloniaHwndProvider();
+            ICredentialPicker credentialPicker;
+            if (OperatingSystem.IsWindows())
+            {
+                credentialPicker = new WindowsCredentialPicker(hwndProvider);
+            }
+            else
+            {
+                credentialPicker = new NullCredentialPicker();
+            }
+
+            var dialogHost = new AvaloniaSecretUseDialogHost(credentialPicker);
+            var secretProvider = new SecretProvider(allowedSecretsStore, platformStore, dialogHost);
+
+            // #1385: register the interactive MCP OAuth redirect handler (system browser + loopback
+            // listener, consent-gated) into the #1382 McpOAuthOptions.RedirectDelegateProvider seam so
+            // the MCP transport factory drives real interactive OAuth in the GUI host. #1384: also
+            // register the persistent per-server token cache over the platform secret store so tokens
+            // survive restarts (silent refresh). Headless hosts (CLI / Web.Server / tests) do not wire
+            // this and keep the failing default.
+            var mcpOAuthOptions = Services.Mcp.McpOAuthComposition.CreateOptions(secretProvider, platformStore, loggerFactory);
+            var agentChatFactory = new AgentChatFactory(
+                agentPersistenceStore,
+                Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions),
+                foregroundScheduler);
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(agentChatFactory),
                 agentPersistenceStoreCache,
                 loggerFactory: loggerFactory,
                 logDirectoryProvider: logDirectoryProvider,
-                configurationPersistence: persistenceService);
+                configurationPersistence: persistenceService,
+                secretProvider: secretProvider,
+                credentialPicker: credentialPicker,
+                allowedSecretsStore: allowedSecretsStore,
+                platformSecretStore: platformStore,
+                mcpOAuthOptions: mcpOAuthOptions);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             // #1172: register the canonical URL opener now that MainWindowViewModel exists
@@ -297,6 +345,7 @@ public partial class App : Application
             // RestoreSubAgentsAsync (the reported #1186 cause) left it stuck in
             // front indefinitely.
             var succeeded = await StartupSplashRunner.RunWithSplashDismissAsync(
+                loggerFactory: loggerFactory,
                 initializeAsync: () => viewModel.InitializeAsync(),
                 setStatus: msg => loadingViewModel.StatusText = msg,
                 onFaultDelay: () => Task.Delay(5000), // Give user time to read the error

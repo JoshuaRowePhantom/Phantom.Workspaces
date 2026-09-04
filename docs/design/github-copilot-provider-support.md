@@ -578,3 +578,7 @@ provider be exercised against one of our own test chat providers:
   Copilot CLI session against the local server; it is gated on `COPILOT_BYOK_E2E=1` (plus the
   Copilot CLI, via `COPILOT_CLI_PATH`) so it never runs in the deterministic suite. Verified
   passing locally: the CLI accepts the BYOK provider and surfaces the test server's response.
+
+## Remote hosting
+
+The ```[remote-copilot-sdk]``` topology hosts the `CopilotSdkChatClient` on a remote `user-computer-profile` while the source instance keeps the `AgentChat` router and persistence. See `docs/design/remote-chat-client-session.md` for the full topology (executor targets, trust-profile-driven host selection, and the split tool set). BYOK `openai` / `azure-openai` providers follow the same topology; their `CopilotByokOptions` (`Provider`, `BaseUrl`, `ApiKey`) are honored on the remote host.

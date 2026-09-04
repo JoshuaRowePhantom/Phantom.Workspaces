@@ -196,6 +196,7 @@ Inline tools are specified directly in the agent definition and are always loade
 | `file_search` | — | File search built-in. |
 | `code_interpreter` | — | Code interpreter built-in. |
 | `bing_search` | — | Bing search built-in. |
+| `github-cli-builtin-tools` | CustomTool | GitHub Copilot SDK default-tool policy for `github-copilot`/`github-copilot-subagent` agents. |
 | `""` (empty) | CustomTool | Fixed built-in toolset referenced by name (resolved via the toolset factory). |
 
 ### McpTool fields
@@ -209,6 +210,20 @@ Inline tools are specified directly in the agent definition and are always loade
 | `serverDescription` | | Human-readable server description. |
 | `approvalMode` | | `{ "kind": "always" }`, `{ "kind": "never" }`, or `{ "kind": "specify", "alwaysRequireApprovalTools": [], "neverRequireApprovalTools": [] }`. |
 | `allowedTools` | | Allowlist of MCP tool names to expose. |
+
+### Locked-down GitHub Copilot agent recipe
+
+Safety-sensitive Copilot SDK agents can disable the SDK's ambient Copilot CLI tools and opt into only MCP tools:
+
+```jsonc
+{
+  "kind": "github-cli-builtin-tools",
+  "client-mode": "empty",
+  "available-tools": { "tools": ["mcp:*"] }
+}
+```
+
+`client-mode: "empty"` is a Copilot client construction option. It must be paired with a present, non-empty `available-tools` selector because the SDK exposes no tools by default in Empty mode. Use `excluded-tools: { "tools": ["*"] }` instead when you only want to remove Copilot built-ins while keeping all custom and MCP tools.
 
 ---
 
@@ -251,6 +266,29 @@ An `agent-session` entity is created when a session is launched from a manifest 
 | `host-profile-entity-id` | | Entity ID of the `user-computer-profile` hosting this session. |
 | `agent-definition-reference` | | Entity-name path to the `agent-definition` used to reconstruct the session on resume. |
 | `parameter-values` | | Parameter values supplied at launch (string key → string value). |
+
+### Remote-hosted `agent-session`
+
+When the wrapping manifest opts into the `[remote-copilot-sdk]` topology by declaring a `trust-profile` parameter whose resolved `llm-trust-profile` names a non-`"."` client instance (`TrustProfile.HostingWorkspacesClientInstances`), the launcher records the selected host on the resulting `agent-session` entity's `host-profile-entity-id`. The `agent-definition-reference` still resolves against the source workspace so the same manifest reconstructs the session on resume; the topology is rebuilt from the trust-profile resolution, not from the persisted host id (which is a hint, not the source of truth — see `docs/design/session-context-tools.md`).
+
+```json
+{
+  "entity-types": ["entity", "agent-session"],
+  "agent-session-id": "sess-42",
+  "host-profile-entity-id": "d3b07384-d113-4f45-9d6f-2b6a1c7d9e01",
+  "agent-definition-reference": ["user", "agent-definitions", "github-copilot-remote-chat"],
+  "parameter-values": {
+    "working-directory": "/home/agent/projects/phantom",
+    "trust-profile": "remote-copilot"
+  }
+}
+```
+
+- `host-profile-entity-id` — entity id of the remote `user-computer-profile` (see `["documentation", "user-computer-profile-schema"]`).
+- `parameter-values["trust-profile"]` — the parameter value the launcher used to look up the `llm-trust-profile` entity that populated `HostingWorkspacesClientInstances` with the remote client-instance id.
+- `parameter-values["working-directory"]` — the CWD the Copilot CLI process should use on the remote host.
+
+See `docs/examples/github-copilot-remote-chat.json` for the wrapping AgentDefinition and `docs/design/remote-chat-client-session.md` for the full topology.
 
 ---
 

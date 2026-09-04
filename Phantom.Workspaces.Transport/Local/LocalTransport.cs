@@ -48,7 +48,7 @@ public sealed class LocalTransport : ITransport
         return Task.FromResult<IMessageChannel>(clientChannel);
     }
 
-    public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+    public async Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
     {
         this.ThrowIfDisposed();
 
@@ -58,25 +58,23 @@ public sealed class LocalTransport : ITransport
             this.streams.Add(clientStream);
         }
 
-        _ = Task.Run(async () =>
+        try
         {
-            try
+            var lease = await this.registry.OnStreamOpenAsync(request.Clone(), serverStream, ct).ConfigureAwait(false);
+            if (lease is null)
             {
-                var lease = await this.registry.OnStreamOpenAsync(request.Clone(), serverStream, ct).ConfigureAwait(false);
-                if (lease is null)
-                {
-                    clientStream.SetException(new TransportException("No local listener handled the stream request."));
-                    await serverStream.DisposeAsync().ConfigureAwait(false);
-                }
-            }
-            catch (Exception ex)
-            {
-                clientStream.SetException(ex);
+                clientStream.SetException(new TransportException("No local listener handled the stream request."));
                 await serverStream.DisposeAsync().ConfigureAwait(false);
             }
-        }, CancellationToken.None);
 
-        return Task.FromResult<Stream>(clientStream);
+            return clientStream;
+        }
+        catch (Exception ex)
+        {
+            clientStream.SetException(ex);
+            await serverStream.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()

@@ -1,7 +1,46 @@
 namespace Phantom.Workspaces.Tests;
 
+using System.Threading.Tasks;
+using Avalonia.Controls;
+using Avalonia.Headless.XUnit;
+using Phantom.Workspaces;
+using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.ViewModels.Configuration;
+
 public sealed class SettingsDialogWindowTests
 {
+    [AvaloniaFact]
+    public async Task TrySaveAsync_WhenSaveThrows_DoesNotCrash_ShowsErrorAndStaysOpen()
+    {
+        // #1349: a Save-path exception (here, persistence failure) must never reach the dispatcher.
+        // The dialog must stay open, remain unsaved, and surface the failure in the in-dialog banner.
+        var tempFile = Path.Combine(Path.GetTempPath(), $"phantom-settings-{Guid.NewGuid():N}.tmp");
+        File.WriteAllText(tempFile, "occupied");
+        try
+        {
+            // Point persistence at a path *under* an existing file so directory creation fails.
+            var service = new ConfigurationPersistenceService(Path.Combine(tempFile, "config.json"));
+            var viewModel = new WorkspacesSettingsViewModel(service, new WorkspacesConfiguration());
+            var window = new SettingsDialogWindow(viewModel);
+
+            var exception = await Record.ExceptionAsync(() => window.TrySaveAsync());
+
+            Assert.Null(exception);
+            Assert.False(window.Saved);
+            Assert.Null(window.Result);
+            Assert.NotNull(window.SaveErrorMessage);
+            Assert.Contains("Saving settings failed", window.SaveErrorMessage!, StringComparison.Ordinal);
+
+            var banner = window.FindControl<TextBlock>("SaveErrorBanner");
+            Assert.NotNull(banner);
+            Assert.True(banner!.IsVisible);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
     [Fact]
     public void SettingsDialogWindow_SizesToContentInBothDimensions()
     {

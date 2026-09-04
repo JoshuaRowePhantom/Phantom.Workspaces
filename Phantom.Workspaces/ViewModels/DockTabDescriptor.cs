@@ -19,6 +19,12 @@ public abstract record DockTabDescriptor
     /// referenced entity's display-name is empty or has changed.
     /// </summary>
     public string? Title { get; init; }
+
+    /// <summary>
+    /// True when <see cref="Title"/> is a user/host override rather than content-derived.
+    /// Content-derived title updates must not overwrite explicit titles after restore.
+    /// </summary>
+    public bool IsTitleExplicit { get; init; }
 }
 
 /// <summary>Descriptor for a generic entity view tab.</summary>

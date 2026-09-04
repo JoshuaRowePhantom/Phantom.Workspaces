@@ -1,12 +1,17 @@
 <ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:vm="using:Phantom.Workspaces.ViewModels">
+                    xmlns:vm="using:Phantom.Workspaces.ViewModels"
+                    xmlns:entityControls="using:Phantom.Workspaces.Controls">
 
-    <!-- #1196: Single source of truth for tab-header indicator DataTemplates.
+    <!-- #1196 / #1324: Single source of truth for EVERY tab-header per-item DataTemplate.
          Merged into App.axaml so {StaticResource} lookup can find them from any
          window (including floating PhantomHostWindow) via
-         Application.Current.Resources. Referenced by
-         DockDataTemplates.axaml and WorkspaceDataTemplates.axaml. -->
+         Application.Current.Resources. Referenced by DockDataTemplates.axaml
+         (outer AND inner DockControl scopes) so both scopes resolve the full set
+         of per-item templates identically — the inner nested DockControl uses
+         AutoCreateDataTemplates="False" and does not walk up to ancestor scopes
+         (#1130), so every per-item template a tab can carry MUST be reachable
+         from the keyed TabHeaderTemplate / WebTabHeaderTemplate bodies below. -->
 
     <DataTemplate x:Key="AgentRunningIndicatorTabHeaderItemTemplate"
                   DataType="vm:AgentRunningIndicatorTabHeaderItemViewModel">
@@ -20,17 +25,41 @@
                      IsIndeterminate="{Binding HasUnread}" />
     </DataTemplate>
 
-    <!-- #1196: Single source of truth for the OUTER tab-header body used by every
+    <!-- #1324: Icon / Favicon / Status per-item templates moved here from
+         WorkspaceDataTemplates.axaml (where they were implicit top-level
+         DataTemplates unreachable from the scope-blocked inner DockControl). -->
+    <DataTemplate x:Key="IconTabHeaderItemTemplate"
+                  DataType="vm:IconTabHeaderItemViewModel">
+        <TextBlock Text="{Binding Icon}" />
+    </DataTemplate>
+
+    <DataTemplate x:Key="FaviconTabHeaderItemTemplate"
+                  DataType="vm:FaviconTabHeaderItemViewModel">
+        <!-- Show the globe glyph; favicon image loading is a future enhancement -->
+        <TextBlock Text="🌐" />
+    </DataTemplate>
+
+    <DataTemplate x:Key="StatusTabHeaderItemTemplate"
+                  DataType="vm:StatusTabHeaderItemViewModel">
+        <entityControls:StatusControl Item="{Binding Status}" />
+    </DataTemplate>
+
+    <!-- #1196: Single source of truth for the tab-header body used by every
          DocumentControl.HeaderTemplate. Referenced explicitly via
-         ContentTemplate="{StaticResource TabHeaderTemplate}" so the Dock.Avalonia
+         ContentTemplate / ContentControl.DataTemplates so the Dock.Avalonia
          tab-strip does NOT depend on an implicit DataTemplate DataType="vm:TabHeaderViewModel"
-         lookup, which fails from inside the DocumentTabStripItem container scope. -->
+         lookup, which fails from inside the DocumentTabStripItem container scope.
+         #1324: the ItemsControl.DataTemplates references ALL FIVE keyed per-item
+         templates so no scope ever sees a subset. -->
     <DataTemplate x:Key="TabHeaderTemplate"
-                  DataType="vm:TabHeaderViewModel">
+                   DataType="vm:TabHeaderViewModel">
         <Grid HorizontalAlignment="Left">
-            <StackPanel Orientation="Horizontal" Spacing="4">
+            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
                 <TextBlock Text="{Binding Title}"
-                           ToolTip.Tip="{Binding Title}" />
+                           ToolTip.Tip="{Binding Title}"
+                           TextTrimming="CharacterEllipsis"
+                           TextWrapping="NoWrap"
+                           MaxWidth="180" />
                 <ItemsControl ItemsSource="{Binding Items}">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -40,6 +69,36 @@
                     <ItemsControl.DataTemplates>
                         <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
                         <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="IconTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="FaviconTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="StatusTabHeaderItemTemplate" />
+                    </ItemsControl.DataTemplates>
+                </ItemsControl>
+            </StackPanel>
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="WebTabHeaderTemplate"
+                  DataType="vm:WebTabHeaderViewModel">
+        <Grid HorizontalAlignment="Left">
+            <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Left">
+                <TextBlock Text="{Binding Title}"
+                           ToolTip.Tip="{Binding Title}"
+                           TextTrimming="CharacterEllipsis"
+                           TextWrapping="NoWrap"
+                           MaxWidth="180" />
+                <ItemsControl ItemsSource="{Binding Items}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Orientation="Horizontal" Spacing="2" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.DataTemplates>
+                        <StaticResource ResourceKey="AgentRunningIndicatorTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="NotificationIndicatorTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="IconTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="FaviconTabHeaderItemTemplate" />
+                        <StaticResource ResourceKey="StatusTabHeaderItemTemplate" />
                     </ItemsControl.DataTemplates>
                 </ItemsControl>
             </StackPanel>

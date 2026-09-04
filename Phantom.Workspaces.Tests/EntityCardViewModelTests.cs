@@ -254,37 +254,91 @@ public sealed class EntityCardViewModelTests : IAsyncDisposable
     }
 
     [AvaloniaFact]
-    public void EntityCardViewModel_WhenQueryMatchesDisplayName_HighlightsMatchedText()
+    public void EntityCardViewModel_SearchQuerySetToMatchingSubstring_MatchesIsTrue()
     {
-        var card = new EntityCardViewModel(
-            displayName: "hello world",
-            entityType: "note");
+        var card = new EntityCardViewModel(displayName: "hello world", entityType: "note");
 
-        card.MatchQuery = "world";
+        card.SearchQuery = "WORLD";
 
-        Assert.True(card.IsFindMatch);
-        Assert.Equal(6, card.DisplayNameMatchStart);
-        Assert.Equal(5, card.DisplayNameMatchLength);
-        Assert.Equal("hello ", card.DisplayNameBefore);
-        Assert.Equal("world", card.DisplayNameMatch);
-        Assert.Equal(string.Empty, card.DisplayNameAfter);
+        Assert.True(card.Matches);
     }
 
     [AvaloniaFact]
-    public void EntityCardViewModel_WhenQueryCleared_RemovesHighlight()
+    public void EntityCardViewModel_SearchQueryMatchesOnlyAPropertyValue_MatchesIsTrue()
     {
         var card = new EntityCardViewModel(
             displayName: "hello world",
-            entityType: "note");
-        card.MatchQuery = "world";
-        Assert.True(card.IsFindMatch);
+            entityType: "note",
+            fieldEditors: new EntityFieldEditorViewModel[]
+            {
+                new StringFieldEditorViewModel("summary", "the quick brown fox"),
+            });
 
-        card.MatchQuery = null;
+        card.SearchQuery = "brown";
 
-        Assert.False(card.IsFindMatch);
-        Assert.Equal("hello world", card.DisplayNameBefore);
-        Assert.Equal(string.Empty, card.DisplayNameMatch);
-        Assert.Equal(string.Empty, card.DisplayNameAfter);
+        Assert.True(card.Matches);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_SearchQueryMatchesOnlyAPropertyName_MatchesIsFalse()
+    {
+        var card = new EntityCardViewModel(
+            displayName: "hello world",
+            entityType: "note",
+            fieldEditors: new EntityFieldEditorViewModel[]
+            {
+                new StringFieldEditorViewModel("secretfield", "nothing here"),
+            });
+
+        card.SearchQuery = "secretfield";
+
+        Assert.False(card.Matches);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_SearchQuerySetToNonMatchingSubstring_MatchesIsFalse()
+    {
+        var card = new EntityCardViewModel(displayName: "hello world", entityType: "note");
+
+        card.SearchQuery = "zzz";
+
+        Assert.False(card.Matches);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_SearchQueryCleared_MatchesIsFalse()
+    {
+        var card = new EntityCardViewModel(displayName: "hello world", entityType: "note");
+        card.SearchQuery = "world";
+        Assert.True(card.Matches);
+
+        card.SearchQuery = null;
+
+        Assert.False(card.Matches);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_SearchQueryChanged_RaisesPropertyChangedForMatches()
+    {
+        var card = new EntityCardViewModel(displayName: "hello world", entityType: "note");
+        var changed = new System.Collections.Generic.List<string?>();
+        card.PropertyChanged += (_, e) => changed.Add(e.PropertyName);
+
+        card.SearchQuery = "world";
+
+        Assert.Contains(nameof(EntityCardViewModel.SearchQuery), changed);
+        Assert.Contains(nameof(EntityCardViewModel.Matches), changed);
+    }
+
+    [AvaloniaFact]
+    public void EntityCardViewModel_SearchQueryComputedForUnrealizedNode_MatchesEvaluatesWithoutControl()
+    {
+        // No control ever realizes this VM; Matches must still evaluate from the VM state.
+        var card = new EntityCardViewModel(displayName: "unrealized node", entityType: "note");
+
+        card.SearchQuery = "node";
+
+        Assert.True(card.Matches);
     }
 
     // ---- Issue #1164: multi-typed entity card composition ------------------------------------

@@ -1,4 +1,5 @@
 using System;
+using Phantom.Workspaces.Llm.Core.Transport;
 using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.Trust;
@@ -16,9 +17,19 @@ public sealed class DeferredTrustedExecutorSelector : ITrustedExecutorSelector
 {
     private readonly LocalTrustedExecutor localExecutor = new();
     private volatile ITrustedExecutor? remoteExecutor;
+    private volatile ExecutorTopology? topology;
 
     /// <summary>The transport-backed executor used for non-local targets, or null before initialization.</summary>
     public ITrustedExecutor? RemoteExecutor => this.remoteExecutor;
+
+    /// <summary>
+    /// The topology mapping each <see cref="ExecutorTarget"/> to a client instance. When set,
+    /// <see cref="SelectExecutor(TrustProfile, string)"/> and
+    /// <see cref="SelectExecutorForTarget(ExecutorTarget)"/> honor the topology to route
+    /// GUI-local-tagged tools to <see cref="LocalTrustedExecutor"/> even when the remote executor
+    /// is available. Default is <c>null</c> (single-machine behavior).
+    /// </summary>
+    public ExecutorTopology? Topology => this.topology;
 
     /// <summary>
     /// Supplies the transport-backed executor used for non-local targets. Called once the transport
@@ -28,6 +39,44 @@ public sealed class DeferredTrustedExecutorSelector : ITrustedExecutorSelector
     {
         ArgumentNullException.ThrowIfNull(executor);
         this.remoteExecutor = executor;
+    }
+
+    /// <summary>
+    /// Sets the <see cref="ExecutorTopology"/> that governs which executor is selected for a given
+    /// <see cref="ExecutorTarget"/>. When topology is set, <see cref="SelectExecutorForTarget"/>
+    /// routes <see cref="ExecutorTarget.GuiLocal"/>-tagged tools to <see cref="LocalTrustedExecutor"/>
+    /// (even if the remote executor is available), while other targets route to
+    /// <see cref="RemoteExecutor"/>. Default is <c>null</c> (single-machine behavior).
+    /// </summary>
+    public void SetTopology(ExecutorTopology? topology)
+    {
+        this.topology = topology;
+    }
+
+    /// <summary>
+    /// Selects the executor for a given <paramref name="executorTarget"/> execution class, honoring
+    /// the current <see cref="Topology"/> if set. When topology is <c>null</c> or
+    /// <see cref="ExecutorTopology.SingleMachine"/>, all targets route based on
+    /// <see cref="ITrustedExecutor.CanExecute"/> (backward-compatible behavior). When topology is
+    /// router-local, <see cref="ExecutorTarget.GuiLocal"/>-tagged tools route to
+    /// <see cref="LocalTrustedExecutor"/>, while other targets route to <see cref="RemoteExecutor"/>.
+    /// </summary>
+    public ITrustedExecutor SelectExecutorForTarget(ExecutorTarget executorTarget)
+    {
+        var effectiveTopology = this.topology ?? ExecutorTopology.SingleMachine;
+
+        if (effectiveTopology.ResolvesLocally(executorTarget))
+        {
+            return this.localExecutor;
+        }
+
+        if (this.remoteExecutor is { } remote)
+        {
+            return remote;
+        }
+
+        throw new InvalidOperationException(
+            $"No remote executor is available for execution target '{executorTarget}'.");
     }
 
     /// <inheritdoc />

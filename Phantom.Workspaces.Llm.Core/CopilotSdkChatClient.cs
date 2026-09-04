@@ -6,6 +6,8 @@ using AgentSchema;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Transport.Chat;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -29,7 +31,7 @@ namespace Phantom.Workspaces.Llm;
 /// documentation entities: <c>["documentation", "agent-options", "providers"]</c> and
 /// <c>["documentation", "agent-options", "model-options"]</c>.
 /// </remarks>
-public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient, SlashCommands.IModelSlashCommandClient
+public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfInvokingToolChatClient, SlashCommands.IModelSlashCommandClient, ICopilotSdkSessionSink
 {
     private string modelId;
     private readonly string displayName;
@@ -38,9 +40,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly CopilotByokOptions? byokOptions;
     private readonly string? cliPath;
     private readonly ModelOptions? modelOptions;
+    private readonly CopilotBuiltinToolPolicy? builtinToolPolicy;
     private readonly AgentInputQueueManager? queueManager;
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly IGitHubAccountUpsertService? accountUpsertService;
+    private ICopilotClientFactory copilotClientFactory;
 
     /// <summary>
     /// The account-upsert service wired in by the factory, or <see langword="null"/> when none was
@@ -60,8 +64,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private IRunningAgentChatFactory runningAgentChatFactory = default!;
     private ISubAgentTable subAgentTable = default!;
 
-    private CopilotClient? copilotClient;
-    private CopilotSession? copilotSession;
+    private ICopilotClient? copilotClient;
+    private ICopilotSession? copilotSession;
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
     private int disposeStarted;
@@ -125,6 +129,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     internal ModelOptions? ModelOptions => this.modelOptions;
 
+    internal CopilotBuiltinToolPolicy? BuiltinToolPolicyForTest => this.builtinToolPolicy;
+
     /// <summary>
     /// Creates a new <see cref="CopilotSdkChatClient"/>.
     /// </summary>
@@ -175,7 +181,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ModelOptions? modelOptions = null,
         ISubAgentChatRegistry? subAgentChatRegistry = null,
         IGitHubAccountUpsertService? accountUpsertService = null,
-        SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null)
+        SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -186,16 +193,27 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.loggerFactory = loggerFactory;
         this.byokOptions = byokOptions;
         this.modelOptions = modelOptions;
+        this.builtinToolPolicy = builtinToolPolicy;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
         this.accountUpsertService = accountUpsertService;
+        this.copilotClientFactory = DefaultCopilotClientFactory.Instance;
 
         if (slashCommandRegistry is { } registry)
         {
             registry.Register(new SlashCommands.CopilotSdkWorkingDirectorySlashCommandHandler(this));
             registry.Register(new SlashCommands.CopilotSdkModelSlashCommandHandler(this));
         }
+    }
+
+    /// <summary>
+    /// Internal helper for test injection: sets a custom <see cref="ICopilotClientFactory"/>
+    /// after construction.
+    /// </summary>
+    internal void SetCopilotClientFactoryForTest(ICopilotClientFactory factory)
+    {
+        this.copilotClientFactory = factory ?? throw new ArgumentNullException(nameof(factory));
     }
 
     /// <summary>
@@ -261,7 +279,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         string modelId,
         CopilotByokOptions? byokOptions,
         ChatOptions? options,
-        ModelOptions? modelOptions = null)
+        ModelOptions? modelOptions = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
@@ -302,6 +321,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.Tools = tools;
         }
 
+        ApplyBuiltinToolPolicy(sessionConfig, builtinToolPolicy);
+
         return sessionConfig;
     }
 
@@ -315,7 +336,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         string modelId,
         CopilotByokOptions? byokOptions,
         ChatOptions? options,
-        ModelOptions? modelOptions = null)
+        ModelOptions? modelOptions = null,
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
 
@@ -356,7 +378,35 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             resumeConfig.Tools = tools;
         }
 
+        ApplyBuiltinToolPolicy(resumeConfig, builtinToolPolicy);
+
         return resumeConfig;
+    }
+
+    private static void ApplyBuiltinToolPolicy(SessionConfig config, CopilotBuiltinToolPolicy? policy)
+    {
+        if (policy?.AvailableTools is { } available)
+        {
+            config.AvailableTools = available.ToList();
+        }
+
+        if (policy?.ExcludedTools is { } excluded)
+        {
+            config.ExcludedTools = excluded.ToList();
+        }
+    }
+
+    private static void ApplyBuiltinToolPolicy(ResumeSessionConfig config, CopilotBuiltinToolPolicy? policy)
+    {
+        if (policy?.AvailableTools is { } available)
+        {
+            config.AvailableTools = available.ToList();
+        }
+
+        if (policy?.ExcludedTools is { } excluded)
+        {
+            config.ExcludedTools = excluded.ToList();
+        }
     }
 
     /// <summary>
@@ -389,14 +439,24 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
     /// <summary>
-    /// Changes the active model for this client. The current session signature is invalidated so
-    /// the next turn creates a fresh session with the new model.
+    /// Changes the active model for this client. When a session is already live, the model is
+    /// retuned in place via <see cref="ICopilotSession.SetModelAsync"/> so the conversation history
+    /// is preserved (issue #1418); the cached session signature is left intact so the next turn
+    /// reuses the same session rather than recreating it. When no session is live yet, the model id
+    /// is simply stashed and applied by the next created/resumed session.
     /// </summary>
-    public void SetModelId(string modelId)
+    public async Task SetModelIdAsync(string modelId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         this.modelId = modelId;
-        this.currentSessionSignature = null;
+
+        if (this.copilotSession is { } session)
+        {
+            await session.SetModelAsync(modelId, cancellationToken).ConfigureAwait(false);
+        }
+
+        // No live session yet: BuildSessionConfig/BuildResumeSessionConfig already read this.modelId
+        // when the next session is created or resumed.
     }
 
     /// <summary>
@@ -407,8 +467,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     public async Task<IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
     {
         await this.EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
-        var models = await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
-        return models.ToArray();
+        return await this.copilotClient!.ListModelsAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -433,15 +492,21 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 GitHubToken = this.gitHubToken,
                 Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
             };
+
+            if (clientOptions.Mode == CopilotClientMode.Empty)
+            {
+                clientOptions.BaseDirectory = Directory.GetCurrentDirectory();
+            }
 
             if (!string.IsNullOrWhiteSpace(this.cliPath))
             {
                 clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
             }
 
-            var client = new CopilotClient(clientOptions);
-            await client.StartAsync(cancellationToken).ConfigureAwait(false);
+            var client = this.copilotClientFactory.Create(clientOptions);
+            await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
             this.copilotClient = client;
         }
         finally
@@ -449,6 +514,44 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             this.sessionInitializationLock.Release();
         }
     }
+
+    /// <summary>
+    /// Starts the Copilot client, translating the SDK's raw "Copilot runtime not found" failure
+    /// into a message that makes sense for an installed, signed application (issue #1376). The SDK
+    /// resolves its CLI strictly from <c>AppContext.BaseDirectory\runtimes\&lt;rid&gt;\native\copilot.exe</c>
+    /// and, when it is missing, tells the caller to "restore the NuGet package" — advice that is
+    /// meaningless to an end user of a packaged build. Phantom.Workspaces bundles that runtime as a
+    /// loose file in the installed payload, so a missing runtime means the installation is damaged;
+    /// point the user at reinstalling or at the manual <c>cliPath</c> override instead.
+    /// </summary>
+    private static async Task StartClientAsync(ICopilotClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.StartAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex) when (IsRuntimeNotFound(ex))
+        {
+            throw new InvalidOperationException(RuntimeMissingMessage, ex);
+        }
+    }
+
+    /// <summary>
+    /// True when the exception is the SDK's "Copilot runtime not found" failure raised because the
+    /// packaged <c>copilot.exe</c> is absent from <c>AppContext.BaseDirectory\runtimes\...\native</c>.
+    /// </summary>
+    private static bool IsRuntimeNotFound(InvalidOperationException ex) =>
+        ex.Message.Contains("Copilot runtime not found", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The installed-app-friendly replacement for the SDK's runtime-not-found message. It must not
+    /// tell a signed-installer user to "restore the NuGet package" (issue #1376).
+    /// </summary>
+    internal const string RuntimeMissingMessage =
+        "The packaged GitHub Copilot runtime (copilot.exe) is missing from this installation. It is " +
+        "expected next to the application at runtimes\\<rid>\\native\\copilot.exe. Reinstall or " +
+        "repair Phantom.Workspaces to restore the bundled runtime, or set the 'cliPath' model option " +
+        "(equivalently RuntimeConnection.ForStdio) to point at an installed GitHub Copilot CLI.";
 
     /// <summary>
     /// Injects the <see cref="IRunningAgentChatFactory"/> and <see cref="ISubAgentTable"/> that
@@ -483,7 +586,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var toolCalls = new List<FunctionCallContent>();
             var toolResults = new List<FunctionResultContent>();
 
-            using var subscription = session.On<SessionEvent>(sessionEvent =>
+            using var subscription = session.Subscribe(sessionEvent =>
             {
                 switch (sessionEvent)
                 {
@@ -498,6 +601,30 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                         lock (toolEventLock)
                         {
                             toolResults.Add(CopilotToolEventMapper.MapToolComplete(toolComplete));
+                        }
+
+                        break;
+                    default:
+                        // Fix #1312 / #1323: mirror the streaming adapter's default arm — do not
+                        // silently drop unmapped SDK event kinds, but log at Debug so we do not
+                        // spam Warning per high-frequency SDK ping (e.g. AssistantStreamingDeltaEvent).
+                        // This path does not have a transcript channel to emit content into, so
+                        // surfacing is log-only.
+                        if (sessionEvent is not null
+                            && sessionEvent is not SessionIdleEvent
+                            && sessionEvent is not SessionErrorEvent
+                            && sessionEvent is not AssistantMessageDeltaEvent
+                            && sessionEvent is not AssistantReasoningDeltaEvent
+                            && sessionEvent is not AssistantUsageEvent
+                            && sessionEvent is not SystemNotificationEvent
+                            && sessionEvent is not SubagentStartedEvent
+                            && sessionEvent is not SubagentCompletedEvent
+                            && sessionEvent is not SubagentFailedEvent)
+                        {
+                            this.loggerFactory?.CreateLogger<CopilotSdkChatClient>().LogDebug(
+                                "Copilot SDK non-streaming path received an unmapped session event of type {EventType} for AgentId {AgentId}.",
+                                sessionEvent.GetType().FullName,
+                                string.IsNullOrEmpty(sessionEvent.AgentId) ? "<root>" : sessionEvent.AgentId);
                         }
 
                         break;
@@ -565,7 +692,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             var eventChannel = Channel.CreateUnbounded<SessionEvent>(
                 new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
 
-            var eventSubscription = session.On<SessionEvent>(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
+            var eventSubscription = session.Subscribe(sessionEvent => eventChannel.Writer.TryWrite(sessionEvent));
 
             var dispatchLoop = Task.Run(async () =>
             {
@@ -577,7 +704,10 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     // normally on SessionIdleEvent and faults on SessionErrorEvent, so the turn
                     // channel is completed here rather than inside the translation layer.
                     await foreach (var update in CopilotSdkStreamAdapter
-                        .TranslateCopilotSdkSessionEvents(eventChannel.Reader, turnCancellationToken)
+                        .TranslateCopilotSdkSessionEvents(
+                            eventChannel.Reader,
+                            this.loggerFactory?.CreateLogger(typeof(CopilotSdkStreamAdapter).FullName!),
+                            turnCancellationToken)
                         .ConfigureAwait(false))
                     {
                         await router.RouteAsync(update).ConfigureAwait(false);
@@ -727,7 +857,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Actually stops the in-flight Copilot CLI turn. Cancelling the read loop alone leaves the CLI
     // generating and lets a stale SessionIdleEvent from the abandoned turn complete the next turn's
     // channel (a silent empty response), so the session is also invalidated and recreated next turn.
-    private async Task AbortAndInvalidateSessionAsync(CopilotSession session, CopilotSubAgentRouter? router = null)
+    private async Task AbortAndInvalidateSessionAsync(ICopilotSession session, CopilotSubAgentRouter? router = null)
     {
         // Suspend steering BEFORE aborting/invalidating the session (GitHub issue #1142). Once
         // this flag is set, OnQueueChanged early-returns without calling TryDequeueNextImmediate,
@@ -838,7 +968,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     }
 
     // Drops the cached session (disposing it in the background) so the next turn creates a fresh one.
-    private void InvalidateCopilotSession(CopilotSession session)
+    private void InvalidateCopilotSession(ICopilotSession session)
     {
         if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session)
         {
@@ -867,7 +997,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // Drops the cached session without re-arming pendingResumeSessionId. Used when the session's
     // pipe broke (GitHub issue #267): the broken session cannot be resumed, so the next
     // EnsureSessionAsync must create a fresh session rather than trying to resume the broken one.
-    private void InvalidateBrokenSession(CopilotSession session)
+    private void InvalidateBrokenSession(ICopilotSession session)
     {
         if (Interlocked.CompareExchange(ref this.copilotSession, null, session) != session)
         {
@@ -902,6 +1032,14 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
 
         return null;
     }
+
+    event Action<string>? ICopilotSdkSessionSink.SessionEstablished
+    {
+        add => this.SessionEstablished += value;
+        remove => this.SessionEstablished -= value;
+    }
+
+    void ICopilotSdkSessionSink.SetResumeSessionId(string? sessionId) => this.SetResumeSessionId(sessionId);
 
     /// <inheritdoc />
     public void Dispose()
@@ -1089,7 +1227,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         };
     }
 
-    private async Task<CopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
+    private async Task<ICopilotSession> EnsureSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
         var signature = ComputeSessionSignatureCore(options, this.workingDirectoryOverride);
 
@@ -1115,6 +1253,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 {
                     GitHubToken = this.gitHubToken,
                     Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                    Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
                 };
 
                 if (!string.IsNullOrWhiteSpace(this.cliPath))
@@ -1128,8 +1267,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                     clientOptions.WorkingDirectory = workingDirectory;
                 }
 
-                var client = new CopilotClient(clientOptions);
-                await client.StartAsync(cancellationToken).ConfigureAwait(false);
+                if (clientOptions.Mode == CopilotClientMode.Empty)
+                {
+                    clientOptions.BaseDirectory = !string.IsNullOrWhiteSpace(workingDirectory)
+                        ? workingDirectory
+                        : Directory.GetCurrentDirectory();
+                }
+
+                var client = this.copilotClientFactory.Create(clientOptions);
+                await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
                 this.copilotClient = client;
 
                 if (this.accountUpsertService is not null)
@@ -1148,8 +1294,11 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 // Preserve the existing session id so the next CreateOrResumeSessionAsync call
                 // resumes the Copilot CLI session with the updated config (e.g. new working
-                // directory) rather than creating a blank new session.
+                // directory) rather than creating a blank new session. Model changes no longer
+                // reach this teardown path: SetModelIdAsync retunes the live session in place via
+                // CopilotSession.SetModelAsync, preserving the conversation history (issue #1418).
                 this.pendingResumeSessionId ??= staleSession.SessionId;
+
                 await staleSession.DisposeAsync().ConfigureAwait(false);
                 this.copilotSession = null;
                 this.currentSessionSignature = null;
@@ -1172,7 +1321,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // prior conversation history remains visible to the model (issue #3); otherwise creates a fresh
     // session. The resume id is one-shot. If resuming fails (for example the on-disk session has been
     // removed), fall back to creating a new session so the chat stays usable.
-    private async Task<CopilotSession> CreateOrResumeSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
+    private async Task<ICopilotSession> CreateOrResumeSessionAsync(ChatOptions? options, CancellationToken cancellationToken)
     {
         var resumeSessionId = this.pendingResumeSessionId;
         this.pendingResumeSessionId = null;
@@ -1181,7 +1330,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             try
             {
-                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions);
+                var resumeConfig = BuildResumeSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions, this.builtinToolPolicy);
                 if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
                 {
                     resumeConfig.WorkingDirectory = this.workingDirectoryOverride;
@@ -1199,7 +1348,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             }
         }
 
-        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions);
+        var sessionConfig = BuildSessionConfig(this.modelId, this.byokOptions, options, this.modelOptions, this.builtinToolPolicy);
         if (!string.IsNullOrWhiteSpace(this.workingDirectoryOverride))
         {
             sessionConfig.WorkingDirectory = this.workingDirectoryOverride;

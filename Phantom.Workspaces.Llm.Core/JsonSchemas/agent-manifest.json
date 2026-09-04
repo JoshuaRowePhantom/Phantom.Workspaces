@@ -71,12 +71,12 @@
         "id": {
           "type": "string",
           "minLength": 1,
-          "description": "Tool resource type that selects how the tool is resolved. Common values: 'mcp-server-entity' (resolve an mcp-server entity by name), 'fixed' (resolve a built-in toolset by name)."
+          "description": "Tool resource type that selects how the tool is resolved. Common values: 'mcp-server-entity' (resolve an mcp-server entity by entity name, see 'name'), 'fixed' (resolve a built-in toolset by name). An unknown id fails session load with \"Tool resource '<id>:<name>' could not be resolved\"."
         },
         "name": {
           "type": "string",
           "minLength": 1,
-          "description": "Tool resource name. For 'mcp-server-entity' type, this is the mcp-server entity name (e.g., 'github'). For 'fixed' type, this is the built-in toolset name (e.g., 'workspace-entity', 'filesystem')."
+          "description": "Tool resource name. For 'fixed' type, this is the built-in toolset name (e.g., 'workspace-entity', 'filesystem'). For 'mcp-server-entity' type, this value is appended to each MCP-server search prefix, in priority order, to form a candidate entity name; the first existing entity that has an 'mcp-server' property wins. Search prefixes, highest priority first: the machine profile 'computer-user-profiles/users/username/<user>/computers/hostname/<host>/copilot/mcp-servers', then '${USER}/mcp-servers', then 'defaults/mcp-servers'. The mcp-server entity must therefore be named with this value as its final name component under one of those prefixes (e.g. 'defaults/mcp-servers/github'). Resolution keys off the entity name, not the mcp-server 'serverName' field."
         },
         "options": {
           "type": "object",

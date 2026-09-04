@@ -16,7 +16,12 @@ internal static class UnhandledExceptionHandler
     public static void Install()
     {
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
-        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // #1352: unobserved TaskScheduler exceptions are NOT shown in the crash dialog. They are
+        // benign-by-default (the runtime swallows them after finalization) and are already logged +
+        // observed by Services.Logging.GlobalExceptionLogging, which subscribes
+        // TaskScheduler.UnobservedTaskException during host framework init. Only process-crashing
+        // paths (AppDomain / dispatcher) show the crash dialog.
     }
 
     public static void InstallDispatcherHandler()
@@ -24,14 +29,8 @@ internal static class UnhandledExceptionHandler
         Dispatcher.UIThread.UnhandledException += OnDispatcherUnhandledException;
     }
 
-    private static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    internal static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
         => ShowOrDiscard(e.ExceptionObject as Exception, isTerminating: e.IsTerminating);
-
-    internal static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
-    {
-        e.SetObserved();
-        ShowOrDiscard(e.Exception, isTerminating: false);
-    }
 
     internal static void OnDispatcherUnhandledException(object? sender, DispatcherUnhandledExceptionEventArgs e)
     {

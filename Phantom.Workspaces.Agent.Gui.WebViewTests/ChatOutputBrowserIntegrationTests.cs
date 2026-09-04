@@ -781,7 +781,9 @@ public sealed class ChatOutputBrowserIntegrationTests
                 var bodyMessages = await EvalAsync(
                     web,
                     "document.querySelectorAll('#tool-group-0-body .chat-message').length.toString()");
-                Assert.Equal("\"2\"", bodyMessages);
+                // Issue #1225: grouped members no longer emit per-member <div class="chat-message">
+                // frames — the group itself owns the single outer message frame.
+                Assert.Equal("\"0\"", bodyMessages);
             }
             finally
             {

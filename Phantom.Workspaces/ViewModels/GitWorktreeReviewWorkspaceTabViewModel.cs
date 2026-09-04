@@ -24,6 +24,8 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
     private GitWorktreeFileListViewModel fileList;
     private ObservableCollection<GitDiffViewModel> fileDiffs;
 
+    internal static Func<string?, string> DefaultBranchProbeForTests { get; set; } = ProbeRepositoryForDefaultBranch;
+
     // #1210: `foregroundScheduler` is a required constructor parameter (mirrors AgentViewModel /
     // #1122). Heavy LibGit2Sharp work runs on the thread pool and only the final observable-collection
     // mutations marshal back via ContinueWith(..., foregroundScheduler). No blocking git probe runs
@@ -189,7 +191,7 @@ public sealed class GitWorktreeReviewWorkspaceTabViewModel : WorkspaceTabViewMod
             var branches = new System.Collections.Generic.List<string>();
             LoadBranchNames(this.RepositoryPath, branches);
             string? probedDefault = needsDefaultBranchProbe
-                ? ProbeRepositoryForDefaultBranch(this.RepositoryPath)
+                ? DefaultBranchProbeForTests(this.RepositoryPath)
                 : null;
             return (branches, probedDefault);
         }, ct).ConfigureAwait(false);

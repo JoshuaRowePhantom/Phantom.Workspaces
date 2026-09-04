@@ -10,6 +10,7 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     private string title = string.Empty;
     private string? tabTooltip;
     private TabHeaderViewModel? tabHeader;
+    private bool isTitleExplicit;
 
     public required string Id { get; init; }
 
@@ -29,6 +30,28 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     {
         get => this.tabTooltip;
         set => this.SetProperty(ref this.tabTooltip, value);
+    }
+
+    public bool IsTitleExplicit
+    {
+        get => this.isTitleExplicit;
+        set => this.SetProperty(ref this.isTitleExplicit, value);
+    }
+
+    public void SetTitleExplicit(string title)
+    {
+        this.IsTitleExplicit = true;
+        this.Title = title;
+    }
+
+    public void SetTitleFromContent(string title)
+    {
+        if (this.IsTitleExplicit)
+        {
+            return;
+        }
+
+        this.Title = title;
     }
 
     /// <summary>

@@ -16,8 +16,8 @@ internal interface IModelSlashCommandClient
     /// <summary>The currently active model identifier.</summary>
     string ModelId { get; }
 
-    /// <summary>Changes the active model for this client.</summary>
-    void SetModelId(string modelId);
+    /// <summary>Changes the active model for this client, retuning the live session in place.</summary>
+    Task SetModelIdAsync(string modelId, CancellationToken cancellationToken);
 
     /// <summary>Returns the models available from the Copilot backend.</summary>
     Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken);

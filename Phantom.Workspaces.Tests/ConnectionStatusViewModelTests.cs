@@ -163,4 +163,39 @@ public sealed class ConnectionStatusViewModelTests
 
         Assert.False(viewModel.HasProblem);
     }
+
+    [Fact]
+    public void ConnectionStatusViewModel_RecordClientConnectivityError_AppendsToRecentErrorsAndFlagsProblem()
+    {
+        var registry = new ReverseConnectionStatusRegistry();
+        using var viewModel = new ConnectionStatusViewModel(registry);
+
+        Assert.False(viewModel.HasRecentErrors);
+        Assert.False(viewModel.HasProblem);
+
+        viewModel.RecordClientConnectivityError(new InvalidOperationException("relay answered 404"));
+
+        Assert.True(viewModel.HasRecentErrors);
+        Assert.True(viewModel.HasProblem);
+        var recorded = Assert.Single(viewModel.RecentErrors);
+        Assert.Equal("relay answered 404", recorded.Message);
+        Assert.Equal("relay answered 404", viewModel.ProblemText);
+    }
+
+    [Fact]
+    public void ConnectionStatusViewModel_RecentErrors_AreBoundedAndOrderedNewestFirst()
+    {
+        var registry = new ReverseConnectionStatusRegistry();
+        using var viewModel = new ConnectionStatusViewModel(registry);
+
+        for (var i = 0; i < 25; i++)
+        {
+            viewModel.RecordClientConnectivityError(new InvalidOperationException($"error {i}"));
+        }
+
+        // Bounded to the most recent 20, newest first.
+        Assert.Equal(20, viewModel.RecentErrors.Count);
+        Assert.Equal("error 24", viewModel.RecentErrors[0].Message);
+        Assert.Equal("error 5", viewModel.RecentErrors[^1].Message);
+    }
 }

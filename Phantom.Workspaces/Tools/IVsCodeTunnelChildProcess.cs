@@ -17,6 +17,9 @@ public interface IVsCodeTunnelChildProcess : IDisposable
     /// <summary>Stderr accumulated so far (streamed on a background task by the real implementation).</summary>
     string CapturedStandardError { get; }
 
+    /// <summary>Stdout accumulated so far (streamed on a background task by the real implementation).</summary>
+    string CapturedStandardOutput { get; }
+
     /// <summary>Terminates the process tree if the process is still alive; a no-op after exit.</summary>
     void Kill();
 }
@@ -36,6 +39,8 @@ internal sealed class ProcessBackedVsCodeTunnelChildProcess : IVsCodeTunnelChild
     private readonly Process process;
     private readonly StringBuilder capturedStandardError = new();
     private readonly object stderrLock = new();
+    private readonly StringBuilder capturedStandardOutput = new();
+    private readonly object stdoutLock = new();
 
     public ProcessBackedVsCodeTunnelChildProcess(Process process)
     {
@@ -54,7 +59,18 @@ internal sealed class ProcessBackedVsCodeTunnelChildProcess : IVsCodeTunnelChild
         };
         this.process.BeginErrorReadLine();
 
-        this.process.OutputDataReceived += (_, __) => { };
+        this.process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is null)
+            {
+                return;
+            }
+
+            lock (this.stdoutLock)
+            {
+                this.capturedStandardOutput.AppendLine(e.Data);
+            }
+        };
         this.process.BeginOutputReadLine();
     }
 
@@ -65,6 +81,11 @@ internal sealed class ProcessBackedVsCodeTunnelChildProcess : IVsCodeTunnelChild
     public string CapturedStandardError
     {
         get { lock (this.stderrLock) { return this.capturedStandardError.ToString(); } }
+    }
+
+    public string CapturedStandardOutput
+    {
+        get { lock (this.stdoutLock) { return this.capturedStandardOutput.ToString(); } }
     }
 
     public void Kill()

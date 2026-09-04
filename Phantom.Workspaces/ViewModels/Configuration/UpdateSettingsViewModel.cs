@@ -43,7 +43,7 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
             new UpdateModeOption(AutomaticUpdateMode.DownloadAndInstall, "Download and install automatically"),
         ];
         this.selectedMode = this.Modes.First(option => option.Mode == settings.Mode);
-        this.runAtStartup = controller.IsRunAtStartupEnabled;
+        this.runAtStartup = settings.RunAtStartup;
         this.latestVersion = controller.LatestAvailableVersion;
         this.isUpdateAvailable = controller.LatestAvailableVersion is not null;
 
@@ -90,7 +90,43 @@ public sealed class UpdateSettingsViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            this.controller.SetRunAtStartup(value);
+            try
+            {
+                this.controller.SetRunAtStartup(value);
+            }
+            catch (Exception exception)
+            {
+                // Surface the failure and revert the checkbox: without this, Avalonia's binding
+                // pipeline swallows the exception and the user sees the box appear checked but no
+                // task is created. Reverting the field + raising PropertyChanged flips the visual.
+                this.StatusText = value
+                    ? $"Enabling run-at-startup failed: {exception.Message}"
+                    : $"Disabling run-at-startup failed: {exception.Message}";
+                this.runAtStartup = !value;
+                this.RaisePropertyChanged(nameof(this.RunAtStartup));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reconciles the actual scheduled-task state with the persisted setting. Called from the
+    /// settings dialog Save path so that whatever the user saved is what runs at logon, even if
+    /// the task was deleted out-of-band (via <c>schtasks.exe</c>, group policy, etc.).
+    /// </summary>
+    public void ApplyToController()
+    {
+        try
+        {
+            this.controller.SetRunAtStartup(this.runAtStartup);
+        }
+        catch (Exception exception)
+        {
+            // #1349: a non-elevated environment can fail to register run-at-startup. Handle it at
+            // this source of relevance (mirroring the checkbox setter above): surface the failure
+            // via StatusText and never throw, so the Save path cannot become a dispatcher crash.
+            this.StatusText = this.runAtStartup
+                ? $"Enabling run-at-startup failed: {exception.Message}"
+                : $"Disabling run-at-startup failed: {exception.Message}";
         }
     }
 

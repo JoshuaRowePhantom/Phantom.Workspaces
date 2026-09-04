@@ -172,6 +172,28 @@ public class ToolExecutionResultWriter
         return startTime.ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ", CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Derives the host label (the name segments preceding <see cref="ToolExecutionsSegment"/>, joined
+    /// with " / ") and stores it as a queryable <c>host-label</c> field so run-history queries can
+    /// filter by host server-side (#1360). Mirrors how the view derives the host from the name path.
+    /// </summary>
+    private static string ComputeHostLabel(IReadOnlyList<string> nameComponents)
+    {
+        var executionsIndex = -1;
+        for (var index = 0; index < nameComponents.Count; index++)
+        {
+            if (string.Equals(nameComponents[index], ToolExecutionsSegment, StringComparison.Ordinal))
+            {
+                executionsIndex = index;
+                break;
+            }
+        }
+
+        return executionsIndex <= 0
+            ? string.Empty
+            : string.Join(" / ", nameComponents.Take(executionsIndex));
+    }
+
     private static string BuildResultJson(
         EntityId entityId,
         IReadOnlyList<string> nameComponents,
@@ -210,6 +232,7 @@ public class ToolExecutionResultWriter
             writer.WriteEndArray();
 
             writer.WriteString("tool-name", toolName);
+            writer.WriteString("host-label", ComputeHostLabel(nameComponents));
             writer.WriteString("start-time", startTime.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
             if (endTime is { } end)
             {

@@ -68,11 +68,14 @@ public struct CreateAgentChatRequest
     public TimeProvider? TimeProvider { get; init; }
 
     /// <summary>
-    /// Overrides the factory used to create a persistence store from a
-    /// <see cref="ChatHistoryProviderDefinition"/> extracted from the agent definition's
-    /// <c>chat-history</c> tool options. When <see langword="null"/>,
-    /// <see cref="AgentPersistenceStoreFactory.CreateAsync"/> is used.
-    /// Intended for testing.
+    /// Factory used to create the agent chat's persistence store. This delegate is invoked
+    /// for every chat, including chats whose agent definition does not declare a
+    /// <c>chat-history</c> tool — in that case the delegate is called with a <see langword="null"/>
+    /// <see cref="ChatHistoryProviderDefinition"/> and is expected to return an in-memory store.
+    /// When left <see langword="null"/>, <see cref="AgentFactory"/> uses a default delegate that
+    /// maps a null definition to <see cref="AgentPersistenceStoreFactory.CreateInMemory"/> and a
+    /// non-null definition to <see cref="AgentPersistenceStoreFactory.CreateAsync"/>.
+    /// Intended primarily for testing; production callers can leave it null.
     /// </summary>
-    public Func<ChatHistoryProviderDefinition, CancellationToken, ValueTask<IAgentPersistenceStore>>? PersistenceStoreFactory { get; init; }
+    public Func<ChatHistoryProviderDefinition?, CancellationToken, ValueTask<IAgentPersistenceStore>>? PersistenceStoreFactory { get; init; }
 }

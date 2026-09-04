@@ -23,12 +23,6 @@ public class WorkspaceDockFactory : Factory
     public DockState DockState => dockState;
 
     /// <summary>
-    /// Registry mapping tab IDs to their dock documents. Populated by
-    /// <see cref="WorkspaceDocumentGenerator"/> via the onPrepared callback.
-    /// </summary>
-    private readonly Dictionary<string, WorkspaceDocument> documentsByTabId = new(StringComparer.Ordinal);
-
-    /// <summary>
     /// Registry mapping pane IDs to their dock documents. Populated by
     /// <see cref="WorkspacePaneDocumentGenerator"/> via the onPrepared callback.
     /// </summary>
@@ -40,30 +34,46 @@ public class WorkspaceDockFactory : Factory
     }
 
     /// <summary>
-    /// Returns the <see cref="WorkspaceDocument"/> registered for the given tab ID, or null if none.
+    /// #1334: uniformly wires a <see cref="WorkspaceContentDock"/> region so that fresh, restored,
+    /// primary, secondary, and menu-split docks are configured identically. The single owns-tabs
+    /// "primary" dock is bound to the pane's <see cref="WorkspacePaneViewModel.Tabs"/> via
+    /// <c>ItemsSource</c> and a live <see cref="WorkspaceDocumentGenerator"/> that registers into
+    /// the OWNING PANE's registry (#1341); every other region re-initializes and registers its
+    /// already-materialized restored documents into the same per-pane registry so the pane's
+    /// <c>GetDocumentForTab</c> and the Ctrl-click / <c>NewWindowRequested</c> anchor resolution
+    /// route each tab to the region that actually hosts it (#1333).
     /// </summary>
-    public WorkspaceDocument? GetDocumentForTab(string tabId)
-        => this.documentsByTabId.TryGetValue(tabId, out var doc) ? doc : null;
-
-    /// <summary>
-    /// Removes the document registration for the given tab ID (called when a document is cleared).
-    /// </summary>
-    public void UnregisterDocument(string tabId)
+    public void WireContentDock(WorkspaceContentDock dock, WorkspacePaneViewModel workspacePane, bool ownsTabs)
     {
-        this.documentsByTabId.Remove(tabId);
-        this.DockableLocator?.Remove(tabId);
-    }
+        if (ownsTabs)
+        {
+            dock.VisibleDockables?.Clear();
+            dock.ItemsSource = workspacePane.Tabs;
+            dock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
+                id => workspacePane.GetDocumentForTab(id),
+                doc => workspacePane.RegisterDocument(doc.Id, doc),
+                id => workspacePane.UnregisterDocument(id));
+        }
+        else if (dock.VisibleDockables is { } stubs)
+        {
+            foreach (var stub in stubs.OfType<WorkspaceDocument>())
+            {
+                // The stub's Context was pre-wired by InitLayout's ContextLocator but not fully
+                // initialized (no header, no tab-event subscriptions). Complete initialization and
+                // register it so the region's tabs render their header template and resolve to the
+                // owning dock for Ctrl-click / NewWindowRequested (#1333).
+                if (stub.TabViewModel is not { } tabVm)
+                {
+                    continue;
+                }
 
-    /// <summary>
-    /// Registers a document for the given tab ID (called when restoring from dock-layout JSON).
-    /// Also updates <see cref="IDockFactory.DockableLocator"/> so the Dock library can locate
-    /// the document by ID when re-wiring the layout.
-    /// </summary>
-    public void RegisterDocument(string tabId, WorkspaceDocument document)
-    {
-        this.documentsByTabId[tabId] = document;
-        if (this.DockableLocator is not null)
-            this.DockableLocator[tabId] = () => this.documentsByTabId.GetValueOrDefault(tabId);
+                stub.Initialize(tabVm);
+                if (!string.IsNullOrEmpty(stub.Id))
+                {
+                    workspacePane.RegisterDocument(stub.Id, stub);
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -108,6 +118,24 @@ public class WorkspaceDockFactory : Factory
     }
 
     /// <summary>
+    /// #1307: split-created docks (via Dock's ``NewHorizontalDocumentDock`` /
+    /// ``NewVerticalDocumentDock`` paths) must be ``WorkspaceContentDock`` so tabs
+    /// they host match the rich header template in ``DockDataTemplates.axaml``
+    /// (favicon + ``MaxWidth=180`` + ``CharacterEllipsis``). A plain ``DocumentDock``
+    /// would fall through to the generic ``IDocumentDock`` template, which has no
+    /// ``HeaderTemplate`` and would render an unbounded, icon-less tab title.
+    /// A fresh ``Id`` is assigned to prevent ``FactoryBase`` from copying the source
+    /// dock's ``Id`` on split (which would create duplicate ids in the layout).
+    /// </summary>
+    public override IDocumentDock CreateDocumentDock()
+    {
+        return new WorkspaceContentDock
+        {
+            Id = Guid.NewGuid().ToString(),
+        };
+    }
+
+    /// <summary>
     /// Creates a dock layout for workspace content (entity tabs, agent sessions, etc.)
     /// Uses ItemsSource wired to <see cref="WorkspacePaneViewModel.Tabs"/> so that
     /// adding/removing tabs automatically creates/destroys dock documents via
@@ -124,8 +152,9 @@ public class WorkspaceDockFactory : Factory
             VisibleDockables = CreateList<IDockable>(),
             ItemsSource = workspacePane.Tabs,
             ItemContainerGenerator = new WorkspaceDocumentGenerator(
-                doc => this.documentsByTabId[doc.Id] = doc,
-                id => this.documentsByTabId.Remove(id)),
+                id => workspacePane.GetDocumentForTab(id),
+                doc => workspacePane.RegisterDocument(doc.Id, doc),
+                id => workspacePane.UnregisterDocument(id)),
         };
 
         var root = CreateRootDock();

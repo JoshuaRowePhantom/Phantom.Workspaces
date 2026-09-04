@@ -23,6 +23,7 @@ using Dock.Serializer.SystemTextJson;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
@@ -31,7 +32,7 @@ using Phantom.Workspaces.Transport.ReverseHttp;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable
+public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceController, IWorkspaceTabService, IActiveTabProvider, IAsyncDisposable, ITabNavigatorHost, IWorkspaceTabFactory
 {
     private const string DefaultWorkspaceId = "default-workspace";
     private const string LoadingWorkspaceIdPrefix = "loading-workspace:";
@@ -72,6 +73,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private static readonly GridLength LeftPaneExpandedWidth = new(1, GridUnitType.Star);
     private static readonly GridLength LeftPaneCollapsedWidth = new(0, GridUnitType.Pixel);
     private readonly WorkspaceDockFactory dockFactory;
+    private WorkspacePaneEnvironment? workspacePaneEnvironment;
     private IRootDock? layout;
     private ScheduledTools.ScheduledToolHost? scheduledToolHost;
     private ScheduledTools.ScheduledToolPauseStateService? scheduledToolPauseStateService;
@@ -93,6 +95,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
     private bool navigatingViaHistory;
+    private ITabNavigator tabNavigator = null!;
+    private Action? focusWindowAction;
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
     private readonly List<RunningAgentChatLease> autoResumeLeases = [];
@@ -119,20 +123,24 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.TopLevelViews = new ObservableCollection<ViewDefinitionViewModel>();
         this.WorkspacePanes = new ObservableCollection<WorkspacePaneViewModel>();
 
+        // #1341: dockFactory and notificationService must exist before the first workspace pane is
+        // created, because the pane captures a WorkspacePaneEnvironment bundling these services.
+        this.dockFactory = new WorkspaceDockFactory(this);
+        this.notificationService = new NotificationService(this);
+
         this.selectedWorkspacePane = CreatePlaceholderWorkspacePane(DefaultWorkspaceId, "No workspace selected.");
         this.WorkspacePanes.Add(this.selectedWorkspacePane);
-        
-        this.dockFactory = new WorkspaceDockFactory(this);
         
         this.ActivateShortcutCommand = new RelayCommand(async _ => await this.OnActivateShortcutAsync(_), this.CanActivateShortcut);
         this.SetDebuggingCommand = new RelayCommand(async parameter => await this.SetDebuggingAsync(ReadDebuggingParameter(parameter)));
         this.CloseWorkspaceCommand = new RelayCommand(this.OnCloseWorkspace, this.CanCloseWorkspace);
-        this.CloseActiveTabCommand = new RelayCommand(_ => this.OnCloseActiveTab());
-        this.CycleTabForwardCommand = new RelayCommand(_ => this.OnCycleTab(+1));
-        this.CycleTabBackwardCommand = new RelayCommand(_ => this.OnCycleTab(-1));
+        this.CloseActiveTabCommand = new RelayCommand(_ => this.selectedWorkspacePane?.CloseActiveTab());
+        this.CycleTabForwardCommand = new RelayCommand(_ => this.selectedWorkspacePane?.CycleTab(+1));
+        this.CycleTabBackwardCommand = new RelayCommand(_ => this.selectedWorkspacePane?.CycleTab(-1));
         this.NavigateBackCommand = new RelayCommand(_ => this.OnNavigateBack());
         this.NavigateForwardCommand = new RelayCommand(_ => this.OnNavigateForward());
         this.DuplicateBrowserTabCommand = new RelayCommand(async _ => await this.DuplicateBrowserTabAsync());
+        this.OpenCredentialManagerCommand = new RelayCommand(_ => this.OpenCredentialManagerRequested?.Invoke());
         var agentSessionShortcutContext = new AgentSessionShortcutContext(
             userComputerProfileOverride: configuration?.UserComputerProfileOverride,
             persistenceStoreCache: services.AgentPersistenceStoreCache);
@@ -167,10 +175,13 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         this.refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         this.refreshTimer.Tick += this.OnRefreshTick;
-        this.notificationService = new NotificationService(this);
+        this.tabNavigator = new MainWindowTabNavigator(
+            this,
+            this.navigationHistoryService,
+            this.notificationService);
         this.notificationsViewModel = new NotificationsViewModel(
             this.notificationService,
-            tabId => this.NavigateToNotificationTab(tabId));
+            this.tabNavigator);
         this.NavigateNextNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(+1));
         this.NavigatePreviousNotificationCommand = new RelayCommand(_ => this.OnNavigateNotification(-1));
         this.notificationService.NotificationsChanged += this.OnNotificationsChanged;
@@ -181,8 +192,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.runningAgentBrain = new RunningAgentBrainViewModel(
             runningAgentChats,
             this.GetAllAgentTabs,
-            this.ActivateTabById,
-            sessionKey => _ = this.OpenAgentForSessionAsync(sessionKey),
+            this.tabNavigator,
             action => Dispatcher.UIThread.Post(action));
     }
 
@@ -229,12 +239,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public RelayCommand DuplicateBrowserTabCommand { get; }
 
     /// <summary>
-    /// Find (Ctrl-F) session over the active View's <see cref="EntityListViewModel"/>. The list is
-    /// replaced when the active tab changes; the same instance persists so bindings stay live.
+    /// Opens the credential/memorized-secrets manager dialog (#1267). Exposed as a command so the
+    /// 🤫 top-right button and any keyboard binding open the same dialog through one path; the
+    /// view raises the actual window via <see cref="OpenCredentialManagerRequested"/>.
     /// </summary>
-    public FindViewModel Find => this.find ??= new FindViewModel(this.findList);
+    public RelayCommand OpenCredentialManagerCommand { get; }
+
+    /// <summary>Raised when <see cref="OpenCredentialManagerCommand"/> is invoked.</summary>
+    public event Action? OpenCredentialManagerRequested;
+
+    /// <summary>
+    /// Find (Ctrl-F) session over the active View's <see cref="ViewPopulationViewModel"/>. The population
+    /// is replaced when the active tab changes; the same FindViewModel instance persists so bindings stay live.
+    /// </summary>
+    public FindViewModel Find => this.find ??= new FindViewModel(this.currentPopulation);
     private FindViewModel? find;
-    private readonly EntityListViewModel findList = new();
 
     public NotificationsViewModel? NotificationsViewModel
     {
@@ -249,19 +268,28 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     /// <summary>
     /// Navigate directly to the history entry at <paramref name="historyIndex"/> without
-    /// pushing a new entry onto the navigation stack.
+    /// pushing a new entry onto the navigation stack. Delegates to the shared
+    /// <see cref="ITabNavigator"/> so the Ctrl nav-stack popup navigates identically to the
+    /// brain button and notifications (issue #1254).
     /// </summary>
-    public void NavigateToHistoryEntry(int historyIndex)
+    public void NavigateToHistoryEntry(int historyIndex) =>
+        _ = this.NavigateToHistoryEntryAsync(historyIndex);
+
+    internal async Task NavigateToHistoryEntryAsync(int historyIndex)
     {
         if (!this.navigationHistoryService.GoToIndex(historyIndex, out var entry) || entry is null)
         {
             return;
         }
 
+        // The guard is still required so OpenTabAsync's dock-factory re-entry does not re-push a
+        // history entry while we are replaying one; NavigationOptions.PushHistory is false as well.
         this.navigatingViaHistory = true;
         try
         {
-            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+            await this.tabNavigator.NavigateAsync(
+                new NavigationTarget { DocumentTabId = entry.DocumentTabId, WorkspaceTabId = entry.WorkspaceTabId },
+                new NavigationOptions { PushHistory = false });
         }
         finally
         {
@@ -276,7 +304,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var tab = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
             if (tab is null) continue;
 
-            var doc = this.dockFactory.GetDocumentForTab(tabId);
+            var doc = pane.GetDocumentForTab(tabId);
             if (doc is null) continue;
 
             var statusIndicator = doc.EffectiveTabHeader.Items
@@ -452,6 +480,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
 
             this.RaisePropertyChanged(nameof(this.HasStickyParentContext));
+            this.find?.SetPopulation(value);
         }
     }
 
@@ -1183,7 +1212,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 Data = document.RootElement.Clone(),
                 Relationships = Array.Empty<EntitySnapshot>(),
             });
-        return new WorkspacePaneViewModel(entity, paneId, closeCommand);
+        return new WorkspacePaneViewModel(
+            entity, paneId, closeCommand, environment: this.GetWorkspacePaneEnvironment());
     }
 
     private void InitializeTopLevelViews()
@@ -1696,6 +1726,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             await this.AddHierarchyNodeAsync(population, node, indentLevel: 0);
         }
+
+        population.ReapplyFindAfterAssembly();
     }
 
     private async Task AddHierarchyNodeAsync(
@@ -1738,7 +1770,30 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         object? sender,
         EventArgs e)
     {
-        await this.EntityBroker.RefreshAsync();
+        await this.RefreshOnceAsync(() => this.EntityBroker.RefreshAsync());
+    }
+
+    /// <summary>
+    /// Runs a single entity refresh, swallowing the connectivity failures that a periodic refresh must
+    /// tolerate. The refresh runs from an <c>async void</c> timer tick, so an escaping exception would
+    /// crash the app: a cancelled refresh (shutdown/teardown) is ignored, and a
+    /// <see cref="WebDataAccessRequestException"/> (dropped tunnel, stale relay answering 404/503, server
+    /// 5xx) is surfaced as a client connectivity error instead. Any other exception still propagates so
+    /// genuine bugs are not hidden.
+    /// </summary>
+    internal async Task RefreshOnceAsync(Func<Task> refresh)
+    {
+        try
+        {
+            await refresh();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (WebDataAccessRequestException exception)
+        {
+            this.ConnectionStatus?.RecordClientConnectivityError(exception);
+        }
     }
 
     private void OnEntityBrokerChanged(
@@ -1827,7 +1882,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Phase 1: create skeleton workspace pane and show it immediately
-        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand, this.SaveWorkspacePaneAsync);
+        var workspacePane = new WorkspacePaneViewModel(workspaceEntity, null, this.CloseWorkspaceCommand, this.SaveWorkspacePaneAsync, environment: this.GetWorkspacePaneEnvironment());
         workspacePane.ContentLayout = this.dockFactory.CreateWorkspaceContentLayout(workspacePane);
         this.SubscribeToInnerDockChanges(workspacePane);
 
@@ -1845,7 +1900,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.SelectedWorkspacePane = workspacePane;
 
         // Phase 2: populate tabs asynchronously (fire and forget)
-        var populateTask = this.PopulateWorkspacePaneTabsAsync(workspacePane, workspaceEntity, workspaceData);
+        var populateTask = workspacePane.PopulateTabsAsync(workspaceEntity, workspaceData);
         _ = populateTask.ContinueWith(t =>
         {
             if (t.IsFaulted && t.Exception != null)
@@ -1941,85 +1996,27 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
        await this.CloseWorkspacePaneAsync(pane);
     }
 
-    private void OnCloseActiveTab()
+    /// <summary>
+    /// #1341 Runs most-recently-used navigation after a pane's active tab has been closed. The
+    /// closing pane invokes this through <see cref="WorkspacePaneEnvironment.RunMruNavigationAfterActiveClose"/>
+    /// so the window-scoped navigation history remains authoritative. Mirrors the behaviour that
+    /// <see cref="CloseTab"/> uses when a tab is closed programmatically.
+    /// </summary>
+    internal void RunMruNavigationAfterActiveClose()
     {
-        if (this.selectedWorkspacePane?.ContentLayout is null)
-        {
-            return;
-        }
-
-        var documentDock = this.FindDocumentDock(this.selectedWorkspacePane.ContentLayout);
-        if (documentDock?.ActiveDockable is not WorkspaceDocument activeDoc)
-        {
-            return;
-        }
-
-        // Route through the dock factory so Dock.Avalonia's default chain runs:
-        //   CloseDockable -> RemoveDockable(..., collapse:true) -> CollapseDock(owner)
-        // which removes the emptied nested DocumentDock and its adjacent
-        // ProportionalDockSplitter when the last tab in a split region closes.
-        // OnDockableClosed -> WorkspaceDockFactory.OnDockableClosed ->
-        // MainWindowViewModel.OnDockableTabClosed handles single-dispose.
-        var factory = documentDock.Factory ?? this.dockFactory;
-        factory.CloseDockable(activeDoc);
-
-        // Factory.CloseDockable synchronously removes the closed tab from pane.Tabs
-        // via ItemsSource sync (HandleItemsSourceDockableClosing) BEFORE
-        // OnDockableClosed fires, so OnDockableTabClosed's wasActive check (which
-        // looks at pane.Tabs) can no longer see the closed tab. We know we invoked
-        // close on the active tab, so run MRU navigation here to match the behaviour
-        // of MainWindowViewModel.CloseTab.
         this.navigatingViaHistory = true;
         try
         {
             if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry)
                 && entry is not null)
             {
-                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
             }
         }
         finally
         {
             this.navigatingViaHistory = false;
         }
-    }
-
-    private void OnCycleTab(int delta)
-    {
-        var pane = this.selectedWorkspacePane;
-        if (pane is null || pane.ContentLayout is null || pane.Tabs.Count < 2)
-        {
-            return;
-        }
-
-        var documentDock = this.FindDocumentDock(pane.ContentLayout);
-        if (documentDock is null)
-        {
-            return;
-        }
-
-        // Fix #1107: cycle in dock visual order (VisibleDockables), not pane.Tabs order.
-        // pane.Tabs is a plain, order-independent membership set; the visual/dock order is the
-        // source of truth for user-facing tab cycling.
-        var docs = documentDock.VisibleDockables?.OfType<WorkspaceDocument>().ToList()
-            ?? new List<WorkspaceDocument>();
-        if (docs.Count < 2)
-        {
-            return;
-        }
-
-        var activeTabId = (documentDock.ActiveDockable as WorkspaceDocument)?.Id;
-        var currentIndex = activeTabId is not null
-            ? docs.FindIndex(d => string.Equals(d.Id, activeTabId, StringComparison.Ordinal))
-            : 0;
-        if (currentIndex < 0) currentIndex = 0;
-
-        var nextIndex = ((currentIndex + delta) % docs.Count + docs.Count) % docs.Count;
-        var nextDoc = docs[nextIndex];
-
-        this.dockFactory.SetActiveDockable(nextDoc);
-        this.dockFactory.SetFocusedDockable(documentDock, nextDoc);
-        this.notificationService.MarkRead(nextDoc.Id);
     }
 
     private void OnNavigateBack()
@@ -2029,7 +2026,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
             {
-                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
             }
         }
         finally
@@ -2045,7 +2042,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.navigationHistoryService.GoForwardSkipping(this.IsTabOpen, out var entry) && entry is not null)
             {
-                this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
             }
         }
         finally
@@ -2056,18 +2053,18 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private bool IsTabOpen(NavigationEntry entry)
     {
-        if (entry.WorkspacePaneId is not null)
+        if (entry.WorkspaceTabId is not null)
         {
             var targetPane = this.WorkspacePanes.FirstOrDefault(
-                p => string.Equals(p.Id, entry.WorkspacePaneId, StringComparison.Ordinal));
-            if (targetPane?.Tabs.Any(t => string.Equals(t.Id, entry.TabId, StringComparison.Ordinal)) == true)
+                p => string.Equals(p.Id, entry.WorkspaceTabId, StringComparison.Ordinal));
+            if (targetPane?.Tabs.Any(t => string.Equals(t.Id, entry.DocumentTabId, StringComparison.Ordinal)) == true)
             {
                 return true;
             }
         }
 
         return this.WorkspacePanes.Any(
-            pane => pane.Tabs.Any(t => string.Equals(t.Id, entry.TabId, StringComparison.Ordinal)));
+            pane => pane.Tabs.Any(t => string.Equals(t.Id, entry.DocumentTabId, StringComparison.Ordinal)));
     }
 
     /// <summary>
@@ -2079,7 +2076,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// </summary>
     private void ActivateTabById(string tabId, string? workspacePaneId)
     {
-        _ = this.ActivateTabByIdAsync(tabId, workspacePaneId);
+        _ = this.ActivateTabByRequestAsync(new NavigationRequest(workspacePaneId ?? string.Empty, tabId));
     }
 
     /// <summary>
@@ -2128,15 +2125,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
     }
 
-    internal async Task ActivateTabByIdAsync(string tabId, string? workspacePaneId)
+    /// <summary>
+    /// #1341 Phase-1 of navigate-to-tab-by-id. Resolves the workspace pane by
+    /// <see cref="NavigationRequest.WorkspaceTabId"/> (opening it first if it is registered but not
+    /// yet loaded, per #1157), selects it, then delegates Phase-2 (resolving the document tab id
+    /// against the pane's own registry and activating/focusing it) to
+    /// <see cref="WorkspacePaneViewModel.NavigateToDocumentTabAsync"/>. Falls back to asking each
+    /// pane whether it owns the document tab id.
+    /// </summary>
+    internal async Task<bool> ActivateTabByRequestAsync(NavigationRequest request)
     {
-        // Prefer the workspace pane recorded in the history entry
+        var workspacePaneId = string.IsNullOrEmpty(request.WorkspaceTabId) ? null : request.WorkspaceTabId;
+        var documentTabId = request.DocumentTabId;
+
+        // Prefer the workspace pane recorded in the request.
         if (workspacePaneId is not null)
         {
             var targetPane = this.WorkspacePanes.FirstOrDefault(
                 p => string.Equals(p.Id, workspacePaneId, StringComparison.Ordinal));
 
-            // If the pane is not open yet, open it first
+            // If the pane is not open yet, open it first.
             var openedJustNow = false;
             if ((targetPane is null || targetPane.ContentLayout is null)
                 && Guid.TryParse(workspacePaneId, out var paneGuid))
@@ -2149,84 +2157,31 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
             if (targetPane is not null && targetPane.ContentLayout is not null)
             {
-                // Use the dock factory as the authoritative source of truth: the pane's
-                // Tabs view-model collection lags for unselected panes (populated when the
-                // pane's document dock hydrates), but the underlying document exists in the
-                // dock factory as soon as the tab is opened anywhere.
-                var doc = this.dockFactory.GetDocumentForTab(tabId);
-                if (doc is not null)
+                this.SelectedWorkspacePane = targetPane;
+                if (await targetPane.NavigateToDocumentTabAsync(documentTabId, deferIfAbsent: openedJustNow))
                 {
-                    var documentDock = this.FindDocumentDock(targetPane.ContentLayout);
-                    this.SelectedWorkspacePane = targetPane;
-                    this.dockFactory.SetActiveDockable(doc);
-                    if (documentDock is not null)
-                        this.dockFactory.SetFocusedDockable(documentDock, doc);
-                    return;
-                }
-
-                if (openedJustNow)
-                {
-                    // Workspace was just opened; tab list is still hydrating.
-                    // Subscribe and activate the tab once it appears.
-                    this.ActivateTabWhenLoaded(targetPane, tabId);
-                    return;
+                    return true;
                 }
                 // else: fall through to all-panes search so a stale WorkspaceId still navigates.
             }
         }
 
-        // Fall back to searching all panes
+        // Fall back to asking each pane whether it owns the document tab id.
         foreach (var pane in this.WorkspacePanes)
         {
-            var tab = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
-            if (tab is null) continue;
+            if (!pane.OwnsDocumentTab(documentTabId) || pane.ContentLayout is null)
+            {
+                continue;
+            }
 
-            var doc = this.dockFactory.GetDocumentForTab(tabId);
-            if (doc is null || pane.ContentLayout is null) continue;
-
-            var dock = this.FindDocumentDock(pane.ContentLayout);
             this.SelectedWorkspacePane = pane;
-            this.dockFactory.SetActiveDockable(doc);
-            if (dock is not null)
-                this.dockFactory.SetFocusedDockable(dock, doc);
-            return;
-        }
-    }
-
-    private void ActivateTabWhenLoaded(WorkspacePaneViewModel pane, string tabId)
-    {
-        void OnTabsCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-        {
-            var tab = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
-            if (tab is null) return;
-
-            pane.Tabs.CollectionChanged -= OnTabsCollectionChanged;
-
-            var doc = this.dockFactory.GetDocumentForTab(tabId);
-            if (doc is null || pane.ContentLayout is null) return;
-
-            var documentDock = this.FindDocumentDock(pane.ContentLayout);
-            this.SelectedWorkspacePane = pane;
-            this.dockFactory.SetActiveDockable(doc);
-            if (documentDock is not null)
-                this.dockFactory.SetFocusedDockable(documentDock, doc);
+            if (await pane.NavigateToDocumentTabAsync(documentTabId))
+            {
+                return true;
+            }
         }
 
-        pane.Tabs.CollectionChanged += OnTabsCollectionChanged;
-
-        // Race-condition guard: check again after subscribing
-        var existing = pane.Tabs.FirstOrDefault(t => string.Equals(t.Id, tabId, StringComparison.Ordinal));
-        if (existing is not null)
-        {
-            pane.Tabs.CollectionChanged -= OnTabsCollectionChanged;
-            var doc = this.dockFactory.GetDocumentForTab(tabId);
-            if (doc is null || pane.ContentLayout is null) return;
-            var documentDock = this.FindDocumentDock(pane.ContentLayout);
-            this.SelectedWorkspacePane = pane;
-            this.dockFactory.SetActiveDockable(doc);
-            if (documentDock is not null)
-                this.dockFactory.SetFocusedDockable(documentDock, doc);
-        }
+        return false;
     }
 
     internal async Task RemoveWorkspacePaneAsync(WorkspacePaneViewModel pane)
@@ -2340,7 +2295,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         }
 
         // Check if tab already exists
-        var existingDocument = this.dockFactory.GetDocumentForTab(tab.Id);
+        var existingDocument = targetPane.GetDocumentForTab(tab.Id);
 
         if (existingDocument is not null)
         {
@@ -2385,7 +2340,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var anchorTabId = insertAfterTabId
             ?? targetPane.SelectedTab?.Id;
         var sourceDocument = anchorTabId is not null
-            ? this.dockFactory.GetDocumentForTab(anchorTabId)
+            ? targetPane.GetDocumentForTab(anchorTabId)
             : null;
         var sourceDock = sourceDocument?.Owner as IDock;
 
@@ -2394,11 +2349,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.SelectedWorkspacePane = targetPane;
         }
 
+        var previousActiveDockable = focus ? null : documentDock.ActiveDockable;
+        var previousSelectedTab = focus ? null : targetPane.SelectedTab;
+
         // Add to the pane's Tabs membership set. The ItemsSource generator on the
         // pane's WorkspaceContentDock creates a WorkspaceDocument and appends it to
         // that dock's VisibleDockables.
         targetPane.Tabs.Add(tab);
-        var newDocument = this.dockFactory.GetDocumentForTab(tab.Id);
+        var newDocument = targetPane.GetDocumentForTab(tab.Id);
 
         // If we have a valid source anchor, move the newly-created dockable to
         // sourceIndex + 1 within the source's owning DocumentDock. This is deterministic
@@ -2454,6 +2412,25 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.navigationHistoryService.Push(new NavigationEntry(tab.Id, targetPane.Id));
             }
         }
+        else
+        {
+            if (previousActiveDockable is not null)
+            {
+                if (!ReferenceEquals(documentDock.ActiveDockable, previousActiveDockable))
+                {
+                    this.dockFactory.SetActiveDockable(previousActiveDockable);
+                }
+            }
+            else if (newDocument is not null && ReferenceEquals(documentDock.ActiveDockable, newDocument))
+            {
+                documentDock.ActiveDockable = null;
+            }
+
+            if (!ReferenceEquals(targetPane.SelectedTab, previousSelectedTab))
+            {
+                targetPane.SelectedTab = previousSelectedTab;
+            }
+        }
     }
 
     public async Task ReplaceTabAsync(WorkspaceTabViewModel oldTab, WorkspaceTabViewModel newTab)
@@ -2473,7 +2450,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        var existingDocument = this.dockFactory.GetDocumentForTab(oldTab.Id);
+        var existingDocument = pane.GetDocumentForTab(oldTab.Id);
         if (existingDocument is null)
         {
             // Old tab doesn't exist, just open the new one
@@ -2499,7 +2476,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         if (wasActive)
         {
-            var newDocument = this.dockFactory.GetDocumentForTab(newTab.Id);
+            var newDocument = pane.GetDocumentForTab(newTab.Id);
             if (newDocument is not null)
             {
                 this.dockFactory.SetActiveDockable(newDocument);
@@ -2536,7 +2513,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
                     {
-                        this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                        this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
                     }
                 }
                 finally
@@ -2669,7 +2646,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 {
                     if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
                     {
-                        this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
+                        this.ActivateTabById(entry.DocumentTabId, entry.WorkspaceTabId);
                     }
                 }
                 finally
@@ -2708,103 +2685,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     internal Task<UpdateResult> WriteBackWorkspaceTabs(WorkspacePaneViewModel workspacePane)
     {
         if (this.entityBroker is null) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
-        var entityData = workspacePane.Entity.Data;
-        if (entityData is not JsonElement dataElement || dataElement.ValueKind != JsonValueKind.Object) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
 
-        // Build tabs array as workspace-tab-descriptors
-        var tabDescriptors = new JsonArray();
-        foreach (var tab in workspacePane.Tabs)
+        // #1341: the tabs + dock-layout serialization body now lives on the pane so per-pane
+        // concerns stay with the pane. The entityBroker.UpdateAsync write stays here.
+        var changes = workspacePane.BuildPersistedTabsSnapshot();
+        if (changes is null)
         {
-            var descriptor = BuildTabDescriptor(tab);
-            if (descriptor is not null)
-            {
-                tabDescriptors.Add(descriptor);
-            }
+            return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
         }
-
-        // Serialize dock layout: DockState.Save captures split proportions and active-dockable
-        // state into the layout tree. Owner back-references are handled by ReferenceHandler.Preserve
-        // ($ref markers); WorkspaceDockTypeInfoResolver strips Type-typed properties that STJ cannot
-        // serialize (e.g. Avalonia StyledElement.StyleKey).
-        JsonNode? dockLayout = null;
-        if (workspacePane.ContentLayout is not null)
-        {
-            // #1190: refresh each document's Descriptor from its current TabViewModel
-            // before serializing. Belt-and-braces backstop for the OnTabViewModelPropertyChanged
-            // hook: if the descriptor drifted from the live tab (e.g. Title changed via a path
-            // that did not raise the WorkspaceTabViewModel.Title property change), rebuild it
-            // now so the persisted layout carries the currently-rendered title.
-            foreach (var openDoc in EnumerateAllDocuments(workspacePane.ContentLayout))
-            {
-                if (openDoc.TabViewModel is { } liveTab)
-                {
-                    var refreshed = WorkspaceDocument.BuildDescriptor(liveTab);
-                    if (refreshed is not null)
-                    {
-                        openDoc.Descriptor = refreshed;
-                    }
-                }
-            }
-
-            this.dockFactory.DockState.Save(workspacePane.ContentLayout);
-
-            var serializer = new DockSerializer(
-                typeof(System.Collections.ObjectModel.ObservableCollection<>),
-                new WorkspaceDockTypeInfoResolver());
-            var layoutJson = serializer.Serialize(workspacePane.ContentLayout);
-
-            if (!string.IsNullOrWhiteSpace(layoutJson))
-            {
-                dockLayout = JsonNode.Parse(layoutJson);
-            }
-        }
-
-        // Build merged entity data with updated tabs and dock-layout
-        var entityNode = JsonNode.Parse(dataElement.GetRawText())?.AsObject();
-        if (entityNode is null) return Task.FromResult(new UpdateResult { EntityResults = Array.Empty<EntityUpdateResult>() });
-
-        entityNode["tabs"] = tabDescriptors;
-
-        // Capture the currently active tab's ID
-        var documentDock = workspacePane.ContentLayout is not null
-            ? this.FindDocumentDock(workspacePane.ContentLayout)
-            : null;
-        var activeTabId = (documentDock?.ActiveDockable as WorkspaceDocument)?.Id;
-        if (activeTabId is not null)
-        {
-            entityNode["active-tab-id"] = activeTabId;
-        }
-        else
-        {
-            entityNode.Remove("active-tab-id");
-        }
-        if (dockLayout is not null)
-        {
-            entityNode["dock-layout"] = dockLayout;
-        }
-        else
-        {
-            entityNode.Remove("dock-layout");
-        }
-
-        // Remove legacy fields that we no longer write
-        entityNode.Remove("focused-tab-id");
-
-        var updatedJson = entityNode.ToJsonString();
-        using var doc = JsonDocument.Parse(updatedJson);
-        var updatedData = doc.RootElement.Clone();
-
-        var changes = new List<EntityChange>
-        {
-            new()
-            {
-                EntityId = workspacePane.Entity.EntityId,
-                ConcurrencyTag = workspacePane.Entity.ConcurrencyTag,
-                Data = updatedData,
-                EntityChangeMode = EntityChangeMode.Replace,
-            },
-        };
-        AppendWorkspaceTabRelationshipChanges(workspacePane, changes);
 
         return this.entityBroker.UpdateAsync(new UpdateRequest
         {
@@ -2818,107 +2706,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     private Task SaveWorkspacePaneAsync(WorkspacePaneViewModel workspacePane) =>
         this.WriteBackWorkspaceTabs(workspacePane);
-
-    private static void AppendWorkspaceTabRelationshipChanges(
-        WorkspacePaneViewModel workspacePane,
-        ICollection<EntityChange> changes)
-    {
-        var liveEntityIds = workspacePane.Tabs
-            .Select(static tab => tab.Entity?.EntityId)
-            .OfType<EntityId>()
-            .Distinct()
-            .ToHashSet();
-
-        var existingByTarget = new Dictionary<EntityId, EntitySnapshot>();
-        foreach (var relationship in workspacePane.Entity.Relationships)
-        {
-            if (relationship.Data is not JsonElement data
-                || !EntityPresentation.IsEntityType(relationship, "related")
-                || !data.TryGetProperty("note", out var note)
-                || note.ValueKind != JsonValueKind.String
-                || !string.Equals(note.GetString(), "Workspace save records the live entity tabs associated with this workspace.", StringComparison.Ordinal)
-                || !RelationshipParticipantIdExtractor.TryGetRelationshipParticipantIds(data, out var participantIds)
-                || !participantIds.Contains(workspacePane.Entity.EntityId))
-            {
-                continue;
-            }
-
-            var targetId = participantIds.FirstOrDefault(id => id != workspacePane.Entity.EntityId);
-            if (targetId != default)
-            {
-                existingByTarget[targetId] = relationship;
-            }
-        }
-
-        foreach (var removed in existingByTarget.Where(pair => !liveEntityIds.Contains(pair.Key)))
-        {
-            changes.Add(new EntityChange
-            {
-                EntityId = removed.Value.EntityId,
-                ConcurrencyTag = removed.Value.ConcurrencyTag,
-                Data = null,
-                EntityChangeMode = EntityChangeMode.Replace,
-            });
-        }
-
-        foreach (var added in liveEntityIds.Where(id => !existingByTarget.ContainsKey(id)))
-        {
-            var relationshipId = Guid.NewGuid();
-            var relationshipData = new JsonObject
-            {
-                ["entity-id"] = relationshipId.ToString(),
-                ["entity-types"] = new JsonArray("entity", "relationship", "related"),
-                ["participants"] = new JsonObject
-                {
-                    ["entities"] = new JsonArray(workspacePane.Entity.EntityId.Value.ToString(), added.Value.ToString()),
-                },
-                ["note"] = "Workspace save records the live entity tabs associated with this workspace.",
-            };
-            using var doc = JsonDocument.Parse(relationshipData.ToJsonString());
-            changes.Add(new EntityChange
-            {
-                EntityId = new EntityId(relationshipId),
-                Data = doc.RootElement.Clone(),
-                EntityChangeMode = EntityChangeMode.Replace,
-            });
-        }
-    }
-
-    /// <summary>
-    /// Builds a workspace-tab-descriptor <see cref="JsonObject"/> for write-back.
-    /// Returns null for tab types that cannot be serialized.
-    /// </summary>
-    private static JsonObject? BuildTabDescriptor(WorkspaceTabViewModel tab)
-    {
-        JsonObject? content = null;
-
-        if (tab.Entity is { } entity)
-        {
-            // Entity-reference tab: write as UUID string (entity-reference = entity-id | entity-name)
-            content = new JsonObject
-            {
-                ["target-entity-name"] = entity.EntityId.Value.ToString(),
-            };
-        }
-        else if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
-        {
-            // Browser-URL tab
-            content = new JsonObject
-            {
-                ["url"] = webVm.AddressBarUrl,
-            };
-        }
-
-        if (content is null) return null;
-
-        return new JsonObject
-        {
-            ["tab-id"] = tab.Id,
-            ["title"] = tab.Title,
-            ["kind"] = tab.DockRegion,
-            ["content"] = content,
-        };
-    }
 
     // Fix #1107: SyncPaneTabsFromDockChange, SyncPaneTabsOrderFromDock, RunSuppressingDockOrderSync
     // and the suppressDockOrderSync field have been deleted. Tab order (WorkspacePaneViewModel.Tabs)
@@ -2951,9 +2738,43 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     /// <summary>
+    /// #1310: resolve the currently focused <see cref="IDocumentDock"/> under a pane's
+    /// content layout. Walks the dock-focus tracking maintained by
+    /// <see cref="IFactory.SetFocusedDockable"/> (which writes <see cref="IDock.FocusedDockable"/>
+    /// on the affected roots) down from the given root and then walks the resulting
+    /// dockable's <see cref="IDockable.Owner"/> chain to the enclosing document dock.
+    /// Returns <c>null</c> when no focus is tracked, so callers can fall back to the
+    /// depth-first behaviour used before focus tracking existed.
+    /// </summary>
+    private IDocumentDock? FindFocusedDocumentDock(IDockable dockable)
+    {
+        IDockable? focused = dockable;
+        while (focused is IDock currentDock && currentDock.FocusedDockable is { } childFocus
+               && !ReferenceEquals(childFocus, currentDock))
+        {
+            focused = childFocus;
+        }
+
+        for (IDockable? cursor = focused; cursor is not null; cursor = cursor.Owner)
+        {
+            if (cursor is IDocumentDock documentDock)
+            {
+                return documentDock;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Recursively enumerates every <see cref="WorkspaceDocument"/> in a dock layout tree.
     /// Walks the entire <see cref="IDock.VisibleDockables"/> hierarchy so that documents
     /// inside split panes are discovered, not just those in the primary content dock.
+    /// #1335: intentionally VisibleDockables-only. ActiveDockable/DefaultDockable/FocusedDockable
+    /// may alias a stale document instance left behind when the primary generator regenerates a
+    /// content dock's items (the live VisibleDockables holds the authoritative instance); walking
+    /// those references would surface duplicates. Persisted layouts are canonicalized on load and
+    /// save (see <see cref="DockLayoutCanonicalizer"/>), so every real tab lives in VisibleDockables.
     /// </summary>
     internal static IEnumerable<WorkspaceDocument> EnumerateAllDocuments(IDockable dockable)
     {
@@ -2972,6 +2793,189 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// #1334: recursively enumerates every <see cref="WorkspaceContentDock"/> in a restored content
+    /// layout tree in depth-first pre-order. The first element is the deterministic DFS-first
+    /// "primary" region (matching <see cref="FindDocumentDock"/>'s DFS traversal); the remainder are
+    /// the non-primary split regions. Used by <see cref="TryRestoreFromDockLayoutAsync"/> to wire
+    /// every region uniformly via <see cref="WorkspaceDockFactory.WireContentDock"/>.
+    /// </summary>
+    internal static IEnumerable<WorkspaceContentDock> EnumerateContentDocks(IDockable dockable)
+    {
+        if (dockable is WorkspaceContentDock contentDock)
+        {
+            yield return contentDock;
+        }
+
+        if (dockable is IDock dock && dock.VisibleDockables is not null)
+        {
+            foreach (var child in dock.VisibleDockables)
+            {
+                foreach (var found in EnumerateContentDocks(child))
+                {
+                    yield return found;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// #1324: enforces the invariant that every document-dock region in a restored layout
+    /// tree is the workspace-specific dock type. Pre-#1307 persisted layouts encode inner
+    /// split docks as a base <c>Dock.Model.Mvvm.Controls.DocumentDock</c>; those re-hydrate as
+    /// a base <see cref="IDocumentDock"/> that falls through the generic fallback DataTemplate
+    /// (no <c>HeaderTemplate</c>) and renders headerless tabs. Walk the tree and replace any
+    /// <see cref="IDocumentDock"/> that is not already a <see cref="WorkspaceContentDock"/> (or
+    /// the outer <see cref="WorkspacesPaneDock"/>) with a <see cref="WorkspaceContentDock"/>,
+    /// preserving all layout state, so the single centralized header template on the workspace
+    /// dock type covers every content region. This is performed at deserialization time in
+    /// <see cref="TryRestoreFromDockLayoutAsync"/>, the only path that can introduce a base
+    /// <c>DocumentDock</c> into the live tree (all factory creation paths already produce the
+    /// workspace-specific type). A polymorphism-layer type substitution is not viable because
+    /// System.Text.Json forbids registering one derived type under two discriminators (which the
+    /// round-trip of both the base and the workspace-specific <c>$type</c> would require) and
+    /// because <see cref="WorkspaceContentDock"/> derives from the Avalonia — not the Mvvm —
+    /// <c>DocumentDock</c> hierarchy.
+    /// </summary>
+    internal static void MigrateBaseDocumentDocksToWorkspaceContentDock(IDockable? dockable)
+    {
+        var visited = new HashSet<IDockable>(ReferenceEqualityComparer.Instance);
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dockable, visited);
+    }
+
+    private static void MigrateBaseDocumentDocksToWorkspaceContentDock(IDockable? dockable, HashSet<IDockable> visited)
+    {
+        if (dockable is null || !visited.Add(dockable))
+        {
+            return;
+        }
+
+        if (dockable is IRootDock rootDock)
+        {
+            // #1335: also descend into floating-window layouts so a base DocumentDock persisted
+            // inside a Window subtree is migrated too.
+            MigrateBaseDocumentDocksToWorkspaceContentDock(rootDock.Window?.Layout, visited);
+            if (rootDock.Windows is not null)
+            {
+                foreach (var window in rootDock.Windows)
+                {
+                    MigrateBaseDocumentDocksToWorkspaceContentDock(window.Layout, visited);
+                }
+            }
+        }
+
+        if (dockable is not IDock dock || dock.VisibleDockables is null)
+        {
+            return;
+        }
+
+        var children = dock.VisibleDockables;
+        for (int i = 0; i < children.Count; i++)
+        {
+            var child = children[i];
+            if (child is IDocumentDock and not WorkspaceContentDock and not WorkspacesPaneDock)
+            {
+                var replacement = ConvertToWorkspaceContentDock((IDocumentDock)child);
+                children[i] = replacement;
+
+                if (ReferenceEquals(dock.ActiveDockable, child))
+                {
+                    dock.ActiveDockable = replacement;
+                }
+
+                if (ReferenceEquals(dock.DefaultDockable, child))
+                {
+                    dock.DefaultDockable = replacement;
+                }
+
+                if (ReferenceEquals(dock.FocusedDockable, child))
+                {
+                    dock.FocusedDockable = replacement;
+                }
+
+                child = replacement;
+            }
+
+            MigrateBaseDocumentDocksToWorkspaceContentDock(child, visited);
+        }
+
+        // #1335: also descend into AD/DD/FD references so a base DocumentDock reachable only via an
+        // active-dockable chain (legacy inline clone) is migrated. The reference visited-set stops
+        // the common case where these alias a VisibleDockables child already handled above.
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dock.ActiveDockable, visited);
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dock.DefaultDockable, visited);
+        MigrateBaseDocumentDocksToWorkspaceContentDock(dock.FocusedDockable, visited);
+    }
+
+    /// <summary>
+    /// Builds a <see cref="WorkspaceContentDock"/> that carries the full layout state of the
+    /// given source document dock. Copies every readable/writable <see cref="IDockable"/>,
+    /// <see cref="IDock"/>, and <see cref="IDocumentDock"/> interface property (excluding
+    /// commands and the <c>Owner</c>/<c>Factory</c>/<c>OriginalOwner</c> runtime back-references,
+    /// which <see cref="WorkspaceDockFactory.InitLayout"/> re-wires afterwards) so the substituted
+    /// dock is a lossless replacement of the persisted base <c>DocumentDock</c>.
+    /// </summary>
+    private static WorkspaceContentDock ConvertToWorkspaceContentDock(IDocumentDock source)
+    {
+        var replacement = new WorkspaceContentDock();
+
+        foreach (var property in s_documentDockCopyableProperties)
+        {
+            property.SetValue(replacement, property.GetValue(source));
+        }
+
+        if (replacement.VisibleDockables is not null)
+        {
+            foreach (var childDockable in replacement.VisibleDockables)
+            {
+                childDockable.Owner = replacement;
+            }
+        }
+
+        return replacement;
+    }
+
+    private static readonly IReadOnlyList<System.Reflection.PropertyInfo> s_documentDockCopyableProperties =
+        BuildDocumentDockCopyableProperties();
+
+    private static IReadOnlyList<System.Reflection.PropertyInfo> BuildDocumentDockCopyableProperties()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var result = new List<System.Reflection.PropertyInfo>();
+
+        var interfaces = new List<Type> { typeof(IDocumentDock) };
+        interfaces.AddRange(typeof(IDocumentDock).GetInterfaces());
+
+        foreach (var iface in interfaces)
+        {
+            foreach (var property in iface.GetProperties())
+            {
+                if (!property.CanRead || !property.CanWrite)
+                {
+                    continue;
+                }
+
+                if (typeof(System.Windows.Input.ICommand).IsAssignableFrom(property.PropertyType))
+                {
+                    continue;
+                }
+
+                // Owner/Factory/OriginalOwner are runtime back-references that InitLayout re-wires.
+                if (property.Name is "Owner" or "Factory" or "OriginalOwner")
+                {
+                    continue;
+                }
+
+                if (seen.Add(property.Name))
+                {
+                    result.Add(property);
+                }
+            }
+        }
+
+        return result;
     }
 
     internal string? FindWorkspacePaneIdForTab(string tabId)
@@ -2996,34 +3000,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (pane.Tabs.Contains(tabVm))
             {
-                // Capture whether this tab was active before removing it
-                var wasActive = false;
-                if (pane.ContentLayout is not null)
-                {
-                    var documentDock = this.FindDocumentDock(pane.ContentLayout);
-                    wasActive = documentDock?.ActiveDockable is WorkspaceDocument activeDoc
-                        && string.Equals(activeDoc.Id, tabVm.Id, StringComparison.Ordinal);
-                }
-
-                pane.Tabs.Remove(tabVm);
-
-                // Navigate to MRU tab if we just closed the active tab
-                if (wasActive)
-                {
-                    this.navigatingViaHistory = true;
-                    try
-                    {
-                        if (this.navigationHistoryService.GoBackSkipping(this.IsTabOpen, out var entry) && entry is not null)
-                        {
-                            this.ActivateTabById(entry.TabId, entry.WorkspacePaneId);
-                        }
-                    }
-                    finally
-                    {
-                        this.navigatingViaHistory = false;
-                    }
-                }
-
+                pane.HandleChildTabClosed(tabVm);
                 break;
             }
         }
@@ -3125,7 +3102,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// Collects tab declarations from workspaceData, preferring the new <c>tabs</c> array
     /// and falling back to flattening the legacy <c>regions[].tabs</c>.
     /// </summary>
-    private static IReadOnlyList<JsonElement> CollectTabDeclarations(JsonElement workspaceData)
+    internal static IReadOnlyList<JsonElement> CollectTabDeclarations(JsonElement workspaceData)
     {
         // Prefer new top-level tabs array
         if (workspaceData.TryGetProperty("tabs", out var tabsElement)
@@ -3164,199 +3141,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         return result;
     }
 
-    private async Task PopulateWorkspacePaneTabsAsync(
-        WorkspacePaneViewModel workspacePane,
-        SubscribedEntityViewModel workspaceEntity,
-        JsonElement workspaceData)
-    {
-        // Try to restore from dock-layout first (preserves split positions and tab descriptors)
-        if (workspaceData.TryGetProperty("dock-layout", out var dockLayoutElement)
-            && dockLayoutElement.ValueKind == JsonValueKind.Object)
-        {
-            var dockLayoutJson = dockLayoutElement.GetRawText();
-            if (await this.TryRestoreFromDockLayoutAsync(workspacePane, workspaceEntity, dockLayoutJson))
-            {
-                return;
-            }
-        }
-
-        // Collect tab declarations: prefer new tabs[] array, fall back to legacy regions[].tabs
-        var tabDeclarations = CollectTabDeclarations(workspaceData);
-
-        // Determine the active/focused tab id before any async work so it is available inside InvokeAsync.
-        // Prefer new active-tab-id property, falling back to legacy focused-tab-id.
-        string? activeTabId = null;
-        if (workspaceData.TryGetProperty("active-tab-id", out var activeTabIdElement)
-            && activeTabIdElement.ValueKind == JsonValueKind.String)
-        {
-            activeTabId = activeTabIdElement.GetString();
-        }
-        else if (workspaceData.TryGetProperty("focused-tab-id", out var focusedTabIdElement)
-            && focusedTabIdElement.ValueKind == JsonValueKind.String)
-        {
-            activeTabId = focusedTabIdElement.GetString();
-        }
-
-        // Load all tabs in parallel, preserving declaration order
-        var tabAdded = false;
-        if (tabDeclarations.Count > 0)
-        {
-            var tabResults = await Task.WhenAll(
-                tabDeclarations.Select(tabDecl => this.TryFetchWorkspaceTabAsync(tabDecl)));
-
-            // Add to pane.Tabs on the UI thread; WorkspaceDocumentGenerator creates dock documents automatically.
-            // Activate the saved active tab in the same dispatcher frame: PrepareDocumentContainer fires
-            // synchronously during Tabs.Add, so GetDocumentForTab is reliable immediately after Add.
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                var workspaceClosed = false;
-                foreach (var workspaceTab in tabResults)
-                {
-                    if (workspaceTab is null) continue;
-
-                    // Guard: workspace may have been closed while tabs were loading
-                    if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
-                    {
-                        workspaceClosed = true;
-                        _ = DisposeWorkspaceTabAsync(workspaceTab);
-                        continue;
-                    }
-
-                    workspacePane.Tabs.Add(workspaceTab);
-                    tabAdded = true;
-                }
-
-                if (tabAdded && !workspaceClosed && !string.IsNullOrEmpty(activeTabId))
-                {
-                    var focusedDoc = this.dockFactory.GetDocumentForTab(activeTabId);
-                    if (focusedDoc is not null)
-                    {
-                        this.dockFactory.SetActiveDockable(focusedDoc);
-                    }
-                }
-            });
-        }
-
-        if (!tabAdded)
-        {
-            // Fall back to a default entity view for the workspace itself
-            var defaultTab = new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
-            {
-                Id = workspaceEntity.EntityId.ToString(),
-                Title = workspaceEntity.DisplayName,
-                Entity = workspaceEntity,
-                DockRegion = "full",
-            };
-
-            await Dispatcher.UIThread.InvokeAsync(() =>
-            {
-                if (!this.WorkspacePanes.Contains(workspacePane))
-                {
-                    _ = DisposeWorkspaceTabAsync(defaultTab);
-                    return;
-                }
-
-                workspacePane.Tabs.Add(defaultTab);
-            });
-        }
-    }
-
-    /// <summary>
-    /// Attempts to restore workspace tabs from the saved dock-layout JSON.
-    /// Deserializes the layout structure (preserving split positions), recreates tab VMs
-    /// from <see cref="DockTabDescriptor"/> nodes, and wires them into the content dock.
-    /// Returns true when at least one tab was successfully restored.
-    /// </summary>
-    private async Task<bool> TryRestoreFromDockLayoutAsync(
-        WorkspacePaneViewModel workspacePane,
-        SubscribedEntityViewModel workspaceEntity,
-        string dockLayoutJson)
-    {
-        IRootDock? layout;
-        try
-        {
-            var serializer = new DockSerializer(
-                typeof(System.Collections.ObjectModel.ObservableCollection<>),
-                new WorkspaceDockTypeInfoResolver());
-            layout = serializer.Deserialize<IRootDock>(dockLayoutJson);
-        }
-        catch
-        {
-            return false;
-        }
-
-        if (layout is null) return false;
-
-        // Walk the entire layout tree to find all stub documents (handles split layouts)
-        var stubs = EnumerateAllDocuments(layout)
-            .Where(d => d.Descriptor is not null)
-            .ToList();
-
-        if (stubs.Count == 0) return false;
-
-        // Create tab VMs from descriptors in parallel
-        var tabVmTasks = stubs.Select(stub =>
-            this.CreateTabViewModelFromDescriptorAsync(workspaceEntity, stub.Descriptor!, stub.Id));
-        var tabResults = await Task.WhenAll(tabVmTasks);
-
-        bool success = false;
-        await Dispatcher.UIThread.InvokeAsync(() =>
-        {
-            if (!this.WorkspacePanes.Contains(workspacePane)) return;
-
-            // Populate ContextLocator for every stub before calling InitLayout so
-            // base.InitDockable wires each stub's Context from the locator.
-            this.dockFactory.ContextLocator ??= new Dictionary<string, Func<object?>>();
-            for (int i = 0; i < stubs.Count; i++)
-            {
-                var tabVm = tabResults[i];
-                if (tabVm is null) continue;
-                var stubId = stubs[i].Id;
-                this.dockFactory.ContextLocator[stubId] = () => tabVm;
-            }
-
-            // Switch to the restored layout and wire Owner/Factory/Context for every node
-            this.UnsubscribeFromInnerDockChanges(workspacePane);
-            workspacePane.ContentLayout = layout;
-            this.dockFactory.InitLayout(layout);
-            this.dockFactory.DockState.Restore(layout);
-            this.SubscribeToInnerDockChanges(workspacePane);
-
-            // Find the primary ContentDock and configure it for future dynamic tab management.
-            // The split structure (sibling ContentDocks in a ProportionalDock) is preserved
-            // because we only replace the primary dock's VisibleDockables.
-            var contentDock = this.FindDocumentDock(layout) as WorkspaceContentDock;
-            if (contentDock is not null)
-            {
-                contentDock.VisibleDockables?.Clear();
-                contentDock.ItemsSource = workspacePane.Tabs;
-                contentDock.ItemContainerGenerator = new WorkspaceDocumentGenerator(
-                    doc => this.dockFactory.RegisterDocument(doc.Id, doc),
-                    id => this.dockFactory.UnregisterDocument(id));
-            }
-
-            // Add tab VMs; the generator creates dock documents in the primary content dock
-            bool workspaceClosed = false;
-            for (int i = 0; i < stubs.Count; i++)
-            {
-                var tabVm = tabResults[i];
-                if (tabVm is null) continue;
-
-                if (workspaceClosed || !this.WorkspacePanes.Contains(workspacePane))
-                {
-                    workspaceClosed = true;
-                    _ = DisposeWorkspaceTabAsync(tabVm);
-                    continue;
-                }
-
-                workspacePane.Tabs.Add(tabVm);
-                success = true;
-            }
-        });
-
-        return success;
-    }
-
     /// <summary>
     /// Creates a <see cref="WorkspaceTabViewModel"/> from a <see cref="DockTabDescriptor"/>
     /// by fetching the referenced entity (if any) and constructing the appropriate tab type.
@@ -3387,7 +3171,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         var agentTab = await this.openAgentSessionShortcutHandler
                             .TryCreateAgentSessionTabForRestoreAsync(
                                 this, entity, tabId, title: restoredAgentTitle, dockRegion: null);
-                        if (agentTab is not null) return agentTab;
+                        if (agentTab is not null)
+                        {
+                            agentTab.IsTitleExplicit = agentDesc.IsTitleExplicit;
+                            return agentTab;
+                        }
                     }
                 }
                 break;
@@ -3412,6 +3200,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                         {
                             Id = tabId,
                             Title = restoredTitle,
+                            IsTitleExplicit = entityDesc.IsTitleExplicit,
                             Entity = entity,
                             DockRegion = "full",
                         };
@@ -3422,7 +3211,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             case BrowserDockTabDescriptor browserDesc:
                 if (!string.IsNullOrWhiteSpace(browserDesc.Url))
                 {
-                    return new WebViewModel(browserDesc.Url)
+                    return new WebViewModel(browserDesc.Url, this, titleFixed: browserDesc.IsTitleExplicit)
                     {
                         Id = tabId,
                         Title = !string.IsNullOrEmpty(browserDesc.Title) ? browserDesc.Title : browserDesc.Url,
@@ -3474,7 +3263,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            return new WebViewModel(url.GetString()!)
+            return new WebViewModel(url.GetString()!, this)
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,
@@ -3629,7 +3418,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             && url.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(url.GetString()))
         {
-            return new WebViewModel(url.GetString()!)
+            return new WebViewModel(url.GetString()!, this)
             {
                 Id = ReadString(tab, "tab-id") ?? url.GetString()!,
                 Title = ReadString(tab, "title") ?? url.GetString()!,
@@ -3802,7 +3591,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return null;
         }
 
-        return property.GetString();
+        var value = property.GetString();
+        return string.IsNullOrEmpty(value) ? null : value;
     }
 
     private static string? ReadPrimaryName(
@@ -4269,7 +4059,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             var anyUnread = false;
             foreach (var tab in pane.Tabs)
             {
-                var doc = this.dockFactory.GetDocumentForTab(tab.Id);
+                var doc = pane.GetDocumentForTab(tab.Id);
                 if (doc is null) continue;
                 var hasUnread = notifications.Any(n => n.TabKey == doc.Id && !n.IsRead);
                 doc.HasUnreadNotification = hasUnread;
@@ -4363,24 +4153,63 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var workspacePaneId = this.notificationService.Notifications
             .FirstOrDefault(e => e.TabKey == tabId)
             ?.TabDescriptor.WorkspaceId;
-        this.ActivateTabById(tabId, workspacePaneId);
-        if (!this.navigatingViaHistory)
-        {
-            var paneId = workspacePaneId ?? this.SelectedWorkspacePane?.Id;
-            if (paneId is not null)
-            {
-                this.navigationHistoryService.Push(new NavigationEntry(tabId, paneId));
-            }
-        }
+        _ = this.tabNavigator.NavigateAsync(
+            new NavigationTarget { DocumentTabId = tabId, WorkspaceTabId = workspacePaneId },
+            new NavigationOptions { PushHistory = true });
     }
 
     public void WireWindowFocus(Action focusWindow)
     {
-        if (this.notificationsViewModel is not null)
-        {
-            this.notificationsViewModel.FocusWindowCallback = focusWindow;
-        }
+        this.focusWindowAction = focusWindow;
     }
+
+    /// <summary>
+    /// #1341: lazily builds the <see cref="WorkspacePaneEnvironment"/> passed into every real
+    /// workspace pane, bundling the window-scoped services the pane needs to own its per-pane
+    /// concerns. Cached so all panes share one instance.
+    /// </summary>
+    private WorkspacePaneEnvironment GetWorkspacePaneEnvironment() =>
+        this.workspacePaneEnvironment ??= new WorkspacePaneEnvironment
+        {
+            GetEntityBroker = () => this.entityBroker,
+            DockFactory = this.dockFactory,
+            NotificationService = this.notificationService,
+            NavigationHistory = this.navigationHistoryService,
+            TabFactory = this,
+            IsPaneLive = pane => this.WorkspacePanes.Contains(pane),
+            SelectPane = pane => this.SelectedWorkspacePane = pane,
+            RunMruNavigationAfterActiveClose = this.RunMruNavigationAfterActiveClose,
+        };
+
+    Task<WorkspaceTabViewModel?> IWorkspaceTabFactory.CreateTabViewModelFromDescriptorAsync(
+        SubscribedEntityViewModel workspaceEntity,
+        DockTabDescriptor descriptor,
+        string tabId) =>
+        this.CreateTabViewModelFromDescriptorAsync(workspaceEntity, descriptor, tabId);
+
+    Task<WorkspaceTabViewModel?> IWorkspaceTabFactory.TryFetchWorkspaceTabAsync(JsonElement tab) =>
+        this.TryFetchWorkspaceTabAsync(tab);
+
+    WorkspaceTabViewModel IWorkspaceTabFactory.CreateDefaultWorkspaceTab(SubscribedEntityViewModel workspaceEntity) =>
+        new EntityWorkspaceTabViewModel(this.EntityBroker, this.entityTypeViewCatalog, this)
+        {
+            Id = workspaceEntity.EntityId.ToString(),
+            Title = workspaceEntity.DisplayName,
+            Entity = workspaceEntity,
+            DockRegion = "full",
+        };
+
+    Task<bool> ITabNavigatorHost.ActivateTabByRequestAsync(NavigationRequest request) =>
+        this.ActivateTabByRequestAsync(request);
+
+    Task ITabNavigatorHost.OpenAgentForSessionAsync(string sessionKey) =>
+        this.OpenAgentForSessionAsync(sessionKey);
+
+    string? ITabNavigatorHost.SelectedWorkspacePaneId => this.SelectedWorkspacePane?.Id;
+
+    bool ITabNavigatorHost.NavigatingViaHistory => this.navigatingViaHistory;
+
+    void ITabNavigatorHost.FocusMainWindow() => this.focusWindowAction?.Invoke();
 
     public override async ValueTask DisposeAsync()
     {

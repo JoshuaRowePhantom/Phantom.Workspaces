@@ -11,6 +11,7 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -205,6 +206,15 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 var agentServices = await this.agentSessionShortcutContext
                     .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
                 var agentManifest = AgentManifestLoader.LoadManifestFromJson(manifestJson);
+                // Populate the manifest's stable identity from the workspace entity so the
+                // ManifestIdentity ("all sessions using this manifest") consent scope works for
+                // real manifest entities, not just hand-authored JSON (issue #1401).
+                agentManifest.Metadata ??= new Dictionary<string, object>();
+                if (!agentManifest.Metadata.ContainsKey(AgentManifestSecretUseMemoryFactory.EntityIdMetadataKey))
+                {
+                    agentManifest.Metadata[AgentManifestSecretUseMemoryFactory.EntityIdMetadataKey] =
+                        this.ManifestEntity.EntityId.ToString();
+                }
                 var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                     new AcquireAgentChatRequest
                     {
@@ -232,7 +242,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 var loggerFactory = new ObservableLoggerFactory();
                 var agentServices = await this.agentSessionShortcutContext
                     .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
-                var agentDefinition = AgentDefinition.FromJson(definitionJson);
+                var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
                 var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                     new AcquireAgentChatRequest
                     {
@@ -260,8 +270,9 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         try
         {
             var (agentChat, loggerFactory) = await createChatAsync();
-            var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id, foregroundScheduler);
+            // #1429: materialize through the single composition seam so slash commands are always wired.
+            var agent = this.openAgentSessionShortcutHandler.ComposeSessionAgentViewModel(
+                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity, loadingTab, foregroundScheduler);
             loadingTab.SetReady(agent, loggerFactory);
         }
         catch (Exception ex)

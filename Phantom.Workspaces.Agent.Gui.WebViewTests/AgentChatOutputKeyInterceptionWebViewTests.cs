@@ -163,6 +163,52 @@ public sealed class AgentChatOutputKeyInterceptionWebViewTests
             }
         });
 
+    [Fact]
+    public Task PostWmKeyDownCtrlF_ToWebView2HwndWithNonCapturedCtrlF_ReachesHtmlPage()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            // With Ctrl+F declared non-captured on the browser host (issue #1255), the accelerator
+            // is left for the WebView2 page's in-page find: the routed re-dispatch and ancestor
+            // KeyBinding walk are skipped, so the app's global find binding never fires and the COM
+            // args stay unhandled (put_Handled is not called).
+            var (control, browser, window, findCount) = CreateHarness(bindings: (Key.F, KeyModifiers.Control));
+            BrowserAcceleratorBehavior.SetNonCapturedAcceleratorKeys(
+                browser,
+                new System.Collections.Generic.List<KeyGesture> { new(Key.F, KeyModifiers.Control) });
+            try
+            {
+                await Task.Yield();
+                var args = new AcceleratorKeyEventArgs(0, Key.F, KeyModifiers.Control);
+                BrowserAcceleratorBehavior.Dispatch(browser, args);
+                Assert.Equal(0, findCount());
+                Assert.False(args.Handled);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task PostWmKeyDownCtrlF_ToMainWindowOutsideWebView_StillOpensGlobalEntityFind()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            // Regression guard: a web view that does NOT exempt Ctrl+F still forwards it to the
+            // top-level KeyBinding (the #1143 global entity-find handler), so global find keeps
+            // working everywhere the page has not opted out.
+            var (control, browser, window, findCount) = CreateHarness(bindings: (Key.F, KeyModifiers.Control));
+            try
+            {
+                await Task.Yield();
+                BrowserAcceleratorBehavior.Dispatch(browser, new AcceleratorKeyEventArgs(0, Key.F, KeyModifiers.Control));
+                Assert.Equal(1, findCount());
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
     private static (Control Control, Control Browser, Window Window, Func<int> CloseCount) CreateHarness(
         (Key Key, KeyModifiers Modifiers)? bindings = null)
     {

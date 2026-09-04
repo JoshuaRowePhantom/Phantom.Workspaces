@@ -225,6 +225,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public long? TotalOutputTokenCount => this.agentChat.TotalOutputTokenCount;
 
+    public long? TotalCacheReadTokenCount => this.agentChat.TotalCacheReadTokenCount;
+
+    public long? TotalCacheWriteTokenCount => this.agentChat.TotalCacheWriteTokenCount;
+
+    public long? TotalReasoningTokenCount => this.agentChat.TotalReasoningTokenCount;
+
+    public double? TotalSessionCostUsd => this.agentChat.TotalSessionCostUsd;
+
     public string ModelApiType => this.ResolveAgentModel()?.ApiType ?? string.Empty;
 
     public string ModelConnectionType => this.ResolveAgentModel()?.Connection switch
@@ -486,11 +494,13 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             };
         }
 
-        // Transient results are displayed as a one-off inline notification rather than
-        // being persisted into conversation history.
+        // Transient slash-command results (e.g. /model) are shown in the visible chat
+        // transcript as non-persisted diagnostic notes so the user gets feedback. The note
+        // is added to in-memory History only and is never written to the store, so it does
+        // not reappear after a reload (issue #1396).
         if (result.IsTransient)
         {
-            this.agentChat.RaiseTransientNotification(result.StatusMessage);
+            this.agentChat.EnqueueTransientDiagnostic(result.StatusMessage);
             return;
         }
 
@@ -903,6 +913,10 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     {
         this.RaisePropertyChanged(nameof(this.TotalInputTokenCount));
         this.RaisePropertyChanged(nameof(this.TotalOutputTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalCacheReadTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalCacheWriteTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalReasoningTokenCount));
+        this.RaisePropertyChanged(nameof(this.TotalSessionCostUsd));
     }
 
     private sealed class ToolsCollectionTransformer : CollectionTransformer<AgentChatToolViewModel, AgentEditorNavigationItemViewModel>

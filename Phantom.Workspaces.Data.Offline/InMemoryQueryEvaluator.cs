@@ -20,6 +20,7 @@ internal sealed class InMemoryQueryEvaluator
     private readonly IReadOnlyList<Candidate> candidates;
     private readonly IEmbeddingsProvider embeddingsProvider;
     private readonly Dictionary<EntityId, List<VectorQueryScore>> vectorScores = [];
+    private Dictionary<EntityId, JsonElement?>? dataById;
 
     public InMemoryQueryEvaluator(
         IReadOnlyList<Candidate> candidates,
@@ -115,7 +116,7 @@ internal sealed class InMemoryQueryEvaluator
             case TopQueryClause topClause:
             {
                 var childIds = await this.EvaluateClauseAsync(topClause.Clause, cancellationToken).ConfigureAwait(false);
-                return this.TakeTop(childIds, topClause.ResultLimit.Value);
+                return this.TakeTop(childIds, topClause.ResultLimit.Value, topClause.SortSpecifications);
             }
 
             case EntityTypeQueryClause entityTypeClause:
@@ -588,17 +589,103 @@ internal sealed class InMemoryQueryEvaluator
         throw new ArgumentException("A vector query clause requires query-text or a query-embedding.");
     }
 
-    private HashSet<EntityId> TakeTop(HashSet<EntityId> ids, int limit)
+    private HashSet<EntityId> TakeTop(HashSet<EntityId> ids, int limit, IReadOnlyList<SortSpecification>? sorts)
     {
         if (limit < 0)
         {
             return ids;
         }
 
-        var ranked = ids
-            .OrderByDescending(this.BestScore)
-            .Take(limit);
+        // When explicit sort specifications are supplied, order matched entities by those fields
+        // (compound, in list order) BEFORE taking the top-N, so the limit is a true top-N-by-order
+        // rather than an arbitrary subset. Vector-score ordering is retained only for unsorted
+        // (e.g. vector) queries.
+        var ranked = sorts is { Count: > 0 }
+            ? this.OrderBySpecifications(ids, sorts).Take(limit)
+            : ids.OrderByDescending(this.BestScore).Take(limit);
         return [.. ranked];
+    }
+
+    private IOrderedEnumerable<EntityId> OrderBySpecifications(
+        HashSet<EntityId> ids,
+        IReadOnlyList<SortSpecification> sorts)
+    {
+        var lookup = this.DataById();
+        IOrderedEnumerable<EntityId>? ordered = null;
+        foreach (var specification in sorts)
+        {
+            var components = specification.FieldPath.Components ?? [];
+            JsonElement? KeySelector(EntityId id) =>
+                lookup.TryGetValue(id, out var data) && data is { } value
+                    ? NavigateField(value, components)
+                    : null;
+
+            var descending = specification.Direction == SortDirection.Descending;
+            if (ordered is null)
+            {
+                ordered = descending
+                    ? ids.OrderByDescending(KeySelector, FieldValueComparer.Instance)
+                    : ids.OrderBy(KeySelector, FieldValueComparer.Instance);
+            }
+            else
+            {
+                ordered = descending
+                    ? ordered.ThenByDescending(KeySelector, FieldValueComparer.Instance)
+                    : ordered.ThenBy(KeySelector, FieldValueComparer.Instance);
+            }
+        }
+
+        return ordered ?? ids.OrderBy(static id => id.Value);
+    }
+
+    private Dictionary<EntityId, JsonElement?> DataById()
+    {
+        if (this.dataById is null)
+        {
+            var map = new Dictionary<EntityId, JsonElement?>();
+            foreach (var candidate in this.candidates)
+            {
+                map[candidate.Id] = candidate.Data;
+            }
+
+            this.dataById = map;
+        }
+
+        return this.dataById;
+    }
+
+    /// <summary>
+    /// Orders field values monotonically: numbers numerically, strings ordinally, and missing values
+    /// (absent field) before any present value. Incomparable kinds compare equal (stable order).
+    /// </summary>
+    private sealed class FieldValueComparer : IComparer<JsonElement?>
+    {
+        public static readonly FieldValueComparer Instance = new();
+
+        public int Compare(JsonElement? x, JsonElement? y)
+        {
+            if (x is not { } left)
+            {
+                return y is null ? 0 : -1;
+            }
+
+            if (y is not { } right)
+            {
+                return 1;
+            }
+
+            if (left.ValueKind == JsonValueKind.Number && right.ValueKind == JsonValueKind.Number)
+            {
+                return left.GetDouble().CompareTo(right.GetDouble());
+            }
+
+            if (left.ValueKind == JsonValueKind.String && right.ValueKind == JsonValueKind.String)
+            {
+                return string.CompareOrdinal(left.GetString(), right.GetString());
+            }
+
+            return 0;
+        }
     }
 
     private double BestScore(EntityId id)

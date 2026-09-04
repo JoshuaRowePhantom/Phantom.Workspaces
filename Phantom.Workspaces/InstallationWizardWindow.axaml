@@ -46,18 +46,44 @@
                     <ComboBox HorizontalAlignment="Stretch"
                               ItemsSource="{Binding Repository.AvailableModes}"
                               SelectedItem="{Binding Repository.Mode}" />
+                    <TextBlock Text="{Binding Repository.ActiveSettings.Description}"
+                               Opacity="0.7"
+                               TextWrapping="Wrap" />
                 </StackPanel>
 
                 <ContentControl Content="{Binding Repository.ActiveSettings}" />
 
                 <TextBlock Text="Remote access" FontWeight="Bold" Margin="0,8,0,0" />
 
-                <CheckBox Content="Host the web data-access endpoint from this instance"
-                          IsChecked="{Binding RemoteAccess.HostingEnabled}" />
+                <StackPanel Spacing="4">
+                    <CheckBox Content="Host the web data-access endpoint from this instance"
+                              IsChecked="{Binding RemoteAccess.HostingEnabled}" />
+                    <TextBlock Text="Turn on only if you want other peers/machines to connect to this instance. Off is correct for a solo/local user."
+                               Opacity="0.7"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+
+                <CheckBox Content="Accept reverse execution from connected peers"
+                          IsChecked="{Binding RemoteAccess.AcceptReverseExecution}" />
 
                 <StackPanel Spacing="4">
                     <TextBlock Text="Listen URL" />
-                    <TextBox PlaceholderText="http://localhost:5280" Text="{Binding RemoteAccess.ListenUrl}" />
+                    <TextBox x:Name="WizardListenUrlTextBox"
+                             PlaceholderText="http://localhost:5280"
+                             Text="{Binding RemoteAccess.ListenUrl}"
+                             IsEnabled="{Binding RemoteAccess.HostingEnabled}" />
+                    <TextBlock Text="URL this instance listens on when hosting the data-access endpoint. Default http://localhost:5280 is fine for local development."
+                               Opacity="0.7"
+                               TextWrapping="Wrap" />
+                </StackPanel>
+
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Dev tunnel name" />
+                    <TextBox PlaceholderText="my-workspace-tunnel or auto" Text="{Binding RemoteAccess.TunnelName}" />
+                    <TextBlock x:Name="WizardTunnelNameHelperText"
+                               Text="{Binding RemoteAccess.TunnelNameHelperTextValue}"
+                               Opacity="0.7"
+                               TextWrapping="Wrap" />
                 </StackPanel>
 
                 <StackPanel Spacing="4">
@@ -71,18 +97,36 @@
                            Foreground="#B00020"
                            TextWrapping="Wrap"
                            IsVisible="{Binding RemoteAccess.IsAnonymousAccessWarningVisible}" />
+
+                <TextBlock Text="Advanced/testing options are available in Settings after setup."
+                           Opacity="0.6"
+                           FontStyle="Italic"
+                           TextWrapping="Wrap"
+                           Margin="0,8,0,0" />
             </StackPanel>
         </ScrollViewer>
 
         <StackPanel Grid.Row="2"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Right"
+                    Orientation="Vertical"
                     Spacing="8"
                     Margin="0,16,0,0">
-            <Button Content="Cancel" Click="OnCancelClicked" />
-            <Button Content="Complete setup"
-                    IsEnabled="{Binding CanSave}"
-                    Click="OnCompleteClicked" />
+            <ItemsControl ItemsSource="{Binding ValidationMessages}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}"
+                                   Foreground="#B00020"
+                                   TextWrapping="Wrap" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Spacing="8">
+                <Button Content="Cancel" Click="OnCancelClicked" />
+                <Button Content="Complete setup"
+                        IsEnabled="{Binding CanSave}"
+                        Click="OnCompleteClicked" />
+            </StackPanel>
         </StackPanel>
     </Grid>
 </Window>

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Globalization;
+using System.Text;
 using Phantom.Workspaces.Agent.Gui.ViewModels.Visualization;
 
 namespace Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -11,6 +12,7 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable, I
     private string modelDisplay = "(none)";
     private string providerDisplay = "(none)";
     private string? tokensDisplay;
+    private string? tokensTooltip;
     private string? intentDisplay;
 
     public AgentChatStatusLineViewModel(AgentViewModel agent)
@@ -89,6 +91,24 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable, I
 
     public bool HasTokens => !string.IsNullOrEmpty(this.TokensDisplay);
 
+    /// <summary>
+    /// Per-component usage breakdown shown as a tooltip over the token footer: input (with cached /
+    /// non-cached split), reasoning, output and dollar cost. <c>null</c> when there is no token data.
+    /// </summary>
+    public string? TokensTooltip
+    {
+        get => this.tokensTooltip;
+        private set
+        {
+            if (this.SetProperty(ref this.tokensTooltip, value))
+            {
+                this.RaisePropertyChanged(nameof(this.HasTokensTooltip));
+            }
+        }
+    }
+
+    public bool HasTokensTooltip => !string.IsNullOrEmpty(this.TokensTooltip);
+
     public bool HasProvider => !string.IsNullOrEmpty(this.ProviderDisplay);
 
     public bool HasModel => !string.IsNullOrEmpty(this.ModelDisplay);
@@ -116,23 +136,92 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable, I
     private static string CreateDisplayText(string value)
         => string.IsNullOrWhiteSpace(value) ? "(none)" : value;
 
-    private static string? CreateTokensDisplay(long? inputTokenCount, long? outputTokenCount)
-        => inputTokenCount.HasValue && outputTokenCount.HasValue
-            ? string.Format(
+    private static string? CreateTokensDisplay(
+        long? inputTokenCount,
+        long? outputTokenCount,
+        long? cacheReadTokenCount,
+        double? sessionCostUsd)
+    {
+        if (inputTokenCount is not long input || outputTokenCount is not long output)
+        {
+            return null;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendFormat(CultureInfo.InvariantCulture, "{0:N0} in", input);
+        if (cacheReadTokenCount is long cacheRead && cacheRead > 0)
+        {
+            builder.AppendFormat(CultureInfo.InvariantCulture, " ({0:N0} cached)", cacheRead);
+        }
+
+        builder.AppendFormat(CultureInfo.InvariantCulture, " / {0:N0} out", output);
+        if (sessionCostUsd is double cost && cost > 0)
+        {
+            builder.AppendFormat(CultureInfo.InvariantCulture, " \u00b7 ${0:N2}", cost);
+        }
+
+        return builder.ToString();
+    }
+
+    private static string? CreateTokensTooltip(
+        long? inputTokenCount,
+        long? outputTokenCount,
+        long? cacheReadTokenCount,
+        long? reasoningTokenCount,
+        double? sessionCostUsd)
+    {
+        if (inputTokenCount is not long input || outputTokenCount is not long output)
+        {
+            return null;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendFormat(CultureInfo.InvariantCulture, "Input: {0:N0}", input);
+        if (cacheReadTokenCount is long cacheRead && cacheRead > 0)
+        {
+            var nonCached = System.Math.Max(0L, input - cacheRead);
+            builder.AppendFormat(
                 CultureInfo.InvariantCulture,
-                "{0:N0} in / {1:N0} out",
-                inputTokenCount.Value,
-                outputTokenCount.Value)
-            : null;
+                " (cached: {0:N0}, non-cached: {1:N0})",
+                cacheRead,
+                nonCached);
+        }
+
+        if (reasoningTokenCount is long reasoning && reasoning > 0)
+        {
+            builder.AppendFormat(CultureInfo.InvariantCulture, " \u00b7 Reasoning: {0:N0}", reasoning);
+        }
+
+        builder.AppendFormat(CultureInfo.InvariantCulture, " \u00b7 Output: {0:N0}", output);
+        if (sessionCostUsd is double cost && cost > 0)
+        {
+            builder.AppendFormat(CultureInfo.InvariantCulture, " \u00b7 Cost: ${0:N2}", cost);
+        }
+
+        return builder.ToString();
+    }
+
+    private void UpdateTokensFromAgent()
+    {
+        this.TokensDisplay = CreateTokensDisplay(
+            this.agent.TotalInputTokenCount,
+            this.agent.TotalOutputTokenCount,
+            this.agent.TotalCacheReadTokenCount,
+            this.agent.TotalSessionCostUsd);
+        this.TokensTooltip = CreateTokensTooltip(
+            this.agent.TotalInputTokenCount,
+            this.agent.TotalOutputTokenCount,
+            this.agent.TotalCacheReadTokenCount,
+            this.agent.TotalReasoningTokenCount,
+            this.agent.TotalSessionCostUsd);
+    }
 
     private void UpdateFromAgent()
     {
         this.IsThinking = this.agent.IsChatRunning;
         this.ModelDisplay = CreateDisplayText(this.agent.ModelId);
         this.ProviderDisplay = CreateDisplayText(this.agent.ModelProvider);
-        this.TokensDisplay = CreateTokensDisplay(
-            this.agent.TotalInputTokenCount,
-            this.agent.TotalOutputTokenCount);
+        this.UpdateTokensFromAgent();
     }
 
     private void OnAgentPropertyChanged(object? sender, PropertyChangedEventArgs propertyChangedEvent)
@@ -150,11 +239,12 @@ public sealed class AgentChatStatusLineViewModel : ViewModelBase, IDisposable, I
             this.ProviderDisplay = CreateDisplayText(this.agent.ModelProvider);
         }
         else if (string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.TotalInputTokenCount), StringComparison.Ordinal)
-            || string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.TotalOutputTokenCount), StringComparison.Ordinal))
+            || string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.TotalOutputTokenCount), StringComparison.Ordinal)
+            || string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.TotalCacheReadTokenCount), StringComparison.Ordinal)
+            || string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.TotalReasoningTokenCount), StringComparison.Ordinal)
+            || string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.TotalSessionCostUsd), StringComparison.Ordinal))
         {
-            this.TokensDisplay = CreateTokensDisplay(
-                this.agent.TotalInputTokenCount,
-                this.agent.TotalOutputTokenCount);
+            this.UpdateTokensFromAgent();
         }
         else if (string.Equals(propertyChangedEvent.PropertyName, nameof(AgentViewModel.IsReasoningVisible), StringComparison.Ordinal))
         {

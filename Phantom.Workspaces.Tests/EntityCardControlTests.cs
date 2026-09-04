@@ -2,8 +2,10 @@ using System;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Layout;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Phantom.Workspaces.Controls;
@@ -115,9 +117,97 @@ public sealed class EntityCardControlTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task EntityCardControl_DisplayName_PreservesHighlightMatchRuns()
+    public void EntityCardControl_SearchQuerySetAfterRealize_DisplayNameRendersHighlightedRun()
     {
-        var card = new EntityCardControl { DataContext = await BuildToolNoteCardViewModelAsync() };
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.SearchQuery = "foo";
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            var highlighted = title.Inlines!
+                .OfType<Avalonia.Controls.Documents.Run>()
+                .Where(r => r.Background is not null)
+                .ToArray();
+            Assert.Single(highlighted);
+            Assert.Equal("foo", highlighted[0].Text);
+            Assert.Same(title.HighlightBrush, highlighted[0].Background);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryEmpty_DisplayNameKeepsPlainText()
+    {
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.SearchQuery = null;
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.Equal("the foo bar", title.Text);
+            Assert.DoesNotContain(title.Inlines!.OfType<Avalonia.Controls.Documents.Run>(),
+                r => r.Background is not null);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryNoMatch_DisplayNameKeepsPlainText()
+    {
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            vm.SearchQuery = "zzz";
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            Assert.Equal("the foo bar", title.Text);
+            Assert.False(vm.Matches);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryChangedAfterRealize_HighlightUpdatesToNewQuery()
+    {
+        var vm = new EntityCardViewModel(displayName: "foo and bar", entityType: "note");
+        var card = new EntityCardControl { DataContext = vm };
         var window = new Window { Content = card };
         try
         {
@@ -128,11 +218,133 @@ public sealed class EntityCardControlTests
                 .OfType<SafeSelectableTextBlock>()
                 .First(t => t.Classes.Contains("workspace-entity-title"));
 
-            Assert.NotNull(title.Inlines);
-            var runs = title.Inlines!.OfType<Avalonia.Controls.Documents.Run>().ToArray();
-            Assert.True(runs.Length >= 3, $"Expected at least 3 runs, found {runs.Length}.");
-            var runText = string.Concat(runs.Select(r => r.Text));
-            Assert.Contains("Run VS Code Tunnel", runText, StringComparison.Ordinal);
+            vm.SearchQuery = "foo";
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("foo", title.Inlines!.OfType<Avalonia.Controls.Documents.Run>()
+                .Single(r => r.Background is not null).Text);
+
+            vm.SearchQuery = "bar";
+            Dispatcher.UIThread.RunJobs();
+            Assert.Equal("bar", title.Inlines!.OfType<Avalonia.Controls.Documents.Run>()
+                .Single(r => r.Background is not null).Text);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1257: a property VALUE whose text matches the active search query must render a
+    // highlighted Run in the field-value SafeSelectableTextBlock. This is the new highlight surface
+    // introduced by binding SearchQuery to the field-value presentation control.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryMatchesPropertyValue_PropertyValueTextRendersHighlightedRun()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", "the foo bar"),
+        };
+        var vm = new EntityCardViewModel(entity, fieldEditors);
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var value = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-field-read-value"));
+            Assert.Equal("the foo bar", value.Text);
+
+            vm.SearchQuery = "foo";
+            Dispatcher.UIThread.RunJobs();
+
+            var highlighted = value.Inlines!
+                .OfType<Avalonia.Controls.Documents.Run>()
+                .Where(r => r.Background is not null)
+                .ToArray();
+            Assert.Single(highlighted);
+            Assert.Equal("foo", highlighted[0].Text);
+            Assert.Same(value.HighlightBrush, highlighted[0].Background);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1257: a property NAME label must never be highlighted, even when the query is a
+    // substring of the field name. The field-name label control does not bind SearchQuery, so it
+    // stays a single plain Run regardless of the query.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_SearchQueryMatchesPropertyName_PropertyNameLabelRendersSinglePlainRun()
+    {
+        var entity = new SubscribedEntityViewModel(BuildGitWorktreeSnapshotForTests());
+        var fieldEditors = new EntityFieldEditorViewModel[]
+        {
+            new StringFieldEditorViewModel("path", "xyz"),
+        };
+        var vm = new EntityCardViewModel(entity, fieldEditors);
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card, Width = 400, Height = 400 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            // "pat" is a substring of the field name "path" but not of any value/display name.
+            vm.SearchQuery = "pat";
+            Dispatcher.UIThread.RunJobs();
+
+            var label = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-field-label") && t.Text == "path");
+
+            // The label control never binds SearchQuery, so it stays plain text with no highlight.
+            Assert.Null(label.SearchQuery);
+            Assert.Equal("path", label.Text);
+            Assert.DoesNotContain(
+                label.Inlines!.OfType<Avalonia.Controls.Documents.Run>(),
+                r => r.Background is not null);
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1257 (interaction with #1177 virtualization): when SearchQuery is assigned on the card
+    // view model while its container is virtualized (not realized), realizing the container — here,
+    // attaching a freshly-created EntityCardControl bound to that same view model — must apply the
+    // highlight on realize rather than only responding to post-realize query changes.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_VirtualizedItemRealizedAfterSearchQuerySet_ShowsHighlightOnRealize()
+    {
+        var vm = new EntityCardViewModel(displayName: "the foo bar", entityType: "note");
+
+        // Query set before any control is realized against this view model.
+        vm.SearchQuery = "foo";
+
+        var card = new EntityCardControl { DataContext = vm };
+        var window = new Window { Content = card };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var title = window.GetVisualDescendants()
+                .OfType<SafeSelectableTextBlock>()
+                .First(t => t.Classes.Contains("workspace-entity-title"));
+
+            var highlighted = title.Inlines!
+                .OfType<Avalonia.Controls.Documents.Run>()
+                .Where(r => r.Background is not null)
+                .ToArray();
+            Assert.Single(highlighted);
+            Assert.Equal("foo", highlighted[0].Text);
+            Assert.Same(title.HighlightBrush, highlighted[0].Background);
         }
         finally
         {
@@ -334,11 +546,81 @@ public sealed class EntityCardControlTests
 
             // Every character of the display name remains present across the wrapped lines.
             var renderedLength = lines.Sum(l => l.Length);
-            var displayName = string.Concat(
-                title.Inlines!.OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text));
+            var displayName = title.Text ?? string.Empty;
             Assert.True(
                 renderedLength >= displayName.Length,
                 $"Rendered {renderedLength} chars < display name {displayName.Length}; text was clipped.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1266 (retry): rendered-bounds coverage for the shared entity-card action-button style.
+    // The headless test App applies SharedStyles globally, so a Button carrying the shared class
+    // receives the shipped 28x28 footprint after a real layout pass.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardControl_ActionButtons_ShareUniformSize()
+    {
+        var buttons = new[] { "🔧", "{}", "💾", "✖", "A" }
+            .Select(glyph =>
+            {
+                var button = new Button { Content = glyph };
+                button.Classes.Add("entity-card-action-button");
+                return button;
+            })
+            .ToArray();
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        foreach (var button in buttons)
+        {
+            panel.Children.Add(button);
+        }
+
+        var window = new Window { Content = panel, Width = 400, Height = 200 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            foreach (var button in buttons)
+            {
+                Assert.Equal(28, button.Bounds.Width, precision: 1);
+                Assert.Equal(28, button.Bounds.Height, precision: 1);
+            }
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardActionButton_HighlightedVariant_KeepsSameFootprint()
+    {
+        var baseButton = new Button { Content = "A" };
+        baseButton.Classes.Add("entity-card-action-button");
+
+        var highlightedButton = new Button { Content = "A" };
+        highlightedButton.Classes.Add("entity-card-action-button");
+        highlightedButton.Classes.Add("highlighted");
+
+        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+        panel.Children.Add(baseButton);
+        panel.Children.Add(highlightedButton);
+
+        var window = new Window { Content = panel, Width = 400, Height = 200 };
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            // The highlighted variant only changes visual accents — never the footprint.
+            Assert.Equal(baseButton.Bounds.Width, highlightedButton.Bounds.Width, precision: 1);
+            Assert.Equal(baseButton.Bounds.Height, highlightedButton.Bounds.Height, precision: 1);
+            Assert.Equal(28, highlightedButton.Bounds.Width, precision: 1);
+            Assert.Equal(28, highlightedButton.Bounds.Height, precision: 1);
         }
         finally
         {
@@ -492,6 +774,104 @@ public sealed class EntityCardControlTests
         {
             window.Close();
         }
+    }
+
+    // Issue #1347: when a single entity card is taller than the pane, the entity-card-tree's inner
+    // ScrollViewer must accumulate vertical extent beyond the viewport so the vertical scrollbar
+    // engages. The TreeViewItem template's items row is Auto (not *) so the header measures cleanly
+    // under the pixel-virtualizing VirtualizingStackPanel.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ItemTallerThanViewport_ScrollExtentExceedsViewport()
+    {
+        var (window, tree) = BuildTreeWithTallItem();
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var scrollViewer = tree.GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .First();
+
+            Assert.True(
+                scrollViewer.Extent.Height > scrollViewer.Viewport.Height,
+                $"Extent height {scrollViewer.Extent.Height} should exceed viewport height {scrollViewer.Viewport.Height} for a tall card.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1347: offsetting the inner ScrollViewer must actually move content, so the bottom of a
+    // tall card is reachable.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ItemTallerThanViewport_CanScrollToBottom()
+    {
+        var (window, tree) = BuildTreeWithTallItem();
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var scrollViewer = tree.GetVisualDescendants()
+                .OfType<Avalonia.Controls.ScrollViewer>()
+                .First();
+
+            var maxOffset = scrollViewer.Extent.Height - scrollViewer.Viewport.Height;
+            Assert.True(maxOffset > 0, "Tall card should produce a positive scrollable range.");
+
+            scrollViewer.Offset = scrollViewer.Offset.WithY(maxOffset);
+            Dispatcher.UIThread.RunJobs();
+
+            Assert.True(
+                scrollViewer.Offset.Y > 0,
+                $"Vertical offset {scrollViewer.Offset.Y} should be positive after scrolling to the bottom.");
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    // Issue #1347: the shell border must not clip its own content in isolation, otherwise tall-card
+    // overflow is silently cut off instead of being scrollable.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void EntityCardTree_ShellBorder_DoesNotClipTallContent()
+    {
+        var (window, tree) = BuildTreeWithTallItem();
+        try
+        {
+            window.Show();
+            Dispatcher.UIThread.RunJobs();
+
+            var shellBorders = tree.GetVisualDescendants()
+                .OfType<Border>()
+                .Where(b => b.Classes.Contains("entity-card-shell-border"))
+                .ToArray();
+
+            Assert.NotEmpty(shellBorders);
+            Assert.All(shellBorders, border => Assert.False(
+                border.ClipToBounds,
+                "entity-card-shell-border must not clip tall content."));
+        }
+        finally
+        {
+            window.Close();
+        }
+    }
+
+    private static (Window Window, TreeView Tree) BuildTreeWithTallItem()
+    {
+        var tree = new TreeView();
+        tree.Classes.Add("entity-card-tree");
+        var tallItem = new TreeViewItem
+        {
+            Header = new Border { Height = 2000, Width = 120 },
+        };
+        tree.ItemsSource = new[] { tallItem };
+        var window = new Window { Content = tree, Width = 300, Height = 300 };
+        return (window, tree);
     }
 
     private static void AssertItemsPanelIsVirtualizing(string className)

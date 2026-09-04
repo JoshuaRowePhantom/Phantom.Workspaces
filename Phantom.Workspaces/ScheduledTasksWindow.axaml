@@ -78,6 +78,7 @@
                            IsVisible="{Binding HasNoRunsForSelectedTask}"
                            Opacity="0.7" />
                 <TreeView ItemsSource="{Binding SelectedToolRow.RecentRuns}"
+                          Name="RunHistoryTree"
                           IsVisible="{Binding SelectedToolRow, Converter={x:Static ObjectConverters.IsNotNull}}">
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate ItemsSource="{Binding SubRuns}">

@@ -60,10 +60,36 @@ if (Test-Path -LiteralPath $assetPath)
 }
 
 # Package the publish output, excluding symbol files (shipped separately as a CI artifact).
-$itemsToPack = Get-ChildItem -LiteralPath $PublishDirectory -Recurse -File |
+# Build the archive entry-by-entry so each file keeps its path RELATIVE to $PublishDirectory.
+# `Compress-Archive -LiteralPath <full file paths>` writes every file to the ZIP root and CANNOT
+# preserve subdirectories from a flat file list (issue #1377), which flattened
+# `runtimes\<rid>\native\copilot.exe` to the root and broke the installed/self-updated layout.
+Add-Type -AssemblyName System.IO.Compression | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+
+# Enumerate from the resolved root so file FullNames share the exact same base string (avoids
+# 8.3 short-name vs long-form mismatches when computing the relative entry path).
+$publishRoot = (Resolve-Path -LiteralPath $PublishDirectory).ProviderPath.TrimEnd('\', '/')
+$itemsToPack = Get-ChildItem -LiteralPath $publishRoot -Recurse -File |
     Where-Object { $_.Extension -ne '.pdb' }
 
-Compress-Archive -LiteralPath $itemsToPack.FullName -DestinationPath $assetPath -CompressionLevel Optimal
+$archive = [System.IO.Compression.ZipFile]::Open($assetPath, [System.IO.Compression.ZipArchiveMode]::Create)
+try
+{
+    foreach ($item in $itemsToPack)
+    {
+        # Compute the entry name relative to the publish root, using `/` separators so the ZIP
+        # preserves the nested directory structure (e.g. runtimes/<rid>/native/copilot.exe).
+        $relativePath = $item.FullName.Substring($publishRoot.Length).TrimStart('\', '/')
+        $entryName = $relativePath -replace '\\', '/'
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+            $archive, $item.FullName, $entryName, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+}
+finally
+{
+    $archive.Dispose()
+}
 
 $hash = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
 $checksumPath = "$assetPath.sha256"

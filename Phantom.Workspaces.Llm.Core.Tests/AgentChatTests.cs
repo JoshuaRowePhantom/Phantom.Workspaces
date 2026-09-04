@@ -377,6 +377,87 @@ public sealed class AgentChatTests
         Assert.Empty(tool.Children);
     }
 
+    private static AgentChat CreateChatWithTools(
+        IReadOnlyList<Tool> tools,
+        IChatClient? client = null)
+    {
+        // Placeholder tools (UnresolvedToolResourceTool) cannot be loaded from JSON — the AgentSchema
+        // loader drops unknown kinds — so the definition is built from JSON and the tools are attached
+        // programmatically, mirroring how AgentFactory materializes them (issue #1417).
+        var agentDefinition = (PromptAgent)AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        agentDefinition.Tools = [.. tools];
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        return AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = client ?? new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        }).GetAwaiter().GetResult();
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenDefinitionHasUnresolvedPlaceholderTool_EmitsDiagnostic()
+    {
+        await using var chat = CreateChatWithTools(
+            [new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }]);
+
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item =>
+                item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                && item.Contents.OfType<ErrorContent>().Any(error =>
+                    error.Message.Contains("mcp-server-entity:IcM", StringComparison.Ordinal))),
+            "a diagnostic naming the unresolved tool resource to appear in history");
+
+        var diagnostic = chat.History.Single(item =>
+            item.Role == AgentChatHistoryItem.DiagnosticChatRole
+            && item.Contents.OfType<ErrorContent>().Any());
+        var error = Assert.Single(diagnostic.Contents.OfType<ErrorContent>());
+        Assert.Contains("mcp-server-entity:IcM", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenDefinitionHasUnresolvedPlaceholderTool_DoesNotExposeItToModel()
+    {
+        var client = new DeterministicTestChatClient();
+        await using var chat = CreateChatWithTools(
+            [new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }],
+            client);
+
+        // The placeholder must never appear in the UI tool tree.
+        Assert.DoesNotContain(chat.Tools, tool => tool.Kind == UnresolvedToolResourceTool.KindValue);
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        // The placeholder produced no AIContextProvider, so no tool is exposed to the model.
+        var exposedTools = client.LastRequestOptions?.Tools ?? [];
+        Assert.Empty(exposedTools);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenDefinitionHasUnresolvedPlaceholderTool_DoesNotAbortSession()
+    {
+        var resolvedTool = new CustomTool { Kind = "web_search", Description = "Search docs" };
+        await using var chat = CreateChatWithTools(
+            [resolvedTool, new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }]);
+
+        // The resolved tool still attaches despite the unresolved placeholder.
+        var searchTool = Assert.Single(chat.Tools, tool => tool.Kind == "web_search");
+        Assert.True(searchTool.IsEnabled);
+
+        // And the diagnostic for the unresolved resource is still surfaced.
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item =>
+                item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                && item.Contents.OfType<ErrorContent>().Any(error =>
+                    error.Message.Contains("mcp-server-entity:IcM", StringComparison.Ordinal))),
+            "a diagnostic naming the unresolved tool resource to appear in history");
+    }
+
     [Fact]
     public async Task EnqueueUserMessage_DoesNotDuplicateCurrentUserMessageInRequestHistory()
     {
@@ -588,6 +669,114 @@ public sealed class AgentChatTests
         Assert.Equal(1234, chat.TotalInputTokenCount);
         Assert.Equal(56, chat.TotalOutputTokenCount);
         Assert.Equal(2, usageChangedCount);
+    }
+
+    [Fact]
+    public async Task AccumulateUsage_WhenCacheReadPresent_AggregatesTotalCacheReadTokenCount()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 1000,
+                OutputTokenCount = 25,
+                AdditionalCounts = new() { [CopilotSdkStreamAdapter.CacheReadTokensCountName] = 600 },
+            }),
+        ]));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 200,
+                OutputTokenCount = 10,
+                AdditionalCounts = new() { [CopilotSdkStreamAdapter.CacheReadTokensCountName] = 150 },
+            }),
+        ])
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = CreateChat(client);
+        var usageChangedCount = 0;
+        chat.UsageChanged += (_, _) => usageChangedCount++;
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2,
+            "streaming usage response to complete");
+
+        Assert.Equal(750, chat.TotalCacheReadTokenCount);
+        Assert.Equal(2, usageChangedCount);
+    }
+
+    [Fact]
+    public async Task AccumulateUsage_WhenCostPresent_AggregatesTotalSessionCostUsd()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 1000,
+                OutputTokenCount = 25,
+                AdditionalCounts = new() { [CopilotSdkStreamAdapter.CostMicroUsdCountName] = 1_230_000 },
+            }),
+        ]));
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 200,
+                OutputTokenCount = 10,
+                AdditionalCounts = new() { [CopilotSdkStreamAdapter.CostMicroUsdCountName] = 450_000 },
+            }),
+        ])
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = CreateChat(client);
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2,
+            "streaming usage response to complete");
+
+        Assert.Equal(1_680_000, chat.TotalSessionCostMicroUsd);
+        Assert.Equal(1.68, chat.TotalSessionCostUsd);
+    }
+
+    [Fact]
+    public async Task AccumulateUsage_WhenNoAdditionalCounts_LeavesCacheAndCostTotalsNull()
+    {
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, [
+            new UsageContent(new UsageDetails
+            {
+                InputTokenCount = 1000,
+                OutputTokenCount = 25,
+            }),
+        ])
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
+        await using var chat = CreateChat(client);
+
+        chat.EnqueueUserMessage("hi");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count == 2,
+            "streaming usage response to complete");
+
+        Assert.Equal(1000, chat.TotalInputTokenCount);
+        Assert.Null(chat.TotalCacheReadTokenCount);
+        Assert.Null(chat.TotalCacheWriteTokenCount);
+        Assert.Null(chat.TotalReasoningTokenCount);
+        Assert.Null(chat.TotalSessionCostMicroUsd);
+        Assert.Null(chat.TotalSessionCostUsd);
     }
 
     [Fact]
@@ -2420,31 +2609,95 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public void RaiseTransientNotification_WithText_DoesNotModifyHistory()
+    public async Task RunSlashCommand_TransientResult_IsNotPersistedToStore()
     {
-        var chat = CreateChat();
-        var received = new List<string>();
-        chat.TransientNotification += (_, text) => received.Add(text);
+        // Issue #1396: transient slash-command results are shown as non-persisted diagnostic
+        // notes. They must land in the visible in-memory History but must NOT be written to
+        // the configured store.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var store = new InMemoryAgentPersistenceStore();
+        await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        });
 
-        chat.RaiseTransientNotification("hello");
+        chat.EnqueueTransientDiagnostic("Active model: gpt-5");
 
-        Assert.Empty(chat.History);
-        Assert.Single(received);
-        Assert.Equal("hello", received[0]);
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "transient diagnostic note to appear in history");
+
+        var note = chat.History.Single(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains("Active model: gpt-5", note.Contents.OfType<TextContent>().Single().Text);
+
+        // The note must not have been written to the store.
+        var persisted = await store.ReadMessagesAsync(
+            new ReadMessagesRequest { AgentSessionId = chat.AgentSessionId },
+            CancellationToken.None);
+        Assert.DoesNotContain(persisted, m =>
+            m.Contents.OfType<TextContent>().Any(c => c.Text.Contains("Active model: gpt-5")));
     }
 
     [Fact]
-    public void RaiseTransientNotification_WithWhitespace_IsNoop()
+    public async Task AgentChat_AfterReload_DoesNotContainTransientDiagnosticNotes()
     {
-        var chat = CreateChat();
-        var received = new List<string>();
-        chat.TransientNotification += (_, text) => received.Add(text);
+        // Issue #1396: a transient diagnostic note must not reappear after a reload, which
+        // rebuilds History from ConfiguredStore.ReadMessagesAsync via LoadInitialHistory.
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        var store = new InMemoryAgentPersistenceStore();
 
-        chat.RaiseTransientNotification(string.Empty);
-        chat.RaiseTransientNotification("   ");
+        var client = new DeterministicTestChatClient();
+        var stream = client.EnqueueStreamingResponse();
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "world")
+        {
+            FinishReason = ChatFinishReason.Stop,
+        });
+        stream.Complete();
 
-        Assert.Empty(received);
-        Assert.Empty(chat.History);
+        string sessionId;
+        await using (var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = store,
+            ClientOverride = client,
+            DisplayNameOverride = "test-chat",
+        }))
+        {
+            sessionId = chat.AgentSessionId;
+
+            // A real turn so the session is persisted with user + assistant messages.
+            chat.EnqueueUserMessage("hello");
+            await WaitForConditionAsync(
+                chat.History,
+                () => chat.History.Count == 2 && chat.History[^1].Role == ChatRole.Assistant,
+                "assistant response to complete");
+
+            // Transient diagnostic note — must NOT be persisted.
+            chat.EnqueueTransientDiagnostic("Model set to: gpt-5");
+            await WaitForConditionAsync(
+                chat.History,
+                () => chat.History.Any(h => h.Role == AgentChatHistoryItem.DiagnosticChatRole),
+                "transient diagnostic note to appear in history");
+        }
+
+        // Reload the same session from the same store.
+        await using var reloaded = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentSessionId = sessionId,
+            AgentDefinition = null,
+            ConfiguredStore = store,
+        });
+
+        await reloaded.HistoryPopulated;
+
+        // The persisted user + assistant messages survive; the transient diagnostic note does not.
+        Assert.DoesNotContain(reloaded.History, h => h.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains(reloaded.History, h => h.Role == ChatRole.User);
+        Assert.Contains(reloaded.History, h => h.Role == ChatRole.Assistant);
     }
 
     [Fact]

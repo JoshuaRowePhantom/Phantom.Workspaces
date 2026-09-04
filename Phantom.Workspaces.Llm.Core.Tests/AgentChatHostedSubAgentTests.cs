@@ -1233,9 +1233,39 @@ public sealed class AgentChatHostedSubAgentTests
             var running = (System.Collections.Specialized.INotifyCollectionChanged)child.RunningItems;
             var innerSubscribed = new List<AgentChatRunningItem>();
             int notifications = 0;
+            TaskCompletionSource? incrementSignal = null;
+
+            // Fix #1406: signal each increment so the assertions can WAIT for the
+            // per-event CollectionChanged notification instead of racing its dispatch.
+            void SignalIncrement()
+            {
+                Interlocked.Increment(ref notifications);
+                Volatile.Read(ref incrementSignal)?.TrySetResult();
+            }
+
+            // Fix #1406: block until the notification counter advances past `previous`
+            // (or the shared ~10s cts fires, preserving the regression timeout). Uses a
+            // TCS completed by the increment handlers — no polling — and re-checks the
+            // counter after registering to avoid missing an increment.
+            async Task WaitForNotificationAsync(int previous, CancellationToken ct)
+            {
+                while (Volatile.Read(ref notifications) <= previous)
+                {
+                    var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    Volatile.Write(ref incrementSignal, signal);
+                    if (Volatile.Read(ref notifications) > previous)
+                    {
+                        break;
+                    }
+
+                    await signal.Task.WaitAsync(ct);
+                }
+
+                Volatile.Write(ref incrementSignal, null);
+            }
 
             void OnInner(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs __) =>
-                Interlocked.Increment(ref notifications);
+                SignalIncrement();
 
             void SubscribeInner(AgentChatRunningItem it)
             {
@@ -1252,10 +1282,18 @@ public sealed class AgentChatHostedSubAgentTests
                         SubscribeInner(it);
                     }
                 }
-                Interlocked.Increment(ref notifications);
+                SignalIncrement();
             }
 
+            // Fix #1406: count the History collection too — the wait predicate
+            // (WaitForRunningOrHistoryContainsAsync) can be satisfied via History, so the
+            // notification counter must observe the same collection to avoid diverging.
+            var history = (System.Collections.Specialized.INotifyCollectionChanged)child.History;
+            void OnHistory(object? _, System.Collections.Specialized.NotifyCollectionChangedEventArgs __) =>
+                SignalIncrement();
+
             running.CollectionChanged += OnRunning;
+            history.CollectionChanged += OnHistory;
             foreach (var it in child.RunningItems)
             {
                 SubscribeInner(it);
@@ -1267,11 +1305,16 @@ public sealed class AgentChatHostedSubAgentTests
 
                 await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "delta-one"));
                 await WaitForRunningOrHistoryContainsAsync(child, "delta-one", cts.Token);
+                // Fix #1406: wait for the notification instead of sampling immediately,
+                // which raced the asynchronous CollectionChanged dispatch. A timeout on the
+                // shared ~10s cts surfaces as OperationCanceledException = "no notification".
+                await WaitForNotificationAsync(0, cts.Token);
                 var afterFirst = Volatile.Read(ref notifications);
                 Assert.True(afterFirst > 0, "Expected at least one CollectionChanged notification after the first delta.");
 
                 await router.RouteAsync(F1139_SubAgentText("child-runtime-id", "delta-two"));
                 await WaitForRunningOrHistoryContainsAsync(child, "delta-two", cts.Token);
+                await WaitForNotificationAsync(afterFirst, cts.Token);
                 var afterSecond = Volatile.Read(ref notifications);
                 Assert.True(afterSecond > afterFirst,
                     $"Expected additional CollectionChanged notifications after the second delta; before={afterFirst}, after={afterSecond}.");
@@ -1279,6 +1322,7 @@ public sealed class AgentChatHostedSubAgentTests
             finally
             {
                 running.CollectionChanged -= OnRunning;
+                history.CollectionChanged -= OnHistory;
                 foreach (var it in innerSubscribed)
                 {
                     ((System.Collections.Specialized.INotifyCollectionChanged)it.Items).CollectionChanged -= OnInner;

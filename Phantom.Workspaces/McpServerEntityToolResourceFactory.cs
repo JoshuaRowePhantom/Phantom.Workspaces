@@ -103,7 +103,10 @@ public sealed class McpServerEntityToolResourceFactory : IToolResourceFactory
         node["kind"] = "mcp";
         node["name"] ??= node["serverName"]?.DeepClone() ?? resourceName;
 
-        return McpTool.FromJson(node.ToJsonString())
+        // #1416: route through the centralized Phantom load funnel so the server-level 'type' field
+        // (carried in 'node') is resolved into a PhantomMcpTool.Transport rather than silently dropped
+        // by AgentSchema. This is the path the bluebird Streamable-HTTP-only server uses.
+        return PhantomAgentSchema.McpToolFromJson(node.ToJsonString())
             ?? throw new InvalidOperationException(
                 $"Failed to construct an MCP tool from mcp-server entity '{resourceName}'.");
     }

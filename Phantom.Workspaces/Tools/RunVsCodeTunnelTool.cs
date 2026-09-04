@@ -40,8 +40,17 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     private readonly Func<string?> defaultCliPathResolver;
     private readonly Func<string?> tokenResolver;
     private readonly VsCodeCliInvoker cliInvoker;
+    private readonly IVsCodeTunnelStatusResolver tunnelStatusResolver;
     private readonly VsCodeTunnelProcessLauncher processLauncher;
     private readonly Func<CancellationToken, Task> waitBetweenPollsAsync;
+    private readonly Func<CancellationToken, Task> initialStatusCheckDelayAsync;
+
+    /// <summary>
+    /// Default grace period awaited once after spawning <c>code tunnel</c> and before the first
+    /// <c>code tunnel status</c> liveness probe, giving the freshly-spawned tunnel a chance to
+    /// authenticate and register before the first check races its startup.
+    /// </summary>
+    public static TimeSpan DefaultInitialStatusCheckDelay { get; } = TimeSpan.FromSeconds(10);
 
     public RunVsCodeTunnelTool(
         ICurrentExecutionContextProvider? currentExecutionContextProvider = null,
@@ -50,8 +59,10 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         Func<string?>? tokenResolver = null,
         INotificationService? notificationService = null,
         VsCodeCliInvoker? cliInvoker = null,
+        IVsCodeTunnelStatusResolver? tunnelStatusResolver = null,
         VsCodeTunnelProcessLauncher? processLauncher = null,
         Func<CancellationToken, Task>? waitBetweenPollsAsync = null,
+        Func<CancellationToken, Task>? initialStatusCheckDelayAsync = null,
         ILogger<RunVsCodeTunnelTool>? logger = null)
     {
         this.currentExecutionContextProvider = currentExecutionContextProvider ?? new CurrentExecutionContextProvider();
@@ -61,9 +72,13 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
         this.tokenResolver = tokenResolver ?? (() => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve(this.logger));
         this.cliInvoker = cliInvoker
             ?? new VsCodeCliInvoker(notificationService: notificationService, logger: this.logger);
+        this.tunnelStatusResolver = tunnelStatusResolver
+            ?? new VsCodeTunnelStatusResolver(invoker: this.cliInvoker, logger: this.logger);
         this.processLauncher = processLauncher ?? DefaultProcessLauncher;
         this.waitBetweenPollsAsync = waitBetweenPollsAsync
             ?? (ct => Task.Delay(TimeSpan.FromSeconds(15), ct));
+        this.initialStatusCheckDelayAsync = initialStatusCheckDelayAsync
+            ?? (ct => Task.Delay(DefaultInitialStatusCheckDelay, ct));
     }
 
     public string ToolType => "run-vscode-tunnel";
@@ -100,35 +115,43 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
 
         try
         {
+            // Give the freshly-spawned `code tunnel` a chance to authenticate and register before
+            // the first liveness probe, so the first `code tunnel status` call does not race
+            // startup and spuriously report "not running".
+            await this.initialStatusCheckDelayAsync(context.CancellationToken).ConfigureAwait(false);
+
             while (!context.CancellationToken.IsCancellationRequested)
             {
                 if (child.HasExited)
                 {
                     var exitCode = SafeExitCode(child);
                     var stderr = child.CapturedStandardError;
+                    var stdout = child.CapturedStandardOutput;
+                    this.LogCapturedStandardOutput(stdout);
                     return WorkspaceToolExecutionResult.Failure(
-                        $"`code tunnel` exited with code {exitCode}.\nStderr:\n{stderr}");
+                        $"`code tunnel` exited with code {exitCode}.\nStdout:\n{stdout}\nStderr:\n{stderr}");
                 }
 
-                var statusResult = await this.RunCliAsync(
-                    cliPath,
-                    "tunnel status",
-                    environmentVariables: null,
-                    VsCodeCliReporting.LogOnly,
-                    context.CancellationToken).ConfigureAwait(false);
+                // Obtain tunnel status EXCLUSIVELY through the shared status component. The runner
+                // must not invoke `code tunnel status` or parse its output itself, so runner and
+                // discovery can never disagree about liveness/health. A non-null Status means the
+                // tunnel daemon is running (outer `tunnel` member is an object); a null Status means
+                // it is genuinely not running (or the CLI could not be launched / errored).
+                var resolution = await this.tunnelStatusResolver
+                    .ResolveAsync(cliPath, context.CancellationToken)
+                    .ConfigureAwait(false);
 
-                var reportsRunning =
-                    statusResult.ExitCode == 0
-                    && statusResult.StandardOut.Contains("running", StringComparison.OrdinalIgnoreCase);
-
-                if (!reportsRunning)
+                if (resolution.Status is null)
                 {
                     child.Kill();
+                    var stdout = child.CapturedStandardOutput;
+                    this.LogCapturedStandardOutput(stdout);
                     return new WorkspaceToolExecutionResult
                     {
                         ResultContent =
-                            $"`code tunnel status` no longer reports the tunnel as running "
-                            + $"(exit {statusResult.ExitCode}).\n{statusResult.StandardOut}",
+                            "`code tunnel status` no longer reports the tunnel as running "
+                            + DescribeResolution(resolution) + "\n"
+                            + $"Tunnel stdout:\n{stdout}",
                     };
                 }
 
@@ -159,6 +182,26 @@ public sealed class RunVsCodeTunnelTool : IWorkspaceTool
     {
         try { return child.ExitCode; }
         catch (InvalidOperationException) { return -1; }
+    }
+
+    private static string DescribeResolution(VsCodeTunnelResolution resolution)
+    {
+        if (resolution.CliResult is { } cli)
+        {
+            return $"(exit {cli.ExitCode}).\n{cli.StandardOut}";
+        }
+
+        return $"(VS Code CLI could not be launched: {resolution.CliLaunchError}).";
+    }
+
+    // #1356: surface the child's captured stdout (where `code tunnel` prints the tunnel URL and
+    // status) the same way stderr is surfaced, so it is visible in the logs rather than discarded.
+    private void LogCapturedStandardOutput(string capturedStandardOutput)
+    {
+        if (!string.IsNullOrWhiteSpace(capturedStandardOutput))
+        {
+            this.logger.LogInformation("`code tunnel` stdout:\n{Stdout}", capturedStandardOutput);
+        }
     }
 
     private async Task TryLoginAsync(string cliPath, CancellationToken cancellationToken)

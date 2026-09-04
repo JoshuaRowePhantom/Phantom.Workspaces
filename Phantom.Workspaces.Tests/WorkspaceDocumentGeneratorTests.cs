@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text.Json;
 using global::Dock.Model.Core;
 using Phantom.Workspaces.Data;
@@ -121,6 +122,46 @@ public sealed class WorkspaceDocumentGeneratorTests
         generator.ClearDocumentContainer(StubDock.Instance, wrongContainer, null);
 
         Assert.Null(clearedId);
+    }
+
+    // ── #1340: collision-guard orphan healing ────────────────────────────────
+
+    [Fact]
+    public void WorkspaceDocumentGenerator_CreateDocumentContainer_StaleOrphanEntry_ReturnsFreshDocument()
+    {
+        // A registry entry left over from a prior owner whose dock no longer hosts it (the #1340
+        // stale-entry mechanism). The orphan's owner dock does not list it in VisibleDockables, so
+        // the collision guard must heal by materializing a fresh document instead of returning null.
+        var orphanOwner = new global::Dock.Model.Mvvm.Controls.DocumentDock { Id = "prior-owner" };
+        var staleDoc = new WorkspaceDocument { Id = "orphan-tab", Owner = orphanOwner };
+
+        var generator = new WorkspaceDocumentGenerator(
+            getDocumentForTab: id => string.Equals(id, "orphan-tab", StringComparison.Ordinal) ? staleDoc : null);
+        var tab = new EntityWorkspaceTabViewModel { Id = "orphan-tab", Title = "Orphan Tab" };
+
+        var result = generator.CreateDocumentContainer(StubDock.Instance, tab, 0);
+
+        var fresh = Assert.IsType<WorkspaceDocument>(result);
+        Assert.NotSame(staleDoc, fresh);
+    }
+
+    [Fact]
+    public void WorkspaceDocumentGenerator_CreateDocumentContainer_LiveNonPrimaryEntry_ReturnsNull()
+    {
+        // A live document genuinely hosted in a different (non-primary split) region of the SAME
+        // pane: the collision guard must still defer (return null) so the ItemsSource-bound primary
+        // dock does not fabricate a duplicate wrapper.
+        var liveOwner = new global::Dock.Model.Mvvm.Controls.DocumentDock { Id = "live-owner" };
+        var liveDoc = new WorkspaceDocument { Id = "live-tab", Owner = liveOwner };
+        liveOwner.VisibleDockables = new List<IDockable> { liveDoc };
+
+        var generator = new WorkspaceDocumentGenerator(
+            getDocumentForTab: id => string.Equals(id, "live-tab", StringComparison.Ordinal) ? liveDoc : null);
+        var tab = new EntityWorkspaceTabViewModel { Id = "live-tab", Title = "Live Tab" };
+
+        var result = generator.CreateDocumentContainer(StubDock.Instance, tab, 0);
+
+        Assert.Null(result);
     }
 
     // ── WorkspacePaneDocumentGenerator ──────────────────────────────────────

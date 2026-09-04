@@ -66,7 +66,7 @@ public sealed class OpenExternalEntityShortcutHandler : ShortcutHandler
         var urlKey = urls.ContainsKey("default") ? "default" : urls.Keys.First();
         var entityUrl = urls[urlKey];
         var isDefault = string.Equals(urlKey, "default", StringComparison.OrdinalIgnoreCase);
-        var explicitTitle = title;
+        var explicitTitle = string.IsNullOrEmpty(title) ? null : title;
 
         WorkspaceTabViewModel tab = new WebViewModel(
             entityUrl,

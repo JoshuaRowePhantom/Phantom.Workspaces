@@ -5,6 +5,7 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Headless.XUnit;
 using Avalonia.LogicalTree;
+using Avalonia.Media;
 using global::Dock.Model.Controls;
 using global::Dock.Model.Core;
 using global::Dock.Model.Mvvm.Controls;
@@ -239,17 +240,30 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal("Updated", doc.EffectiveTabHeader.Title);
     }
 
-    // ── WorkspaceDataTemplates — top-level DataTemplate presence ─────────────
+    // ── #1324: per-item templates are centralized keyed resources, not implicit ──
 
     [AvaloniaFact(Timeout = 15_000)]
-    public void WorkspaceDataTemplates_HasTopLevelDataTemplateFor_IconTabHeaderItemViewModel()
+    public void WorkspaceDataTemplates_DoesNotDeclareImplicitIconTabHeaderItemTemplate()
     {
+        // #1324: the Icon per-item template was moved out of WorkspaceDataTemplates (where the
+        // scope-blocked inner DockControl could not reach it) into the centralized keyed resource
+        // dictionary. It must NOT be re-declared here as an implicit top-level template.
         var templates = new WorkspaceDataTemplates();
         var viewModel = new IconTabHeaderItemViewModel { Icon = "🧠" };
 
-        var matchingTemplate = templates.Cast<IDataTemplate>().First(t => t.Match(viewModel));
+        Assert.DoesNotContain(templates.OfType<IDataTemplate>(), t => t.Match(viewModel));
+    }
 
-        Assert.NotNull(matchingTemplate);
+    [AvaloniaFact(Timeout = 15_000)]
+    public void IconTabHeaderItemTemplate_IsCentralizedKeyedResource()
+    {
+        // #1324: the Icon per-item template is now a keyed resource in TabHeaderItemTemplates.axaml
+        // (merged into App.axaml), reachable identically from every DockControl scope.
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "IconTabHeaderItemTemplate", null, out var resource));
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new IconTabHeaderItemViewModel { Icon = "🧠" }));
     }
 
     // ── #1196: The outer tab-header body is a single keyed resource ───────────
@@ -279,6 +293,18 @@ public sealed class TabHeaderViewModelTests
             t => t.Match(new TabHeaderViewModel { Title = "T" }));
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_IsDefinedInApplicationResources()
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        var found = Avalonia.Application.Current!.TryFindResource(
+            "WebTabHeaderTemplate", null, out var resource);
+
+        Assert.True(found);
+        var template = Assert.IsAssignableFrom<IDataTemplate>(resource);
+        Assert.True(template.Match(new WebTabHeaderViewModel { Title = "T" }));
+    }
+
     private static IDataTemplate ResolveTabHeaderTemplate()
     {
         // #1196: the single-source header body lives in App.Resources as the
@@ -286,6 +312,14 @@ public sealed class TabHeaderViewModelTests
         Assert.NotNull(Avalonia.Application.Current);
         Assert.True(Avalonia.Application.Current!.TryFindResource(
             "TabHeaderTemplate", null, out var resource));
+        return Assert.IsAssignableFrom<IDataTemplate>(resource);
+    }
+
+    private static IDataTemplate ResolveWebTabHeaderTemplate()
+    {
+        Assert.NotNull(Avalonia.Application.Current);
+        Assert.True(Avalonia.Application.Current!.TryFindResource(
+            "WebTabHeaderTemplate", null, out var resource));
         return Assert.IsAssignableFrom<IDataTemplate>(resource);
     }
 
@@ -321,20 +355,165 @@ public sealed class TabHeaderViewModelTests
         Assert.Equal("Renamed", ToolTip.GetTip(titleTextBlock));
     }
 
-    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderViewModel_WebTabHeaderTemplate_UsesCharacterEllipsisTrimming()
     {
-        var template = ResolveTabHeaderTemplate();
+        var viewModel = new WebTabHeaderViewModel { Title = "Web Tab" };
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel, ResolveWebTabHeaderTemplate());
+
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+    }
+
+    // #1287: long titles are capped at MaxWidth=180 (0.75 * previous 240 fixed
+    // Width) under the tab strip's infinite-width measure pass, so trimming
+    // still engages while short titles are free to shrink to content.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsCappedAtMaxWidth()
+    {
+        const string longTitle = "Bug: \"Microsoft.Extensions.AI.UsageContent\" leaks as literal text in assistant replies on tool-only turns";
+        var viewModel = new WebTabHeaderViewModel { Title = longTitle };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveWebTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        Assert.Equal(TextWrapping.NoWrap, titleTextBlock.TextWrapping);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.InRange(desired.Width, 150, 180);
+        Assert.InRange(titleTextBlock.Bounds.Width, 150, 180);
+        AssertTextLayoutTrimmedToSingleEllipsizedLine(titleTextBlock, longTitle);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_LongTitle_ToolTipStillExposesFullTitle()
+    {
+        const string longTitle = "Bug: Web tab titles are not length-limited and full page titles overflow the tab strip";
+        var viewModel = new WebTabHeaderViewModel { Title = longTitle };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(viewModel, ResolveWebTabHeaderTemplate());
+
+        Assert.Equal(longTitle, ToolTip.GetTip(titleTextBlock));
+    }
+
+    // #1287: short titles size to content — bounds width strictly < MaxWidth=180.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void WebTabHeaderTemplate_ShortTitleUnderInfiniteAvailableWidth_TextBlockShrinksBelowMaxWidth()
+    {
+        const string title = "Design 6";
+        var viewModel = new WebTabHeaderViewModel { Title = title };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveWebTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(title, titleTextBlock.Text);
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.True(
+            desired.Width < 180,
+            $"Expected short title desired width < 180 but was {desired.Width}.");
+        Assert.True(
+            titleTextBlock.Bounds.Width < 180 && titleTextBlock.Bounds.Width > 0,
+            $"Expected short title bounds width in (0, 180) but was {titleTextBlock.Bounds.Width}.");
+    }
+
+    // #1287: long non-web titles are also capped at MaxWidth=180.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplate_LongTitleUnderInfiniteAvailableWidth_TextBlockIsCappedAtMaxWidth()
+    {
+        var viewModel = new TabHeaderViewModel
+        {
+            Title = "Long non-web tab title that should be bounded by the shared tab header template",
+        };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(TextTrimming.CharacterEllipsis, titleTextBlock.TextTrimming);
+        Assert.Equal(TextWrapping.NoWrap, titleTextBlock.TextWrapping);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.InRange(desired.Width, 150, 180);
+        Assert.InRange(titleTextBlock.Bounds.Width, 150, 180);
+    }
+
+    // #1287: short non-web titles size to content — bounds width strictly < MaxWidth=180.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void TabHeaderTemplate_ShortTitleUnderInfiniteAvailableWidth_TextBlockShrinksBelowMaxWidth()
+    {
+        const string title = "Design 6";
+        var viewModel = new TabHeaderViewModel { Title = title };
+
+        var titleTextBlock = InflateTabHeaderTitleTextBlock(
+            viewModel,
+            ResolveTabHeaderTemplate(),
+            new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+
+        Assert.Equal(title, titleTextBlock.Text);
+        Assert.True(double.IsNaN(titleTextBlock.Width));
+        Assert.Equal(180, titleTextBlock.MaxWidth);
+        var desired = MeasureAndArrangeTextBlockUnderInfiniteWidth(titleTextBlock);
+        Assert.True(
+            desired.Width < 180,
+            $"Expected short title desired width < 180 but was {desired.Width}.");
+        Assert.True(
+            titleTextBlock.Bounds.Width < 180 && titleTextBlock.Bounds.Width > 0,
+            $"Expected short title bounds width in (0, 180) but was {titleTextBlock.Bounds.Width}.");
+    }
+
+    // #1287: directly measure/arrange a title TextBlock under infinite available
+    // width so Bounds reflects the arranged size (the InflateTabHeaderTitleTextBlock
+    // ContentControl host has no theme applied in these unit tests, so its
+    // DesiredSize is 0 and it cannot arrange the child TextBlock itself).
+    private static Avalonia.Size MeasureAndArrangeTextBlockUnderInfiniteWidth(TextBlock textBlock)
+    {
+        textBlock.Measure(new Avalonia.Size(double.PositiveInfinity, double.PositiveInfinity));
+        var desired = textBlock.DesiredSize;
+        textBlock.Arrange(new Avalonia.Rect(0, 0, desired.Width, desired.Height));
+        return desired;
+    }
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel)
+        => InflateTabHeaderTitleTextBlock(viewModel, ResolveTabHeaderTemplate());
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel, IDataTemplate template)
+        => InflateTabHeaderTitleTextBlock(viewModel, template, new Avalonia.Size(1000, 600));
+
+    private static TextBlock InflateTabHeaderTitleTextBlock(TabHeaderViewModel viewModel, IDataTemplate template, Avalonia.Size measureSize)
+    {
         var control = template.Build(viewModel);
         Assert.NotNull(control);
         control!.DataContext = viewModel;
 
         var host = new ContentControl { Content = control };
-        host.Measure(new Avalonia.Size(1000, 600));
-        host.Arrange(new Avalonia.Rect(0, 0, 1000, 600));
+        host.Measure(measureSize);
+        var arrangeWidth = double.IsPositiveInfinity(measureSize.Width) ? host.DesiredSize.Width : measureSize.Width;
+        var arrangeHeight = double.IsPositiveInfinity(measureSize.Height) ? host.DesiredSize.Height : measureSize.Height;
+        host.Arrange(new Avalonia.Rect(0, 0, arrangeWidth, arrangeHeight));
 
         return control.GetLogicalDescendants()
             .OfType<TextBlock>()
             .First(tb => tb.Text == viewModel.Title);
+    }
+
+    private static void AssertTextLayoutTrimmedToSingleEllipsizedLine(TextBlock titleTextBlock, string fullTitle)
+    {
+        var lines = titleTextBlock.TextLayout.TextLines;
+        var line = Assert.Single(lines);
+        Assert.True(
+            line.Length > fullTitle.Length,
+            $"Expected the trimmed layout line to include an ellipsis marker; line length was {line.Length}, title length was {fullTitle.Length}.");
     }
 
     // ── #1196: Indicator DataTemplates are keyed resources in App.Resources ────

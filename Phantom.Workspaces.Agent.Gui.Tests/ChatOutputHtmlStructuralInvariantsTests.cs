@@ -176,14 +176,14 @@ public sealed class ChatOutputHtmlStructuralInvariantsTests
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
 
-        // The grouped chunk blob must retain each member's message and contents-container ids so
-        // per-content EmitDiff operations continue to resolve after grouping.
+        // The grouped chunk blob must retain each member's per-content binding element ids so
+        // per-content EmitDiff operations continue to resolve after grouping. The per-member
+        // message frames are suppressed (issue #1225) — only binding ids are preserved.
         var blob = sink.Operations.Single(op => op.Kind == "update").Content;
         for (var i = 0; i < 2; i++)
         {
             var messageId = ChatOutputHtmlRenderer.MessageId(i);
-            Assert.Contains($"id=\"{messageId}\"", blob);
-            Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentsContainerId(messageId)}\"", blob);
+            Assert.Contains($"id=\"{ChatOutputHtmlRenderer.ContentId(messageId, 0)}\"", blob);
         }
 
         // A per-content update after grouping targets the nested content id directly.

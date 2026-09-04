@@ -17,10 +17,20 @@ namespace Phantom.Workspaces.ViewModels;
 /// Replicates <c>DockModelPolymorphicTypeResolver</c> (internal in Dock.Serializer.SystemTextJson)
 /// and additionally removes properties whose declared type is <see cref="Type"/> (e.g. the Avalonia
 /// <c>StyledElement.StyleKey</c>) so that they do not cause a <see cref="NotSupportedException"/>
-/// during serialization. <c>Owner</c> back-references are excluded from all dockable types because
-/// <c>DockSerializer.JsonConverterList</c> creates isolated serialization contexts per list that
-/// bypass <c>ReferenceHandler.Preserve</c>, so <c>Owner</c> must be filtered here to prevent
-/// infinite recursion through the <c>Owner → VisibleDockables → Owner</c> cycle.
+/// during serialization.
+/// <para>
+/// #1335: the persistence write path now serializes the whole layout through a single
+/// <see cref="System.Text.Json.JsonSerializer.Serialize"/> call with
+/// <see cref="System.Text.Json.Serialization.ReferenceHandler.Preserve"/>
+/// (see <see cref="DockLayoutCanonicalizer"/>) rather than <c>DockSerializer.JsonConverterList</c>.
+/// Because the whole graph shares one reference scope, <c>ActiveDockable</c>/<c>DefaultDockable</c>/
+/// <c>FocusedDockable</c> emit as <c>$ref</c> back to their canonical <c>VisibleDockables</c>
+/// sibling instead of full inline <c>$id</c> clones. To keep those <c>$ref</c>s valid on read (STJ
+/// requires a <c>$id</c> to appear before any <c>$ref</c> to it), dockable-collection properties are
+/// ordered before the scalar AD/DD/FD reference properties via <see cref="ApplySerializationOrder"/>.
+/// <c>Owner</c> back-references are excluded from all dockable types to prevent infinite recursion
+/// through the <c>Owner → VisibleDockables → Owner</c> cycle.
+/// </para>
 /// </summary>
 internal sealed class WorkspaceDockTypeInfoResolver : DefaultJsonTypeInfoResolver
 {
@@ -60,6 +70,7 @@ internal sealed class WorkspaceDockTypeInfoResolver : DefaultJsonTypeInfoResolve
     {
         var jsonTypeInfo = base.GetTypeInfo(type, options);
         RemoveIgnoredMembers(jsonTypeInfo);
+        ApplySerializationOrder(jsonTypeInfo);
 
         if (type == typeof(IDockable))
             jsonTypeInfo.PolymorphismOptions = CloneOptions(s_dockableOptions.Value);
@@ -82,6 +93,13 @@ internal sealed class WorkspaceDockTypeInfoResolver : DefaultJsonTypeInfoResolve
         for (var i = jsonTypeInfo.Properties.Count - 1; i >= 0; i--)
         {
             var property = jsonTypeInfo.Properties[i];
+            if (jsonTypeInfo.Type == typeof(WorkspaceDocument)
+                && string.Equals(property.Name, nameof(WorkspaceDocument.Title), StringComparison.Ordinal))
+            {
+                property.ShouldSerialize = static (_, _) => false;
+                continue;
+            }
+
             if (property.AttributeProvider?.IsDefined(typeof(IgnoreDataMemberAttribute), true) == true
                 || typeof(ICommand).IsAssignableFrom(property.PropertyType)
                 || property.PropertyType == typeof(Type)
@@ -91,6 +109,49 @@ internal sealed class WorkspaceDockTypeInfoResolver : DefaultJsonTypeInfoResolve
                 || IsDockOwnerBackReference(property))
             {
                 jsonTypeInfo.Properties.RemoveAt(i);
+            }
+        }
+    }
+
+    private static readonly HashSet<string> s_collectionPropertyNames = new(StringComparer.Ordinal)
+    {
+        "VisibleDockables",
+        "HiddenDockables",
+        "LeftPinnedDockables",
+        "RightPinnedDockables",
+        "TopPinnedDockables",
+        "BottomPinnedDockables",
+        "Windows",
+        "Window",
+    };
+
+    private static readonly HashSet<string> s_referencePropertyNames = new(StringComparer.Ordinal)
+    {
+        "ActiveDockable",
+        "DefaultDockable",
+        "FocusedDockable",
+    };
+
+    /// <summary>
+    /// #1335: orders dockable-collection properties (<c>VisibleDockables</c>, pinned lists,
+    /// <c>Windows</c>) before the scalar reference properties (<c>ActiveDockable</c>/
+    /// <c>DefaultDockable</c>/<c>FocusedDockable</c>). With the single-serialize
+    /// <see cref="System.Text.Json.Serialization.ReferenceHandler.Preserve"/> write path the
+    /// canonical instance is written (as a <c>$id</c>) inside a collection, and AD/DD/FD are written
+    /// as a <c>$ref</c> to it. STJ requires the <c>$id</c> to appear before any <c>$ref</c> to it, so
+    /// the collection must serialize first for the layout to round-trip.
+    /// </summary>
+    private static void ApplySerializationOrder(JsonTypeInfo jsonTypeInfo)
+    {
+        foreach (var property in jsonTypeInfo.Properties)
+        {
+            if (s_collectionPropertyNames.Contains(property.Name))
+            {
+                property.Order = -1;
+            }
+            else if (s_referencePropertyNames.Contains(property.Name))
+            {
+                property.Order = 1;
             }
         }
     }

@@ -83,6 +83,7 @@ public sealed class ApplyUpdateRunner
             {
                 FileName = this.layout.CurrentExecutablePath,
                 Arguments = new[] { StartupTaskService.StartupArgument },
+                Detached = true,
             });
         }
 

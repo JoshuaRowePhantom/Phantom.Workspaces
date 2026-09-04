@@ -175,7 +175,8 @@ public sealed class ScheduledTasksViewModel : ViewModelBase, IDisposable
                 this.RaisePropertyChanged(nameof(this.HasNoRunsForSelectedTask));
                 if (this.SelectedToolRow is { } row)
                 {
-                    _ = row.LoadRecentRunsAsync();
+                    // #1357: load the most-recent ~1-hour window; older windows are paged in on scroll.
+                    _ = row.LoadInitialWindowAsync();
                 }
             }
         }

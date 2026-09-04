@@ -1,9 +1,12 @@
 using System;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using InstallCommandLineOptions = Phantom.Workspaces.Install.CommandLineOptions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Phantom.Workspaces.Install;
+using Phantom.Workspaces.Services.Updates;
 
 namespace Phantom.Workspaces;
 
@@ -16,7 +19,7 @@ namespace Phantom.Workspaces;
 /// </summary>
 internal static class ManagementModeDispatcher
 {
-    private static readonly string[] ManagementFlags = { "--install", "--apply-update", "--uninstall" };
+    private static readonly string[] ManagementFlags = { "--install", "--apply-update", "--uninstall", "update", "--update" };
 
     /// <summary>
     /// Runs a management mode if <paramref name="arguments"/> requests one, returning the process
@@ -48,12 +51,27 @@ internal static class ManagementModeDispatcher
         var layout = new InstallLayout(fileSystem, installRoot);
         var clock = new SystemClock();
         var processLauncher = new RealProcessLauncher();
-#pragma warning disable CA1416 // RealScheduledTasks is Windows-only; this path is only reached on Windows
-        var startupTaskService = new StartupTaskService(new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance), layout.CurrentExecutablePath);
+#pragma warning disable CA1416 // RealScheduledTasks/RegistryStartupRegistration are Windows-only; this path is only reached on Windows
+        var startupTaskService = new StartupTaskService(
+            new RegistryStartupRegistration(),
+            new RealScheduledTasks(NullLogger<RealScheduledTasks>.Instance),
+            layout.CurrentExecutablePath);
 #pragma warning restore CA1416
         var healthGate = new HealthGate(fileSystem, layout);
         var releaseWaiter = new RealInstanceReleaseWaiter(configFilePath: null);
         var applyUpdateRunner = new ApplyUpdateRunner(layout, releaseWaiter, healthGate, processLauncher);
+
+        // The update verb requires an UpdateService; other management modes don't. Build it only
+        // when needed (network work) but the constructor is cheap so unconditional wiring is fine.
+        var httpClient = new HttpClient();
+        var updateService = new UpdateService(
+            new GitHubReleaseSource(httpClient),
+            new HttpUpdateDownloader(httpClient),
+            new ZipArchiveExtractor(),
+            fileSystem,
+            layout,
+            ResolveVersion(),
+            ResolveAssetMoniker());
 
         var runner = new ManagementModeRunner(
             layout,
@@ -61,7 +79,9 @@ internal static class ManagementModeDispatcher
             clock,
             processLauncher,
             startupTaskService,
-            applyUpdateRunner);
+            applyUpdateRunner,
+            updateService,
+            options.InstallRootOverride);
 
         var payloadDirectory = AppContext.BaseDirectory;
         var version = ResolveVersion();
@@ -73,6 +93,13 @@ internal static class ManagementModeDispatcher
 
         return (int)exitCode;
     }
+
+    private static string ResolveAssetMoniker()
+        => RuntimeInformation.ProcessArchitecture switch
+        {
+            Architecture.Arm64 => "win-arm64",
+            _ => "win-x64",
+        };
 
     private static string ResolveVersion()
     {

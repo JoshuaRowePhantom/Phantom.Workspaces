@@ -207,7 +207,6 @@
                 <StackPanel HorizontalAlignment="Stretch">
                     <Border Classes="entity-card-shell-border"
                             Classes.has-children="{Binding HasChildren, FallbackValue=False}"
-                            ClipToBounds="True"
                             HorizontalAlignment="Stretch">
                         <ContentPresenter Classes="branch-header"
                                           HorizontalAlignment="Stretch"
@@ -256,7 +255,11 @@
         <Setter Property="MinWidth" Value="160" />
         <Setter Property="Template">
             <ControlTemplate>
-                <Grid RowDefinitions="Auto,*"
+                <!-- Issue #1347: the items row is Auto (not *) so the header Auto row measures
+                     cleanly under the pixel-virtualizing VirtualizingStackPanel (which supplies an
+                     infinite vertical constraint); a * row cannot resolve against infinity and the
+                     inner ScrollViewer's ExtentHeight never grows past the viewport for a tall card. -->
+                <Grid RowDefinitions="Auto,Auto"
                       ColumnDefinitions="20,*"
                       HorizontalAlignment="Stretch">
                     <StackPanel Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2"
@@ -651,8 +654,7 @@
     <Style Selector="StackPanel.workspace-entity-card-content.workspace-entity-deleted">
         <Setter Property="Opacity" Value="0.4" />
     </Style>
-    <Style Selector="WrapPanel.workspace-entity-header-wrap">
-        <Setter Property="Orientation" Value="Horizontal" />
+    <Style Selector="controls|EntityCardHeaderPanel.workspace-entity-header-wrap">
         <Setter Property="HorizontalAlignment" Value="Stretch" />
     </Style>
     <Style Selector="StackPanel.workspace-entity-header-row">
@@ -668,11 +670,54 @@
     <Style Selector=":is(TextBlock).workspace-entity-title">
         <Setter Property="FontWeight" Value="Bold" />
     </Style>
-    <Style Selector="WrapPanel.workspace-entity-actions-row">
-        <Setter Property="Orientation" Value="Horizontal" />
-        <Setter Property="HorizontalAlignment" Value="Right" />
-        <Setter Property="VerticalAlignment" Value="Center" />
-        <Setter Property="MinWidth" Value="100" />
+    <Style Selector="Button.entity-card-action-button">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="MinHeight" Value="28" />
+        <Setter Property="Padding" Value="0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Opacity" Value="0" />
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.16" />
+            </Transitions>
+        </Setter>
+    </Style>
+    <!--
+      Interest badge buttons (issue #1300): the shared entity-card-action-button style above pins
+      Width=28/MinWidth=28/Padding=0, which clips multi-character interest labels (Glyph is bound
+      to the interest type's short indicator label from the schema, not a single-char icon).
+      This companion selector releases the width clamp so Interest buttons grow to their content
+      while keeping the 28-px min tap target, without touching the base action-button footprint.
+    -->
+    <Style Selector="Button.entity-card-action-button.entity-card-interest-button">
+        <Setter Property="Width" Value="NaN" />
+        <Setter Property="MinWidth" Value="28" />
+        <Setter Property="Padding" Value="6,0" />
+    </Style>
+    <Style Selector="Button.entity-card-action-button.highlighted">
+        <Setter Property="Opacity" Value="1" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Background" Value="#60406040" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="BorderBrush" Value="#A0A060A0" />
+    </Style>
+    <Style Selector="Border.entity-card:pointerover Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card:focus-within Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:pointerover Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
+    </Style>
+    <Style Selector="Border.entity-card-shell-border:focus-within Button.entity-card-action-button">
+        <Setter Property="Opacity" Value="1" />
     </Style>
     <Style Selector="Button.workspace-edit-indicator-button">
         <Setter Property="HorizontalAlignment" Value="Right" />

@@ -20,7 +20,6 @@ public class WebViewModel : WorkspaceTabViewModel
 
     private readonly IWorkspaceTabService? tabService;
     private readonly IUrlOpener? urlOpener;
-    private readonly bool titleFixed;
     private readonly FaviconTabHeaderItemViewModel faviconItem;
 
     public WebViewModel(
@@ -29,7 +28,7 @@ public class WebViewModel : WorkspaceTabViewModel
         bool titleFixed = false,
         IUrlOpener? urlOpener = null)
     {
-        this.titleFixed = titleFixed;
+        this.IsTitleExplicit = titleFixed;
         this.addressBarUrl = initialUrl;
         this.currentUrl = initialUrl;
         this.sourceUri = Uri.TryCreate(initialUrl, UriKind.Absolute, out var uri) ? uri : null;
@@ -258,10 +257,7 @@ public class WebViewModel : WorkspaceTabViewModel
     public void SetPageTitle(string pageTitle)
     {
         this.fullTitle = pageTitle;
-        if (!this.titleFixed)
-        {
-            this.Title = pageTitle;
-        }
+        this.SetTitleFromContent(pageTitle);
         UpdateTooltip();
     }
     

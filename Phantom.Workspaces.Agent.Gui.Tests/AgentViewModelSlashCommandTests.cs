@@ -1,10 +1,12 @@
 using AgentSchema;
+using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.SlashCommands;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 
 namespace Phantom.Workspaces.Agent.Gui.Tests;
@@ -111,8 +113,61 @@ public sealed class AgentViewModelSlashCommandTests
         Assert.DoesNotContain(chat.History, item => item.Role == AgentChatHistoryItem.HelpChatRole);
     }
 
+    // ── Issue #1396: transient slash-command results are shown as non-persisted diagnostics ──
+
     [Fact]
-    public async Task RunSlashCommandAsync_TransientResult_RaisesTransientNotification()
+    public async Task RunSlashCommand_ModelCommand_AddsDiagnosticNoteToHistory()
+    {
+        // Arrange
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        chat.SlashCommands.Register(new FakeModelCommandHandler("echo-model"));
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        // Act — /model with an argument switches the model and returns a transient result.
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/model gpt-5");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "transient /model result to appear as a diagnostic note");
+
+        // Assert — the result is visible in the transcript as a diagnostic note.
+        var note = chat.History.Single(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains("Model set to: gpt-5", string.Concat(note.Contents.OfType<TextContent>().Select(c => c.Text)));
+    }
+
+    [Fact]
+    public async Task RunSlashCommand_ModelCommandNoArgs_AddsDiagnosticNoteWithCurrentModel()
+    {
+        // Arrange
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        chat.SlashCommands.Register(new FakeModelCommandHandler("echo-model"));
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
+
+        // Act — /model with no argument reports the current model as a transient result.
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/model");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "transient /model result to appear as a diagnostic note");
+
+        var note = chat.History.Single(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains("Active model: echo-model", string.Concat(note.Contents.OfType<TextContent>().Select(c => c.Text)));
+    }
+
+    [Fact]
+    public async Task RunSlashCommand_TransientResult_IsVisibleAsDiagnostic()
     {
         // Arrange
         await using var chat = await AgentFactory.CreateAgentChatAsync(
@@ -124,18 +179,46 @@ public sealed class AgentViewModelSlashCommandTests
         chat.SlashCommands.Register(new FakeTransientCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
-        var notifications = new List<string>();
-        chat.TransientNotification += (_, text) => notifications.Add(text);
+        // Act
+        var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
+        await interceptor("/transient-test");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "transient result to appear as a diagnostic note");
+
+        // Assert — the transient result is visible as a diagnostic note (not silently discarded).
+        var note = chat.History.Single(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole);
+        Assert.Contains("Transient status", string.Concat(note.Contents.OfType<TextContent>().Select(c => c.Text)));
+    }
+
+    [Fact]
+    public async Task RunSlashCommand_TransientResult_DoesNotRaiseDeadTransientNotification()
+    {
+        // Regression guard for issue #1396: transient slash-command results must be routed to the
+        // visible diagnostic-note path, not silently discarded to a subscriber-less event. The
+        // dead TransientNotification event has been removed; this test asserts the diagnostic-note
+        // path is used and produces exactly one visible item.
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var viewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        chat.SlashCommands.Register(new FakeTransientCommandHandler());
+        viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
         // Act
         var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
         await interceptor("/transient-test");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(i => i.Role == AgentChatHistoryItem.DiagnosticChatRole),
+            "transient result to appear as a diagnostic note");
 
-        // Assert — notification was raised, history was NOT modified
-        Assert.Single(notifications);
-        Assert.Equal("Transient status", notifications[0]);
-        Assert.Empty(chat.History);
+        // Assert — exactly one diagnostic note, nothing silently discarded.
+        Assert.Single(chat.History);
+        Assert.Equal(AgentChatHistoryItem.DiagnosticChatRole, chat.History[0].Role);
     }
 
     [Fact]
@@ -151,17 +234,51 @@ public sealed class AgentViewModelSlashCommandTests
         chat.SlashCommands.Register(new FakeThrowingCommandHandler());
         viewModel.ConfigureSlashCommands(() => new SlashCommandContext { AgentChat = chat });
 
-        var notifications = new List<string>();
-        chat.TransientNotification += (_, text) => notifications.Add(text);
-
         // Act — the handler throws, so the result should be persisted (not transient)
         var interceptor = viewModel.InputQueue!.DefaultComposer.SlashCommandInterceptorAsync!;
         await interceptor("/throw-test");
-        await Task.Delay(500, TestContext.Current.CancellationToken);
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Count > 0,
+            "error result to be added to history");
 
-        // Assert — error should be persisted to history, NOT a transient notification
-        Assert.Empty(notifications);
+        // Assert — error should be added to history as a system note.
         Assert.NotEmpty(chat.History);
+    }
+
+    private static async Task WaitForConditionAsync(
+        System.Collections.Specialized.INotifyCollectionChanged collection,
+        Func<bool> condition,
+        string description)
+    {
+        if (condition())
+        {
+            return;
+        }
+
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            if (condition())
+            {
+                signal.TrySetResult();
+            }
+        }
+
+        collection.CollectionChanged += OnCollectionChanged;
+        try
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await signal.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            collection.CollectionChanged -= OnCollectionChanged;
+        }
     }
 
     private static AgentDefinition CreateAgentDefinition()
@@ -246,6 +363,40 @@ public sealed class AgentViewModelSlashCommandTests
             string arguments,
             CancellationToken cancellationToken)
             => Task.FromResult(new SlashCommandResult { StatusMessage = "Transient status" });
+
+        public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
+            SlashCommandContext context,
+            string partialArguments,
+            CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<SlashCommandCompletion>>([]);
+    }
+
+    /// <summary>
+    /// Fake handler that mimics the real /model handler: returns a transient result reporting or
+    /// setting the model. Used to verify transient results render as non-persisted diagnostics.
+    /// </summary>
+    private sealed class FakeModelCommandHandler : ISlashCommandHandler
+    {
+        private readonly string currentModel;
+
+        public FakeModelCommandHandler(string currentModel) => this.currentModel = currentModel;
+
+        public string Name => "model";
+        public string Description => "List or set the active model.";
+        public string? Usage => "/model [model-id]";
+        public string? LongDescription => null;
+
+        public Task<SlashCommandResult> ExecuteAsync(
+            SlashCommandContext context,
+            string arguments,
+            CancellationToken cancellationToken)
+        {
+            var modelId = arguments.Trim();
+            var message = string.IsNullOrEmpty(modelId)
+                ? $"Active model: {this.currentModel}"
+                : $"Model set to: {modelId}";
+            return Task.FromResult(new SlashCommandResult { StatusMessage = message });
+        }
 
         public Task<IReadOnlyList<SlashCommandCompletion>> GetCompletionsAsync(
             SlashCommandContext context,

@@ -1,5 +1,11 @@
 # Session context tools
 
+> Cross-link: the `[remote-copilot-sdk]` topology described in
+> `docs/design/remote-chat-client-session.md` relies on the "host follows the
+> current run" rule documented here — `host-profile-entity-id` on the persisted
+> `agent-session` is a resume hint, not the runtime source of truth. The remote
+> topology reconstructs the host from the resolved `trust-profile` at each run.
+
 ## Purpose
 
 Add agent-facing tools that let an LLM inspect the **session it is running in**. The first is

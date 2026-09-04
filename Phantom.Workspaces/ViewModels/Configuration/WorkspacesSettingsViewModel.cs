@@ -41,11 +41,11 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
         ArgumentNullException.ThrowIfNull(configuration);
         this.persistenceService = persistenceService;
         this.baseConfiguration = configuration;
-        this.Repository = new RepositoryConnectionSettingsViewModel(configuration.DataAccess);
         this.RemoteAccess = new RemoteAccessSettingsViewModel(
             configuration.RemoteHosting,
             configuration.DevTunnel,
             configuration.UserComputerProfileOverride);
+        this.Repository = new RepositoryConnectionSettingsViewModel(configuration.DataAccess, this.RemoteAccess);
 
         this.Repository.PropertyChanged += this.OnSectionChanged;
         this.RemoteAccess.PropertyChanged += this.OnSectionChanged;
@@ -127,6 +127,31 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
     /// <summary>Whether all sections are valid and the configuration can be saved.</summary>
     public bool CanSave => this.Repository.IsValid && this.RemoteAccess.IsValid;
 
+    /// <summary>
+    /// Human-readable messages naming the specific missing/invalid fields that make
+    /// <see cref="CanSave"/> return <see langword="false"/>. Empty when everything is valid.
+    /// Rendered in the setup wizard above the Complete/Cancel buttons so users know why the
+    /// button is disabled and what to fix.
+    /// </summary>
+    public IReadOnlyList<string> ValidationMessages
+    {
+        get
+        {
+            var messages = new List<string>();
+            var modeMessage = this.Repository.ActiveSettings.ValidationMessage;
+            if (!string.IsNullOrEmpty(modeMessage))
+            {
+                messages.Add(modeMessage);
+            }
+            var remoteMessage = this.RemoteAccess.ValidationMessage;
+            if (!string.IsNullOrEmpty(remoteMessage))
+            {
+                messages.Add(remoteMessage);
+            }
+            return messages;
+        }
+    }
+
     /// <summary>Builds the configuration represented by the current view-model state.</summary>
     public WorkspacesConfiguration BuildConfiguration() => this.baseConfiguration with
     {
@@ -153,9 +178,16 @@ public sealed class WorkspacesSettingsViewModel : ViewModelBase
 
         var configuration = this.BuildConfiguration();
         await this.persistenceService.SaveAsync(configuration, path, cancellationToken).ConfigureAwait(false);
+        // Reconcile the persisted run-at-startup intent with the actual scheduled task so what
+        // was saved matches what runs at logon, even if the task was deleted out-of-band. See
+        // issue #1298: without this, the checkbox and the scheduled task can disagree.
+        this.Updates?.ApplyToController();
         return configuration;
     }
 
     private void OnSectionChanged(object? sender, PropertyChangedEventArgs e)
-        => this.RaisePropertyChanged(nameof(this.CanSave));
+    {
+        this.RaisePropertyChanged(nameof(this.CanSave));
+        this.RaisePropertyChanged(nameof(this.ValidationMessages));
+    }
 }

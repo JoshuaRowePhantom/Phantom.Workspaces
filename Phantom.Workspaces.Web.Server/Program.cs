@@ -1,5 +1,6 @@
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Server;
+using Phantom.Workspaces.Containers;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Trust;
@@ -47,6 +48,10 @@ var app = builder.Build();
 // #1093: log global uncaught/unobserved exceptions for this standalone host through the file
 // provider registered above.
 GlobalExceptionLogging.Register(app.Services.GetRequiredService<ILoggerFactory>());
+
+// #1373: install the process-wide ambient docker logger factory so the production
+// MongoDbConnectionBroker default path logs docker stdout/stderr through the real host logger.
+DockerCommandRunnerLogging.LoggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
 
 app.UseWebSockets();
 

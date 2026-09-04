@@ -265,6 +265,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         var composer = viewModel.DefaultComposer;
 
+        composer.InputText = "/wo";
         composer.Completions.SetItems([
             new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
         ]);
@@ -284,6 +285,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         var composer = viewModel.DefaultComposer;
 
+        composer.InputText = "/wo";
         composer.Completions.SetItems([
             new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
         ]);
@@ -301,6 +303,7 @@ public sealed class AgentChatInputQueueControlKeyTests
         var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
         var composer = viewModel.DefaultComposer;
 
+        composer.InputText = "/wo";
         composer.Completions.SetItems([
             new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("working-directory", "/working-directory", "desc"),
         ]);
@@ -310,6 +313,196 @@ public sealed class AgentChatInputQueueControlKeyTests
 
         Assert.NotNull(newText);
         Assert.Equal(newText!.Length, newCaretIndex);
+    }
+
+    // ── Issue #1380: Tab-completing an ARGUMENT must replace only the argument token ──
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_ArgumentCompletion_ReplacesOnlyArgumentToken()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        // Argument completion values are bare tokens (no leading slash).
+        composer.InputText = "/model gpt";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("gpt-5", "gpt-5", "GPT-5"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/model gpt".Length,
+            out var newText,
+            out _);
+
+        Assert.Equal("/model gpt-5", newText);
+        Assert.Equal("/model gpt-5", composer.InputText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_ArgumentCompletion_DoesNotPrependSlash()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.InputText = "/model gpt";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("gpt-5", "gpt-5", "GPT-5"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/model gpt".Length,
+            out var newText,
+            out _);
+
+        Assert.NotNull(newText);
+        Assert.DoesNotContain("/gpt-5", newText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_ArgumentCompletion_PreservesCommandPrefix()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.InputText = "/model gpt";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("gpt-5", "gpt-5", "GPT-5"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/model gpt".Length,
+            out var newText,
+            out _);
+
+        Assert.NotNull(newText);
+        Assert.StartsWith("/model ", newText);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_ArgumentCompletion_PlacesCaretAfterInsertedArgument()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        composer.InputText = "/model gpt";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("gpt-5", "gpt-5", "GPT-5"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/model gpt".Length,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.Equal("/model gpt-5".Length, newCaretIndex);
+        Assert.Equal("/model gpt-5", newText![..newCaretIndex]);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_ArgumentCompletionWithTrailingText_PreservesTextAfterCaret()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        // Caret sits after "gpt"; the trailing " more" text must be preserved.
+        composer.InputText = "/model gpt more";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("gpt-5", "gpt-5", "GPT-5"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/model gpt".Length,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.Equal("/model gpt-5 more", newText);
+        Assert.Equal("/model gpt-5".Length, newCaretIndex);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_CommandNameCompletion_StillReplacesNameToken()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        // Command-name completion values carry a trailing space and no slash
+        // (RootSlashCommandCompletionsHandler). The leading slash comes from the input.
+        composer.InputText = "/mod";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("model ", "/model", "desc"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/mod".Length,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.Equal("/model ", newText);
+        Assert.Equal("/model ".Length, newCaretIndex);
+    }
+
+    [AvaloniaFact]
+    public async Task HandleInputKey_Tab_DirectoryArgumentCompletion_InsertsPathVerbatim()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+
+        // Directory completions are bare path tokens with a trailing separator
+        // (DirectoryBrowserCompletionHelper); they must be inserted verbatim.
+        composer.InputText = "/working-directory s";
+        composer.Completions.SetItems([
+            new Phantom.Workspaces.Llm.SlashCommands.SlashCommandCompletion("src\\", "src\\", "Directory"),
+        ]);
+        composer.Completions.SelectedIndex = 0;
+
+        QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Tab,
+            KeyModifiers.None,
+            caretLine: 0,
+            caretIndex: "/working-directory s".Length,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.Equal("/working-directory src\\", newText);
+        Assert.Equal("/working-directory src\\".Length, newCaretIndex);
     }
 
     [Fact]

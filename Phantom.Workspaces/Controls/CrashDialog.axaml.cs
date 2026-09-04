@@ -9,6 +9,11 @@ public sealed partial class CrashDialog : Window
 {
     private readonly Exception? _exception;
 
+    public CrashDialog()
+        : this(null, isTerminating: false)
+    {
+    }
+
     public CrashDialog(Exception? exception, bool isTerminating)
     {
         _exception = exception;

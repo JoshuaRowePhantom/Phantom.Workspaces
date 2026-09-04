@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui.ViewModels.DocumentModels;
@@ -270,6 +271,133 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
+    public void RenderContent_UsageContent_DoesNotLeakTypeName()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("Microsoft.Extensions.AI.UsageContent", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_EmitsUsageMarkerWithInspectAttributes()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.StartsWith("<div ", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"chat-content chat-usage\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-usage-inspect-target", html, StringComparison.Ordinal);
+        Assert.Contains("data-details-target=", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"c0\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-usage-marker", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_EmitsVisibleUsageRowNotDisplayNoneSpan()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains("<div class=\"chat-content chat-usage\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<span class=\"chat-usage-marker\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("display: none", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_DetailsPayloadContainsTokenCounts()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5, TotalTokenCount = 15 });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        var payload = ExtractDataDetailsTarget(html);
+        Assert.Contains("\"InputTokenCount\": 10", payload, StringComparison.Ordinal);
+        Assert.Contains("\"OutputTokenCount\": 5", payload, StringComparison.Ordinal);
+        Assert.Contains("\"TotalTokenCount\": 15", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_UsageContent_CarriesAdditionalCounts()
+    {
+        var usage = new UsageContent(new UsageDetails
+        {
+            InputTokenCount = 10,
+            OutputTokenCount = 5,
+            TotalTokenCount = 15,
+            AdditionalCounts = new()
+            {
+                ["copilot.sdk.reasoning_tokens"] = 2,
+                ["copilot.sdk.cache_read_tokens"] = 3,
+                ["copilot.sdk.cache_write_tokens"] = 4,
+                ["copilot.sdk.cost_micro_usd"] = 5,
+            },
+        });
+
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", usage, includeReasoning: false, isDiagnostic: false);
+
+        var payload = ExtractDataDetailsTarget(html);
+        Assert.Contains("copilot.sdk.reasoning_tokens", payload, StringComparison.Ordinal);
+        Assert.Contains("copilot.sdk.cache_read_tokens", payload, StringComparison.Ordinal);
+        Assert.Contains("copilot.sdk.cache_write_tokens", payload, StringComparison.Ordinal);
+        Assert.Contains("copilot.sdk.cost_micro_usd", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderContent_TextContent_DoesNotEmitUsageMarker()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("hello"), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.DoesNotContain("chat-usage-marker", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-usage-inspect-target", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderToolCallGroup_WithUsagePostGroupContent_UsageRowIsOutsideClosedGroupDetails()
+    {
+        const string usageRow = "<div class=\"chat-content chat-usage\" data-usage-inspect-target id=\"usage-0\"></div>";
+
+        var html = ChatOutputHtmlRenderer.RenderToolCallGroup(
+            "grp-0",
+            new[] { "my_tool" },
+            1,
+            "<details class=\"chat-content chat-tool-group-item\"><summary>tool</summary></details>",
+            postGroupContent: usageRow);
+
+        var closeDetailsIndex = html.IndexOf("</div></details>", StringComparison.Ordinal);
+        var usageIndex = html.IndexOf("id=\"usage-0\"", StringComparison.Ordinal);
+        Assert.True(closeDetailsIndex >= 0);
+        Assert.True(usageIndex > closeDetailsIndex);
+    }
+
+    [Fact]
+    public void RenderContent_UnknownAIContentSubtype_DoesNotLeakTypeName()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent("c0", new UnknownAIContent(), includeReasoning: false, isDiagnostic: false);
+
+        Assert.NotNull(html);
+        Assert.Contains(">[UnknownAIContent]</div>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain($">{typeof(UnknownAIContent).FullName}</div>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ComputeContentKey_UsageContent_DoesNotCallToString()
+    {
+        var usage = new UsageContent(new UsageDetails { InputTokenCount = 10, OutputTokenCount = 5 });
+
+        var key = ChatOutputHtmlRenderer.ComputeContentKey(usage, isDiagnostic: false);
+
+        Assert.DoesNotContain("Microsoft.Extensions.AI.UsageContent", key, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RenderContent_TextReasoningContent_DataDetailsTargetIsJsonNotRawText()
     {
         const string text = "thinking about this";
@@ -291,6 +419,20 @@ public sealed class ChatOutputHtmlRendererTests
         // The attribute should be the full content JSON, not just the arguments body
         Assert.DoesNotContain("data-details-target=\"{\n  &quot;arg&quot;", html, StringComparison.Ordinal);
     }
+
+    private static string ExtractDataDetailsTarget(string? html)
+    {
+        Assert.NotNull(html);
+        const string marker = "data-details-target=\"";
+        var start = html!.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, "Expected data-details-target attribute.");
+        start += marker.Length;
+        var end = html.IndexOf('"', start);
+        Assert.True(end > start, "Expected non-empty data-details-target attribute.");
+        return WebUtility.HtmlDecode(html[start..end]);
+    }
+
+    private sealed class UnknownAIContent : AIContent;
 
     [Fact]
     public void RenderContent_ErrorContent_DataDetailsTargetIsJsonNotRawText()
@@ -806,6 +948,50 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
+    public void ChatOutputHtmlRenderer_ErrorDiagnosticWithDetailLines_RendersCollapsibleSummaryAndBody()
+    {
+        var message = "Failed to open MCP server 'github-oauth': token exchange failed\n"
+            + "System.InvalidOperationException: token exchange failed\n"
+            + "System.Text.Json.JsonException: 'e' is an invalid start of a value.";
+
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new ErrorContent(message),
+            includeReasoning: false,
+            isDiagnostic: true,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        // Collapsible <details> styled as both diagnostic and error.
+        Assert.Contains("<details", html, StringComparison.Ordinal);
+        Assert.Contains("chat-diagnostic", html, StringComparison.Ordinal);
+        Assert.Contains("chat-error", html, StringComparison.Ordinal);
+        // <summary> = first line (header).
+        Assert.Contains("<summary", html, StringComparison.Ordinal);
+        Assert.Contains("Failed to open MCP server &#39;github-oauth&#39;: token exchange failed", html, StringComparison.Ordinal);
+        // <pre> body = remaining detail lines.
+        Assert.Contains("chat-collapsible-body", html, StringComparison.Ordinal);
+        Assert.Contains("System.Text.Json.JsonException: &#39;e&#39; is an invalid start of a value.", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChatOutputHtmlRenderer_NonDiagnosticErrorContent_StillRendersFlatBlock()
+    {
+        var html = ChatOutputHtmlRenderer.RenderContent(
+            "c0",
+            new ErrorContent("something went wrong"),
+            includeReasoning: false,
+            isDiagnostic: false,
+            isHelp: false);
+
+        Assert.NotNull(html);
+        // No regression: a non-diagnostic error keeps its flat chat-error block, not a <details>.
+        Assert.Contains("chat-error", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<details", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("chat-diagnostic", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RoleClass_HelpRole_ReturnsChatHelpMessage()
     {
         var roleClass = ChatOutputHtmlRenderer.RoleClass("help");
@@ -935,8 +1121,11 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
-    public void RenderToolCallPair_WithLargeResultJson_BodyDoesNotContainFullPayload()
+    public void RenderToolCallPair_WithLargeResultJson_BodyContainsFullPayload()
     {
+        // #1280: the <details> body now renders the FULL escaped payload so the user can inspect
+        // the actual returned text; the compact "(N lines)" header stays in <summary>. Replaces
+        // the earlier wrong-behavior test that asserted the body did NOT contain the payload.
         var lineCount = ChatOutputHtmlRenderer.MaxToolResultLines + 5;
         var lines = Enumerable.Range(0, lineCount).Select(i => $"line-{i}").ToList();
         lines[10] = "UNIQUE_PAYLOAD_MARKER_XYZ";
@@ -944,7 +1133,9 @@ public sealed class ChatOutputHtmlRendererTests
 
         var html = ChatOutputHtmlRenderer.RenderToolCallPair("c0", "my_tool", "{}", largeResult);
 
-        Assert.DoesNotContain("UNIQUE_PAYLOAD_MARKER_XYZ", html, StringComparison.Ordinal);
+        Assert.Contains("UNIQUE_PAYLOAD_MARKER_XYZ", html, StringComparison.Ordinal);
+        // Summary line still shows the compact "(N lines)" header for the collapsed state.
+        Assert.Contains($"result  ({lineCount} lines)", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1062,5 +1253,55 @@ public sealed class ChatOutputHtmlRendererTests
             "c0", 2, new[] { "powershell" }, "<div>inner</div>");
 
         Assert.Contains("data-sticky-level=\"2\">$ ", html, StringComparison.Ordinal);
+    }
+
+    // ── Issue #1274: sub-agent panel CSS — compact divider + max-height:25vh ────────
+
+    private static string LoadEmbeddedChatOutputShell()
+    {
+        var assembly = typeof(ChatOutputHtmlRenderer).Assembly;
+        var resourceName = Array.Find(
+            assembly.GetManifestResourceNames(),
+            name => name.EndsWith("chat-output-shell.html", StringComparison.Ordinal))
+            ?? throw new InvalidOperationException("Embedded chat-output-shell.html resource was not found.");
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException("Could not open the chat-output-shell.html resource stream.");
+        using var reader = new System.IO.StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
+    [Fact]
+    public void ShellCss_RunningSubagentsPanel_HasMaxHeight25VhAndOverflowAuto()
+    {
+        var shell = LoadEmbeddedChatOutputShell();
+
+        Assert.Contains(".running-subagents-panel", shell, StringComparison.Ordinal);
+        // A combined selector rule containing both max-height:25vh and overflow-y:auto and border-top.
+        // The exact whitespace doesn't matter as long as all three declarations appear inside a rule
+        // that names .running-subagents-panel.
+        Assert.Contains("max-height: 25vh", shell, StringComparison.Ordinal);
+        Assert.Contains("overflow-y: auto", shell, StringComparison.Ordinal);
+        Assert.Contains("border-top:", shell, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShellCss_RunningParentAgentPanel_HasSameCompactDividerAndHeightCap()
+    {
+        var shell = LoadEmbeddedChatOutputShell();
+
+        Assert.Contains(".running-parent-agent-panel", shell, StringComparison.Ordinal);
+
+        // Locate the rule that includes .running-parent-agent-panel and assert the three key
+        // declarations appear before the closing brace of that rule.
+        var selectorIndex = shell.IndexOf(".running-parent-agent-panel", StringComparison.Ordinal);
+        Assert.True(selectorIndex >= 0);
+        var openBraceIndex = shell.IndexOf('{', selectorIndex);
+        Assert.True(openBraceIndex > selectorIndex);
+        var closeBraceIndex = shell.IndexOf('}', openBraceIndex);
+        Assert.True(closeBraceIndex > openBraceIndex);
+        var block = shell.Substring(openBraceIndex, closeBraceIndex - openBraceIndex);
+        Assert.Contains("max-height: 25vh", block, StringComparison.Ordinal);
+        Assert.Contains("overflow-y: auto", block, StringComparison.Ordinal);
+        Assert.Contains("border-top:", block, StringComparison.Ordinal);
     }
 }

@@ -5,12 +5,13 @@ using Dock.Model.Mvvm.Controls;
 
 namespace Phantom.Workspaces.ViewModels;
 
-public class WorkspaceDocument : Document, IAsyncDisposable
+public class WorkspaceDocument : Document, IAsyncDisposable, IJsonOnDeserialized
 {
     private bool hasUnreadNotification;
+    private bool initialized;
     private string baseTitle = string.Empty;
     private readonly StatusTabHeaderItemViewModel statusIndicator;
-    private readonly TabHeaderViewModel cachedTabHeader;
+    private TabHeaderViewModel cachedTabHeader;
     private IStatusItem? subscribedTabStatus;
     private int disposed;
 
@@ -38,23 +39,39 @@ public class WorkspaceDocument : Document, IAsyncDisposable
     /// Called by <see cref="WorkspaceDocumentGenerator.PrepareDocumentContainer"/> and
     /// after dock layout restore. No-ops if the document is already initialized.
     /// </summary>
+    /// <remarks>
+    /// #1333: the guard is keyed on a one-shot <see cref="initialized"/> flag rather than on
+    /// <c>base.Context</c> because a restored non-primary-region stub has its <c>Context</c>
+    /// pre-wired by the dock <c>ContextLocator</c> during <c>InitLayout</c> (which does not build
+    /// the header or subscribe to tab events). Keying on <c>Context</c> would leave such a stub
+    /// permanently header-less; keying on <see cref="initialized"/> lets it complete initialization.
+    /// </remarks>
     internal void Initialize(WorkspaceTabViewModel tabViewModel)
     {
-        if (base.Context is null)
+        if (!this.initialized)
             this.InitializeCore(tabViewModel);
     }
 
     private void InitializeCore(WorkspaceTabViewModel tabViewModel)
     {
+        this.initialized = true;
         base.Context = tabViewModel;
         this.Id = tabViewModel.Id;
-        this.baseTitle = ComputeBaseTitle(tabViewModel);
+        this.Descriptor ??= BuildDescriptor(tabViewModel);
+        if (this.Descriptor?.IsTitleExplicit == true)
+        {
+            tabViewModel.IsTitleExplicit = true;
+        }
+
+        this.EnsureTabHeaderForDescriptor();
+        var incomingTitle = !string.IsNullOrEmpty(tabViewModel.Title)
+            ? tabViewModel.Title
+            : !string.IsNullOrEmpty(this.Descriptor?.Title)
+                ? this.Descriptor!.Title!
+                : this.baseTitle;
+        this.baseTitle = incomingTitle;
         this.Title = this.baseTitle;
         this.CanClose = true;
-
-        // Preserve any descriptor that was set by JSON deserialization; only compute
-        // from the tab when restoring a fresh (stub) document.
-        this.Descriptor ??= BuildDescriptor(tabViewModel);
 
         this.cachedTabHeader.Title = this.baseTitle;
         this.RebuildTabHeaderItems();
@@ -109,6 +126,14 @@ public class WorkspaceDocument : Document, IAsyncDisposable
                 }
             }
         }
+        else if (e.PropertyName is nameof(WorkspaceTabViewModel.IsTitleExplicit))
+        {
+            var refreshed = BuildDescriptor(tabVm);
+            if (refreshed is not null)
+            {
+                this.Descriptor = refreshed;
+            }
+        }
         else if (e.PropertyName is nameof(WorkspaceTabViewModel.TabStatus))
         {
             this.SubscribeToTabStatus(tabVm.TabStatus);
@@ -154,6 +179,47 @@ public class WorkspaceDocument : Document, IAsyncDisposable
         this.cachedTabHeader.Items.Add(this.statusIndicator);
     }
 
+    public void OnDeserialized() => this.SyncHeaderFromPersistedTitle();
+
+    internal void SyncHeaderFromPersistedTitle()
+    {
+        this.EnsureTabHeaderForDescriptor();
+        var persistedTitle = !string.IsNullOrEmpty(this.Descriptor?.Title)
+            ? this.Descriptor!.Title
+            : !string.IsNullOrEmpty(this.Title)
+                ? this.Title
+                : null;
+        if (persistedTitle is null)
+        {
+            return;
+        }
+
+        this.baseTitle = persistedTitle;
+        this.Title = persistedTitle;
+        this.cachedTabHeader.Title = persistedTitle;
+    }
+
+    private void EnsureTabHeaderForDescriptor()
+    {
+        var desiredType = this.Descriptor is BrowserDockTabDescriptor
+            ? typeof(WebTabHeaderViewModel)
+            : typeof(TabHeaderViewModel);
+        if (this.cachedTabHeader.GetType() == desiredType)
+        {
+            return;
+        }
+
+        var replacement = this.Descriptor is BrowserDockTabDescriptor
+            ? new WebTabHeaderViewModel { Title = this.cachedTabHeader.Title }
+            : new TabHeaderViewModel { Title = this.cachedTabHeader.Title };
+        foreach (var item in this.cachedTabHeader.Items)
+        {
+            replacement.Items.Add(item);
+        }
+
+        this.cachedTabHeader = replacement;
+    }
+
     private void UpdateTitle()
     {
         this.Title = this.baseTitle;
@@ -162,12 +228,7 @@ public class WorkspaceDocument : Document, IAsyncDisposable
 
     private static string ComputeBaseTitle(WorkspaceTabViewModel tabViewModel)
     {
-        return TruncateTitle(tabViewModel.Title);
-    }
-
-    private static string TruncateTitle(string title)
-    {
-        return title.Length > 20 ? title[..17] + "..." : title;
+        return tabViewModel.Title;
     }
 
     /// <summary>
@@ -198,13 +259,13 @@ public class WorkspaceDocument : Document, IAsyncDisposable
         if (tab.Entity is { } entity)
         {
             if (tab is AgentSessionWorkspaceTabViewModel)
-                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString()) { Title = title };
+                return new AgentSessionDockTabDescriptor(entity.EntityId.Value.ToString()) { Title = title, IsTitleExplicit = tab.IsTitleExplicit };
 
-            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open") { Title = title };
+            return new EntityDockTabDescriptor(entity.EntityId.Value.ToString(), "Open") { Title = title, IsTitleExplicit = tab.IsTitleExplicit };
         }
 
         if (tab is WebViewModel webVm && !string.IsNullOrWhiteSpace(webVm.AddressBarUrl))
-            return new BrowserDockTabDescriptor(webVm.AddressBarUrl) { Title = title };
+            return new BrowserDockTabDescriptor(webVm.AddressBarUrl) { Title = title, IsTitleExplicit = tab.IsTitleExplicit };
 
         return null;
     }

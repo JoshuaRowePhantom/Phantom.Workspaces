@@ -198,21 +198,80 @@ public sealed class CrashDialogTests
 
 public sealed class UnhandledExceptionHandlerTests
 {
+    // #1352: unobserved TaskScheduler exceptions are benign-by-default and must NOT show the crash
+    // dialog. They are logged + observed by GlobalExceptionLogging (covered by
+    // GlobalExceptionLoggingTests). This asserts the installed handler path never opens the dialog.
     [AvaloniaFact(Timeout = 15_000)]
-    public void OnUnobservedTaskException_SetsObserved()
+    public void Install_UnobservedTaskException_DoesNotShowCrashDialog()
     {
         UnhandledExceptionHandler._dialogActive = 0;
-        UnhandledExceptionHandler.ShowCrashDialogAsync = static (_, _) => Task.CompletedTask;
+        var factoryCalled = 0;
+        UnhandledExceptionHandler.ShowCrashDialogAsync = (_, _) =>
+        {
+            Interlocked.Increment(ref factoryCalled);
+            return Task.CompletedTask;
+        };
 
-        var exception = new AggregateException(new Exception("test"));
-        var args = new UnobservedTaskExceptionEventArgs(exception);
-        Assert.False(args.Observed);
+        // Local observer stands in for GlobalExceptionLogging: it observes the fault so the finalizer
+        // cannot crash the test process, and confirms the unobserved-task event actually fired.
+        Exception? observed = null;
+        void Observe(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            observed = args.Exception;
+            args.SetObserved();
+        }
 
-        UnhandledExceptionHandler.OnUnobservedTaskException(null, args);
+        TaskScheduler.UnobservedTaskException += Observe;
+        UnhandledExceptionHandler.Install();
+        try
+        {
+            RaiseUnobservedFault();
 
-        Assert.True(args.Observed);
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
 
-        // Cleanup: reset flag so dispatcher-posted work doesn't bleed into other tests
+            // The unobserved-task mechanism fired, but the crash dialog was never opened.
+            Assert.NotNull(observed);
+            Assert.Equal(0, Volatile.Read(ref factoryCalled));
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= Observe;
+            AppDomain.CurrentDomain.UnhandledException -= UnhandledExceptionHandler.OnAppDomainUnhandledException;
+            UnhandledExceptionHandler._dialogActive = 0;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void RaiseUnobservedFault()
+    {
+        // A faulted Task whose exception is never observed raises TaskScheduler.UnobservedTaskException
+        // when finalized. Isolated in its own method so no local keeps it rooted past this call.
+        _ = Task.FromException(new InvalidOperationException("unobserved"));
+    }
+
+    // #1352: a genuine process-crashing path (AppDomain) STILL shows the crash dialog.
+    [AvaloniaFact(Timeout = 15_000)]
+    public void OnAppDomainUnhandledException_ShowsCrashDialog()
+    {
+        UnhandledExceptionHandler._dialogActive = 0;
+        var factoryCalled = 0;
+        UnhandledExceptionHandler.ShowCrashDialogAsync = (_, _) =>
+        {
+            Interlocked.Increment(ref factoryCalled);
+            return Task.CompletedTask;
+        };
+
+        UnhandledExceptionHandler.OnAppDomainUnhandledException(
+            new object(),
+            new UnhandledExceptionEventArgs(new InvalidOperationException("boom"), isTerminating: true));
+
+        // ShowOrDiscard posts the dialog to the UI dispatcher; drain it so the factory runs.
+        Dispatcher.UIThread.RunJobs();
+
+        Assert.Equal(1, Volatile.Read(ref factoryCalled));
+
         UnhandledExceptionHandler._dialogActive = 0;
     }
 
@@ -220,7 +279,12 @@ public sealed class UnhandledExceptionHandlerTests
     public void OnDispatcherUnhandledException_SetsHandled()
     {
         UnhandledExceptionHandler._dialogActive = 0;
-        UnhandledExceptionHandler.ShowCrashDialogAsync = static (_, _) => Task.CompletedTask;
+        var factoryCalled = 0;
+        UnhandledExceptionHandler.ShowCrashDialogAsync = (_, _) =>
+        {
+            Interlocked.Increment(ref factoryCalled);
+            return Task.CompletedTask;
+        };
 
         // DispatcherUnhandledExceptionEventArgs has an internal constructor (same pattern as
         // TappedEventArgs in EntityCardControlInteractionTests).
@@ -231,6 +295,10 @@ public sealed class UnhandledExceptionHandlerTests
         UnhandledExceptionHandler.OnDispatcherUnhandledException(null, args);
 
         Assert.True(args.Handled);
+
+        // The dispatcher path is a genuine process-crashing path and still shows the crash dialog.
+        Dispatcher.UIThread.RunJobs();
+        Assert.Equal(1, Volatile.Read(ref factoryCalled));
 
         UnhandledExceptionHandler._dialogActive = 0;
     }

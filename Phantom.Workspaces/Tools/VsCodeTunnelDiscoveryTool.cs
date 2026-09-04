@@ -82,8 +82,12 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
                     $"'code tunnel status' failed (exit {cli.ExitCode}).\nStdout:\n{cli.StandardOut}\nStderr:\n{cli.StandardError}");
             }
 
-            // No tunnel currently running — do not upsert a stale entity.
-            return WorkspaceToolExecutionResult.Success();
+            // No tunnel currently running — do not upsert a stale entity. Report this as a
+            // failure (#1355) so callers can distinguish "tunnel discovered" from "no tunnel
+            // found"; a missing tunnel must not be treated as a successful discovery.
+            var noTunnelSummary = "VS Code tunnel discovery: no tunnel running.";
+            this.logger.LogInformation("{Summary}", noTunnelSummary);
+            return WorkspaceToolExecutionResult.Failure(noTunnelSummary);
         }
 
         var entityName = this.BuildEntityName();
@@ -109,7 +113,12 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
             },
             context.CancellationToken).ConfigureAwait(false);
 
-        return WorkspaceToolExecutionResult.Success();
+        var summary =
+            $"VS Code tunnel discovery: tunnel running "
+            + $"(Name={resolution.Status.TunnelName}, Url={resolution.Status.TunnelUrl}, "
+            + $"IsConnected={resolution.Status.IsConnected}).";
+        this.logger.LogInformation("{Summary}", summary);
+        return WorkspaceToolExecutionResult.Success() with { ResultContent = summary };
     }
 
     private EntityName BuildEntityName()

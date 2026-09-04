@@ -56,6 +56,30 @@ public sealed class ApplyUpdateRunnerTests
     }
 
     [Fact]
+    public async Task RelaunchGui_LaunchesDetached()
+    {
+        // Issue #1302: the apply-update relaunch must be fire-and-forget detached so the
+        // installer's console pipe closes as soon as apply-update exits — mirrors #1289's
+        // post-install launch semantics. The runner must never WaitForExit on the relaunched
+        // GUI, and the ProcessStartRequest must carry Detached=true so RealProcessLauncher
+        // avoids inheriting standard handles.
+        var (fileSystem, layout) = NewLayout("0.1.0", "0.2.0");
+        layout.RepointCurrent("0.1.0");
+        var launcher = new FakeProcessLauncher();
+        var runner = new ApplyUpdateRunner(
+            layout, new FakeInstanceReleaseWaiter(), new HealthGate(fileSystem, layout), launcher);
+
+        var exitCode = await runner.RunAsync(layout.GetVersionDirectory("0.2.0"), relaunch: true);
+
+        Assert.Equal(ExitCode.Success, exitCode);
+        var request = Assert.Single(launcher.Requests);
+        Assert.True(
+            request.Detached,
+            "Apply-update GUI relaunch must set ProcessStartRequest.Detached=true so the launched "
+            + "GUI does not inherit the installer console's standard handles.");
+    }
+
+    [Fact]
     public async Task RunAsync_ReturnsFailureAndLeavesCurrentUntouchedWhenLockNeverReleases()
     {
         var (fileSystem, layout) = NewLayout("0.1.0", "0.2.0");

@@ -1,18 +1,278 @@
 using AgentSchema;
+using GitHub.Copilot;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
+using System.Security;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 
 public class AgentFactoryTests
 {
+    [Fact]
+    public async Task AgentFactory_CreateAgentChat_SessionDefinitionWithSecret_MaterializesWithoutManifest()
+    {
+        // #1401: a session launch passes a prebuilt AgentDefinition and NO manifest. The inverted
+        // gate must still materialize ${SECRET:...} — request the secret, rewrite to an opaque
+        // handle, and populate the resolver.
+        const string plaintext = "super-secret-token";
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "session-agent",
+          "model": {
+            "id": "gpt-test",
+            "provider": "github-copilot",
+            "connection": { "kind": "key", "apiKey": "${SECRET:GitHubToken}" }
+          }
+        }
+        """) ?? throw new InvalidOperationException("Failed to load definition.");
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = definition,
+            AgentSessionId = "session-1",
+            AgentServices = new AgentServices { SecretProvider = provider, ChatClientOverride = new DeterministicTestChatClient() },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        Assert.Equal(1, provider.CallCount);
+        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
+        Assert.StartsWith("${SECRET:", connection.ApiKey, StringComparison.Ordinal);
+        Assert.NotEqual("${SECRET:GitHubToken}", connection.ApiKey);
+        Assert.DoesNotContain(plaintext, chat.AgentDefinition!.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_SecretInManifest_CallsSecretProviderAndKeepsDefinitionTokenized()
+    {
+        const string plaintext = "super-secret-token";
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot");
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentManifest = manifest,
+            AgentServices = new AgentServices { SecretProvider = provider, ChatClientOverride = new DeterministicTestChatClient() },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        Assert.Equal(1, provider.CallCount);
+        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
+        Assert.StartsWith("${SECRET:", connection.ApiKey, StringComparison.Ordinal);
+        Assert.NotEqual("${SECRET:GitHubToken}", connection.ApiKey);
+        Assert.DoesNotContain(plaintext, chat.AgentDefinition!.ToJson(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_SecretProviderRefuses_ThrowsSecretMaterializationRefusedException()
+    {
+        var provider = new FakeSecretProvider { ReturnNull = true };
+        var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot");
+
+        var exception = await Assert.ThrowsAsync<SecretMaterializationRefusedException>(() =>
+            AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+            {
+                AgentManifest = manifest,
+                AgentServices = new AgentServices { SecretProvider = provider },
+                PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+            }));
+
+        Assert.DoesNotContain("super-secret-token", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateChatClientAsync_SecretReferenceToken_ResolvesAtSdkSeamAndDisposesSecureString()
+    {
+        const string token = "${SECRET:handle}";
+        const string plaintext = "byok-secret-token";
+        var secure = ToSecureString(plaintext, makeReadOnly: false);
+        var resolver = new SecretPlaceholderResolver();
+        resolver.Register(token, new SecretRetriever
+        {
+            SecretName = "ApiKey",
+            Secret = _ => Task.FromResult(secure),
+        });
+        var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
+        {
+          "kind": "prompt",
+          "name": "byok-agent",
+          "model": {
+            "id": "gpt-test",
+            "provider": "openai",
+            "connection": { "kind": "key", "endpoint": "http://localhost:12345/", "apiKey": "{{token}}" }
+          }
+        }
+        """);
+
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { SecretPlaceholderResolver = resolver });
+
+        var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Equal(plaintext, client.ByokOptions!.ApiKey);
+        Assert.Throws<ObjectDisposedException>(() => secure.AppendChar('x'));
+    }
+
+    [Fact]
+    public async Task CreateChatClientAsync_McpToolSecretPlaceholder_TransportReceivesResolvedSecretNotRawPlaceholder()
+    {
+        // #1405: the shared gate materializes an MCP tool's ${SECRET:GitHubToken} into an opaque
+        // handle registered with the resolver, so when McpTransportFactory builds the transport via
+        // ResolveRequiredSecretOrEnvAsync (the exact seam in the reported stack trace) the resolved
+        // secret — never the raw ${SECRET:GitHubToken} placeholder — reaches the transport.
+        const string plaintext = "resolved-github-token";
+        var provider = new FakeSecretProvider();
+        provider.Secrets["GitHubToken"] = ToSecureString(plaintext);
+        var definition = AgentDefinition.FromJson("""
+        {
+          "kind": "prompt",
+          "name": "mcp-agent",
+          "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+          "tools": [
+            {
+              "kind": "mcp",
+              "name": "github-secret-gated",
+              "serverName": "github-secret-gated",
+              "connection": { "kind": "key", "endpoint": "http://127.0.0.1:1/", "apiKey": "${SECRET:GitHubToken}" },
+              "approvalMode": { "kind": "never" }
+            }
+          ]
+        }
+        """) ?? throw new InvalidOperationException("Failed to load definition.");
+
+        var (materializedDefinition, materializedServices) = await AgentFactory.MaterializeSecretsIfNeededAsync(
+            definition,
+            new AgentServices { SecretProvider = provider },
+            manifest: null,
+            agentSessionId: null,
+            CancellationToken.None);
+
+        Assert.Equal(1, provider.CallCount);
+        var rewrittenApiKey = Regex.Match(materializedDefinition!.ToJson(), "\\$\\{SECRET:[^}]+\\}").Value;
+        Assert.NotEqual("${SECRET:GitHubToken}", rewrittenApiKey);
+        Assert.DoesNotContain("${SECRET:GitHubToken}", materializedDefinition.ToJson(), StringComparison.Ordinal);
+
+        var resolved = await AgentFactory.ResolveRequiredSecretOrEnvAsync(
+            rewrittenApiKey,
+            materializedServices,
+            serverName: "github-secret-gated");
+
+        Assert.Equal(plaintext, resolved);
+    }
+
+    [Fact]
+    public async Task CreateAgentChatAsync_NoSecretProvider_LeavesLegacySecretPlaceholderPathIntact()
+    {
+        var manifest = LoadSecretManifest("${SECRET:GitHubToken}", provider: "github-copilot", modelId: "test");
+
+        await using var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentManifest = manifest,
+            AgentServices = new AgentServices { ChatClientOverride = new DeterministicTestChatClient() },
+            PersistenceStoreFactory = (_, _) => ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore()),
+        });
+
+        var promptAgent = Assert.IsType<PromptAgent>(chat.AgentDefinition);
+        var connection = Assert.IsType<ApiKeyConnection>(promptAgent.Model!.Connection);
+        Assert.Equal("${SECRET:GitHubToken}", connection.ApiKey);
+    }
+
+    [Fact]
+    public async Task AgentFactory_GitHubModelsConnection_SecretPlaceholder_ResolvesViaSecretResolver()
+    {
+        // #1398: a github-models connection whose apiKey is a ${SECRET:...} placeholder must resolve
+        // through the secret resolver on the async factory path. If the resolver were bypassed the
+        // placeholder would be treated as an environment-variable name and creation would throw.
+        const string token = "${SECRET:GitHubModelsKey}";
+        var resolver = new SecretPlaceholderResolver();
+        resolver.Register(token, new SecretRetriever
+        {
+            SecretName = "GitHubModelsKey",
+            Secret = _ => Task.FromResult(ToSecureString("resolved-models-key")),
+        });
+        var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
+        {
+          "kind": "prompt",
+          "name": "github-models-agent",
+          "model": {
+            "id": "gpt-4.1-mini",
+            "provider": "github-models",
+            "apiType": "OpenAI",
+            "connection": { "kind": "key", "endpoint": "https://models.github.ai/inference", "apiKey": "{{token}}" }
+          },
+          "tools": []
+        }
+        """);
+
+        var (client, displayName) = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { SecretPlaceholderResolver = resolver });
+
+        Assert.NotNull(client);
+        Assert.Equal("GitHub Models (gpt-4.1-mini at https://models.github.ai/inference)", displayName);
+    }
+
+    [Fact]
+    public async Task AgentFactory_GitHubCopilotByokConnection_SecretPlaceholder_ResolvesViaSecretResolver()
+    {
+        // #1398: a BYOK (openai/azure-openai) connection with a ${SECRET:...} apiKey resolves via the
+        // secret resolver, so the resolved plaintext lands in the SDK's BYOK options.
+        const string token = "${SECRET:ByokKey}";
+        var resolver = new SecretPlaceholderResolver();
+        resolver.Register(token, new SecretRetriever
+        {
+            SecretName = "ByokKey",
+            Secret = _ => Task.FromResult(ToSecureString("resolved-byok-key")),
+        });
+        var agent = AgentDefinitionLoader.LoadAgentFromJson($$"""
+        {
+          "kind": "prompt",
+          "name": "byok-agent",
+          "model": {
+            "id": "gpt-test",
+            "provider": "openai",
+            "connection": { "kind": "key", "endpoint": "http://localhost:12345/", "apiKey": "{{token}}" }
+          }
+        }
+        """);
+
+        var result = await AgentFactory.CreateChatClientAsync(
+            agent,
+            new AgentServices { SecretPlaceholderResolver = resolver });
+
+        var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Equal("resolved-byok-key", client.ByokOptions!.ApiKey);
+    }
+
+    [Fact]
+    public void AgentFactory_ResolveApiKey_SyncMethodRemoved()
+    {
+        // #1398: the synchronous ResolveApiKey duplicate (and its IApiKeyResolver member) were
+        // removed so that all API-key resolution flows through the async resolver-first path.
+        var syncOnAgentFactory = typeof(AgentFactory)
+            .GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+            .Where(method => method.Name == "ResolveApiKey")
+            .ToArray();
+        Assert.Empty(syncOnAgentFactory);
+
+        var syncOnInterface = typeof(IApiKeyResolver).GetMethod("ResolveApiKey");
+        Assert.Null(syncOnInterface);
+    }
+
     [Fact]
     public void ConfigureChatOptions_SetsInstructionsAndAdditionalInstructions()
     {
@@ -444,6 +704,245 @@ public class AgentFactoryTests
         Assert.Equal("GitHub Copilot (gpt-4.1-mini)", displayName);
     }
 
+    [Fact]
+    public void AgentFactory_AvailableToolsList_SetsAvailableTools()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["read_agent", "list_agents"] }
+            """);
+
+        Assert.Equal(
+            ["builtin:read_agent", "builtin:list_agents", "custom:*", "mcp:*"],
+            client.BuiltinToolPolicyForTest!.AvailableTools);
+        Assert.Null(client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsWildcard_LeavesAvailableToolsUnset()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["*"] }
+            """);
+
+        Assert.Null(client.BuiltinToolPolicyForTest!.AvailableTools);
+        Assert.Null(client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsMcpStar_MapsToMcpStarWithNoAutoAppend()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["mcp:*"] }
+            """);
+
+        Assert.Equal(["mcp:*"], client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsMixedBareAndSourceQualified_PrefixesBareOnly()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["read_agent", "mcp:*"] }
+            """);
+
+        Assert.Equal(["builtin:read_agent", "mcp:*"], client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsEmpty_SetsAvailableToolsToCustomAndMcpOnly()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": [] }
+            """);
+
+        Assert.Equal(["custom:*", "mcp:*"], client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableToolsIsolated_SetsAvailableToolsToIsolatedSet()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "isolated": true }
+            """);
+
+        var expected = new ToolSet()
+            .AddBuiltIn(BuiltInTools.Isolated)
+            .AddCustom("*")
+            .AddMcp("*")
+            .ToArray();
+        Assert.Equal(expected, client.BuiltinToolPolicyForTest!.AvailableTools);
+    }
+
+    [Fact]
+    public void AgentFactory_ExcludedToolsWildcard_SetsExcludedToolsToBuiltinStar()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "excluded-tools": { "tools": ["*"] }
+            """);
+
+        Assert.Null(client.BuiltinToolPolicyForTest!.AvailableTools);
+        Assert.Equal(["builtin:*"], client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_ExcludedToolsBuiltinStar_MapsToBuiltinStarVerbatim()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "excluded-tools": { "tools": ["builtin:*"] }
+            """);
+
+        Assert.Equal(["builtin:*"], client.BuiltinToolPolicyForTest!.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_ExcludedToolsIsolated_SetsExcludedToolsToIsolatedSet()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "excluded-tools": { "isolated": true }
+            """);
+
+        var expected = new ToolSet().AddBuiltIn(BuiltInTools.Isolated).ToArray();
+        Assert.Equal(expected, client.BuiltinToolPolicyForTest!.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_AvailableAndExcludedCombined_AppliesBoth()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "isolated": true },
+            "excluded-tools": { "tools": ["exit_plan_mode"] }
+            """);
+
+        Assert.Equal("builtin:ask_user", client.BuiltinToolPolicyForTest!.AvailableTools![0]);
+        Assert.Contains("custom:*", client.BuiltinToolPolicyForTest.AvailableTools);
+        Assert.Contains("mcp:*", client.BuiltinToolPolicyForTest.AvailableTools);
+        Assert.Equal(["builtin:exit_plan_mode"], client.BuiltinToolPolicyForTest.ExcludedTools);
+    }
+
+    [Fact]
+    public void AgentFactory_NoBuiltinToolsEntry_LeavesDefaults()
+    {
+        var agent = LoadCopilotAgent("[]");
+
+        var result = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+
+        var client = Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+        Assert.Null(client.BuiltinToolPolicyForTest);
+    }
+
+    [Fact]
+    public void AgentFactory_BuiltinToolsEntry_IsNotForwardedToToolsetFactory()
+    {
+        var agent = LoadCopilotAgent(
+            """
+            [
+              {
+                "kind": "github-cli-builtin-tools",
+                "available-tools": { "tools": ["read_agent"] }
+              },
+              {
+                "kind": "web_request",
+                "name": "web_request"
+              }
+            ]
+            """);
+
+        var tools = AgentFactory.ExtractTools(agent);
+
+        Assert.Collection(
+            tools!,
+            tool => Assert.Equal("web_request", Assert.IsType<CustomTool>(tool).Kind));
+    }
+
+    [Fact]
+    public void AgentFactory_ClientModeEmpty_WithAvailableTools_ConstructsClientWithEmptyMode()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "client-mode": "empty",
+            "available-tools": { "tools": ["mcp:*"] }
+            """);
+
+        Assert.Equal(CopilotClientMode.Empty, client.BuiltinToolPolicyForTest!.ClientMode);
+    }
+
+    [Fact]
+    public void AgentFactory_ClientModeCopilotCli_IsDefault()
+    {
+        var client = CreateCopilotClientWithBuiltinTools(
+            """
+            "available-tools": { "tools": ["mcp:*"] }
+            """);
+
+        Assert.Equal(CopilotClientMode.CopilotCli, client.BuiltinToolPolicyForTest!.ClientMode);
+    }
+
+    [Fact]
+    public void AgentFactory_ClientModeEmpty_WithoutAvailableTools_Throws()
+    {
+        var agent = new PromptAgent
+        {
+            Name = "github-copilot-agent",
+            Model = new Model
+            {
+                Id = "gpt-5",
+                Provider = "github-copilot",
+                ApiType = "OpenAI",
+                Connection = new ApiKeyConnection { ApiKey = "${GITHUB_TOKEN}" },
+            },
+            Tools =
+            [
+                new GitHubCliBuiltinToolsTool
+                {
+                    Kind = GitHubCliBuiltinToolsTool.KindName,
+                    ClientMode = CopilotClientMode.Empty,
+                },
+            ],
+        };
+
+        var exception = Assert.Throws<InvalidOperationException>(() => AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token")));
+        Assert.Contains("client-mode: empty", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("available-tools", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentDefinitionLoader_GithubCliBuiltinToolsEntry_IsExtractedAsTypedSubclass()
+    {
+        var agent = LoadCopilotAgent(
+            """
+            [
+              {
+                "kind": "github-cli-builtin-tools",
+                "client-mode": "empty",
+                "available-tools": { "tools": ["mcp:*"] },
+                "excluded-tools": { "tools": ["shell"] }
+              }
+            ]
+            """);
+
+        var promptAgent = Assert.IsType<PromptAgent>(agent);
+        var tool = Assert.IsType<GitHubCliBuiltinToolsTool>(Assert.Single(promptAgent.Tools!));
+        Assert.Equal(CopilotClientMode.Empty, tool.ClientMode);
+        Assert.Equal(["mcp:*"], tool.AvailableTools!.Tools);
+        Assert.Equal(["shell"], tool.ExcludedTools!.Tools);
+    }
+
     private sealed class RecordingAccountUpsertService : IGitHubAccountUpsertService
     {
         public Task UpsertForTokenAsync(string token, CancellationToken cancellationToken = default)
@@ -554,6 +1053,63 @@ public class AgentFactoryTests
         Assert.NotNull(chat);
         Assert.Equal("Echo Chat Client", chat.DisplayName);
         Assert.False(string.IsNullOrWhiteSpace(chat.AgentSessionId));
+    }
+
+    [Fact]
+    public void CreateAgentChatAsync_CopilotPath_UsesHostSuppliedCurrentSessionContext()
+    {
+        var user = MakeSnapshot(["entity", "user"], ["users", "username", "alice"]);
+        var profile = MakeSnapshot(["entity", "user-computer-profile"], ["profiles", "host-a"]);
+        var computer = MakeSnapshot(["entity", "computer"], ["computers", "hostname", "host-a"]);
+        var hostContext = new CurrentSessionContext
+        {
+            AgentSessionId = "will-be-overwritten",
+            User = user,
+            UserComputerProfile = profile,
+            Computer = computer,
+        };
+        var services = new AgentServices { CurrentSessionContext = hostContext };
+
+        var resolved = AgentFactory.ResolveSessionContext(services, "session-42");
+
+        Assert.Equal("session-42", resolved.AgentSessionId);
+        Assert.Same(user, resolved.User);
+        Assert.Same(profile, resolved.UserComputerProfile);
+        Assert.Same(computer, resolved.Computer);
+    }
+
+    [Fact]
+    public void CreateAgentChatAsync_CopilotPath_NoHostContext_FallsBackToMinimalContext()
+    {
+        var services = new AgentServices();
+
+        var resolved = AgentFactory.ResolveSessionContext(services, "session-42");
+
+        Assert.Equal("session-42", resolved.AgentSessionId);
+        Assert.Null(resolved.User);
+        Assert.Null(resolved.UserComputerProfile);
+        Assert.Null(resolved.Computer);
+    }
+
+    private static Data.EntitySnapshot MakeSnapshot(string[] entityTypes, string[] entityName)
+    {
+        var entityId = new Data.EntityId();
+        using var document = System.Text.Json.JsonDocument.Parse(
+            $$"""
+            {
+              "entity-id": "{{entityId.Value}}",
+              "entity-types": {{System.Text.Json.JsonSerializer.Serialize(entityTypes)}},
+              "names": [{{System.Text.Json.JsonSerializer.Serialize(entityName)}}]
+            }
+            """);
+        return new Data.EntitySnapshot
+        {
+            EntityId = entityId,
+            ConcurrencyTag = new Data.ConcurrencyTag("1"),
+            ModifiedTime = new Data.Timestamp(System.DateTimeOffset.UtcNow, System.Guid.NewGuid().ToString()),
+            Data = document.RootElement.Clone(),
+            Relationships = System.Array.Empty<Data.EntitySnapshot>(),
+        };
     }
 
     [Fact]
@@ -763,7 +1319,6 @@ public class AgentFactoryTests
     }
 
     [Fact]
-    [Trait("Category", "SlowDocker")]
     public async Task CreateAgentChat_UsesAgentDefinitionChatHistoryTool()
     {
         var mongoConfig = new MongoDbChatHistoryProviderDefinition
@@ -774,7 +1329,7 @@ public class AgentFactoryTests
             ContainerName = "test-mongo",
             DataDirectory = "/tmp/mongo",
         };
-        
+
         var mongoConfigJson = System.Text.Json.JsonSerializer.Serialize(
             System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object>>(mongoConfig.ToJson())
         );
@@ -802,12 +1357,100 @@ public class AgentFactoryTests
 
         var agent = AgentDefinitionLoader.LoadAgentFromJson(agentJson);
 
-        // This should extract and create a MongoDB provider from the agent's chat-history tool
-        await using var chat = await CreateChatAsync(agent);
-        
-        // Verify the chat was created successfully
+        // Inject a fake factory so the chat-history tool drives store creation without ever
+        // touching Docker/MongoDB. The factory captures the definition for assertion.
+        ChatHistoryProviderDefinition? observedDefinition = null;
+        var invocationCount = 0;
+        ValueTask<IAgentPersistenceStore> FakeFactory(
+            ChatHistoryProviderDefinition? definition, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocationCount);
+            observedDefinition = definition;
+            return ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore());
+        }
+
+        await using var chat = await CreateChatAsync(agent, persistenceStoreFactory: FakeFactory);
+
         Assert.NotNull(chat);
+        Assert.Equal(1, invocationCount);
+        var mongo = Assert.IsType<MongoDbChatHistoryProviderDefinition>(observedDefinition);
+        Assert.Equal("container", mongo.MongoProvider);
+        Assert.Equal("test-db", mongo.DatabaseName);
+        Assert.Equal("test-collection", mongo.CollectionName);
+        Assert.Equal("test-mongo", mongo.ContainerName);
+        Assert.Equal("/tmp/mongo", mongo.DataDirectory);
         chat.EnqueueUserMessage("hello");
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_NoChatHistoryTool_InvokesPersistenceStoreFactoryWithNullDefinition()
+    {
+        var agentJson = """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": {
+                "id": "echo",
+                "provider": "echo",
+                "apiType": "Echo"
+              },
+              "tools": []
+            }
+            """;
+
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(agentJson);
+
+        ChatHistoryProviderDefinition? observedDefinition = null;
+        var invocationCount = 0;
+        var store = new InMemoryAgentPersistenceStore();
+        ValueTask<IAgentPersistenceStore> FakeFactory(
+            ChatHistoryProviderDefinition? definition, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref invocationCount);
+            observedDefinition = definition;
+            return ValueTask.FromResult<IAgentPersistenceStore>(store);
+        }
+
+        await using var chat = await CreateChatAsync(agent, persistenceStoreFactory: FakeFactory);
+
+        Assert.NotNull(chat);
+        Assert.Equal(1, invocationCount);
+        Assert.Null(observedDefinition);
+        Assert.Same(store, GetConfiguredStore(chat));
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_DefaultFactory_NoChatHistoryTool_UsesInMemoryStore()
+    {
+        var agent = CreateEchoPromptAgentDefinition();
+
+        // No injected factory: the default delegate must map a null definition to an in-memory store.
+        await using var chat = await CreateChatAsync(agent);
+
+        Assert.NotNull(chat);
+        Assert.IsType<InMemoryAgentPersistenceStore>(GetConfiguredStore(chat));
+    }
+
+    [Fact]
+    public async Task CreateAgentChat_AgentPersistenceStoreOverride_TakesPrecedenceOverPersistenceStoreFactory()
+    {
+        var agent = LoadEchoAgentWithChatHistoryTool();
+        var overrideStore = new RecordingAgentPersistenceStore();
+        var services = new AgentServices { AgentPersistenceStoreOverride = overrideStore };
+
+        var factoryInvoked = false;
+        ValueTask<IAgentPersistenceStore> FakeFactory(
+            ChatHistoryProviderDefinition? definition, CancellationToken cancellationToken)
+        {
+            factoryInvoked = true;
+            return ValueTask.FromResult<IAgentPersistenceStore>(new InMemoryAgentPersistenceStore());
+        }
+
+        await using var chat = await CreateChatAsync(agent, services, persistenceStoreFactory: FakeFactory);
+
+        Assert.NotNull(chat);
+        Assert.False(factoryInvoked, "AgentPersistenceStoreOverride should short-circuit the factory.");
+        Assert.Same(overrideStore, GetConfiguredStore(chat));
     }
 
     [Fact]
@@ -1306,13 +1949,27 @@ public class AgentFactoryTests
         public void Dispose() => _queue.CompleteAdding();
     }
 
-    private static Task<AgentChat> CreateChatAsync(AgentDefinition agentDefinition, AgentServices? agentServices = null)
+    private static Task<AgentChat> CreateChatAsync(
+        AgentDefinition agentDefinition,
+        AgentServices? agentServices = null,
+        Func<ChatHistoryProviderDefinition?, CancellationToken, ValueTask<IAgentPersistenceStore>>? persistenceStoreFactory = null)
         => AgentFactory.CreateAgentChatAsync(
             new CreateAgentChatRequest
             {
                 AgentDefinition = agentDefinition,
                 AgentServices = agentServices,
+                PersistenceStoreFactory = persistenceStoreFactory,
             });
+
+    // Reads the persistence store the AgentChat was configured with. AgentChat holds it on the
+    // internal request record; InternalsVisibleTo makes the type visible to the test project.
+    private static IAgentPersistenceStore GetConfiguredStore(AgentChat chat)
+    {
+        var field = typeof(AgentChat).GetField("request", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("AgentChat.request field not found.");
+        var request = (InternalCreateAgentChatRequest)field.GetValue(chat)!;
+        return request.ConfiguredStore;
+    }
 
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
@@ -1409,9 +2066,47 @@ public class AgentFactoryTests
             => ValueTask.FromResult<IReadOnlyList<AgentSessionId>>(Array.Empty<AgentSessionId>());
     }
 
+    private static CopilotSdkChatClient CreateCopilotClientWithBuiltinTools(string builtinToolProperties)
+    {
+        var agent = LoadCopilotAgent(
+            $$"""
+            [
+              {
+                "kind": "github-cli-builtin-tools",
+                {{builtinToolProperties}}
+              }
+            ]
+            """);
+
+        var result = AgentFactory.CreateChatClient(
+            agent,
+            services: null,
+            apiKeyResolver: new FixedApiKeyResolver("test-token"));
+
+        return Assert.IsType<CopilotSdkChatClient>(result.ChatClient);
+    }
+
+    private static AgentDefinition LoadCopilotAgent(string toolsJson)
+        => AgentDefinitionLoader.LoadAgentFromJson(
+            $$"""
+            {
+              "kind": "prompt",
+              "name": "github-copilot-agent",
+              "model": {
+                "id": "gpt-5",
+                "provider": "github-copilot",
+                "apiType": "OpenAI",
+                "connection": {
+                  "kind": "key",
+                  "apiKey": "${GITHUB_TOKEN}"
+                }
+              },
+              "tools": {{toolsJson}}
+            }
+            """);
+
     private sealed class FixedApiKeyResolver(string key) : IApiKeyResolver
     {
-        public string ResolveApiKey(string? apiKeyValue, string? serverName) => key;
         public Task<string> ResolveApiKeyAsync(string? apiKeyValue, string? serverName, CancellationToken cancellationToken = default) => Task.FromResult(key);
     }
 
@@ -1456,4 +2151,64 @@ public class AgentFactoryTests
         var result = AgentFactory.CreateChatClient(definition);
         Assert.IsType<CopilotSubAgentChatClient>(result.ChatClient);
     }
-}
+
+    private static AgentManifest LoadSecretManifest(string apiKey, string provider, string modelId = "gpt-test")
+        => AgentManifestLoader.LoadManifestFromJson($$"""
+        {
+          "name": "secret-agent",
+          "displayName": "Secret Agent",
+          "metadata": { "entity-id": "11111111-1111-1111-1111-111111111111" },
+          "template": {
+            "kind": "prompt",
+            "name": "secret-agent",
+            "model": {
+              "id": "{{modelId}}",
+              "provider": "{{provider}}",
+              "connection": { "kind": "key", "apiKey": "{{apiKey}}" }
+            }
+          }
+        }
+        """);
+
+    private static SecureString ToSecureString(string value, bool makeReadOnly = true)
+    {
+        var secure = new SecureString();
+        foreach (var ch in value)
+        {
+            secure.AppendChar(ch);
+        }
+
+        if (makeReadOnly)
+        {
+            secure.MakeReadOnly();
+        }
+
+        return secure;
+    }
+
+    private sealed class FakeSecretProvider : ISecretProvider
+    {
+        public int CallCount { get; private set; }
+        public bool ReturnNull { get; set; }
+        public Dictionary<string, SecureString> Secrets { get; } = [];
+
+        public Task<RequestSecretsResult?> RequestSecretsAsync(IReadOnlyList<SecretRequest> requests, CancellationToken cancellationToken)
+        {
+            this.CallCount++;
+            if (this.ReturnNull)
+            {
+                return Task.FromResult<RequestSecretsResult?>(null);
+            }
+
+            var retrievers = requests
+                .Where(request => this.Secrets.ContainsKey(request.SecretName))
+                .Select(request => new SecretRetriever
+                {
+                    SecretName = request.SecretName,
+                    Secret = _ => Task.FromResult(this.Secrets[request.SecretName]),
+                })
+                .ToArray();
+
+            return Task.FromResult<RequestSecretsResult?>(new RequestSecretsResult(retrievers, []));
+        }
+    }}

@@ -824,4 +824,84 @@ public sealed class CopilotSubAgentRouterTests
         Assert.Empty(await DrainAsync(channel));
         var updates = await DrainReceiverAsync(factory.CreatedReceiver!);
     }
+
+    // ─── #1318: root-tagged built-in tool execution items land on the root/session sink ────
+
+    private static ChatResponseUpdate RootToolStartFromAdapter(string callId, string toolName)
+    {
+        // Mirrors what CopilotSdkStreamAdapter emits for a ToolExecutionStartEvent with
+        // AgentId == null: FunctionCallContent with NO ParentToolCallIdPropertyName so the
+        // router treats it as root-agent content.
+        var content = new FunctionCallContent(callId, toolName, new Dictionary<string, object?>())
+        {
+            AdditionalProperties = new(),
+        };
+        return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [content] };
+    }
+
+    private static ChatResponseUpdate RootToolCompleteFromAdapter(string callId, string result)
+    {
+        var content = new FunctionResultContent(callId, result)
+        {
+            AdditionalProperties = new(),
+        };
+        return new ChatResponseUpdate { Role = ChatRole.Tool, Contents = [content] };
+    }
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_RootTaggedToolExecutionItems_RouteToRootSessionSink()
+    {
+        // Fix #1318: a REMOTE-emitted built-in shell/powershell ToolExecutionStart/CompleteEvent
+        // pair with AgentId == null must land on the root/session sink and NOT be attributed to
+        // any sub-agent. This mirrors the CopilotSdkStreamAdapter output for root-AgentId events
+        // (no ParentToolCallIdPropertyName).
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        // A concurrent sub-agent is active so we can prove the root-tagged items do NOT leak
+        // into its receiver.
+        await router.RouteAsync(LifecycleStart("agent-child", "call-child"));
+        var childReceiver = factory.CreatedReceivers[^1];
+
+        await router.RouteAsync(RootToolStartFromAdapter("shell-1", "powershell"));
+        await router.RouteAsync(RootToolCompleteFromAdapter("shell-1", "ok"));
+
+        var rootUpdates = await DrainAsync(channel);
+        Assert.Equal(2, rootUpdates.Count);
+        var start = Assert.IsType<FunctionCallContent>(Assert.Single(rootUpdates[0].Contents));
+        Assert.Equal("shell-1", start.CallId);
+        Assert.Equal("powershell", start.Name);
+        var complete = Assert.IsType<FunctionResultContent>(Assert.Single(rootUpdates[1].Contents));
+        Assert.Equal("shell-1", complete.CallId);
+
+        // Child receiver received nothing.
+        var childUpdates = await DrainReceiverAsync(childReceiver);
+        Assert.DoesNotContain(childUpdates, u => u.Contents.Any(c => c is FunctionCallContent fc && fc.CallId == "shell-1"));
+        Assert.DoesNotContain(childUpdates, u => u.Contents.Any(c => c is FunctionResultContent fr && fr.CallId == "shell-1"));
+    }
+
+    [Fact]
+    public async Task CopilotSubAgentRouter_SubAgentTaggedToolExecutionItems_RouteToMatchingSubAgentSink()
+    {
+        // Fix #1318 regression guard: sub-agent-tagged (AgentId non-null) tool events still route
+        // to the matching sub-agent sink and never to the root writer. This prevents the #1312
+        // default-arm work from accidentally stripping ParentToolCallIdPropertyName on known
+        // tool-event mappings.
+        var factory = new SubAgentTestFakes.FakeRunningAgentChatFactory();
+        var (router, channel) = CreateRouter(factory);
+
+        await router.RouteAsync(LifecycleStart("agent-1", "call-parent"));
+        var receiver = factory.CreatedReceivers[^1];
+
+        // Manually construct sub-agent-tagged tool content (mirrors adapter output for AgentId != null).
+        var startCall = new FunctionCallContent("tool-call-42", "search", new Dictionary<string, object?>())
+        {
+            AdditionalProperties = new() { [CopilotSdkStreamAdapter.ParentToolCallIdPropertyName] = "agent-1" },
+        };
+        await router.RouteAsync(new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [startCall] });
+
+        Assert.Empty(await DrainAsync(channel));
+        var childUpdates = await DrainReceiverAsync(receiver);
+        Assert.Contains(childUpdates, u => u.Contents.Any(c => c is FunctionCallContent fc && fc.CallId == "tool-call-42"));
+    }
 }

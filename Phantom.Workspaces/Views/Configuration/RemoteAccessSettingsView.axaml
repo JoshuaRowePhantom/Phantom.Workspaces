@@ -23,7 +23,8 @@
         <StackPanel Spacing="4">
             <TextBlock Text="Dev tunnel name" />
             <TextBox PlaceholderText="my-workspace-tunnel or auto" Text="{Binding TunnelName}" />
-            <TextBlock Text="Name of the dev tunnel to host/connect by; the forwarded port is discovered automatically. When connecting, use &quot;auto&quot; to discover the single Workspaces tunnel without naming it."
+            <TextBlock x:Name="SettingsTunnelNameHelperText"
+                       Text="{Binding TunnelNameHelperTextValue}"
                        Opacity="0.7"
                        TextWrapping="Wrap" />
         </StackPanel>

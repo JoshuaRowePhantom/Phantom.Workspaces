@@ -50,11 +50,13 @@ public sealed class TransportTrustedExecutor : ITrustedExecutor, IAsyncDisposabl
         var chatClient = new ChatClientOverTransport(transport, BuildChatClientRequest(request));
 
         var baseServices = request.AgentServices ?? new AgentServices();
-        var services = baseServices with
-        {
-            ChatClientOverride = chatClient,
-            AgentPersistenceStoreOverride = NullAgentPersistenceStore.Instance,
-        };
+        var services = request.PreserveSourcePersistence
+            ? baseServices with { ChatClientOverride = chatClient }
+            : baseServices with
+            {
+                ChatClientOverride = chatClient,
+                AgentPersistenceStoreOverride = NullAgentPersistenceStore.Instance,
+            };
 
         return await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {

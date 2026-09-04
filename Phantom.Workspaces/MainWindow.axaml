@@ -91,6 +91,11 @@
                                      Classes.paused="{Binding ScheduledToolsPause.IsPaused, FallbackValue=False}" />
                     </Button>
 
+                    <Button Classes="settings-gear top-right"
+                            Content="🤫"
+                            ToolTip.Tip="Memorized secrets and credentials"
+                            Click="OnOpenCredentialManagerClicked" />
+
                     <Panel VerticalAlignment="Stretch"
                            IsVisible="{Binding RunningAgentBrain, Converter={x:Static ObjectConverters.IsNotNull}}">
                         <Button x:Name="RunningAgentBrainButton"
@@ -98,7 +103,7 @@
                                 ToolTip.Tip="Running agents"
                                 Command="{Binding RunningAgentBrain.ToggleOpenCommand}">
                             <ProgressBar Classes="glyph-indicator pulsating-brain"
-                                         IsIndeterminate="{Binding RunningAgentBrain.IsAnyRunning, FallbackValue=False}" />
+                                         IsIndeterminate="{Binding RunningAgentBrain.IsAnyAgentPulsating, FallbackValue=False}" />
                         </Button>
                         <Popup IsOpen="{Binding RunningAgentBrain.IsOpen, Mode=TwoWay}"
                                PlacementTarget="{Binding #RunningAgentBrainButton}"
@@ -172,7 +177,7 @@
                 <TextBox x:Name="FindTextBox"
                          Classes="entity-find-input"
                          Text="{Binding Find.Query, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         Watermark="Find entities…">
+                         PlaceholderText="Find entities…">
                     <TextBox.KeyBindings>
                         <KeyBinding Gesture="Enter"        Command="{Binding Find.NextCommand}" />
                         <KeyBinding Gesture="Shift+Enter"  Command="{Binding Find.PreviousCommand}" />
@@ -217,9 +222,14 @@
                      wrapper makes the tree's own inner scroller the single scroller (vertical
                      scroll plus below-minimum horizontal scroll), and wraps content to the viewport. -->
                 <TreeView Grid.Row="1"
-                          Classes="entity-card-tree entity-card-tree-entity"
+                          Classes="entity-card-tree entity-card-tree-entity entity-card-tree-sticky"
                           HorizontalAlignment="Stretch"
                           ItemsSource="{Binding CurrentViewPopulation.RootEntities}">
+                    <TreeView.Styles>
+                        <Style Selector="TreeViewItem" x:DataType="vm:ViewEntityViewModel">
+                            <Setter Property="IsVisible" Value="{Binding IsVisible}"/>
+                        </Style>
+                    </TreeView.Styles>
                     <TreeView.ItemTemplate>
                         <TreeDataTemplate x:DataType="vm:ViewEntityViewModel"
                                           ItemsSource="{Binding Children}">

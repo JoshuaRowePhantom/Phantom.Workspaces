@@ -221,6 +221,15 @@ what `current` points at.
 #### What ends up in the release payload
 
 - `Phantom.Workspaces.exe` — the bundled GUI (runtime + all managed + native deps inside).
+- `runtimes\<rid>\native\copilot.exe` — the GitHub Copilot CLI, shipped as a **loose file** beside
+  the single-file exe, plus `copilot_runtime.dll` and the CLI `LICENSE.md` in the same folder.
+  `GitHub.Copilot.SDK` resolves the CLI strictly from
+  `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` and does **not** search PATH, and
+  single-file publish drops the SDK's Content-registered binary from the bundle, so the GUI csproj
+  target `PublishCopilotRuntimeLoose` copies it (and the license) from the build output into the
+  publish output. The CLI is redistributed **unmodified** under the GitHub Copilot CLI License; that
+  license (added as content by `Phantom.Workspaces.Llm.Core.csproj`) ships beside the binary to
+  satisfy the redistribution conditions (issue #1376).
 - A few assets the bundler intentionally leaves on disk if any (e.g. the WebView2 loader, if
   `Avalonia.Controls.WebView` requires a loose native loader) — verified per release and added
   to the zip staging.
@@ -1022,6 +1031,21 @@ touch the developer's actual install or processes (respecting "don't kill my pro
 
 - **Publish smoke** (per RID) — `dotnet publish` the GUI, then read its `FileVersionInfo` (no
   process launch, no console needed) and assert the bundle is present (see Test task 1).
+- **Copilot runtime bundled** (per RID) — `packaging\validate\Assert-CopilotRuntimePayload.ps1`
+  asserts the published payload contains the loose file `runtimes\<rid>\native\copilot.exe`
+  (`Publish_IncludesCopilotRuntime_ForEachRid`) and the GitHub Copilot CLI `LICENSE.md` beside it
+  (`Distribution_IncludesCopilotCliLicense`), and — for the host-arch RID — runs the bundled
+  `copilot.exe --version` to confirm the runtime launches (`InstalledPayload_StartsCopilotProvider_Smoke`).
+  Wired into `release.yml` (release gate) and `publish-validation.yml`. Rationale: the SDK resolves
+  the CLI strictly from `AppContext.BaseDirectory\runtimes\<rid>\native\copilot.exe` (no PATH
+  search); single-file publish drops that Content-registered binary, so it must be re-added as a
+  loose file (issue #1376). The `--version` smoke is skipped for the cross-arch payload because the
+  bundled binary only executes on a matching CPU.
+- **Copilot SDK version pin** — `packaging\validate\Assert-CopilotSdkVersion.ps1` asserts
+  `GitHub.Copilot.SDK` is pinned to the reviewed version in `Directory.Packages.props`
+  (`PackageVersions_CopilotSdk_IsExpectedPinnedVersion`). The redistributed CLI version is fixed 1:1
+  by the SDK version (SDK `1.0.11` -> CLI `1.0.79`), so an unreviewed bump would silently change the
+  bundled binary.
 - **Version consistency** — assembly `InformationalVersion` == `app.manifest` == release tag.
 - **Release-artifact hash** — uploaded asset SHA256 matches the published `.sha256`.
 - **Subsystem assertion** — verify the published exe's PE header is GUI-subsystem (no console

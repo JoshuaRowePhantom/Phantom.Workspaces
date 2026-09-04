@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
@@ -29,6 +30,20 @@ public static class BrowserAcceleratorBehavior
         AvaloniaProperty.RegisterAttached<Control, bool>("IsEnabled", typeof(BrowserAcceleratorBehavior));
 
     /// <summary>
+    /// A per-host list of <see cref="KeyGesture"/>s that must NOT be captured by the accelerator
+    /// forwarding path. When a WebView2 accelerator matches any gesture in this list,
+    /// <see cref="Dispatch"/> returns immediately without raising the routed
+    /// <c>KeyDown</c>/<c>KeyUp</c> event and without walking ancestor <c>KeyBinding</c>s, leaving
+    /// <see cref="AcceleratorKeyEventArgs.Handled"/> <c>false</c> so the hosted page processes the
+    /// key natively (e.g. <c>Ctrl+F</c> → in-page find). See issue #1255. The list is declared per
+    /// host, so different web views can exempt different gestures. Gestures not in the list continue
+    /// to be forwarded exactly as before.
+    /// </summary>
+    public static readonly AttachedProperty<IList<KeyGesture>?> NonCapturedAcceleratorKeysProperty =
+        AvaloniaProperty.RegisterAttached<Control, IList<KeyGesture>?>(
+            "NonCapturedAcceleratorKeys", typeof(BrowserAcceleratorBehavior));
+
+    /// <summary>
     /// Private storage for the controller instance on the host so <see cref="IsEnabledProperty"/>
     /// toggles are idempotent (never double-attach or leak).
     /// </summary>
@@ -45,6 +60,12 @@ public static class BrowserAcceleratorBehavior
         control.SetValue(IsEnabledProperty, value);
 
     public static bool GetIsEnabled(Control control) => control.GetValue(IsEnabledProperty);
+
+    public static void SetNonCapturedAcceleratorKeys(Control control, IList<KeyGesture>? value) =>
+        control.SetValue(NonCapturedAcceleratorKeysProperty, value);
+
+    public static IList<KeyGesture>? GetNonCapturedAcceleratorKeys(Control control) =>
+        control.GetValue(NonCapturedAcceleratorKeysProperty);
 
     /// <summary>The controller installed on <paramref name="control"/>, or <c>null</c> if not enabled.</summary>
     internal static BrowserAcceleratorController? GetController(Control control) =>
@@ -63,6 +84,25 @@ public static class BrowserAcceleratorBehavior
         if (e is null || e.Key == Key.None)
         {
             return;
+        }
+
+        // Per-host exclusion list (issue #1255): if this gesture is declared non-captured, leave it
+        // for the hosted page to process natively. Skip the routed re-dispatch (which would reach
+        // MainWindow.OnPreviewKeyDown) and the ancestor KeyBinding walk, and leave e.Handled = false
+        // so WebView2 does not mark the COM args handled.
+        var nonCaptured = host.GetValue(NonCapturedAcceleratorKeysProperty);
+        if (nonCaptured is not null)
+        {
+            for (var i = 0; i < nonCaptured.Count; i++)
+            {
+                var gesture = nonCaptured[i];
+                if (gesture is not null &&
+                    gesture.Key == e.Key &&
+                    gesture.KeyModifiers == e.Modifiers)
+                {
+                    return;
+                }
+            }
         }
 
         var routedEvent = e.IsKeyDown ? InputElement.KeyDownEvent : InputElement.KeyUpEvent;

@@ -18,6 +18,16 @@ public sealed class WebClientDataAccessLayerTests
     }
 
     [Fact]
+    public void WebDataAccessRequestException_IsConnectivityFailure_Covers404And503()
+    {
+        Assert.True(new WebDataAccessRequestException("404 response", HttpStatusCode.NotFound).IsConnectivityFailure);
+        Assert.True(new WebDataAccessRequestException("503 response", HttpStatusCode.ServiceUnavailable).IsConnectivityFailure);
+
+        // A genuine application-level 4xx (other than 401/404) is not a connectivity failure.
+        Assert.False(new WebDataAccessRequestException("400 response", HttpStatusCode.BadRequest).IsConnectivityFailure);
+    }
+
+    [Fact]
     public async Task GetAsync_On401_WithTokenResolver_RefreshesTokenAndRetries()
     {
         var callCount = 0;
