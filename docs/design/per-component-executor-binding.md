@@ -53,6 +53,7 @@ to an explicitly named executor, and the split is expressed declaratively in the
 | G7 | "Session overall executor" is implicit (no explicit default-local concept). | Commit 5 |
 | G8 | `ExecutorTargetRouter` has no production consumer; `McpToolContextProvider` always connects in-process. | Commit 6 |
 | G9 | No remote production handler to host an arbitrary stdio/HTTP MCP server (`McpTransportListener` is never registered in production). | Commit 6 |
+| G10 | The executor model must be structured/extensible so non-persistent runtimes (e.g. ephemeral containers) can be added later WITHOUT a manifest/session schema change. | Commits 4, 5 + [Extensibility](#extensibility--non-persistent-executors-eg-containers) |
 
 ---
 
@@ -68,8 +69,13 @@ to an explicitly named executor, and the split is expressed declaratively in the
    executor**, which is the local orchestrator machine today (`"."`). The system MUST NOT require
    or emit `executor:"local"`.
 4. **Executor `id` resolution strategies.** An executor resource's `id` selects how it resolves
-   to a client-instance: `local`, `parameter` (bind to a launch parameter), `user-computer-profile-entity`
-   (fixed profile entity-id), and `trust-profile`.
+   to a transport **connection-descriptor** (`JsonElement`): `local`, `parameter` (bind to a launch
+   parameter), `user-computer-profile-entity` (fixed profile entity-id), `trust-profile`, and
+   `connection-descriptor` (a raw escape hatch carrying an inline connection-descriptor used
+   verbatim). There is **no** parallel executor schema: an executor resolves to the *same*
+   `type`-discriminated connection-descriptor the transport layer already consumes
+   (`local`, `user-computer-profile`, `http`, `reverse-http`, …). The `connection-descriptor`
+   strategy is what makes the model open-endedly extensible with no schema change.
 5. **`user-computer-profile` launch parameter.** A new manifest parameter `kind:"user-computer-profile"`
    lets the user pick which remote machine at launch; the chosen profile entity-id is recorded in
    the session's `parameter-values`.
@@ -83,8 +89,8 @@ to an explicitly named executor, and the split is expressed declaratively in the
    resolve in the context of the tool's **bound** executor (search order: machine profile →
    `${USER}/mcp-servers` → `defaults/mcp-servers`), not the resolving instance.
 9. **Persist per-executor bindings.** The session MUST persist per-executor bindings
-   (`executor-bindings`: name → resolved client-instance) so the topology reconstructs correctly
-   on resume — not just the single `host-profile-entity-id`.
+   (`executor-bindings`: name → resolved **connection-descriptor** object) so the topology
+   reconstructs correctly on resume — not just the single `host-profile-entity-id`.
 10. **Explicit session executor.** The "session overall executor" becomes an **explicit** concept
     (default local `"."`) that per-component executors override.
 11. **Default split manifest.** Ship a default manifest entity (`defaults/agent-manifests/...`)
@@ -101,6 +107,13 @@ to an explicitly named executor, and the split is expressed declaratively in the
     web MCP does not strictly require local, but the default ships it local. Validation note: an
     MCP tool whose connection uses interactive OAuth combined with a non-local `executor` MUST be
     rejected or warned at load/validation time.
+14. **Extensible to non-persistent runtimes (future).** The model MUST be able to express
+    non-persistent runtimes — e.g. an ephemeral container — **without** any manifest or session
+    schema change, by authoring a host-outer / target-inner connection-descriptor and resolving it
+    through the `connection-descriptor` escape hatch. Implementing such a runtime (a host-side
+    container `target` handler driving `ContainerEngine`) is **explicit future work, out of scope
+    for the commits in this design**; see [Extensibility](#extensibility--non-persistent-executors-eg-containers).
+    The design only guarantees the connection-descriptor model can extend there.
 
 ---
 
@@ -110,14 +123,17 @@ to an explicitly named executor, and the split is expressed declaratively in the
 
 **Architecture:** Add a manifest `kind:"executor"` resource and an optional `executor` string on
 the model and on tools. A new resolver maps each executor resource (given `parameter-values` and
-trust context) to a client-instance (`"."` or a profile UUID). At session build time these
-bindings become an `ExecutorTopology`-like map (`name → client-instance`) persisted as
-`executor-bindings`. Each `McpToolContextProvider` receives its bound client-instance; when it is
-non-local it connects via the already-existing `ExecutorTargetRouter` →
-`ExecutionTargetResolver` → `ITransportFactoryRegistry` (opening an `McpClientOverTransport`),
-and a production `openConnectionAsync` handler on the remote `McpTransportListener` hosts the
-arbitrary stdio/HTTP MCP connection. When local, the existing in-process path is preserved (no
-round-trip).
+trust context) to a transport **connection-descriptor** `JsonElement` (`{"type":"local"}`,
+`{"type":"user-computer-profile","entity-id":...}`, or — via the raw escape hatch — any inline
+connection-descriptor), reusing the shapes already produced by
+`Phantom.Workspaces.Llm.Trust.ExecutionTargetResolver`. There is **no** parallel executor schema:
+the resolver's output IS the connection-descriptor that `ITransportFactoryRegistry.ConnectToAsync`
+already dispatches on. At session build time these bindings become a `name → connection-descriptor`
+map persisted as `executor-bindings`. Each `McpToolContextProvider` receives its bound descriptor;
+when it is non-local it connects via the already-existing `ExecutorTargetRouter` →
+`ITransportFactoryRegistry` (opening an `McpClientOverTransport`), and a production
+`openConnectionAsync` handler on the remote `McpTransportListener` hosts the arbitrary stdio/HTTP MCP
+connection. When local, the existing in-process path is preserved (no round-trip).
 
 **Pros:**
 - True per-server granularity — any individual MCP server can go to any machine.
@@ -169,13 +185,17 @@ conversation.
 
 **Rationale:** Option A gives true per-server granularity (addressing B's fatal con) by making
 the existing but dormant `ExecutorTargetRouter` a production consumer and giving each MCP provider
-a resolved client-instance. It avoids C's sub-session sprawl by keeping ONE `AgentChat` whose
+a resolved **connection-descriptor**. It avoids C's sub-session sprawl by keeping ONE `AgentChat` whose
 components are individually routed over transport. Its own cons are contained: the remote MCP host
 handler is a small `McpTransportListener` registration (the listener primitive already exists and
-is exercised by tests), the client-instance threading is an additive constructor parameter on
+is exercised by tests), the descriptor threading is an additive constructor parameter on
 `McpToolContextProvider`, and the parameter-kind work is localised to the manifest parameter model
 and the Launchpad picker. Because an unset `executor` and a single-machine topology both resolve
-to `"."`, the change is behaviour-preserving for every existing manifest.
+to `{"type":"local"}`, the change is behaviour-preserving for every existing manifest. Reusing the
+transport connection-descriptor (rather than inventing a parallel executor schema) also means
+non-persistent runtimes — e.g. ephemeral containers — can be added later purely as a new
+connection-descriptor `type` behind the same `ITransportFactory` dispatch, with no manifest or
+session schema change (G10; see Extensibility).
 
 ---
 
@@ -241,17 +261,87 @@ to `"."`, the change is behaviour-preserving for every existing manifest.
 - *(EXISTING)* `agent-session.json` has `host-profile-entity-id`, `parameter-values`, and
   `auto-resume{trusted-executor,resume-prompt}`
   (`Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json:24-70`).
+- *(EXISTING)* Transport factories dispatch by a `type` discriminator and are tried in turn, each
+  returning `null` to pass to the next: `ITransportFactory.ConnectToAsync(JsonElement) -> ITransport?`
+  (`Phantom.Workspaces.Transport/ITransportFactory.cs`) iterated by
+  `TransportFactoryRegistry.ConnectToAsync` (`Phantom.Workspaces.Transport/TransportFactoryRegistry.cs:20-32`).
+- *(EXISTING)* `UserComputerProfileTransportFactory` establishes the **recursive-resolve** pattern this
+  design reuses: for `type:"user-computer-profile"` it loads the profile entity, reads a structured
+  **`connection-descriptor`** object off it
+  (`Phantom.Workspaces.Transport/UserComputerProfileTransportFactory.cs:47-55`), and **recursively**
+  calls `transportFactoryRegistry.ConnectToAsync(routedDescriptor)` (`:57`); it also nests an inner
+  `target` descriptor via a private `TargetedTransport` wrapper (`:58-106`). Existing descriptor
+  `type`s include `local`, `user-computer-profile`, `http`, `reverse-http`.
+- *(EXISTING)* `TrustProfile.DefaultExecutionTarget` is a `JsonElement?` documented as
+  "Connection descriptor used as this profile's default execution target"
+  (`Phantom.Workspaces.Llm.Core/Trust/TrustProfile.cs:105`, and the effective copy at `:143`) — so a
+  trust profile's execution target already **is** a connection-descriptor, not a bespoke shape.
+- *(EXISTING)* A container subsystem already exists and is reusable: `Phantom.Workspaces.Containers`
+  defines `ContainerDefinition` + `container-definition.json` (fields: `container-name`, `image-name`,
+  `network-type`, `environment-variables`, `mounts`, `port-mappings`) and `ContainerEngine`
+  (`CreateAsync(ContainerDefinition)`, `PullAsync`, `StartAsync`, `StopAsync`, `DestroyAsync`,
+  `UsableAsync`) with Docker Desktop / containerd engine implementations
+  (`Phantom.Workspaces.Containers/ContainerEngine.cs:3-27`;
+  `Phantom.Workspaces.Containers/JsonSchemas/container-definition.json`). It is already used in
+  production by `MongoDbConnectionBroker`. **No** container *executor / transport* exists yet — that is
+  a documented future extension (see Extensibility), NOT implemented by this design.
 
-### Code organisation
+### Concept: reuse the transport connection-descriptor as the execution schema
+
+**Key insight (motivates the #1436 revision).** The transport layer ALREADY defines how to
+execute/reach a target: a `type`-discriminated **connection-descriptor** JSON consumed by
+`ITransportFactory` implementations tried in turn (`Phantom.Workspaces.Transport/ITransportFactory.cs`;
+`TransportFactoryRegistry.cs:20-32`). Existing descriptor types: `local`, `user-computer-profile`,
+`http`, `reverse-http`. A trust profile's execution target already IS one of these
+(`TrustProfile.DefaultExecutionTarget` is a `JsonElement?` "Connection descriptor used as this
+profile's default execution target", `TrustProfile.cs:105`,`:143`), and
+`Phantom.Workspaces.Llm.Trust.ExecutionTargetResolver.ResolveDescriptor(string)` already maps
+`"."`→`{"type":"local"}` else→`{"type":"user-computer-profile","entity-id":...}`
+(`ExecutionTargetResolver.cs:34-52`).
+
+**Therefore there is NO new execution schema.** An executor resource **resolves to a
+connection-descriptor** (`JsonElement`), and an `executor-binding` **IS** a connection-descriptor.
+The resolver's output is fed straight into `ITransportFactoryRegistry.ConnectToAsync`. This closes the
+lossy string→descriptor bottleneck of #1436 (the resolver previously produced a flat client-instance
+string) without inventing a parallel `ExecutorDescriptor` record. **The `ExecutorDescriptor` record is
+DELETED.**
+
+**Nesting is host-OUTER, target-INNER.** The established convention (from
+`UserComputerProfileTransportFactory`, which reads a host profile's stored `connection-descriptor`,
+RECURSIVELY connects it, and threads an inner `target` through a `TargetedTransport` wrapper,
+`UserComputerProfileTransportFactory.cs:47-106`) is that the OUTER descriptor reaches the host and an
+INNER `target` is what runs there:
+
+```
+{ "type":"user-computer-profile", "entity-id":"<host>", "target":{ ...inner... } }
+{ "type":"local", "target":{ ...inner... } }
+```
+
+This host-outer/target-inner shape is the documented extension seam (see Extensibility). Descriptor
+shapes a resolver produces today:
+
+- `{"type":"local"}` — the local orchestrator (`"."`).
+- `{"type":"user-computer-profile","entity-id":"<uuid>"}` — a persisted remote machine; the profile
+  entity carries the real `connection-descriptor` (resolved recursively by
+  `UserComputerProfileTransportFactory`).
+- an inline connection-descriptor supplied verbatim via the `connection-descriptor` strategy — the raw
+  escape hatch that lets new `type`s be introduced with NO schema change.
+
+The design is deliberately **open to future kinds** — a container `target`, a k8s pod, a WSL distro, or
+a cloud sandbox can be added as an additional descriptor `type` behind the same `ITransportFactory`
+dispatch, without changing callers or the manifest/session schema.
+
 
 **New files** *(NEW/PROPOSED)*:
 
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResource.cs` — parsed model of a `kind:"executor"`
-  manifest resource.
+  manifest resource (convenience strategies + an optional inline `connection-descriptor`).
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResourceResolver.cs` — resolves an
-  `ExecutorResource` (+ `parameter-values` + trust context) to a client-instance string.
-- `Phantom.Workspaces.Llm.Core/Manifest/ExecutorBindings.cs` — immutable `name → client-instance`
-  map plus the explicit session executor; builds an `ExecutorTopology`-equivalent for routing.
+  `ExecutorResource` (+ `parameter-values` + trust context) to a **connection-descriptor**
+  (`JsonElement`), delegating to `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes.
+- `Phantom.Workspaces.Llm.Core/Manifest/ExecutorBindings.cs` — immutable `name → connection-descriptor`
+  map and the explicit session executor; derives the client-instance strings the existing
+  `ExecutorTopology` needs for routing.
 - `Phantom.Workspaces.Transport.Mcp/RemoteMcpHostHandler.cs` — the production `openConnectionAsync`
   that opens an arbitrary stdio/HTTP MCP connection described by the request. *(May instead live in
   `Phantom.Workspaces/Services` next to `WorkspacesTransportComposition` if it must reference the
@@ -268,13 +358,14 @@ to `"."`, the change is behaviour-preserving for every existing manifest.
   `From`/`Save` recipe.
 - `Phantom.Workspaces.Llm.Interfaces/PhantomAgentSchema.cs` — read `executor` in `PostProcess`
   (`ReadExecutor`) so it survives load.
-- `Phantom.Workspaces.Llm.Core/McpToolContextProvider.cs` — accept a resolved client-instance +
+- `Phantom.Workspaces.Llm.Core/McpToolContextProvider.cs` — accept a resolved connection-descriptor +
   router and connect over transport when non-local.
 - `Phantom.Workspaces.Llm.Core/AgentChat.cs` — construct each `McpToolContextProvider` with its
-  bound client-instance and the production `ExecutorTargetRouter`.
+  bound connection-descriptor and the production `ExecutorTargetRouter`.
 - `Phantom.Workspaces/Services/WorkspacesTransportComposition.cs` — register the production
   `RemoteMcpHostHandler` on `LocalListeners` via `McpTransportListener`.
-- `Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json` — add `executor-bindings`.
+- `Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json` — add `executor-bindings` (storing
+  connection-descriptor objects, not bare strings).
 - Session build/resume path (the code that constructs `ExecutorTopology` and calls
   `DeferredTrustedExecutorSelector.SetTopology`) — rebuild topology from `executor-bindings`.
 - `Phantom.Workspaces/ViewModels/AgentManifestParameterKind.cs` +
@@ -293,50 +384,67 @@ to `"."`, the change is behaviour-preserving for every existing manifest.
 
 **Members:**
 - `string Name { get; init; }` — the executor's name, referenced by `executor` fields.
-- `string Id { get; init; }` — resolution strategy: `local`, `parameter`,
-  `user-computer-profile-entity`, or `trust-profile`.
-- `IReadOnlyDictionary<string, string?> Options { get; init; }` — strategy inputs (e.g. the
-  parameter name for `parameter`, the fixed entity-id for `user-computer-profile-entity`, the trust
-  profile name for `trust-profile`).
+- `string Id { get; init; }` — the convenience resolution strategy: `local`, `parameter`,
+  `user-computer-profile-entity`, `trust-profile`, or `connection-descriptor`. The last is a raw
+  escape hatch carrying an inline connection-descriptor used verbatim — this is what makes the model
+  open-endedly extensible with NO schema change.
+- `IReadOnlyDictionary<string,string?> Options { get; init; }` — the simple string inputs for the
+  convenience strategies (the parameter name for `parameter`; the fixed entity-id for
+  `user-computer-profile-entity`; the trust-profile name for `trust-profile`).
+- `JsonElement? ConnectionDescriptor { get; init; }` — the inline connection-descriptor used verbatim
+  by the `connection-descriptor` strategy. (No structured host/spec/lifecycle payload is introduced.)
 
 #### `ExecutorResourceResolver` *(NEW/PROPOSED)*
 
 **Namespace:** `Phantom.Workspaces.Llm.Core.Manifest`
 **Kind:** class
-**Responsibility:** resolve an `ExecutorResource` to a client-instance string (`"."` or a
-user-computer-profile UUID) given the resolved parameter values and trust context.
+**Responsibility:** resolve an `ExecutorResource` to a transport **connection-descriptor**
+(`JsonElement`) given the resolved parameter values and trust context. This is the **#1436 fix**: the
+resolver no longer returns a flat client-instance string (nor a bespoke `ExecutorDescriptor`) — it
+returns the connection-descriptor that `ITransportFactoryRegistry.ConnectToAsync` already dispatches
+on. For the `local`/profile shapes it **delegates to the existing**
+`Phantom.Workspaces.Llm.Trust.ExecutionTargetResolver.ResolveDescriptor` rather than re-implementing
+them.
 
 **Members:**
-- `string Resolve(ExecutorResource resource, IReadOnlyDictionary<string,string> parameterValues, TrustProfile? trustProfile)`
+- `JsonElement Resolve(ExecutorResource resource, IReadOnlyDictionary<string,string> parameterValues, TrustProfile? trustProfile)`
   — dispatch on `Id`:
-  - `local` → `TrustProfile.LocalClientInstance` (`"."`).
-  - `parameter` → the value of the named parameter (a user-computer-profile UUID recorded at
-    launch); missing/blank → throws.
-  - `user-computer-profile-entity` → the fixed `entity-id` option verbatim.
-  - `trust-profile` → the client-instance derived from the trust profile's
-    `DefaultExecutionTarget` / `HostingWorkspacesClientInstances`.
-  - unknown `Id` or unresolved profile → throws with a message mirroring the existing
-    `"Tool resource '<id>:<name>' could not be resolved"` convention, e.g.
+  - `local` → `{"type":"local"}`.
+  - `parameter` → `{"type":"user-computer-profile","entity-id":<resolved profile UUID from the named
+    parameter>}`; missing/blank → throws.
+  - `user-computer-profile-entity` → `{"type":"user-computer-profile","entity-id":<fixed uuid>}`.
+  - `trust-profile` → the trust profile's `DefaultExecutionTarget` connection-descriptor.
+  - `connection-descriptor` → the inline descriptor (`resource.ConnectionDescriptor`) **verbatim** —
+    the extension escape hatch.
+  - Prefer DELEGATING to `Llm.Trust.ExecutionTargetResolver.ResolveDescriptor` for the local/profile
+    shapes (`"."`→`{"type":"local"}`, else→`{"type":"user-computer-profile","entity-id":...}`,
+    `ExecutionTargetResolver.cs:34-52`).
+  - unknown `Id` or unresolved profile → throws
     `"Executor resource '<id>:<name>' could not be resolved"`.
 
 #### `ExecutorBindings` *(NEW/PROPOSED)*
 
 **Namespace:** `Phantom.Workspaces.Llm.Core.Manifest`
 **Kind:** record
-**Responsibility:** the resolved, persistable map of executor name → client-instance plus the
-explicit **session executor** (default `"."`); knows how to project onto the routing primitives.
+**Responsibility:** the resolved, persistable map of executor name → **connection-descriptor**
+(`JsonElement`) and the explicit **session executor** (default `{"type":"local"}`); knows how to
+project onto the existing routing primitives.
 
 **Members:**
-- `string SessionExecutor { get; init; }` — the overall session executor; default
-  `TrustProfile.LocalClientInstance` (`"."`).
-- `IReadOnlyDictionary<string,string> Bindings { get; init; }` — executor name → client-instance.
-- `string ResolveComponent(string? executorName)` — returns `SessionExecutor` when
-  `executorName` is null/empty (Requirement 3), otherwise the bound client-instance; unknown name
-  → throws.
-- `ExecutorTopology ToTopology()` — projects the session executor and gui-local classification into
-  an `ExecutorTopology` so `DeferredTrustedExecutorSelector.SetTopology` continues to work for the
-  `CustomTool` (workspace-gui/entity) routing that already exists.
-- `IReadOnlyDictionary<string,string> ToPersistableMap()` — the `executor-bindings` JSON payload.
+- `JsonElement SessionExecutor { get; init; }` — the overall session executor; default
+  `{"type":"local"}`.
+- `IReadOnlyDictionary<string,JsonElement> Bindings { get; init; }` — executor name →
+  connection-descriptor.
+- `JsonElement ResolveComponent(string? executorName)` — returns `SessionExecutor` when
+  `executorName` is null/empty (Requirement 3), otherwise the bound descriptor; unknown name → throws.
+- `ExecutorTopology ToTopology()` — still needed to keep the EXISTING GuiLocal `CustomTool`
+  (workspace-gui/entity) routing working via `DeferredTrustedExecutorSelector.SetTopology`. For
+  `local` / `user-computer-profile` descriptors the client-instance string is derivable for the
+  existing string-keyed trust/topology checks (`"."` for `local`, or the `entity-id` for a
+  `user-computer-profile`).
+- `JsonElement ToPersistableMap()` — the `executor-bindings` JSON payload (name → connection-descriptor
+  object). Back-compat: a legacy `host-profile-entity-id` (or a bare string binding) is read as a
+  `user-computer-profile` descriptor.
 
 #### `RemoteMcpHostHandler` *(NEW/PROPOSED)*
 
@@ -356,16 +464,18 @@ channel. This is the production `openConnectionAsync` that G9 says is missing.
 #### `McpToolContextProvider` *(EXISTING — modified)*
 
 **Namespace:** `Phantom.Workspaces.Llm`
-**Change:** add a resolved client-instance + router so it connects over transport when non-local.
+**Change:** add a resolved **connection-descriptor** (`JsonElement`) + router so it connects over
+transport when the descriptor is non-local.
 
 **New/changed members:**
-- Constructor gains `string boundClientInstance` and an optional `ExecutorTargetRouter router`
-  (both additive; default `"."` + null preserve today's in-process behaviour).
-- `ProvideAIContextAsync` — when `ExecutionTargetResolver.IsLocal(boundClientInstance)` is `true`,
-  keep the existing in-process `McpTransportFactory.CreateMcpTransportAsync` path (no round-trip);
-  otherwise connect via the router: build a `{"type":"mcp","connection":{...}}` descriptor from
-  `this.tool` and open an `McpClientOverTransport` against the transport returned by
-  `router.ConnectAsync(...)` / `transportFactoryRegistry.ConnectToAsync(descriptor)`.
+- Constructor gains `JsonElement boundExecutor` and an optional `ExecutorTargetRouter router`
+  (both additive; default `{"type":"local"}` + null preserve today's in-process behaviour).
+- `ProvideAIContextAsync` — when the bound descriptor is `{"type":"local"}`, keep the existing
+  in-process `McpTransportFactory.CreateMcpTransportAsync` path (no round-trip); otherwise connect via
+  the router by feeding the resolved connection-descriptor straight into
+  `ExecutorTargetRouter` / `ITransportFactoryRegistry.ConnectToAsync`, building a
+  `{"type":"mcp","connection":{...}}` request from `this.tool` and opening an `McpClientOverTransport`
+  over the returned transport.
 
 #### `ExecutorTargetRouter` *(EXISTING — becomes production consumer)*
 
@@ -380,24 +490,26 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
    `McpTool` to `PhantomMcpTool`, now also recovering the dropped `executor` field
    (`ReadExecutor`).
 2. The manifest's `resources[]` are parsed; `kind:"executor"` entries become `ExecutorResource`s.
-3. `ExecutorResourceResolver.Resolve` turns each `ExecutorResource` into a client-instance using
-   the resolved `parameter-values` (including any `user-computer-profile` parameter the user chose)
-   and trust context. The result is an `ExecutorBindings` (with `SessionExecutor` = `"."` by
-   default).
+3. `ExecutorResourceResolver.Resolve` turns each `ExecutorResource` into a **connection-descriptor**
+   (`JsonElement`) using the resolved `parameter-values` (including any `user-computer-profile`
+   parameter the user chose) and trust context, delegating to `Llm.Trust.ExecutionTargetResolver` for
+   the local/profile shapes. The result is an `ExecutorBindings` (with `SessionExecutor` =
+   `{"type":"local"}` by default).
 4. For each component: the model's `executor` and each tool's `executor` are resolved through
-   `ExecutorBindings.ResolveComponent` to a client-instance; unset → `SessionExecutor`.
-5. `AgentChat` constructs each `McpToolContextProvider` with its bound client-instance and the
+   `ExecutorBindings.ResolveComponent` to a connection-descriptor; unset → `SessionExecutor`.
+5. `AgentChat` constructs each `McpToolContextProvider` with its bound connection-descriptor and the
    production `ExecutorTargetRouter` (built from `ExecutorBindings.ToTopology()` and the
    `ITransportFactoryRegistry`). `DeferredTrustedExecutorSelector.SetTopology` is set from the same
    topology so `CustomTool` (gui-local) routing is unchanged.
-6. `ExecutorBindings.ToPersistableMap()` is written to the session's `executor-bindings`.
+6. `ExecutorBindings.ToPersistableMap()` is written to the session's `executor-bindings`
+   (connection-descriptor objects).
 
 **Runtime (per MCP server first use):**
 
-7. `McpToolContextProvider.ProvideAIContextAsync` runs lazily. If its bound client-instance is
-   local, it connects in-process exactly as today. If non-local, it connects via the router →
-   `ExecutionTargetResolver.ResolveDescriptor` → `ITransportFactoryRegistry.ConnectToAsync`,
-   opening an `McpClientOverTransport`.
+7. `McpToolContextProvider.ProvideAIContextAsync` runs lazily. If its bound descriptor is
+   `{"type":"local"}`, it connects in-process exactly as today. Otherwise it feeds the
+   connection-descriptor into the router → `ITransportFactoryRegistry.ConnectToAsync`, opening an
+   `McpClientOverTransport`.
 8. On the remote host, the inbound `{"type":"mcp","connection":{...}}` channel is served by the
    production `RemoteMcpHostHandler` registered on `McpTransportListener`, which opens the described
    stdio/HTTP MCP server locally and bridges it back.
@@ -422,17 +534,20 @@ Test names follow `<Subject>_<Scenario>_<ExpectedOutcome>` matching neighbours s
 `Scenario2_GuiLocalTool_DuringRemoteTurn_RoutesBackToMachineA`.
 
 #### `ExecutorResourceResolverTests` (`Phantom.Workspaces.Llm.Core.Tests`)
-- `Resolve_LocalId_ReturnsDotClientInstance`
-- `Resolve_ParameterId_ReturnsResolvedProfileUuid`
-- `Resolve_UserComputerProfileEntityId_ReturnsFixedUuid`
-- `Resolve_TrustProfileId_ReturnsDerivedClientInstance`
+- `Resolve_LocalId_ReturnsLocalDescriptor`
+- `Resolve_ParameterId_ReturnsUserComputerProfileDescriptor`
+- `Resolve_UserComputerProfileEntityId_ReturnsFixedUuidDescriptor`
+- `Resolve_TrustProfileId_ReturnsDefaultExecutionTargetDescriptor`
+- `Resolve_ConnectionDescriptorId_ReturnsInlineDescriptorVerbatim`
 - `Resolve_UnknownId_ThrowsWithClearMessage`
 - `Resolve_ParameterMissing_ThrowsWithClearMessage`
 
 #### `ExecutorBindingsTests` (`Phantom.Workspaces.Llm.Core.Tests`)
 - `ResolveComponent_UnsetExecutor_InheritsSessionExecutor`
 - `ResolveComponent_UnknownName_Throws`
+- `ResolveComponent_BoundName_ReturnsConnectionDescriptor`
 - `ToTopology_LocalSession_ResolvesLocally`
+- `ToPersistableMap_DescriptorObjects_RoundTrips`
 
 #### `PhantomMcpToolExecutorTests` (`Phantom.Workspaces.Llm.Interfaces.Tests`)
 - `Save_WithExecutor_EmitsExecutorField`
@@ -452,6 +567,7 @@ Test names follow `<Subject>_<Scenario>_<ExpectedOutcome>` matching neighbours s
 
 #### `AgentSessionExecutorBindingsTests` (`Phantom.Workspaces.Data.Core.Tests`)
 - `Persist_ExecutorBindings_RoundTrips`
+- `Persist_DescriptorObjects_RoundTrips`
 - `Resume_RebuildsTopologyFromBindings`
 - `Resume_LegacyHostProfileOnly_FallsBackToSingleRemote`
 
@@ -510,16 +626,22 @@ convention (read `Scenario2_GuiLocalToolRoutingTests`, `ExecutorTargetRouterTest
 
 ### 2. Executor-resource resolution (unit)
 
-- One test per `id` strategy: `local` → `"."`; `parameter` → the resolved profile UUID;
-  `user-computer-profile-entity` → the fixed UUID; `trust-profile` → the derived client-instance.
-- Failure paths: unknown `id` and unresolved/blank parameter both throw with a clear, convention-matching
+- One test per `id` strategy, asserting the resolved **connection-descriptor**: `local` →
+  `{"type":"local"}`; `parameter` → `{"type":"user-computer-profile","entity-id":<uuid>}`;
+  `user-computer-profile-entity` → the fixed-UUID descriptor; `trust-profile` → the profile's
+  `DefaultExecutionTarget` descriptor.
+- **Extension seam (in scope):** the `connection-descriptor` strategy round-trips and resolves an
+  inline descriptor **verbatim**. This single cheap test PROVES the model can be extended to new
+  transport `type`s (e.g. a future container `target`) with no schema change.
+- Failure paths: unknown `id` and unresolved/blank parameter throw with a clear, convention-matching
   message. → `ExecutorResourceResolverTests`.
-- Inheritance: unset `executor` inherits `SessionExecutor`; unknown name throws.
-  → `ExecutorBindingsTests`.
+- Inheritance: unset `executor` inherits `SessionExecutor`; unknown name throws; bindings round-trip
+  through `ToPersistableMap` as descriptor objects. → `ExecutorBindingsTests`.
 
 ### 3. Session persistence / resume
 
-- `executor-bindings` persists and round-trips on the `agent-session` entity.
+- `executor-bindings` persists and round-trips on the `agent-session` entity as connection-descriptor
+  objects (not bare strings).
 - Resume rebuilds the topology from `executor-bindings` so each component re-binds identically.
 - Unset `executor` inherits the session executor after resume.
 - Back-compat: a legacy session with only `host-profile-entity-id` (no `executor-bindings`)
@@ -590,14 +712,19 @@ Each commit leaves the build green and all tests passing.
 ### Commit 1 — Executor resource schema + model
 
 **Scope:** Add the `executorResource` `$def` to `agent-manifest.json` and its parsed model
-`ExecutorResource`. Extend `resources.items.anyOf` to include it. Add the optional `executor`
-string to `toolResource` and `modelResource` `$defs`. Parse `kind:"executor"` resources into
-`ExecutorResource` during manifest load. *(NEW schema fields marked in the schema comments.)*
+`ExecutorResource` (convenience strategies `local`/`parameter`/`user-computer-profile-entity`/
+`trust-profile` via a simple `Options` string map, PLUS an optional inline `ConnectionDescriptor`
+`JsonElement` for the raw `connection-descriptor` escape hatch). There is NO bespoke
+`ExecutorDescriptor` schema — an executor resolves to the transport connection-descriptor.
+Extend `resources.items.anyOf` to include `executorResource`. Add the optional `executor` string to
+`toolResource` and `modelResource` `$defs`. Parse `kind:"executor"` resources into `ExecutorResource`
+during manifest load. *(NEW schema fields marked in the schema comments.)*
 **Files:** `Phantom.Workspaces.Llm.Core/JsonSchemas/agent-manifest.json`;
 `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResource.cs` (new); the manifest loader that
 enumerates `resources[]`.
 **Tests:** `AgentManifestExecutorResourceTests`
-(`Load_ManifestWithExecutorResource_ParsesResource`, `RoundTrip_ExecutorResourceAndRefs_Lossless`).
+(`Load_ManifestWithExecutorResource_ParsesResource`, `RoundTrip_ExecutorResourceAndRefs_Lossless`,
+and a `connection-descriptor`-strategy resource parse/round-trip).
 **Dependencies:** none.
 
 ### Commit 2 — `user-computer-profile` parameter kind
@@ -624,39 +751,49 @@ the source-scan guard intact.
 `From_CopiesExecutor`, `RoundTrip_ExecutorField_Preserved`, guard test).
 **Dependencies:** none.
 
-### Commit 4 — Executor-resource resolver
+### Commit 4 — Executor-resource resolver (returns a connection-descriptor)
 
 **Scope:** Add `ExecutorResourceResolver` mapping an `ExecutorResource` (+ resolved
-`parameter-values` + trust context) to a client-instance for all four `id` strategies, with clear
-errors for unknown/unresolved. Add `ExecutorBindings` (session executor default `"."` +
-name→client-instance + `ResolveComponent` + `ToTopology`).
+`parameter-values` + trust context) to a transport **connection-descriptor** (`JsonElement`) for all
+five `id` strategies (`local`, `parameter`, `user-computer-profile-entity`, `trust-profile`,
+`connection-descriptor`), with clear errors for unknown/unresolved. This is the **#1436 fix**: the
+resolver no longer returns a flat client-instance string — it returns the connection-descriptor that
+`ITransportFactoryRegistry.ConnectToAsync` already dispatches on, DELEGATING to the existing
+`Llm.Trust.ExecutionTargetResolver.ResolveDescriptor` for the local/profile shapes. The
+`connection-descriptor` strategy returns its inline descriptor verbatim (the extension escape hatch).
+Add `ExecutorBindings` (session executor default `{"type":"local"}` + name→connection-descriptor +
+`ResolveComponent` + `ToTopology`).
 **Files:** `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResourceResolver.cs`,
 `Phantom.Workspaces.Llm.Core/Manifest/ExecutorBindings.cs` (new).
-**Tests:** `ExecutorResourceResolverTests`, `ExecutorBindingsTests`.
+**Tests:** `ExecutorResourceResolverTests` (incl.
+`Resolve_ConnectionDescriptorId_ReturnsInlineDescriptorVerbatim`), `ExecutorBindingsTests`.
 **Dependencies:** Commit 1 (`ExecutorResource`); Commit 2 (for the `parameter` strategy).
 
 ### Commit 5 — Explicit session executor + `executor-bindings` persistence + resume
 
-**Scope:** Make the session's overall executor explicit (default `"."`). Add `executor-bindings`
-(name→client-instance) to `agent-session.json`. On build, write bindings; on resume, rebuild
-`ExecutorTopology` and set the deferred selector's topology from the bindings. Keep
-`host-profile-entity-id` as back-compat fallback (primary remote), with bindings as source of
-truth. *(NEW session field: `executor-bindings`; EXISTING `host-profile-entity-id` retained.)*
+**Scope:** Make the session's overall executor explicit (default `{"type":"local"}`). Add
+`executor-bindings` (name→**connection-descriptor** objects) to `agent-session.json`. On build, write
+bindings; on resume, rebuild `ExecutorTopology` and set the deferred selector's topology from the
+bindings (deriving the client-instance strings for `local`/`user-computer-profile` shapes). Keep
+`host-profile-entity-id` as back-compat fallback (primary remote), with bindings as source of truth.
+*(NEW session field: `executor-bindings` storing connection-descriptor objects; EXISTING
+`host-profile-entity-id` retained.)*
 **Files:** `Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json`; the session build/resume
 path that constructs `ExecutorTopology` and calls
 `DeferredTrustedExecutorSelector.SetTopology`.
-**Tests:** `AgentSessionExecutorBindingsTests`.
+**Tests:** `AgentSessionExecutorBindingsTests` (incl. `Persist_DescriptorObjects_RoundTrips`,
+`Resume_RebuildsTopologyFromBindings`, `Resume_LegacyHostProfileOnly_FallsBackToSingleRemote`).
 **Dependencies:** Commit 4.
 
 ### Commit 6 — Per-tool MCP execution over transport + production remote MCP host
 
-**Scope:** Thread the resolved client-instance + a production `ExecutorTargetRouter` into each
-`McpToolContextProvider` (constructed in `AgentChat`). When the bound client-instance is non-local,
-connect via the router → `ExecutionTargetResolver` → `ITransportFactoryRegistry`, opening an
-`McpClientOverTransport`; when local, keep the in-process path (no round-trip). Add the production
-`RemoteMcpHostHandler` (`openConnectionAsync`) and register it on the remote `McpTransportListener`
-in `WorkspacesTransportComposition`. This makes `ExecutorTargetRouter` a production consumer
-(G8) and provides the arbitrary stdio/HTTP MCP host (G9).
+**Scope:** Thread the resolved **connection-descriptor** + a production `ExecutorTargetRouter` into
+each `McpToolContextProvider` (constructed in `AgentChat`). When the bound descriptor is non-local,
+feed it **straight** into the router → `ITransportFactoryRegistry.ConnectToAsync` (no string hop),
+opening an `McpClientOverTransport`; when local, keep the in-process path (no round-trip). Add the
+production `RemoteMcpHostHandler` (`openConnectionAsync`) and register it on the remote
+`McpTransportListener` in `WorkspacesTransportComposition`. This makes `ExecutorTargetRouter` a
+production consumer (G8) and provides the arbitrary stdio/HTTP MCP host (G9).
 **Files:** `Phantom.Workspaces.Llm.Core/McpToolContextProvider.cs`,
 `Phantom.Workspaces.Llm.Core/AgentChat.cs`,
 `Phantom.Workspaces.Transport.Mcp/RemoteMcpHostHandler.cs` (new),
@@ -700,6 +837,49 @@ JSON shapes against `features/docs/examples/github-copilot-remote-chat.json`.
 (new); the manifest/validation code that enforces the OAuth-local rule.
 **Tests:** `CopilotSplitExecutorManifestTests`, `SplitExecutorIntegrationTests`.
 **Dependencies:** Commits 1–6.
+
+---
+
+## Extensibility — non-persistent executors (e.g. containers)
+
+Everything in this section is **explicitly OUT OF SCOPE and FUTURE WORK**: none of it is implemented
+by the commits above. It documents how the reuse-first connection-descriptor model extends to
+non-persistent runtimes — an ephemeral container is the worked example — **without any manifest or
+session schema change**, because an `ExecutorResource` already supports the raw `connection-descriptor`
+strategy and the transport layer already dispatches by `type`.
+
+**Reuse the existing containers subsystem.** `Phantom.Workspaces.Containers` already defines
+`ContainerDefinition` + `container-definition.json` (fields: `container-name`, `image-name`,
+`network-type`, `environment-variables`, `mounts`, `port-mappings`) and `ContainerEngine`
+(`CreateAsync(ContainerDefinition)`, `PullAsync`, `StartAsync`, `StopAsync`, `DestroyAsync`,
+`UsableAsync`) with Docker Desktop / containerd engine implementations
+(`Phantom.Workspaces.Containers/ContainerEngine.cs:3-27`;
+`Phantom.Workspaces.Containers/JsonSchemas/container-definition.json`). It is already used in
+production by `MongoDbConnectionBroker`. A future container executor drives this subsystem — it does
+NOT invent a new container abstraction.
+
+**Authoring shape (host-outer, target-inner).** A container executor is authored via the raw
+`connection-descriptor` strategy as a host-outer descriptor with an inner container `target`:
+
+```
+{ "type":"user-computer-profile", "entity-id":"<worker>", "target":{ "type":"container", "container-definition":<ContainerDefinition> } }
+{ "type":"local", "target":{ "type":"container", "container-definition":<ContainerDefinition> } }
+```
+
+The OUTER descriptor reaches the host; the INNER `target` is what runs there (threaded through the
+existing `TargetedTransport` seam, `UserComputerProfileTransportFactory.cs:47-106`). Because
+`ExecutorResource` already carries an inline connection-descriptor, **no new manifest field is
+needed**.
+
+**Extension work (future).** Add a host-side container `target` handler — analogous to the MCP host
+handler seam on `McpTransportListener` — that drives `ContainerEngine` create/start + attach and
+`DestroyAsync` on teardown, registered as an `ITransportFactory` / listener in
+`WorkspacesTransportComposition`. Trust would inherit the host executor (the existing
+`TrustProfile.AllowsClientInstance` / `ITrustedExecutor.CanExecute` checks apply to the resolved host,
+not a separate container identity). **Open question (unresolved, future):** what runs INSIDE the
+container — a full agent-executor endpoint, or just the pinned MCP server. The design does not answer
+this; it only guarantees that the connection-descriptor model can extend here without touching the
+manifest or session schema.
 
 ---
 
