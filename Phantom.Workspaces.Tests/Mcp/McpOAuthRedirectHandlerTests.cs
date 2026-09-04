@@ -573,6 +573,167 @@ public sealed class McpOAuthRedirectHandlerTests
         Assert.Equal("localhost", redirectUri.Host);
     }
 
+    // ---- Issue #1428: authorization URIs without a `state` parameter ----
+
+    [Fact]
+    public async Task RedirectHandler_AuthorizationUriWithoutState_InjectsStateAndCompletes()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        var authUri = new Uri("https://auth.test/authorize?client_id=abc"); // no `state`
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=the-code&state={state}");
+        };
+
+        var captured = await handler.HandleAsync("server-a", authUri, redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        Assert.Equal("the-code", GetQueryValue(captured, "code"));
+    }
+
+    [Fact]
+    public async Task RedirectHandler_AuthorizationUriWithoutState_OpensBrowserWithSynthesizedState()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        var authUri = new Uri("https://auth.test/authorize?client_id=abc"); // no `state`
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=c&state={state}");
+        };
+
+        await handler.HandleAsync("server-a", authUri, redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        var openedState = GetQueryValue(browser.LastUri!, "state");
+        Assert.False(string.IsNullOrEmpty(openedState));
+    }
+
+    [Fact]
+    public async Task RedirectHandler_AuthorizationUriWithState_UsesProvidedStateUnchanged()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        var authUri = AuthUri("provided-state");
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=c&state=provided-state");
+
+        await handler.HandleAsync("server-a", authUri, redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        // The original URI is opened verbatim; the existing `state` is neither overwritten nor duplicated.
+        Assert.Equal(authUri, browser.LastUri);
+        Assert.Equal("provided-state", GetQueryValue(browser.LastUri!, "state"));
+    }
+
+    [Fact]
+    public async Task RedirectHandler_TwoStatelessSignIns_AreDemultiplexedBySynthesizedState()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=code-{state}&state={state}");
+        };
+
+        // Both authorization URIs lack `state`; each sign-in synthesizes a distinct one.
+        var authA = new Uri("https://auth.test/authorize?client_id=a");
+        var authB = new Uri("https://auth.test/authorize?client_id=b");
+        var taskA = handler.HandleAsync("server-a", authA, redirectUri, CancellationToken.None);
+        var taskB = handler.HandleAsync("server-b", authB, redirectUri, CancellationToken.None);
+
+        var captured = await Task.WhenAll(taskA, taskB);
+
+        var stateA = GetQueryValue(captured[0], "state");
+        var stateB = GetQueryValue(captured[1], "state");
+        Assert.NotEqual(stateA, stateB);
+        Assert.Equal($"code-{stateA}", GetQueryValue(captured[0], "code"));
+        Assert.Equal($"code-{stateB}", GetQueryValue(captured[1], "code"));
+    }
+
+    [Fact]
+    public async Task RedirectHandler_StatelessSignIn_CallbackWithMismatchedState_DoesNotComplete()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), Timeout.InfiniteTimeSpan);
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+        var authUri = new Uri("https://auth.test/authorize?client_id=a"); // no `state`
+
+        var task = handler.HandleAsync("server-a", authUri, redirectUri, cts.Token);
+        var synthesized = GetQueryValue(browser.LastUri!, "state");
+        Assert.False(string.IsNullOrEmpty(synthesized));
+
+        // A callback carrying a different `state` is answered with the close page and dropped.
+        var body = await SendCallbackAsync(redirectUri, "code=stray&state=some-other-state");
+        Assert.Contains("close this window", body, StringComparison.OrdinalIgnoreCase);
+        Assert.False(task.IsCompleted);
+
+        // The callback echoing the synthesized `state` still completes the sign-in.
+        await SendCallbackAsync(redirectUri, $"code=ok&state={synthesized}");
+        var captured = await task;
+        Assert.Equal("ok", GetQueryValue(captured, "code"));
+
+        cts.Cancel();
+    }
+
+    [Fact]
+    public async Task RedirectHandler_SynthesizedState_IsUrlSafeAndAppendedWithoutClobberingExistingQuery()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        var authUri = new Uri("https://auth.test/authorize?client_id=abc&scope=openid%20profile"); // no `state`
+        browser.OnOpen = uri =>
+        {
+            var state = GetQueryValue(uri, "state");
+            return SendCallbackAsync(redirectUri, $"code=c&state={state}");
+        };
+
+        await handler.HandleAsync("server-a", authUri, redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        var opened = browser.LastUri!;
+        // Existing query parameters are preserved.
+        Assert.Equal("abc", GetQueryValue(opened, "client_id"));
+        Assert.Equal("openid profile", GetQueryValue(opened, "scope"));
+
+        // The synthesized state uses a URL-safe (base64url) alphabet.
+        var state = GetQueryValue(opened, "state");
+        Assert.False(string.IsNullOrEmpty(state));
+        Assert.Matches("^[A-Za-z0-9_-]+$", state);
+    }
+
+    [Fact]
+    public void CreateOptions_EntraPinnedAndDcrSignIn_UseSeparateLoopbackPorts()
+    {
+        // #1427: the composition's shared DCR listener holds a concrete loopback port, but the
+        // entra-pinned credential the transport factory builds carries RedirectUri: null, so MSAL binds
+        // its own listener and the two subsystems never contend for one port.
+        var consent = new FakeSecretProvider();
+        var browser = new FakeSystemBrowserLauncher();
+
+        var options = McpOAuthComposition.CreateOptions(consent, browser);
+        Assert.NotNull(options.RedirectUri);
+
+        var entraOptions = EntraInteractiveCredentialFactory.BuildOptions(
+            new McpEntraPinnedTokenRequest(
+                "https://login.microsoftonline.com/contoso/v2.0",
+                ClientId: null,
+                RedirectUri: null,
+                "server-a"));
+
+        Assert.Null(entraOptions.RedirectUri);
+        Assert.NotEqual(options.RedirectUri, entraOptions.RedirectUri);
+    }
+
     private static async Task<string> SendCallbackAsync(Uri redirectUri, string rawQuery)
     {
         using var client = new HttpClient();

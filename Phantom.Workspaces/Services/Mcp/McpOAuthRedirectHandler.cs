@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,8 +35,11 @@ namespace Phantom.Workspaces.Services.Mcp;
 /// kept alive for the process lifetime. Every MCP server reuses it — there is exactly one
 /// <see cref="HttpListener.Start"/> per process, so overlapping/concurrent sign-ins never collide on
 /// an identical prefix. A single accept loop demultiplexes each inbound callback to the correct pending
-/// authorization using the OAuth <c>state</c> query parameter, which the SDK generates uniquely per
-/// authorization request and echoes back on the redirect. Because the listener is bound continuously
+/// authorization using the OAuth <c>state</c> query parameter. When the authorization request already
+/// carries a <c>state</c> (the SDK-generated common case), it is used as-is; when it omits one (RFC 6749
+/// §4.1.1 makes <c>state</c> OPTIONAL — e.g. servers like IcM), a URL-safe random <c>state</c> is
+/// synthesized and injected into the opened authorization URI, and the server echoes it back on the
+/// redirect (§4.1.2). Because the listener is bound continuously
 /// from first use, the port is never reserved-then-freed, removing the earlier TOCTOU window.
 /// </para>
 /// </remarks>
@@ -152,11 +156,20 @@ public sealed class McpOAuthRedirectHandler : IDisposable
         // binds it; every subsequent server (concurrent or overlapping) demultiplexes on the same prefix.
         this.EnsureListener(redirectUri);
 
-        // The SDK generates and echoes `state`, so it uniquely identifies this authorization on the
-        // shared listener. Register the waiter BEFORE opening the browser so a fast callback is not lost.
-        var state = GetQueryValue(authorizationUri, "state")
-            ?? throw new InvalidOperationException(
-                $"MCP OAuth authorization URI for server '{serverName}' did not include a state parameter.");
+        // `state` uniquely identifies this authorization on the shared listener and must round-trip
+        // through the browser redirect. When the SDK/authorization-server already supplied one, use it
+        // as-is. When it is absent (RFC 6749 §4.1.1 makes `state` OPTIONAL, e.g. the IcM server), the
+        // client synthesizes a URL-safe random `state` and injects it into the authorization request we
+        // open; the server echoes it verbatim (§4.1.2), and the SDK — which never set `state` — only ever
+        // sees the returned `code`. Register the waiter BEFORE opening the browser so a fast callback is
+        // not lost.
+        var state = GetQueryValue(authorizationUri, "state");
+        var effectiveAuthorizationUri = authorizationUri;
+        if (state is null)
+        {
+            state = GenerateState();
+            effectiveAuthorizationUri = AppendQueryParameter(authorizationUri, "state", state);
+        }
 
         var authorization = this.pending.GetOrAdd(
             state,
@@ -173,7 +186,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             timeoutSource.CancelAfter(this.timeout);
         }
 
-        this.browserLauncher.Open(authorizationUri);
+        this.browserLauncher.Open(effectiveAuthorizationUri);
 
         using (linked.Token.Register(() => waiter.TrySetCanceled(linked.Token)))
         {
@@ -466,6 +479,33 @@ public sealed class McpOAuthRedirectHandler : IDisposable
         await response.OutputStream.WriteAsync(payload).ConfigureAwait(false);
         response.OutputStream.Close();
         response.Close();
+    }
+
+    /// <summary>
+    /// Generates a cryptographically-random, URL-safe (base64url, unpadded) <c>state</c> value used as
+    /// the shared-listener correlation key when the authorization request carries none (#1428).
+    /// </summary>
+    private static string GenerateState()
+    {
+        Span<byte> bytes = stackalloc byte[32];
+        RandomNumberGenerator.Fill(bytes);
+        return Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    /// <summary>
+    /// Returns <paramref name="uri"/> with an additional <c>key=value</c> query parameter appended,
+    /// URL-encoding both and preserving any existing query string (#1428).
+    /// </summary>
+    private static Uri AppendQueryParameter(Uri uri, string key, string value)
+    {
+        var encoded = $"{Uri.EscapeDataString(key)}={Uri.EscapeDataString(value)}";
+        var builder = new UriBuilder(uri);
+        var existing = builder.Query.TrimStart('?');
+        builder.Query = string.IsNullOrEmpty(existing) ? encoded : existing + "&" + encoded;
+        return builder.Uri;
     }
 
     private static string? GetQueryValue(Uri uri, string key)
