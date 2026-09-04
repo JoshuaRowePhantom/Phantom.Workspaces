@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security;
 using AgentSchema;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
 using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using Phantom.Workspaces.Llm;
@@ -379,6 +380,114 @@ public sealed class McpTransportFactoryTests
         var options = GetHttpOptions(transport);
         Assert.NotNull(options.OAuth);
         Assert.Equal(HttpTransportMode.StreamableHttp, options.TransportMode);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_WithClientIdOverride_UsesOverrideInsteadOfConfiguredClientId()
+    {
+        // #1421: when a clientIdOverride is supplied (the static-fallback build), it wins over the
+        // resolved oauth.ClientId even when that is null (the DCR case).
+        var transport = await McpTransportFactory.CreateMcpTransportAsync(
+            OAuthTool(clientId: null),
+            services: null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None,
+            clientIdOverride: "override-client-id");
+
+        var options = GetHttpOptions(transport);
+        Assert.NotNull(options.OAuth);
+        Assert.Equal("override-client-id", options.OAuth!.ClientId);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_FallbackClientId_IsPublicVsCodeClientId()
+    {
+        // #1421: the fallback constant is the public VS Code client id, and the fallback build sets
+        // no client secret (public client relying on PKCE).
+        Assert.Equal(
+            "aebc6443-996d-45c2-90f0-388ff96faa56",
+            McpTransportFactory.DefaultDynamicRegistrationFallbackClientId);
+
+        var transport = await McpTransportFactory.CreateMcpTransportAsync(
+            OAuthTool(clientId: null, clientSecret: "configured-secret"),
+            services: null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None,
+            clientIdOverride: McpTransportFactory.DefaultDynamicRegistrationFallbackClientId);
+
+        var options = GetHttpOptions(transport);
+        Assert.NotNull(options.OAuth);
+        Assert.Equal(McpTransportFactory.DefaultDynamicRegistrationFallbackClientId, options.OAuth!.ClientId);
+        Assert.True(
+            string.IsNullOrEmpty(options.OAuth.ClientSecret),
+            "The static fallback build must not send a client secret (public client on PKCE).");
+    }
+
+    [Fact]
+    public void ShouldFallBackToStaticClientId_WhenExplicitClientIdConfigured_ReturnsFalse()
+    {
+        // #1421: an explicitly configured client id means a failure is the user's configuration
+        // error, not a DCR rejection — never mask it with the static fallback.
+        var tool = OAuthTool(clientId: "explicit-client-id");
+        var dcrRejection = new McpException(
+            "Failed to handle unauthorized response with 'Bearer' scheme. Authorization server does not support dynamic client registration");
+
+        Assert.False(McpTransportFactory.ShouldFallBackToStaticClientId(tool, dcrRejection));
+    }
+
+    [Theory]
+    [InlineData("Failed to handle unauthorized response with 'Bearer' scheme. Authorization server does not support dynamic client registration")]
+    [InlineData("Failed to handle unauthorized response with 'Bearer' scheme. Dynamic client registration failed with status BadRequest: {\"error\":\"invalid_client_metadata\"}")]
+    [InlineData("Failed to handle unauthorized response with 'Bearer' scheme. Dynamic client registration returned empty response")]
+    public void ShouldFallBackToStaticClientId_WhenDcrRejected_ReturnsTrue(string message)
+    {
+        // #1421: with no configured client id, each of the SDK's DCR-rejection messages classifies
+        // as a fallback candidate.
+        var tool = OAuthTool(clientId: null);
+
+        Assert.True(McpTransportFactory.ShouldFallBackToStaticClientId(tool, new McpException(message)));
+    }
+
+    [Fact]
+    public void ShouldFallBackToStaticClientId_WhenDcrRejectionIsInnerException_ReturnsTrue()
+    {
+        // The DCR rejection can be wrapped (e.g. by the connect pipeline); the classifier walks the
+        // inner-exception and AggregateException chain.
+        var tool = OAuthTool(clientId: null);
+        var inner = new McpException(
+            "Failed to handle unauthorized response with 'Bearer' scheme. Dynamic client registration failed with status BadRequest");
+        var wrapped = new AggregateException(new InvalidOperationException("connect failed", inner));
+
+        Assert.True(McpTransportFactory.ShouldFallBackToStaticClientId(tool, wrapped));
+    }
+
+    [Theory]
+    [InlineData("The AuthorizationRedirectDelegate returned a null or empty token.")]
+    [InlineData("The remote name could not be resolved: 'auth.example.test'")]
+    [InlineData("The token endpoint 'https://auth.test/token' returned an empty response.")]
+    [InlineData("Response status code does not indicate success: 400 (Bad Request). error=invalid_grant")]
+    public void ShouldFallBackToStaticClientId_WhenAuthCancelledOrNetworkError_ReturnsFalse(string message)
+    {
+        // #1421: non-DCR failures (user-cancelled auth, network error, token-endpoint failure,
+        // invalid_grant) must NOT trigger the static fallback so their diagnostic still surfaces.
+        var tool = OAuthTool(clientId: null);
+
+        Assert.False(McpTransportFactory.ShouldFallBackToStaticClientId(tool, new McpException(message)));
+    }
+
+    [Fact]
+    public void ShouldFallBackToStaticClientId_WhenConnectionNotOAuth_ReturnsFalse()
+    {
+        // Only OAuth connections perform DCR; a DCR-shaped message on a non-OAuth tool never falls
+        // back (defensive — such a message cannot originate from a non-OAuth connection).
+        var tool = new McpTool
+        {
+            ServerName = "keyed",
+            Connection = new ApiKeyConnection { Endpoint = HttpEndpoint, ApiKey = "key" },
+        };
+        var dcrRejection = new McpException("Authorization server does not support dynamic client registration");
+
+        Assert.False(McpTransportFactory.ShouldFallBackToStaticClientId(tool, dcrRejection));
     }
 
     private sealed class FakeSecretPlaceholderResolver : ISecretPlaceholderResolver

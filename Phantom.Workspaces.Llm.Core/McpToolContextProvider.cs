@@ -58,12 +58,21 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
                 var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
                 try
                 {
-                    var transport = await McpTransportFactory.CreateMcpTransportAsync(
+                    this.client = await McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync(
                         this.tool,
-                        this.services,
-                        this.loggerFactory,
+                        async (clientIdOverride, ct) =>
+                        {
+                            var transport = await McpTransportFactory.CreateMcpTransportAsync(
+                                this.tool,
+                                this.services,
+                                this.loggerFactory,
+                                ct,
+                                clientIdOverride);
+                            return await McpClient.CreateAsync(transport, null, this.loggerFactory, ct);
+                        },
+                        logger,
+                        serverName,
                         cancellationToken);
-                    this.client = await McpClient.CreateAsync(transport, null, this.loggerFactory, cancellationToken);
                 }
                 catch (Exception ex)
                 {

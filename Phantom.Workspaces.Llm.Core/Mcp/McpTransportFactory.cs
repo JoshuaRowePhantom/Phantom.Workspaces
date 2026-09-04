@@ -30,17 +30,42 @@ internal static class McpTransportFactory
     private static readonly Uri DefaultLoopbackRedirectUri = new("http://localhost/");
 
     /// <summary>
+    /// The public Visual Studio Code OAuth client id, accepted by GitHub- and Microsoft-hosted MCP
+    /// servers that do not support OAuth 2.0 Dynamic Client Registration (RFC 7591). It is used as
+    /// the static fallback client id when a DCR attempt is rejected and no client id was explicitly
+    /// configured (issue #1421). This is a public client id, not a secret.
+    /// </summary>
+    public const string DefaultDynamicRegistrationFallbackClientId = "aebc6443-996d-45c2-90f0-388ff96faa56";
+
+    /// <summary>
+    /// Marker substring present in every MCP SDK Dynamic Client Registration rejection message
+    /// (RFC 7591). The SDK's <c>ClientOAuthProvider</c> throws with one of
+    /// "Authorization server does not support dynamic client registration",
+    /// "Dynamic client registration failed with status …", or
+    /// "Dynamic client registration returned empty response". Matching this phrase — and only this
+    /// phrase — keeps the fallback narrow so genuine failures (user-cancelled auth, network errors,
+    /// <c>invalid_grant</c>, token-endpoint failures) still surface their own diagnostic.
+    /// </summary>
+    private const string DynamicClientRegistrationFailureMarker = "dynamic client registration";
+
+    /// <summary>
     /// Builds the transport for <paramref name="tool"/>'s connection. The Anonymous arm is
     /// synchronous; the API-key and OAuth arms are async because credential resolution (the
     /// <c>apiKey</c> and OAuth client-id/secret placeholders) may consult an async secret provider —
     /// both a <c>${SECRET:&lt;handle&gt;}</c> resolver and the <c>${ENV}</c>/<c>${GITHUB_TOKEN}</c>
     /// fallback.
     /// </summary>
+    /// <param name="clientIdOverride">
+    /// When non-null/non-empty and the connection is OAuth, this client id wins over the resolved
+    /// <c>oauth.ClientId</c> and no client secret is set (public client on PKCE). Used only by the
+    /// #1421 DCR-rejection static fallback build; null on the normal (DCR-first) path.
+    /// </param>
     public static async Task<IClientTransport> CreateMcpTransportAsync(
         McpTool tool,
         AgentServices? services,
         ILoggerFactory? loggerFactory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? clientIdOverride = null)
     {
         ArgumentNullException.ThrowIfNull(tool);
 
@@ -79,6 +104,7 @@ internal static class McpTransportFactory
                     transportMode,
                     services,
                     loggerFactory,
+                    clientIdOverride,
                     cancellationToken).ConfigureAwait(false);
 
             case null:
@@ -126,6 +152,7 @@ internal static class McpTransportFactory
         McpHttpTransport transportMode,
         AgentServices? services,
         ILoggerFactory? loggerFactory,
+        string? clientIdOverride,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(oauth.Endpoint))
@@ -155,10 +182,22 @@ internal static class McpTransportFactory
             displayName,
             endpointUri.GetLeftPart(UriPartial.Path));
 
-        var clientId = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
-            oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
-        var clientSecret = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
-            oauth.ClientSecret, services, serverName, cancellationToken).ConfigureAwait(false);
+        string? clientId;
+        string? clientSecret;
+        if (!string.IsNullOrWhiteSpace(clientIdOverride))
+        {
+            // #1421 static fallback build: the supplied public client id wins over any configured
+            // value, and no client secret is sent (public client relying on PKCE).
+            clientId = clientIdOverride;
+            clientSecret = null;
+        }
+        else
+        {
+            clientId = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
+                oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
+            clientSecret = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
+                oauth.ClientSecret, services, serverName, cancellationToken).ConfigureAwait(false);
+        }
 
         var clientOAuthOptions = new ClientOAuthOptions
         {
@@ -201,6 +240,99 @@ internal static class McpTransportFactory
 
     internal static McpOAuthOptions ResolveOAuthOptions(AgentServices? services)
         => services?.McpOAuthOptions as McpOAuthOptions ?? McpOAuthOptions.Default;
+
+    /// <summary>
+    /// Connects an MCP client with the #1421 "DCR-first, static-fallback-second" strategy. The
+    /// <paramref name="connectAsync"/> delegate builds the transport (honoring an optional client-id
+    /// override) and connects. It is invoked first with a null override (Dynamic Client Registration
+    /// is attempted). If that connect fails specifically because DCR was rejected and no explicit
+    /// client id was configured — as classified by <see cref="ShouldFallBackToStaticClientId"/> — it
+    /// is invoked exactly once more with <see cref="DefaultDynamicRegistrationFallbackClientId"/>.
+    /// Any other failure, and any failure of the single retry, propagates unchanged (no infinite
+    /// retry) so the caller's diagnostic (issue #1408) is preserved.
+    /// </summary>
+    internal static async Task<TClient> ConnectWithDynamicRegistrationFallbackAsync<TClient>(
+        McpTool tool,
+        Func<string?, CancellationToken, Task<TClient>> connectAsync,
+        ILogger? logger,
+        string? serverName,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        ArgumentNullException.ThrowIfNull(connectAsync);
+
+        try
+        {
+            return await connectAsync(null, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ShouldFallBackToStaticClientId(tool, ex))
+        {
+            logger?.LogWarning(
+                "Dynamic client registration was rejected for MCP server {ServerName}; retrying once with the default public client id.",
+                serverName ?? "(mcp server)");
+
+            // Single retry with the static public client id. No further fallback is attempted, so a
+            // second failure propagates unchanged.
+            return await connectAsync(DefaultDynamicRegistrationFallbackClientId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Classifies whether a failed MCP connect should be retried once with the static public client
+    /// id (issue #1421). Returns true ONLY when all of the following hold: the connection is OAuth,
+    /// no explicit client id was configured on the connection, and the failure is specifically a
+    /// Dynamic Client Registration rejection (not a generic auth failure such as user-cancelled auth,
+    /// a network error, <c>invalid_grant</c>, or a token-endpoint failure).
+    /// </summary>
+    internal static bool ShouldFallBackToStaticClientId(McpTool tool, Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+
+        if (exception is null)
+        {
+            return false;
+        }
+
+        // Only OAuth connections perform Dynamic Client Registration.
+        if (tool.Connection is not OAuthConnection oauth)
+        {
+            return false;
+        }
+
+        // An explicitly configured client id means the failure is not a DCR rejection we should mask:
+        // surface the user's configuration error unchanged.
+        if (!string.IsNullOrWhiteSpace(oauth.ClientId))
+        {
+            return false;
+        }
+
+        return IsDynamicClientRegistrationRejection(exception);
+    }
+
+    private static bool IsDynamicClientRegistrationRejection(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is AggregateException aggregate)
+            {
+                foreach (var inner in aggregate.InnerExceptions)
+                {
+                    if (IsDynamicClientRegistrationRejection(inner))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (current.Message is { } message &&
+                message.Contains(DynamicClientRegistrationFailureMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool IsStdioEndpoint(Uri endpointUri)
         => string.Equals(endpointUri.Scheme, "stdio", StringComparison.OrdinalIgnoreCase);
