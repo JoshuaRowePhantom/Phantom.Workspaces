@@ -108,16 +108,30 @@ public sealed class WorkspaceGuiContextProviderTests
         await viewModel.OpenTabAsync(tabA);
         await viewModel.OpenTabAsync(tabB); // tabB is active after opening
 
-        // Yield to ensure activation state propagates through the Dock layout manager
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }, Avalonia.Threading.DispatcherPriority.Background);
-
         var tool = await GetToolAsync(viewModel, "tab_list");
-        var result = await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>()), CancellationToken.None);
 
-        var resultJson = Assert.IsType<JsonElement>(result);
-        var tabs = resultJson.EnumerateArray().ToList();
+        // Under CI load a single Background yield is not always enough for the Dock
+        // layout manager to finish propagating the active-tab change. Bounded-poll the
+        // dispatcher, re-reading activation via tab_list until tabB reports active. The
+        // AvaloniaFact Timeout provides the overall safety bound.
+        List<JsonElement> tabs = new();
+        JsonElement listedTabB = default;
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            // Pump the dispatcher so pending Dock layout activation work runs.
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }, Avalonia.Threading.DispatcherPriority.Background);
 
-        var listedTabB = Assert.Single(tabs, t => t.GetProperty("tab_id").GetString() == "active-tab-b");
+            var result = await tool.InvokeAsync(new AIFunctionArguments(new Dictionary<string, object?>()), CancellationToken.None);
+            var resultJson = Assert.IsType<JsonElement>(result);
+            tabs = resultJson.EnumerateArray().ToList();
+
+            listedTabB = Assert.Single(tabs, t => t.GetProperty("tab_id").GetString() == "active-tab-b");
+            if (listedTabB.GetProperty("is_active").GetBoolean())
+            {
+                break;
+            }
+        }
+
         Assert.True(listedTabB.GetProperty("is_active").GetBoolean());
 
         var listedTabA = Assert.Single(tabs, t => t.GetProperty("tab_id").GetString() == "active-tab-a");
