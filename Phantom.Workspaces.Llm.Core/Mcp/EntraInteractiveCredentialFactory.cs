@@ -25,6 +25,18 @@ public static class EntraInteractiveCredentialFactory
     public static TokenCredential Create(McpEntraPinnedTokenRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        return new InteractiveBrowserCredential(BuildOptions(request));
+    }
+
+    /// <summary>
+    /// Builds the <see cref="InteractiveBrowserCredentialOptions"/> for <paramref name="request"/>. The
+    /// authority is split into its authority host and tenant id; the configured client id and (only when
+    /// present) redirect URI are applied. When <see cref="McpEntraPinnedTokenRequest.RedirectUri"/> is
+    /// null the redirect URI is left unset so MSAL binds its own ephemeral loopback listener (#1427).
+    /// </summary>
+    internal static InteractiveBrowserCredentialOptions BuildOptions(McpEntraPinnedTokenRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
 
         var options = new InteractiveBrowserCredentialOptions
         {
@@ -53,7 +65,7 @@ public static class EntraInteractiveCredentialFactory
             options.RedirectUri = redirectUri;
         }
 
-        return new InteractiveBrowserCredential(options);
+        return options;
     }
 
     /// <summary>

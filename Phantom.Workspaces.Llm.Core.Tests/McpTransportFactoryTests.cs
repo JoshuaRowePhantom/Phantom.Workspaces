@@ -556,6 +556,58 @@ public sealed class McpTransportFactoryTests
         Assert.Contains("Host-pinned Entra authentication is not configured", exception.Message);
     }
 
+    [Fact]
+    public async Task EntraPinnedTransport_DoesNotReuseSharedLoopbackRedirectUri()
+    {
+        // #1427: the entra-pinned credential request must carry a null RedirectUri so MSAL binds its own
+        // ephemeral loopback listener instead of colliding with the #1425 shared DCR listener's port.
+        McpEntraPinnedTokenRequest? captured = null;
+        var services = new AgentServices
+        {
+            McpOAuthOptions = new McpOAuthOptions
+            {
+                RedirectUri = new Uri("http://localhost:59201/"),
+                EntraCredentialProvider = request =>
+                {
+                    captured = request;
+                    return new StubTokenCredential("access-token", DateTimeOffset.UtcNow.AddHours(1));
+                },
+            },
+        };
+
+        await CreateAsync(EntraPinnedTool(), services);
+
+        Assert.NotNull(captured);
+        Assert.Null(captured!.RedirectUri);
+    }
+
+    [Fact]
+    public async Task EntraPinnedTransport_WhenSharedListenerBound_EntraCredentialGetsNoRedirectUri()
+    {
+        // #1427: even when McpOAuthOptions.RedirectUri points at a bound loopback listener, that URI is
+        // never threaded into the entra-pinned request — the two subsystems must own separate ports.
+        var sharedListenerUri = new Uri("http://localhost:59201/");
+        McpEntraPinnedTokenRequest? captured = null;
+        var services = new AgentServices
+        {
+            McpOAuthOptions = new McpOAuthOptions
+            {
+                RedirectUri = sharedListenerUri,
+                EntraCredentialProvider = request =>
+                {
+                    captured = request;
+                    return new StubTokenCredential("access-token", DateTimeOffset.UtcNow.AddHours(1));
+                },
+            },
+        };
+
+        await CreateAsync(EntraPinnedTool(), services);
+
+        Assert.NotNull(captured);
+        Assert.Null(captured!.RedirectUri);
+        Assert.NotEqual(sharedListenerUri, captured.RedirectUri);
+    }
+
     private static PhantomMcpTool EntraPinnedTool(
         string endpoint = HttpEndpoint,
         string serverName = "entra-server")

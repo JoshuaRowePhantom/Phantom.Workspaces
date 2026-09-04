@@ -309,8 +309,14 @@ internal static class McpTransportFactory
             oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
 
         var oauthOptions = ResolveOAuthOptions(services);
+
+        // #1427: do NOT reuse the #1425 shared DCR loopback redirect URI (oauthOptions.RedirectUri).
+        // That listener is bound and held for the process lifetime, so handing its port to MSAL's
+        // InteractiveBrowserCredential — which starts its own HttpListener on the redirect URI — would
+        // collide ("conflicts with an existing registration on the machine"). Passing RedirectUri: null
+        // lets MSAL bind its own ephemeral localhost loopback port, which Entra matches port-agnostically.
         var credential = oauthOptions.ResolveEntraCredential(
-            new McpEntraPinnedTokenRequest(authority, clientId, oauthOptions.RedirectUri, displayName));
+            new McpEntraPinnedTokenRequest(authority, clientId, RedirectUri: null, displayName));
 
         var tokenProvider = new EntraPinnedTokenProvider(credential, scopes);
         var allowedOrigin = new Uri(endpointUri.GetLeftPart(UriPartial.Authority));
