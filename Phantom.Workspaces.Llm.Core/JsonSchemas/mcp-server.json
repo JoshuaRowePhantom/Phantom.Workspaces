@@ -126,7 +126,11 @@
             },
             "authenticationMode": {
               "type": "string",
-              "description": "Optional OAuth authentication mode. Defaults to 'system'."
+              "description": "Optional OAuth authentication mode. Defaults to 'system' (the MCP SDK's resource-bound OAuth client). Set to 'entra-pinned' for host-pinned Microsoft Entra authentication: tokens are acquired directly from Entra using the v2 'scope' parameter (no RFC 8707 resource indicator) and attached only to the exact HTTPS origin derived from 'endpoint'. 'entra-pinned' requires 'authority' and at least one entry in 'scopes'."
+            },
+            "authority": {
+              "type": "string",
+              "description": "Microsoft Entra tenant authority used only in 'entra-pinned' mode (e.g. 'https://login.microsoftonline.com/<tenant>/v2.0'). The pinned bearer origin is derived from 'endpoint'; there is no separately editable origin field."
             }
           },
           "examples": [

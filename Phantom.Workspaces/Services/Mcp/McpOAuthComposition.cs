@@ -48,6 +48,10 @@ public static class McpOAuthComposition
             // per server when no real store is available (non-Windows) so the SDK in-memory cache is
             // used.
             TokenCacheProvider = CredentialManagerTokenCache.CreateProvider(secretStore),
+
+            // #1420 (integration point D): host-pinned Entra credential builder. Reuses the loopback
+            // redirect URI above and persists tokens through MSAL's OS-backed cache keyed per server.
+            EntraCredentialProvider = EntraInteractiveCredentialFactory.Create,
         };
     }
 

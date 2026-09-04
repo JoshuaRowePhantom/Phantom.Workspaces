@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
@@ -104,5 +105,84 @@ public sealed class TrackingLoadContextTests
 
         var phantom = Assert.IsType<PhantomMcpTool>(reloaded);
         Assert.Equal(McpHttpTransport.Sse, phantom.Transport);
+    }
+
+    [Fact]
+    public void PhantomAgentSchema_EntraPinnedConnection_UpgradesToPhantomOAuthConnectionWithAuthority()
+    {
+        // #1420: an mcp-server whose connection is authenticationMode 'entra-pinned' with an authority
+        // loads as a PhantomOAuthConnection carrying the (otherwise dropped) authority — proving the
+        // #1416 tracking context carries the field for connections too.
+        const string json = """
+        {
+          "name": "entra",
+          "kind": "mcp",
+          "connection": {
+            "kind": "oauth",
+            "endpoint": "https://mcp.entra.test/",
+            "authenticationMode": "entra-pinned",
+            "authority": "https://login.microsoftonline.com/contoso/v2.0",
+            "scopes": ["api://example/.default"]
+          },
+          "serverName": "entra"
+        }
+        """;
+
+        var tool = Assert.IsType<PhantomMcpTool>(PhantomAgentSchema.McpToolFromJson(json));
+        var connection = Assert.IsType<PhantomOAuthConnection>(tool.Connection);
+        Assert.Equal("https://login.microsoftonline.com/contoso/v2.0", connection.Authority);
+        Assert.Equal("entra-pinned", connection.AuthenticationMode);
+    }
+
+    [Fact]
+    public void PhantomAgentSchema_SystemOAuthConnection_StaysPlainOAuthConnection()
+    {
+        // #1420: only entra-pinned connections are upgraded; a default (system) OAuth connection is
+        // left a plain OAuthConnection so it keeps using the SDK's resource-bound provider.
+        const string json = """
+        {
+          "name": "generic",
+          "kind": "mcp",
+          "connection": {
+            "kind": "oauth",
+            "endpoint": "https://mcp.generic.test/",
+            "authority": "https://login.microsoftonline.com/contoso/v2.0"
+          },
+          "serverName": "generic"
+        }
+        """;
+
+        var tool = Assert.IsType<PhantomMcpTool>(PhantomAgentSchema.McpToolFromJson(json));
+        var connection = Assert.IsType<OAuthConnection>(tool.Connection);
+        Assert.IsNotType<PhantomOAuthConnection>(connection);
+    }
+
+    [Fact]
+    public void PhantomOAuthConnection_SaveThenReload_PreservesAuthorityAndMode()
+    {
+        // #1420: Save() re-emits 'authority'; reloading through the Phantom funnel restores both it and
+        // the authenticationMode rather than dropping authority.
+        var original = new PhantomMcpTool
+        {
+            Name = "entra",
+            Kind = "mcp",
+            ServerName = "entra",
+            Connection = new PhantomOAuthConnection
+            {
+                Kind = "oauth",
+                Endpoint = "https://mcp.entra.test/",
+                AuthenticationMode = "entra-pinned",
+                Authority = "https://login.microsoftonline.com/contoso/v2.0",
+                Scopes = new List<string> { "api://example/.default" },
+            },
+        };
+
+        var json = original.ToJson();
+        var reloaded = PhantomAgentSchema.McpToolFromJson(json);
+
+        var tool = Assert.IsType<PhantomMcpTool>(reloaded);
+        var connection = Assert.IsType<PhantomOAuthConnection>(tool.Connection);
+        Assert.Equal("https://login.microsoftonline.com/contoso/v2.0", connection.Authority);
+        Assert.Equal("entra-pinned", connection.AuthenticationMode);
     }
 }

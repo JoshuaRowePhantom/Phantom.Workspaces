@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="AgentSchema" />
+    <PackageReference Include="Azure.Identity" />
     <PackageReference Include="GitHub.Copilot.SDK" />
     <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="Meziantou.Framework.Win32.CredentialManager" />

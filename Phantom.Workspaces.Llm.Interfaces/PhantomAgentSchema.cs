@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using AgentSchema;
 
@@ -34,18 +35,38 @@ public static class PhantomAgentSchema
         => McpTool.FromJson(json, CreateContext());
 
     /// <summary>
-    /// The single place that attaches the <c>McpTool</c> → <see cref="PhantomMcpTool"/> rewrite. Every
-    /// context used by any load site is minted here, so the rewrite can never be omitted by a caller.
+    /// The single place that attaches the <c>McpTool</c> → <see cref="PhantomMcpTool"/> rewrite (issue
+    /// #1416) and the <c>OAuthConnection</c> → <see cref="PhantomOAuthConnection"/> rewrite (issue
+    /// #1420). Every context used by any load site is minted here, so neither rewrite can be omitted by
+    /// a caller.
     /// </summary>
     public static TrackingLoadContext CreateContext() => new()
     {
         // Type-guarded and idempotent: polymorphic loads process the same instance twice, so the
-        // second pass (already a PhantomMcpTool) is a no-op.
-        PostProcess = static (result, data) =>
-            result is McpTool tool and not PhantomMcpTool
-                ? PhantomMcpTool.From(tool, ReadTransport(data))
-                : result,
+        // second pass (already a Phantom subclass) is a no-op.
+        PostProcess = static (result, data) => result switch
+        {
+            // #1416: attach the dropped 'type' transport field.
+            McpTool tool and not PhantomMcpTool => PhantomMcpTool.From(tool, ReadTransport(data)),
+
+            // #1420: for host-pinned Entra, attach the dropped 'authority' field. Only entra-pinned
+            // connections are upgraded — every other OAuth connection stays a plain OAuthConnection and
+            // continues to use the SDK's resource-bound provider.
+            OAuthConnection oauth and not PhantomOAuthConnection
+                when string.Equals(oauth.AuthenticationMode, EntraPinnedAuthenticationMode, StringComparison.OrdinalIgnoreCase)
+                => PhantomOAuthConnection.From(oauth, ReadAuthority(data)),
+
+            _ => result,
+        },
     };
+
+    /// <summary>The <c>authenticationMode</c> discriminator that selects host-pinned Entra auth (#1420).</summary>
+    public const string EntraPinnedAuthenticationMode = "entra-pinned";
+
+    private static string? ReadAuthority(Dictionary<string, object?> data)
+        => data.TryGetValue("authority", out var value) && value is string text && !string.IsNullOrWhiteSpace(text)
+            ? text.Trim()
+            : null;
 
     private static McpHttpTransport ReadTransport(Dictionary<string, object?> data)
         => data.TryGetValue("type", out var value) && value is string text

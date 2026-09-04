@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using System.Security;
 using AgentSchema;
+using Azure.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 using ModelContextProtocol.Authentication;
@@ -488,6 +489,111 @@ public sealed class McpTransportFactoryTests
         var dcrRejection = new McpException("Authorization server does not support dynamic client registration");
 
         Assert.False(McpTransportFactory.ShouldFallBackToStaticClientId(tool, dcrRejection));
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_EntraPinnedMode_LeavesSdkOAuthUnset()
+    {
+        // #1420: an entra-pinned OAuth connection bypasses the SDK's ClientOAuthProvider entirely, so
+        // HttpClientTransportOptions.OAuth must be null (no resource indicator is ever sent).
+        var services = EntraServices();
+        var transport = await CreateAsync(EntraPinnedTool(), services);
+
+        var options = GetHttpOptions(transport);
+        Assert.Null(options.OAuth);
+        Assert.Equal(new Uri(HttpEndpoint), options.Endpoint);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_SystemMode_StillUsesSdkClientOAuthProvider()
+    {
+        // #1420: the default/system authenticationMode continues to populate the SDK OAuth options —
+        // the entra-pinned branch must not regress the generic path.
+        var transport = await CreateAsync(OAuthTool(clientId: "client-123"));
+
+        var options = GetHttpOptions(transport);
+        Assert.NotNull(options.OAuth);
+        Assert.Equal("client-123", options.OAuth!.ClientId);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_EntraPinnedWithoutHttpsEndpoint_Throws()
+    {
+        // #1420: a non-HTTPS endpoint is rejected because the bearer may only be pinned to a secure
+        // origin. The https check happens before any credential is needed.
+        var tool = EntraPinnedTool(endpoint: "http://example.test/mcp");
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateAsync(tool, EntraServices()));
+        Assert.Contains("requires an https endpoint", exception.Message);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_EntraPinnedWithoutAuthority_Throws()
+    {
+        // #1420: entra-pinned requires an explicit authority (the dropped-then-recovered field).
+        var tool = new PhantomMcpTool
+        {
+            ServerName = "entra-no-authority",
+            Connection = new PhantomOAuthConnection
+            {
+                Kind = "oauth",
+                Endpoint = HttpEndpoint,
+                AuthenticationMode = PhantomAgentSchema.EntraPinnedAuthenticationMode,
+                Scopes = new List<string> { "api://example/.default" },
+            },
+        };
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateAsync(tool, EntraServices()));
+        Assert.Contains("requires an 'authority'", exception.Message);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_EntraPinnedWithoutConfiguredCredential_Throws()
+    {
+        // #1420: with no host credential seam registered (headless), the factory fails with a clear
+        // "not configured" error rather than silently falling back to the SDK provider.
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateAsync(EntraPinnedTool()));
+        Assert.Contains("Host-pinned Entra authentication is not configured", exception.Message);
+    }
+
+    private static PhantomMcpTool EntraPinnedTool(
+        string endpoint = HttpEndpoint,
+        string serverName = "entra-server")
+        => new()
+        {
+            ServerName = serverName,
+            Connection = new PhantomOAuthConnection
+            {
+                Kind = "oauth",
+                Endpoint = endpoint,
+                AuthenticationMode = PhantomAgentSchema.EntraPinnedAuthenticationMode,
+                Authority = "https://login.microsoftonline.com/contoso/v2.0",
+                Scopes = new List<string> { "api://example/.default" },
+            },
+        };
+
+    private static AgentServices EntraServices()
+        => new()
+        {
+            McpOAuthOptions = new McpOAuthOptions
+            {
+                EntraCredentialProvider = _ =>
+                    new StubTokenCredential("access-token", DateTimeOffset.UtcNow.AddHours(1)),
+            },
+        };
+
+    private sealed class StubTokenCredential : TokenCredential
+    {
+        private readonly AccessToken token;
+
+        public StubTokenCredential(string token, DateTimeOffset expiresOn)
+            => this.token = new AccessToken(token, expiresOn);
+
+        public override AccessToken GetToken(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => this.token;
+
+        public override ValueTask<AccessToken> GetTokenAsync(TokenRequestContext requestContext, CancellationToken cancellationToken)
+            => new(this.token);
     }
 
     private sealed class FakeSecretPlaceholderResolver : ISecretPlaceholderResolver

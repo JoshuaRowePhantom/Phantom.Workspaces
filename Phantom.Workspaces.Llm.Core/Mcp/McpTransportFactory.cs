@@ -97,6 +97,16 @@ internal static class McpTransportFactory
                     transportMode,
                     loggerFactory);
 
+            case OAuthConnection oauth
+                when string.Equals(oauth.AuthenticationMode, PhantomAgentSchema.EntraPinnedAuthenticationMode, StringComparison.OrdinalIgnoreCase):
+                return await CreateEntraPinnedTransportAsync(
+                    oauth,
+                    tool.ServerName,
+                    transportMode,
+                    services,
+                    loggerFactory,
+                    cancellationToken).ConfigureAwait(false);
+
             case OAuthConnection oauth:
                 return await CreateOAuthTransportAsync(
                     oauth,
@@ -236,6 +246,97 @@ internal static class McpTransportFactory
         }
 
         return new HttpClientTransport(transportOptions, loggerFactory);
+    }
+
+    /// <summary>
+    /// Builds the transport for the host-pinned Entra (<c>entra-pinned</c>) mode (issue #1420,
+    /// integration point C). Unlike the <c>system</c> path this deliberately leaves
+    /// <see cref="HttpClientTransportOptions.OAuth"/> <b>unset</b>, so the SDK's
+    /// <c>ClientOAuthProvider</c> (and its RFC 8707 resource indicator) never runs. Instead it acquires
+    /// tokens via a first-party <see cref="EntraPinnedTokenProvider"/> and attaches them through an
+    /// origin-pinning <see cref="EntraBearerTokenHandler"/> installed over a redirect-disabled inner
+    /// handler. The pinned origin is derived from the endpoint (which must be HTTPS); authority and
+    /// scopes come from static config, never from remote metadata.
+    /// </summary>
+    private static async Task<IClientTransport> CreateEntraPinnedTransportAsync(
+        OAuthConnection oauth,
+        string? serverName,
+        McpHttpTransport transportMode,
+        AgentServices? services,
+        ILoggerFactory? loggerFactory,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(oauth.Endpoint))
+        {
+            throw new InvalidOperationException("MCP tool endpoint is required.");
+        }
+
+        if (!Uri.TryCreate(oauth.Endpoint, UriKind.Absolute, out var endpointUri))
+        {
+            throw new InvalidOperationException($"MCP tool endpoint is not a valid absolute URI: {oauth.Endpoint}");
+        }
+
+        var displayName = string.IsNullOrWhiteSpace(serverName) ? "unknown" : serverName;
+
+        // The bearer is pinned to a secure origin only; a non-HTTPS endpoint is rejected so a token can
+        // never be attached to a cleartext origin.
+        if (!string.Equals(endpointUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"Host-pinned Entra authentication requires an https endpoint for MCP server '{displayName}'.");
+        }
+
+        var authority = (oauth as PhantomOAuthConnection)?.Authority;
+        if (string.IsNullOrWhiteSpace(authority))
+        {
+            throw new InvalidOperationException(
+                $"Host-pinned Entra authentication requires an 'authority' for MCP server '{displayName}'.");
+        }
+
+        if (oauth.Scopes is not { Count: > 0 } scopes)
+        {
+            throw new InvalidOperationException(
+                $"Host-pinned Entra authentication requires at least one scope for MCP server '{displayName}'.");
+        }
+
+        var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Mcp.McpTransportFactory");
+        logger?.LogInformation(
+            "Wiring host-pinned Entra OAuth transport for MCP server '{ServerName}' at endpoint {Endpoint}.",
+            displayName,
+            endpointUri.GetLeftPart(UriPartial.Path));
+
+        var clientId = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
+            oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
+
+        var oauthOptions = ResolveOAuthOptions(services);
+        var credential = oauthOptions.ResolveEntraCredential(
+            new McpEntraPinnedTokenRequest(authority, clientId, oauthOptions.RedirectUri, displayName));
+
+        var tokenProvider = new EntraPinnedTokenProvider(credential, scopes);
+        var allowedOrigin = new Uri(endpointUri.GetLeftPart(UriPartial.Authority));
+
+        // AllowAutoRedirect is disabled so a cross-origin redirect never carries the bearer; the handler
+        // re-checks the origin on every hop regardless.
+        var bearerHandler = new EntraBearerTokenHandler(tokenProvider, allowedOrigin)
+        {
+            InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
+        };
+        var httpClient = new HttpClient(bearerHandler);
+
+        // OAuth is intentionally left unset: the SDK OAuth provider (and its resource indicator) is
+        // bypassed entirely in this mode.
+        var transportOptions = new HttpClientTransportOptions
+        {
+            Endpoint = endpointUri,
+            TransportMode = ToHttpTransportMode(transportMode),
+        };
+
+        if (!string.IsNullOrWhiteSpace(serverName))
+        {
+            transportOptions.Name = serverName;
+        }
+
+        return new HttpClientTransport(transportOptions, httpClient, loggerFactory, ownsHttpClient: true);
     }
 
     internal static McpOAuthOptions ResolveOAuthOptions(AgentServices? services)
