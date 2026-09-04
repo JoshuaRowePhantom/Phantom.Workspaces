@@ -1,0 +1,225 @@
+### Scenario 1 — Local agent, OpenAI endpoint
+
+**Topology:** G == H == E = Machine A. One Phantom.Workspaces process.
+
+#### Agent manifest entity (in PW entity store)
+
+```json
+{
+  "entity-id": "a1b2c3d4-e5f6-7890-ab12-cd34ef567890",
+  "entity-types": ["entity", "agent-manifest"],
+  "names": [["agent-manifests", "my-openai-agent"]],
+  "display-name": { "default": "My OpenAI Assistant" },
+  "manifest": {
+    "name": "my-openai-agent",
+    "displayName": "My OpenAI Assistant",
+    "description": "Answers questions and can read entities and open tabs.",
+    "template": {
+      "kind": "prompt",
+      "name": "my-openai-agent",
+      "model": {
+        "id": "gpt-4o",
+        "provider": "openai",
+        "apiType": "OpenAI",
+        "connection": { "kind": "key", "apiKey": "${OPENAI_API_KEY}" },
+        "options": { "temperature": 0.2 }
+      },
+      "instructions": "You are a helpful assistant.",
+      "metadata": {}
+    },
+    "resources": [
+      { "kind": "tool", "id": "fixed", "name": "workspace-gui" },
+      { "kind": "tool", "id": "fixed", "name": "workspace-entity" },
+      { "kind": "tool", "id": "mcp-server-entity", "name": "my-local-tools" }
+    ]
+  }
+}
+```
+
+No `template.metadata["trust-profile"]` → local execution on Machine A. Tools are not in the `template`; they come from `resources` and are resolved at session-start time.
+
+#### User workflow
+
+1. User opens the `agent-manifest` entity in PW (e.g., double-click in entity browser → triggers `OpenAgentManifestShortcutHandler`).
+2. PW shows the **AgentManifestLaunchpad** view with parameter input fields from `manifest.parameters`. If the manifest defines no parameters, the session starts immediately without showing the launchpad UI.
+3. User fills in any required parameters and clicks **Start Session**.
+4. `CreateAgentSessionEntityAsync(manifestEntity, agentSessionId, parameterValues)` → creates an `agent-session` entity in MongoDB.
+5. `AgentManifestLoader.LoadManifestFromJson(manifest-field-JSON)` → `AgentManifest`.
+6. `AgentFactory.CreateAgentChatAsync({ AgentManifest, Parameters, ToolResourceFactory, AgentSessionId, AgentServices, ForegroundScheduler })`.
+7. All execution happens on **Machine A** (single machine). The OpenAI REST API is called outbound from Machine A.
+8. User types a message in the agent chat UI → `AgentChat.EnqueueUserMessage(text)`.
+
+#### Materialized `AgentDefinition` (after `CreateAgentDefinitionAsync`)
+
+`CreateAgentDefinitionAsync` clones/substitutes the `template`, then calls `ToolResourceFactory.ResolveToolResourceAsync` for each entry in `resources` and appends the resulting `Tool` objects:
+
+- `{ "id": "fixed", "name": "workspace-gui" }` → built-in workspace-gui tool
+- `{ "id": "fixed", "name": "workspace-entity" }` → built-in workspace-entity tool
+- `{ "id": "mcp-server-entity", "name": "my-local-tools" }` → fetches the `mcp-server` entity named "my-local-tools" from the entity store → builds MCP connection tool
+
+```json
+{
+  "kind": "prompt",
+  "name": "my-openai-agent",
+  "model": {
+    "id": "gpt-4o",
+    "provider": "openai",
+    "apiType": "OpenAI",
+    "connection": { "kind": "key", "apiKey": "<resolved>" },
+    "options": { "temperature": 0.2 }
+  },
+  "instructions": "You are a helpful assistant.",
+  "metadata": {},
+  "tools": [
+    { "kind": "workspace-gui" },
+    { "kind": "workspace-entity" },
+    { "kind": "mcp", "serverName": "my-local-tools",
+      "connection": { "kind": "stdio", "command": "my-tool-server", "args": ["--mcp"] } }
+  ]
+}
+```
+
+Tools are now present — they were appended by `ToolResourceFactory` resolving the `resources` list. They are **not** present in the `template` field of the entity.
+
+#### Session construction on Machine A
+
+```
+WorkspacePaneViewModel
+  └─ AgentChatViewModel
+       └─ AgentChatSession
+            ├─ AgentChat entity (MongoDB, local)
+            ├─ IncrementalPersistenceChatHistoryProvider → local MongoDB
+            ├─ LocalTransportFactory → LocalTransport
+            │    └─ IMessageChannel (chat-client channel)
+            │         ├─ [SERVER SIDE] ChatClientTransportListener
+            │         │    ├─ OpenAiChatClient (AgentFactory)
+            │         │    └─ MCP tool wrappers (via McpClientOverTransport → LocalTransport → McpTransportListener)
+            │         └─ [CLIENT SIDE] ChatClientOverTransport : IChatClient
+            └─ LocalTransport → McpTransportListener (per mcp tool)
+                 └─ StdioClientTransport → git mcp server process
+```
+
+#### Factory steps (`AgentFactory.CreateAgentChatAsync`)
+
+1. `AgentManifest` provided → call `CreateAgentDefinitionAsync` (parameter substitution + resource resolution) → returns resolved `AgentDefinition` (above).
+2. `EnforceTrustProfileAsync(resolvedDefinition, trustProfileProvider)`: no trust profile → passes validation.
+3. `AgentChat.CreateAsync(InternalCreateAgentChatRequest { AgentDefinition, AgentSessionId, AgentServices, ForegroundScheduler, ... })`.
+
+#### `AgentChat.InitializeAsync` steps
+
+```
+1.  RestoreAsync(agentSessionId)
+      → No prior session: restoredAgent = null
+
+2.  Resolve AgentDefinition
+      → Use request.AgentDefinition (already fully resolved: tools appended by CreateAgentDefinitionAsync)
+
+3.  [NEW] AgentTrustProfileResolver.ResolveAsync(definition, trustProfileProvider)
+      → metadata["trust-profile"] absent → trustProfile = null
+      → Effective execution target: { "type": "local" }
+
+4.  [NEW] ExecutionTargetResolver.Resolve(trustProfile)
+      → $connection = { "type": "local" }
+
+5.  [NEW] ITransportFactoryRegistry.ConnectToAsync({ "type": "local" })
+      → LocalTransportFactory matches
+      → Returns LocalTransport (in-process channel pair, no network)
+
+6.  [NEW] LocalTransport.ConnectToMessageChannelAsync({
+          "type": "chat-client",
+          "definition": <agentDefinitionJson>,
+          "mcp-servers": [
+            { "server-name": "workspace-gui",    "connection": { "type": "local", "target": "workspace-gui-listener" } },
+            { "server-name": "workspace-entity", "connection": { "type": "local", "target": "workspace-entity-listener" } },
+            { "server-name": "my-local-tools",   "connection": { "type": "local", "target": "mcp-stdio:my-tool-server" } }
+          ]
+        })
+      → On server side: ChatClientTransportListener.OnChannelOpenAsync fires
+          a. AgentFactory.CreateChatClient(definition)
+               provider = "openai"
+               → OpenAI client over HttpClient
+               → WrapWithMiddleware → ToolResultSteeringMiddleware(openAiClient, queueManager)
+          b. For each mcp-server descriptor:
+               workspace-gui    → LocalTransport → WorkspaceGuiMcpServerListener → AIFunction providers
+               workspace-entity → LocalTransport → WorkspaceEntityMcpServerListener → AIFunction providers
+               my-local-tools   → LocalTransport → McpTransportListener → StdioClientTransport("my-tool-server --mcp")
+          c. Returns ChatClientTransportSession (IAsyncDisposable) owning all MCP sessions
+      → On client side: IMessageChannel linked to the session above
+      → ChatClientOverTransport : IChatClient wrapping the channel
+
+      (Provider is "openai" — NOT Copilot SDK → no CopilotSubAgentRouterMiddleware)
+
+7.  Subscribe to ToolResultSteeringMiddleware.MessagesInjected
+      → AppendSteeringMessagesToHistory
+
+8.  Register ChatClientOverTransport as owned resource (IAsyncDisposable)
+
+9.  Create IncrementalPersistenceChatHistoryProvider(definition, store)
+    Create AgentFrameworkChatHistoryProvider(persistenceProvider)
+    Create StreamingPersistenceMiddleware(chatClientOverTransport, persistenceProvider, store)
+      → this.client = streamingMiddleware (the outermost IChatClient wrapper)
+
+10. chatOptions = new ChatClientAgentOptions {
+        ChatOptions = new ChatOptions(),
+        ChatHistoryProvider = agentFrameworkChatHistoryProvider,
+        UseProvidedChatClientAsIs = false,         // standard tool loop
+        RequirePerServiceCallChatHistoryPersistence = true,
+    }
+    AgentFactory.ConfigureChatOptions(definition, chatOptions.ChatOptions)
+      → chatOptions.Instructions = "You are a helpful assistant."
+      → chatOptions.AdditionalProperties["agent_definition"] = definition
+
+11. CreateRuntimeContextProviderRegistrationsAsync(definition, services)
+      → AgentFactory.ExtractTools(definition) = [workspace-gui, workspace-entity, mcp]
+      → All CustomTool instances
+      → [NEW] For each tool: toolsetFactory.CreateToolsetAsync(tool, services)
+             workspace-gui    → McpToolContextProvider(McpClientOverTransport(LocalTransport → workspace-gui listener))
+             workspace-entity → McpToolContextProvider(McpClientOverTransport(LocalTransport → workspace-entity listener))
+             mcp "my-local-tools" → McpToolContextProvider(McpClientOverTransport(LocalTransport → my-tool-server stdio))
+      → registrations = [RuntimeContextProviderRegistration x3]
+
+12. chatOptions.AIContextProviders = registrations.Select(r => new ToolFilteringAIContextProvider(r.Provider, IsToolEnabled))
+
+13. chatClientAgent = new ChatClientAgent(streamingMiddleware, chatOptions)
+    Set session serializer (serializes ChatClientAgent framework session to BSON)
+
+14. frameworkSession = await chatClientAgent.CreateSessionAsync()
+    persistenceProvider.SetAgentSessionId(frameworkSession, agentSessionId)
+
+15. persistedMessages = store.ReadMessagesAsync(agentSessionId)
+    LoadInitialHistory(persistedMessages)           // empty first run
+
+16. SetSession(new AgentChatSession(chatClientAgent, frameworkSession))
+    SetAgentSessionId(resolvedAgentSessionId)
+
+17. (No sub-agent restore — first run)
+
+18. StartProcessingLoop()
+      → Starts background Task that drains queueManager, calls session.RunStreamAsync on each input
+
+19. InitializeMcpToolsAsync()
+      → For each McpToolContextProvider:
+             McpClient.ListToolsAsync() → [AIFunction, ...]
+             Populates toolIndex / toolRoots with ToolStateNode entries
+             Fires ToolsChanged → AgentChatViewModel refreshes tool list in UI
+```
+
+**Session ready.** User message → `EnqueueUserMessage` → processing loop → `session.RunStreamAsync` → `streamingMiddleware.GetStreamingResponseAsync` → `ChatClientOverTransport` → `ChatClientTransportListener` on local channel → `ToolResultSteeringMiddleware(openAiChatClient).GetStreamingResponseAsync` → OpenAI REST API → streaming updates → UI.
+
+#### Turn flow
+
+1. User sends message → `ChatClientOverTransport.GetStreamingResponseAsync(messages, options)`
+2. `process-streaming` frame sent to `ChatClientTransportListener` (in-process, over `LocalTransport`)
+3. `OpenAiChatClient` calls OpenAI REST API
+4. Streaming updates flow back as `streaming-update` frames
+5. If OpenAI issues tool call for `workspace-gui`: routed via `McpClientOverTransport` → `LocalTransport` → workspace-gui MCP listener → executes locally
+6. If OpenAI issues tool call for `git` MCP server: routed via `McpClientOverTransport` → `LocalTransport` → `McpTransportListener` → stdio process
+7. `streaming-update-complete` frame terminates the turn
+8. `ChatClientOverTransport` yields all `ChatResponseUpdate` objects
+9. `IncrementalPersistenceChatHistoryProvider` appends new messages to MongoDB
+
+**Persistence:** All in local MongoDB. No cross-machine communication.
+
+---
+
+This file was created temporarily. I'll use PowerShell to build the complete merged content instead.
