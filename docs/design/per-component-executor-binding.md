@@ -47,7 +47,7 @@ to an explicitly named executor, and the split is expressed declaratively in the
 | G1 | No per-tool / per-MCP executor binding; routing is per-kind static (`ExecutorTargetResolver.ForKind`). | Commits 1, 6 |
 | G2 | No `executor` field on the MCP tool type (`PhantomMcpTool` carries only `Transport`). | Commit 3 |
 | G3 | No `kind:"executor"` manifest resource (`resources[]` is `anyOf:[toolResource, modelResource]`). | Commit 1 |
-| G4 | No `user-computer-profile` parameter kind / picker (Launchpad infers kind by *name* only). | Commits 2, 8 |
+| G4 | No `executor` parameter kind / picker (Launchpad infers kind by *name* only, and there is no way to pick an executor by trust profile or implicit-from-user-computer-profile at launch). | Commits 2, 8 |
 | G5 | MCP `mcp-server-entity` resolution is not scoped to the bound executor's profile→user→defaults context. | Commit 7 |
 | G6 | Session persists only one remote (`host-profile-entity-id`), not per-executor bindings. | Commit 5 |
 | G7 | "Session overall executor" is implicit (no explicit default-local concept). | Commit 5 |
@@ -76,9 +76,21 @@ to an explicitly named executor, and the split is expressed declaratively in the
    `type`-discriminated connection-descriptor the transport layer already consumes
    (`local`, `user-computer-profile`, `http`, `reverse-http`, …). The `connection-descriptor`
    strategy is what makes the model open-endedly extensible with no schema change.
-5. **`user-computer-profile` launch parameter.** A new manifest parameter `kind:"user-computer-profile"`
-   lets the user pick which remote machine at launch; the chosen profile entity-id is recorded in
-   the session's `parameter-values`.
+5. **`executor` launch parameter.** A new manifest parameter `kind:"executor"` lets the user pick,
+   at launch, **which executor** a `parameter`-strategy executor resource resolves to. The parameter
+   offers a choice among two selectable option kinds:
+   - a **trust-profile entity** ("choose by trust policy") — resolves to that trust profile's
+     `DefaultExecutionTarget` connection-descriptor;
+   - a **user-computer-profile entity** — choosing one synthesizes an **implicit trust profile** (an
+     in-memory `TrustProfileDefinition` whose `DefaultExecutionTarget =
+     {"type":"user-computer-profile","entity-id":<chosen uuid>}` and whose
+     `HostingWorkspacesClientInstances = [<chosen uuid>]`); no trust-profile entity needs to be
+     pre-authored or persisted.
+   Both paths converge on a **trust profile** (explicit or implicit) whose `DefaultExecutionTarget`
+   is the connection-descriptor used as the executor binding. The chosen value recorded in the
+   session's `parameter-values` disambiguates the selection as a small JSON object identifying both
+   the kind and the id — `{"trust-profile":"<name-or-id>"}` or
+   `{"user-computer-profile":"<entity-id>"}` — kept lossless through `PhantomAgentSchema` round-trip.
 6. **MCP servers must actually execute on their bound executor.** `McpToolContextProvider` MUST
    connect through the transport router (`ExecutorTargetRouter` → `ExecutionTargetResolver` →
    `ITransportFactoryRegistry`) when its resolved client-instance is non-local; today it always
@@ -150,7 +162,7 @@ connection. When local, the existing in-process path is preserved (no round-trip
 - Requires threading a resolved client-instance into `McpToolContextProvider` (currently it
   receives only an `ExecutorTarget` enum that it ignores).
 - Manifest `parameters` are currently loosely typed and the Launchpad infers kind by name; adding
-  a real `user-computer-profile` kind touches both the model and the picker.
+  a real `executor` parameter kind touches both the model and the picker.
 
 ### Option B — Keep per-kind topology; add one more `ExecutorTarget` class for "MCP" (considered)
 
@@ -353,7 +365,7 @@ dispatch, without changing callers or the manifest/session schema.
 
 - `Phantom.Workspaces.Llm.Core/JsonSchemas/agent-manifest.json` — add an `executorResource` `$def`
   into `resources.items.anyOf`; add optional `executor` to `toolResource` and `modelResource`;
-  document a `user-computer-profile` parameter kind.
+  document an `executor` parameter kind.
 - `Phantom.Workspaces.Llm.Interfaces/PhantomMcpTool.cs` — add `Executor` (nullable string) via the
   `From`/`Save` recipe.
 - `Phantom.Workspaces.Llm.Interfaces/PhantomAgentSchema.cs` — read `executor` in `PostProcess`
@@ -369,10 +381,10 @@ dispatch, without changing callers or the manifest/session schema.
 - Session build/resume path (the code that constructs `ExecutorTopology` and calls
   `DeferredTrustedExecutorSelector.SetTopology`) — rebuild topology from `executor-bindings`.
 - `Phantom.Workspaces/ViewModels/AgentManifestParameterKind.cs` +
-  `AgentManifestLaunchpadViewModel.cs` — add a `UserComputerProfile` kind and honour the manifest
+  `AgentManifestLaunchpadViewModel.cs` — add an `Executor` kind and honour the manifest
   parameter `kind` field (see Contradictions below — kind is currently inferred by name).
 - `Phantom.Workspaces.Data.Core/JsonEntities/documentation/agent-options-parameters.md` — document
-  parameters + `user-computer-profile` kind + `executor` resources + `executor-bindings` round-trip.
+  parameters + `executor` kind + `executor` resources + `executor-bindings` round-trip.
 
 ### Classes and interfaces
 
@@ -410,14 +422,24 @@ them.
 - `JsonElement Resolve(ExecutorResource resource, IReadOnlyDictionary<string,string> parameterValues, TrustProfile? trustProfile)`
   — dispatch on `Id`:
   - `local` → `{"type":"local"}`.
-  - `parameter` → `{"type":"user-computer-profile","entity-id":<resolved profile UUID from the named
-    parameter>}`; missing/blank → throws.
-  - `user-computer-profile-entity` → `{"type":"user-computer-profile","entity-id":<fixed uuid>}`.
-  - `trust-profile` → the trust profile's `DefaultExecutionTarget` connection-descriptor.
+  - `parameter` → the **launch-time interactive** selection: read the named `executor` parameter's
+    recorded value, obtain the selected trust profile — either the referenced **trust-profile
+    entity** (composed via `TrustProfileComposer`) OR the **implicit trust profile** synthesized from
+    the chosen **user-computer-profile** (whose `DefaultExecutionTarget =
+    {"type":"user-computer-profile","entity-id":<chosen uuid>}`) — and return that profile's
+    `DefaultExecutionTarget` connection-descriptor by delegating to
+    `Llm.Trust.ExecutionTargetResolver.Resolve(TrustProfile?)`; missing/blank → throws.
+  - `user-computer-profile-entity` → `{"type":"user-computer-profile","entity-id":<fixed uuid>}`
+    (**fixed at authoring time**).
+  - `trust-profile` → the trust profile's `DefaultExecutionTarget` connection-descriptor
+    (**fixed at authoring time**).
   - `connection-descriptor` → the inline descriptor (`resource.ConnectionDescriptor`) **verbatim** —
     the extension escape hatch.
-  - Prefer DELEGATING to `Llm.Trust.ExecutionTargetResolver.ResolveDescriptor` for the local/profile
-    shapes (`"."`→`{"type":"local"}`, else→`{"type":"user-computer-profile","entity-id":...}`,
+  - The `parameter` strategy overlaps conceptually with `trust-profile` /
+    `user-computer-profile-entity`, but differs by *when* the executor is chosen: `parameter` is the
+    launch-time interactive selection, the others are fixed at authoring time.
+  - Prefer DELEGATING to `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes
+    (`"."`→`{"type":"local"}`, else→`{"type":"user-computer-profile","entity-id":...}`,
     `ExecutionTargetResolver.cs:34-52`).
   - unknown `Id` or unresolved profile → throws
     `"Executor resource '<id>:<name>' could not be resolved"`.
@@ -491,7 +513,7 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
    (`ReadExecutor`).
 2. The manifest's `resources[]` are parsed; `kind:"executor"` entries become `ExecutorResource`s.
 3. `ExecutorResourceResolver.Resolve` turns each `ExecutorResource` into a **connection-descriptor**
-   (`JsonElement`) using the resolved `parameter-values` (including any `user-computer-profile`
+   (`JsonElement`) using the resolved `parameter-values` (including any `executor`
    parameter the user chose) and trust context, delegating to `Llm.Trust.ExecutionTargetResolver` for
    the local/profile shapes. The result is an `ExecutorBindings` (with `SessionExecutor` =
    `{"type":"local"}` by default).
@@ -617,7 +639,7 @@ convention (read `Scenario2_GuiLocalToolRoutingTests`, `ExecutorTargetRouterTest
 ### 1. Schema and model round-trip
 
 - **Manifest round-trip.** A manifest carrying `kind:"executor"` resources, `executor` refs on the
-  model and on tools, and a `user-computer-profile` parameter loads through `PhantomAgentSchema`
+  model and on tools, and an `executor` parameter loads through `PhantomAgentSchema`
   and re-serialises losslessly, remaining compliant with the AgentSchema source-scan guard test.
   → `AgentManifestExecutorResourceTests`.
 - **`PhantomMcpTool.Executor` round-trip + guard.** `Save` emits `executor`, `From` copies it, a
@@ -627,9 +649,13 @@ convention (read `Scenario2_GuiLocalToolRoutingTests`, `ExecutorTargetRouterTest
 ### 2. Executor-resource resolution (unit)
 
 - One test per `id` strategy, asserting the resolved **connection-descriptor**: `local` →
-  `{"type":"local"}`; `parameter` → `{"type":"user-computer-profile","entity-id":<uuid>}`;
-  `user-computer-profile-entity` → the fixed-UUID descriptor; `trust-profile` → the profile's
-  `DefaultExecutionTarget` descriptor.
+  `{"type":"local"}`; `user-computer-profile-entity` → the fixed-UUID descriptor; `trust-profile` →
+  the profile's `DefaultExecutionTarget` descriptor.
+- **`parameter` strategy, both selection paths:** an `executor` parameter selecting a
+  **user-computer-profile** yields an implicit-trust-profile descriptor
+  (`{"type":"user-computer-profile","entity-id":<uuid>}` from the synthesized profile's
+  `DefaultExecutionTarget`); an `executor` parameter selecting a **trust-profile** yields that
+  profile's `DefaultExecutionTarget` (both via `ExecutionTargetResolver.Resolve(TrustProfile?)`).
 - **Extension seam (in scope):** the `connection-descriptor` strategy round-trips and resolves an
   inline descriptor **verbatim**. This single cheap test PROVES the model can be extended to new
   transport `type`s (e.g. a future container `target`) with no schema change.
@@ -680,8 +706,11 @@ Mirror `Scenario2_GuiLocalToolRoutingTests` (in-process `TransportRegistry` mach
 
 ### 8. Launchpad picker
 
-- The `user-computer-profile` parameter lists `user-computer-profile` entities and records the
-  chosen entity-id in `parameter-values`. → `AgentManifestLaunchpadViewModelTests`.
+- The `executor` parameter lists **both** `trust-profile` entities and `user-computer-profile`
+  entities in a combined chooser and records the disambiguated value
+  (`{"trust-profile":...}` or `{"user-computer-profile":...}`) in `parameter-values`; selecting a
+  user-computer-profile round-trips through the implicit-trust-profile path.
+  → `AgentManifestLaunchpadViewModelTests`.
 
 ### 9. Default manifest + validation
 
@@ -727,17 +756,20 @@ enumerates `resources[]`.
 and a `connection-descriptor`-strategy resource parse/round-trip).
 **Dependencies:** none.
 
-### Commit 2 — `user-computer-profile` parameter kind
+### Commit 2 — `executor` parameter kind
 
-**Scope:** Add a `user-computer-profile` parameter kind to the manifest parameter model and its
-documentation, plus value recording/substitution (the chosen profile UUID recorded in
-`parameter-values`). Make parameter kind read from the manifest parameter `kind` field rather than
-being inferred purely by name (see Contradictions). *(NEW parameter kind.)*
+**Scope:** Add an `executor` parameter kind to the manifest parameter model and its
+documentation, plus value recording/substitution. The parameter offers two selectable option
+kinds — a **trust-profile entity** and a **user-computer-profile entity** (the latter synthesizing
+an implicit trust profile) — and records a **disambiguated** value in `parameter-values`
+(`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`), kept lossless
+through `PhantomAgentSchema`. Make parameter kind read from the manifest parameter `kind` field
+rather than being inferred purely by name (see Contradictions). *(NEW parameter kind.)*
 **Files:** the `AgentManifest` parameter model / substitutor
 (`Phantom.Workspaces.Llm.Core/AgentDefinitionParameterSubstitutor.cs` and the parameter property
 model); `Phantom.Workspaces.Data.Core/JsonEntities/documentation/agent-options-parameters.md`.
-**Tests:** `AgentManifestExecutorResourceTests.Load_UserComputerProfileParameter_Recognised`; a
-substitutor test for the new kind.
+**Tests:** `AgentManifestExecutorResourceTests.Load_ExecutorParameter_Recognised`; a
+substitutor test for the new kind (both disambiguated value shapes).
 **Dependencies:** none.
 
 ### Commit 3 — `PhantomMcpTool.Executor` field
@@ -759,14 +791,20 @@ five `id` strategies (`local`, `parameter`, `user-computer-profile-entity`, `tru
 `connection-descriptor`), with clear errors for unknown/unresolved. This is the **#1436 fix**: the
 resolver no longer returns a flat client-instance string — it returns the connection-descriptor that
 `ITransportFactoryRegistry.ConnectToAsync` already dispatches on, DELEGATING to the existing
-`Llm.Trust.ExecutionTargetResolver.ResolveDescriptor` for the local/profile shapes. The
+`Llm.Trust.ExecutionTargetResolver` for the local/profile shapes. The `parameter` strategy reads the
+named `executor` parameter's recorded value, obtains the selected trust profile — the referenced
+**trust-profile entity** (composed via `TrustProfileComposer`) OR the **implicit trust profile**
+synthesized from the chosen **user-computer-profile** — and returns that profile's
+`DefaultExecutionTarget` via `ExecutionTargetResolver.Resolve(TrustProfile?)`. The
 `connection-descriptor` strategy returns its inline descriptor verbatim (the extension escape hatch).
 Add `ExecutorBindings` (session executor default `{"type":"local"}` + name→connection-descriptor +
 `ResolveComponent` + `ToTopology`).
 **Files:** `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResourceResolver.cs`,
 `Phantom.Workspaces.Llm.Core/Manifest/ExecutorBindings.cs` (new).
 **Tests:** `ExecutorResourceResolverTests` (incl.
-`Resolve_ConnectionDescriptorId_ReturnsInlineDescriptorVerbatim`), `ExecutorBindingsTests`.
+`Resolve_ConnectionDescriptorId_ReturnsInlineDescriptorVerbatim`,
+`Resolve_ParameterUserComputerProfile_ReturnsImplicitTrustProfileDescriptor`,
+`Resolve_ParameterTrustProfile_ReturnsDefaultExecutionTarget`), `ExecutorBindingsTests`.
 **Dependencies:** Commit 1 (`ExecutorResource`); Commit 2 (for the `parameter` strategy).
 
 ### Commit 5 — Explicit session executor + `executor-bindings` persistence + resume
@@ -812,11 +850,14 @@ implements the documented prefix search).
 **Tests:** `McpServerEntityBoundExecutorResolutionTests`.
 **Dependencies:** Commit 6.
 
-### Commit 8 — Launchpad `user-computer-profile` picker UI
+### Commit 8 — Launchpad `executor` picker UI
 
-**Scope:** Add a `UserComputerProfile` value to `AgentManifestParameterKind` and a picker in the
-Launchpad that lists `user-computer-profile` entities and records the chosen entity-id in
-`parameter-values`.
+**Scope:** Add an `Executor` value to `AgentManifestParameterKind` (renamed from the earlier
+`UserComputerProfile`) and a combined picker in the Launchpad that lists **both** `trust-profile`
+entities **and** `user-computer-profile` entities; the selection records the **disambiguated** value
+(`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`) in
+`parameter-values`. It is no longer a user-computer-profile-only picker. Honour the manifest
+parameter `kind` field (see Contradiction #2 about name-based inference).
 **Files:** `Phantom.Workspaces/ViewModels/AgentManifestParameterKind.cs`,
 `Phantom.Workspaces/ViewModels/AgentManifestParameterRowViewModel.cs`,
 `Phantom.Workspaces/ViewModels/AgentManifestLaunchpadViewModel.cs`,
@@ -828,7 +869,7 @@ Launchpad that lists `user-computer-profile` entities and records the chosen ent
 
 **Scope:** Add `defaults/agent-manifests/copilot-split-executor` with: one `kind:"executor"`
 resource `worker` (id `parameter` → `worker-profile`); a `worker-profile` parameter (kind
-`user-computer-profile`) + a `working-directory` parameter; a model with `executor:"worker"`;
+`executor`) + a `working-directory` parameter; a model with `executor:"worker"`;
 `workspace-gui` / `workspace-entity` tools with **no** `executor` (inherit local); a GitHub web MCP
 tool with **no** `executor` (local, for OAuth). Add load-time validation that rejects/warns an
 OAuth-interactive MCP whose `executor` is non-local. Cross-check the exact tool/model/connection
@@ -901,12 +942,12 @@ manifest or session schema.
    (`Phantom.Workspaces.Llm.Core/JsonSchemas/agent-manifest.json:36-40`) — it is **not** a typed
    `properties[]` array. The `{name,kind,description,required,default}` shape lives in the
    `AgentManifest` model and in `agent-options-parameters.md`, not in the JSON schema. Adding the
-   `user-computer-profile` kind is primarily a model + documentation change (Commit 2).
+   `executor` kind is primarily a model + documentation change (Commit 2).
 2. **Launchpad infers parameter kind by NAME, not a `kind` field.**
    `AgentManifestLaunchpadViewModel.DetermineParameterKind` returns `Directory` only for the exact
    name `working-directory` (`AgentManifestLaunchpadViewModel.cs:291-296`); `AgentManifestParameterKind`
    has only `Text` and `Directory` (`AgentManifestParameterKind.cs`). Commit 2/8 must switch the
-   picker to honour the manifest parameter `kind` field and add a `UserComputerProfile` kind.
+   picker to honour the manifest parameter `kind` field and add an `Executor` kind.
 3. **`github-copilot-remote-chat.json` is an AgentDefinition, not a manifest.** It is
    `kind:"prompt"` and drives remoting via `model.options.additionalProperties.trust-profile`
    (`features/docs/examples/github-copilot-remote-chat.json:6-22,78-94`) — the OLD per-kind
