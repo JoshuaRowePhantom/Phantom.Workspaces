@@ -87,10 +87,11 @@ to an explicitly named executor, and the split is expressed declaratively in the
      `HostingWorkspacesClientInstances = [<chosen uuid>]`); no trust-profile entity needs to be
      pre-authored or persisted.
    Both paths converge on a **trust profile** (explicit or implicit) whose `DefaultExecutionTarget`
-   is the connection-descriptor used as the executor binding. The chosen value recorded in the
-   session's `parameter-values` disambiguates the selection as a small JSON object identifying both
-   the kind and the id — `{"trust-profile":"<name-or-id>"}` or
+   is the connection-descriptor used as the executor binding. The chosen selection is recorded in the
+   session's typed `parameter-selections` map (`string→JsonElement`) as a small JSON object identifying
+   both the kind and the id — `{"trust-profile":"<name-or-id>"}` or
    `{"user-computer-profile":"<entity-id>"}` — kept lossless through `PhantomAgentSchema` round-trip.
+   (The `string→string` `parameter-values` map stays reserved for `${param}` text templating; see M7.)
 6. **MCP servers must actually execute on their bound executor.** `McpToolContextProvider` MUST
    connect through the transport router (`ExecutorTargetRouter` → `ExecutionTargetResolver` →
    `ITransportFactoryRegistry`) when its resolved client-instance is non-local; today it always
@@ -134,7 +135,7 @@ to an explicitly named executor, and the split is expressed declaratively in the
 ### Option A — Per-component executor binding via manifest `kind:"executor"` resources (CHOSEN)
 
 **Architecture:** Add a manifest `kind:"executor"` resource and an optional `executor` string on
-the model and on tools. A new resolver maps each executor resource (given `parameter-values` and
+the model and on tools. A new resolver maps each executor resource (given `parameter-selections` and
 trust context) to a transport **connection-descriptor** `JsonElement` (`{"type":"local"}`,
 `{"type":"user-computer-profile","entity-id":...}`, or — via the raw escape hatch — any inline
 connection-descriptor), reusing the shapes already produced by
@@ -349,7 +350,7 @@ dispatch, without changing callers or the manifest/session schema.
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResource.cs` — parsed model of a `kind:"executor"`
   manifest resource (convenience strategies + an optional inline `connection-descriptor`).
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorResourceResolver.cs` — resolves an
-  `ExecutorResource` (+ `parameter-values` + trust context) to a **connection-descriptor**
+  `ExecutorResource` (+ `parameter-selections` + trust context) to a **connection-descriptor**
   (`JsonElement`), delegating to `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes.
 - `Phantom.Workspaces.Llm.Core/Manifest/ExecutorBindings.cs` — immutable `name → connection-descriptor`
   map and the explicit session executor; derives the client-instance strings the existing
@@ -358,6 +359,11 @@ dispatch, without changing callers or the manifest/session schema.
   that opens an arbitrary stdio/HTTP MCP connection described by the request. *(May instead live in
   `Phantom.Workspaces/Services` next to `WorkspacesTransportComposition` if it must reference the
   MCP transport factory; see Data flow.)*
+- `Phantom.Workspaces.Transport.Mcp/McpChannelClientTransport.cs` — **(M2)** a NEW adapter class: an
+  `IClientTransport` that bridges the transport `IMessageChannel` (returned by
+  `ITransportFactoryRegistry.ConnectToAsync`) to the MCP SDK client (`McpClient.CreateAsync`). It is
+  what lets a remote-bound `McpToolContextProvider` open an `McpClientOverTransport` over a routed
+  channel. Required by Commit 6 / #1438.
 - `Phantom.Workspaces.Data.Core/JsonEntities/agent-manifests/copilot-split-executor.json` — the
   default split-executor manifest entity.
 
@@ -483,6 +489,19 @@ channel. This is the production `openConnectionAsync` that G9 says is missing.
   mode), open the local MCP client via the shared `McpTransportFactory`, and pump messages between
   the MCP server and `channel`; returns the disposable that tears the connection down.
 
+**Production registration + scoped-resolver consumption (M3).** `WorkspacesTransportComposition`
+(`Phantom.Workspaces/Services/WorkspacesTransportComposition.cs:37-82`, which today registers only
+`ChatClientTransportListener` at `:54-63`) MUST register this handler on a PRODUCTION
+`McpTransportListener`. The `openConnectionAsync` handler steps are: (a) parse the connection request
+(`tool-type-name` + `tool-entity-id`); (b) resolve the MCP tool config **on the remote host** using the
+executor-scoped resolver from Commit 7 / #1439 —
+`McpServerEntityToolResourceFactory(IDataAccessLayer, IReadOnlyList<EntityName> searchPrefixes)`
+(`Phantom.Workspaces/McpServerEntityToolResourceFactory.cs:21-113`) with the **remote machine's prefix
+FIRST**; (c) launch the in-process MCP transport there; (d) bridge it to the incoming `IMessageChannel`;
+(e) dispose on channel close. **#1438 ↔ #1439 touchpoint:** the handler shell lands in #1438 and CONSUMES
+#1439's scoped search-prefix wiring; this is a two-way touchpoint documented in both issues, not a
+change to the dependency direction.
+
 #### `McpToolContextProvider` *(EXISTING — modified)*
 
 **Namespace:** `Phantom.Workspaces.Llm`
@@ -497,7 +516,22 @@ transport when the descriptor is non-local.
   the router by feeding the resolved connection-descriptor straight into
   `ExecutorTargetRouter` / `ITransportFactoryRegistry.ConnectToAsync`, building a
   `{"type":"mcp","connection":{...}}` request from `this.tool` and opening an `McpClientOverTransport`
-  over the returned transport.
+  over the returned transport. **(M2)** The routed transport's `IMessageChannel` is bridged to the MCP
+  SDK client through the NEW `McpChannelClientTransport` (`IClientTransport`) adapter — this is the
+  concrete class that lets `McpClient.CreateAsync` run over the channel; without it the remote branch
+  has no way to reach the SDK client.
+
+#### `RuntimeContextProviderRegistration` *(EXISTING — extended, M1)*
+
+**Location:** private record in `Phantom.Workspaces.Llm.Core/AgentChat.cs:2965-2969`, constructed at
+`AgentChat.cs:2389-2415`.
+**Change:** add `JsonElement? ConnectionDescriptor` populated from
+`ExecutorBindings.ResolveComponent(tool.Executor)`. **Precedence:** explicit `executor` name → its bound
+descriptor; UNSET → fall back to the legacy `ExecutorTarget` → `ExecutorTopology` → descriptor path
+(behaviour-preserving: unset + single-machine both resolve `{"type":"local"}`). The existing
+`ExecutorTarget` field is retained ONLY for `GuiLocal` `CustomTool` routing via
+`DeferredTrustedExecutorSelector.SetTopology`; `ExecutorBindings` is the source of truth for the new
+per-component descriptors that `McpToolContextProvider` consumes.
 
 #### `ExecutorTargetRouter` *(EXISTING — becomes production consumer)*
 
@@ -511,20 +545,30 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
 1. `PhantomAgentSchema.AgentManifestFromJson` loads the manifest; `PostProcess` upgrades each
    `McpTool` to `PhantomMcpTool`, now also recovering the dropped `executor` field
    (`ReadExecutor`).
-2. The manifest's `resources[]` are parsed; `kind:"executor"` entries become `ExecutorResource`s.
+2. The manifest's `resources[]` are parsed. **(M5)** A DISTINCT executor PRE-PASS enumerates
+   `manifest.Resources` (`AgentFactory.CreateAgentDefinitionAsync`, `AgentFactory.cs:451,468`, currently
+   only handles `Kind=="tool"` via `IToolResourceFactory`) and turns `kind:"executor"` entries into
+   `ExecutorResource`s **before** any tool/model construction — executors must exist first because tools
+   and the model reference them by name. Executor resources are NOT routed through `IToolResourceFactory`
+   (which returns `Tool?`, the wrong type).
 3. `ExecutorResourceResolver.Resolve` turns each `ExecutorResource` into a **connection-descriptor**
-   (`JsonElement`) using the resolved `parameter-values` (including any `executor`
-   parameter the user chose) and trust context, delegating to `Llm.Trust.ExecutionTargetResolver` for
-   the local/profile shapes. The result is an `ExecutorBindings` (with `SessionExecutor` =
-   `{"type":"local"}` by default).
+   (`JsonElement`) using the `executor` selections read from `parameter-selections` (the typed
+   `string→JsonElement` channel — NOT `parameter-values`) and trust context, delegating to
+   `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes. The result is an `ExecutorBindings`
+   (with `SessionExecutor` = `{"type":"local"}` by default).
 4. For each component: the model's `executor` and each tool's `executor` are resolved through
    `ExecutorBindings.ResolveComponent` to a connection-descriptor; unset → `SessionExecutor`.
 5. `AgentChat` constructs each `McpToolContextProvider` with its bound connection-descriptor and the
    production `ExecutorTargetRouter` (built from `ExecutorBindings.ToTopology()` and the
-   `ITransportFactoryRegistry`). `DeferredTrustedExecutorSelector.SetTopology` is set from the same
-   topology so `CustomTool` (gui-local) routing is unchanged.
+   `ITransportFactoryRegistry`). **(M1)** The bound descriptor is also stored on the component's
+   `RuntimeContextProviderRegistration.ConnectionDescriptor` (`AgentChat.cs:2965-2969`), populated from
+   `ExecutorBindings.ResolveComponent(tool.Executor)` — explicit `executor` name wins, unset falls back
+   to the legacy `ExecutorTarget` path. `DeferredTrustedExecutorSelector.SetTopology` is set from the
+   same topology so `CustomTool` (gui-local) routing is unchanged.
 6. `ExecutorBindings.ToPersistableMap()` is written to the session's `executor-bindings`
-   (connection-descriptor objects).
+   (connection-descriptor objects), and the `executor` selections are persisted in the typed
+   `parameter-selections` root key (`string→JsonElement`), a sibling of `parameter-values` and
+   `executor-bindings`.
 
 **Runtime (per MCP server first use):**
 
@@ -540,13 +584,26 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
 **Resume:**
 
 10. On resume, `executor-bindings` is read back and an `ExecutorBindings` / `ExecutorTopology` is
-    reconstructed, so the same components bind to the same machines (Requirement 9). If
-    `executor-bindings` is absent (legacy session), fall back to `host-profile-entity-id` for the
-    single remote (back-compat).
+    reconstructed, so the same components bind to the same machines (Requirement 9). **(M6)** The
+    persisted shape is a root key `executor-bindings = { "session": <descriptor>, "components": { <name>:
+    <descriptor> } }` (session default `{"type":"local"}`), added alongside the EXISTING
+    `parameter-values` / `host-profile-entity-id` and the new `parameter-selections` root key written by
+    `AgentSessionEntityFactory.CreateEntityData`
+    (`AgentSessionEntityFactory.cs:39-93`). **Back-compat rule:** if `executor-bindings.session` is
+    absent but `host-profile-entity-id` is present, derive
+    `SessionExecutor = {"type":"user-computer-profile","entity-id":<that id>}`. The new writer sets
+    `executor-bindings` while continuing to honour legacy sessions.
+11. **(M7)** The `executor` launch-parameter selection is recorded in the typed `parameter-selections`
+    map (`string→JsonElement`) — the selection object `{"trust-profile":…}` /
+    `{"user-computer-profile":…}` — persisted as a **sibling root key** alongside `parameter-values` and
+    `executor-bindings`. The resolver (`ExecutorResourceResolver`, Commit 4) reads `parameter-selections`
+    directly (no JSON-string parsing). `parameter-values` stays `IReadOnlyDictionary<string,string>` for
+    `${param}` text templating only (`AgentSessionEntityFactory.cs:46,77-85`); it is NOT widened to
+    `string→object`. The general typed-value widening is the non-blocking #1444.
 
 **Entity resolution (Commit 7):**
 
-11. When a tool's `id` is `mcp-server-entity`, the search prefixes (machine profile →
+12. When a tool's `id` is `mcp-server-entity`, the search prefixes (machine profile →
     `${USER}/mcp-servers` → `defaults/mcp-servers`) are evaluated against the **bound** executor's
     profile/user context, not the resolving instance's.
 
@@ -629,6 +686,153 @@ Mirrors `Scenario2_GuiLocalToolRoutingTests`.
 
 ---
 
+## Cohesion / integration seams
+
+This section is the implementer's map of **where the new executor pieces meet the existing code**. It
+records seven concrete findings (M1–M7) from a review of the three integration seams (manifest→build,
+MCP tool→transport, session persistence). Each names the exact class/method/line to touch and the
+resolution. **No new execution schema is introduced by any of these; there is no `ExecutorDescriptor`;
+reuse-first + host-outer/target-inner is preserved throughout.**
+
+### M1 — Reconcile the two coexisting execution-location models (`ExecutorTarget` enum ↔ `ExecutorBindings`)
+
+Two models now coexist and must be reconciled explicitly:
+
+- **Existing (per-kind enum).** Each component is tagged with `Core.Transport.ExecutorTarget` (values
+  `AgentExecutor` / `GuiLocal` / `HostingInstance`) via
+  `Core.Transport.ExecutorTargetResolver.ForTool(tool)`, and `ExecutorTopology.Resolve(target)` maps
+  those 3 roles → client-instance strings. This target is stored on the private record
+  `RuntimeContextProviderRegistration(Tool, AIContextProvider?, string?, ExecutorTarget)`
+  (`Phantom.Workspaces.Llm.Core/AgentChat.cs:2965-2969`, constructed at
+  `AgentChat.cs:2389-2415`) but is **not used for routing** today.
+- **New (named executors).** `ExecutorBindings` maps arbitrary NAMED executors → connection-descriptors
+  (`JsonElement`).
+
+**Resolution — `ExecutorBindings` is the source of truth.** Extend `RuntimeContextProviderRegistration`
+with a `JsonElement? ConnectionDescriptor` populated from
+`ExecutorBindings.ResolveComponent(tool.Executor)`. **Precedence (state explicitly):**
+
+1. If a component has an explicit `executor` name → use its bound descriptor.
+2. If UNSET → fall back to the legacy `ExecutorTarget` → `ExecutorTopology` → descriptor path.
+
+This is behaviour-preserving: an unset executor and a single-machine topology both resolve to
+`{"type":"local"}`. The legacy enum is retained only for the existing `GuiLocal` `CustomTool`
+(workspace-gui/entity) routing via `DeferredTrustedExecutorSelector.SetTopology`; the new descriptor is
+what `McpToolContextProvider` consumes.
+
+### M2 — `McpToolContextProvider` must consume a descriptor; add the `McpChannelClientTransport` bridge
+
+Today the ctor is
+`McpToolContextProvider(McpTool tool, ILoggerFactory?, ExecutorTarget executorTarget, AgentServices? services)`
+(`Phantom.Workspaces.Llm.Core/McpToolContextProvider.cs:26-37`); `ProvideAIContextAsync`
+(`:47-102`) connects **in-process** via `McpTransportFactory.CreateMcpTransportAsync(...)` (`:65`) →
+`McpClient.CreateAsync(...)` (`:71`) and **ignores** the executor.
+
+**Resolution (Commit 6 / #1438).** Give the provider the resolved `JsonElement` connection-descriptor
+(plus an `ITransportFactoryRegistry` / `ExecutorTargetRouter`). Branch on the descriptor:
+
+- **local** (`{"type":"local"}`) → the existing in-process path UNCHANGED (no round-trip).
+- **remote** → `ITransportFactoryRegistry.ConnectToAsync(descriptor)` yields a transport whose
+  `IMessageChannel` must be bridged to the MCP SDK client (`McpClient.CreateAsync` /
+  `IClientTransport`). That bridge does not exist yet: add a **NEW adapter class
+  `McpChannelClientTransport`** (an `IClientTransport` over the transport `IMessageChannel`), wrapped by
+  `McpClientOverTransport(transport, mcpConnectionRequest)`. `McpChannelClientTransport` is a required
+  deliverable of #1438.
+
+### M3 — Host-side production MCP hosting is missing and couples to the scoped resolver (#1439)
+
+`WorkspacesTransportComposition` (ctor `Phantom.Workspaces/Services/WorkspacesTransportComposition.cs:37-82`)
+registers ONLY `ChatClientTransportListener` (`:54-63`). `McpTransportListener`
+(`Func<JsonElement, IMessageChannel, CancellationToken, Task<IAsyncDisposable?>>`) exists but is
+constructed only in tests.
+
+**Resolution (Commit 6 / #1438).** Add a PRODUCTION `McpTransportListener` registration whose
+`openConnectionAsync` handler (`RemoteMcpHostHandler`):
+
+a. parses the connection request (`tool-type-name` + `tool-entity-id`);
+b. resolves the MCP tool config **on the remote host** using the executor-scoped resolver from
+   Commit 7 / #1439 — i.e.
+   `McpServerEntityToolResourceFactory(IDataAccessLayer, IReadOnlyList<EntityName> searchPrefixes)`
+   (`Phantom.Workspaces/McpServerEntityToolResourceFactory.cs:21-113`) with the **remote machine's
+   prefix FIRST**;
+c. launches the in-process MCP transport there;
+d. bridges it to the incoming `IMessageChannel`;
+e. disposes on channel close.
+
+**Explicit #1438 ↔ #1439 touchpoint.** The remote host handler CONSUMES #1439's scoped resolver, so
+#1438 depends on #1439's resolver semantics even though #1439 is listed as depending on #1438 for the
+transport plumbing. This is a two-way touchpoint, not a dependency-direction change: the transport /
+host shell lands in #1438; the scoped search-prefix wiring (machine profile first) lands in #1439; they
+meet at the handler. Both issues document this seam; the dependency edges are unchanged.
+
+### M4 — Model / chat-client executor binding is a distinct missing mechanism (#1443)
+
+The only remote path today, `TransportTrustedExecutor.CreateAgentChatAsync`
+(`Phantom.Workspaces.Llm.Core/Transport/TransportTrustedExecutor.cs:43-67`), remotes the WHOLE
+`AgentChat` by setting `AgentServices.ChatClientOverride = new ChatClientOverTransport(...)` (`:50`,
+`:54`) — router included. That is the OPPOSITE of "client remote, router local."
+
+**Resolution (Commit 6B / #1443).** Invert the nesting: transport only `CopilotSdkChatClient`'s inner
+SDK session (`EnsureSessionAsync` `:1230` → `copilotClientFactory.Create` `:1277` →
+`CreateOrResumeSessionAsync` `:1324-1357`), while the router (`IChatClient` decorators) and the
+`AIContextProviders` stay **local**. This is a NEW commit (6B), dependencies #1436 + #1437, required by
+#1441.
+
+### M5 — Executor-resource resolution is a PRE-PASS, not an `IToolResourceFactory`
+
+`IToolResourceFactory.ResolveToolResourceAsync` returns `Tool?`; executor resources instead resolve to
+**connection-descriptors**, and tools/model reference executors by NAME, so the bindings must be built
+FIRST. `AgentFactory.CreateAgentDefinitionAsync` currently iterates
+`manifest.Resources?.OfType<ToolResource>()` where `Kind=="tool"`
+(`Phantom.Workspaces.Llm.Core/AgentFactory.cs:451,468`).
+
+**Resolution (Commit 1 / #1433 + Commit 4 / #1436).** Add a DISTINCT pass over
+`manifest.Resources` for `Kind=="executor"` entries that builds `ExecutorBindings` **before** tool/model
+construction. Do NOT shoehorn executor resources through `IToolResourceFactory`
+(different return type, different lifetime, and executors must exist before tools can reference them).
+
+### M6 — Session persistence must reconcile `executor-bindings` with existing `host-profile-entity-id`
+
+`AgentSessionEntityFactory.CreateEntityData(...)`
+(`Phantom.Workspaces.Data.Core/AgentSessionEntityFactory.cs:39-93`) already persists
+`parameter-values` and `host-profile-entity-id` (`EntityId?`, written at `:88-91`).
+
+**Resolution (Commit 5 / #1437).** Add a new root key
+`executor-bindings = { "session": <descriptor>, "components": { <name>: <descriptor> } }` (session
+default `{"type":"local"}`). **Back-compat rule (on read):** if `executor-bindings.session` is absent
+but `host-profile-entity-id` is present, derive
+`SessionExecutor = {"type":"user-computer-profile","entity-id":<that id>}`. The new writer sets
+`executor-bindings` while continuing to honour legacy sessions that carry only `host-profile-entity-id`.
+
+### M7 — decouple: `parameter-values` stays `string→string`; the `executor` selection lives in a typed `parameter-selections`
+
+`parameter-values` is `IReadOnlyDictionary<string,string>` in `AgentSessionEntityFactory`
+(`AgentSessionEntityFactory.cs:46,77-85`) and in the substitutor
+(`AgentDefinitionParameterSubstitutor.Substitute(AgentManifest, IReadOnlyDictionary<string,string>?)`,
+`AgentDefinitionParameterSubstitutor.cs:15-17,133-140`). That map exists for `${param}` **text**
+templating; an executor selection is a structured choice, not a text substitution, so it does **not**
+belong there.
+
+**Resolution — DECOUPLE.** Keep `parameter-values` string-only for templating (no change, no blast
+radius). Record the `executor` parameter's disambiguated selection in a **dedicated typed channel**: a
+`parameter-selections` map of `string` (parameter name) → `JsonElement` (selection), where the selection
+is `{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`. The executor
+PRE-PASS / `ExecutorResourceResolver` reads `parameter-selections` (NOT `parameter-values`) for
+`kind:"executor"` parameters, resolves each to a connection-descriptor, and writes the resolved
+descriptors into `executor-bindings` (session + components). `parameter-selections` is persisted as a
+**sibling root key** alongside `parameter-values` and `executor-bindings` on the agent-session entity
+(`AgentSessionEntityFactory.CreateEntityData`, `AgentSessionEntityFactory.cs:39-93`). Text/directory
+parameters continue to use `parameter-values` exactly as today.
+
+**Rationale.** Storing the selection as a JSON-encoded string inside `parameter-values` was rejected: it
+conflates structured selection with text templating, and widening the whole `string→string` pipeline to
+`string→object` would ripple through ~20 call sites (including the Mongo/Web persistence DTOs). That
+general widening is filed separately as **#1444** (typed parameter values) and is **non-blocking** — the
+executor feature does not depend on it. #1444 would later let `parameter-selections` fold into a unified
+typed `parameter-values`.
+
+---
+
 ## Testing strategy
 
 This section is the authoritative map of what must be proven and where. Every listed test class
@@ -672,6 +876,9 @@ convention (read `Scenario2_GuiLocalToolRoutingTests`, `ExecutorTargetRouterTest
 - Unset `executor` inherits the session executor after resume.
 - Back-compat: a legacy session with only `host-profile-entity-id` (no `executor-bindings`)
   resolves to the single remote. → `AgentSessionExecutorBindingsTests`.
+- The `executor` selection round-trips in the typed `parameter-selections` root key
+  (`string→JsonElement`), a sibling of `parameter-values` (unchanged `string→string`) and
+  `executor-bindings` (M7). → `AgentSessionExecutorBindingsTests`.
 
 ### 4. Transport scenario tests (integration, hermetic)
 
@@ -707,8 +914,9 @@ Mirror `Scenario2_GuiLocalToolRoutingTests` (in-process `TransportRegistry` mach
 ### 8. Launchpad picker
 
 - The `executor` parameter lists **both** `trust-profile` entities and `user-computer-profile`
-  entities in a combined chooser and records the disambiguated value
-  (`{"trust-profile":...}` or `{"user-computer-profile":...}`) in `parameter-values`; selecting a
+  entities in a combined chooser and records the disambiguated selection
+  (`{"trust-profile":...}` or `{"user-computer-profile":...}`) in the typed `parameter-selections`
+  map (`string→JsonElement`); selecting a
   user-computer-profile round-trips through the implicit-trust-profile path.
   → `AgentManifestLaunchpadViewModelTests`.
 
@@ -736,7 +944,8 @@ Mirror `Scenario2_GuiLocalToolRoutingTests` (in-process `TransportRegistry` mach
 
 ## Implementation plan
 
-Each commit leaves the build green and all tests passing.
+Eleven commits total (Commits 1–9, plus Commit 6B for the model/chat-client binding and Commit 10 for
+the LLM authoring guide). Each commit leaves the build green and all tests passing.
 
 ### Commit 1 — Executor resource schema + model
 
@@ -761,9 +970,11 @@ and a `connection-descriptor`-strategy resource parse/round-trip).
 **Scope:** Add an `executor` parameter kind to the manifest parameter model and its
 documentation, plus value recording/substitution. The parameter offers two selectable option
 kinds — a **trust-profile entity** and a **user-computer-profile entity** (the latter synthesizing
-an implicit trust profile) — and records a **disambiguated** value in `parameter-values`
+an implicit trust profile) — and records a **disambiguated** selection in the typed
+`parameter-selections` map (`string→JsonElement`)
 (`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`), kept lossless
-through `PhantomAgentSchema`. Make parameter kind read from the manifest parameter `kind` field
+through `PhantomAgentSchema`. `parameter-values` stays `string→string` for `${param}` text templating
+(no change — see M7). Make parameter kind read from the manifest parameter `kind` field
 rather than being inferred purely by name (see Contradictions). *(NEW parameter kind.)*
 **Files:** the `AgentManifest` parameter model / substitutor
 (`Phantom.Workspaces.Llm.Core/AgentDefinitionParameterSubstitutor.cs` and the parameter property
@@ -786,13 +997,14 @@ the source-scan guard intact.
 ### Commit 4 — Executor-resource resolver (returns a connection-descriptor)
 
 **Scope:** Add `ExecutorResourceResolver` mapping an `ExecutorResource` (+ resolved
-`parameter-values` + trust context) to a transport **connection-descriptor** (`JsonElement`) for all
+`parameter-selections` + trust context) to a transport **connection-descriptor** (`JsonElement`) for all
 five `id` strategies (`local`, `parameter`, `user-computer-profile-entity`, `trust-profile`,
 `connection-descriptor`), with clear errors for unknown/unresolved. This is the **#1436 fix**: the
 resolver no longer returns a flat client-instance string — it returns the connection-descriptor that
 `ITransportFactoryRegistry.ConnectToAsync` already dispatches on, DELEGATING to the existing
 `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes. The `parameter` strategy reads the
-named `executor` parameter's recorded value, obtains the selected trust profile — the referenced
+named `executor` parameter's recorded selection from the typed `parameter-selections` map, obtains the
+selected trust profile — the referenced
 **trust-profile entity** (composed via `TrustProfileComposer`) OR the **implicit trust profile**
 synthesized from the chosen **user-computer-profile** — and returns that profile's
 `DefaultExecutionTarget` via `ExecutionTargetResolver.Resolve(TrustProfile?)`. The
@@ -810,11 +1022,15 @@ Add `ExecutorBindings` (session executor default `{"type":"local"}` + name→con
 ### Commit 5 — Explicit session executor + `executor-bindings` persistence + resume
 
 **Scope:** Make the session's overall executor explicit (default `{"type":"local"}`). Add
-`executor-bindings` (name→**connection-descriptor** objects) to `agent-session.json`. On build, write
-bindings; on resume, rebuild `ExecutorTopology` and set the deferred selector's topology from the
+`executor-bindings` (name→**connection-descriptor** objects) and the typed `parameter-selections` root
+key (`string→JsonElement`, a sibling of the unchanged `string→string` `parameter-values`) to
+`agent-session.json`. On build, write
+bindings and the `executor` selections; on resume, rebuild `ExecutorTopology` and set the deferred
+selector's topology from the
 bindings (deriving the client-instance strings for `local`/`user-computer-profile` shapes). Keep
 `host-profile-entity-id` as back-compat fallback (primary remote), with bindings as source of truth.
-*(NEW session field: `executor-bindings` storing connection-descriptor objects; EXISTING
+*(NEW session fields: `executor-bindings` storing connection-descriptor objects, and
+`parameter-selections` storing the typed `executor` selection; EXISTING
 `host-profile-entity-id` retained.)*
 **Files:** `Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json`; the session build/resume
 path that constructs `ExecutorTopology` and calls
@@ -840,6 +1056,28 @@ production consumer (G8) and provides the arbitrary stdio/HTTP MCP host (G9).
 `Scenario3_PerMcpServerRoutingTests`.
 **Dependencies:** Commits 3, 4, 5.
 
+### Commit 6B — Model / chat-client executor binding (remote client, local router)
+
+**Scope:** *(M4 — mapped to #1443.)* Honour a `model.executor` binding by transporting ONLY
+`CopilotSdkChatClient`'s inner SDK session while the router (`IChatClient` decorators) and the
+`AIContextProviders` stay **local**. This is the structural inverse of `TransportTrustedExecutor`, which
+remotes the whole `AgentChat`. When the model's resolved descriptor is `{"type":"local"}`, behaviour is
+unchanged (in-process CLI). When non-local, `CopilotSdkChatClient` obtains its SDK session over a
+transport (`ITransportFactoryRegistry.ConnectToAsync(modelExecutor)`) instead of the in-process
+`copilotClientFactory.Create(...)`. A production client-only host path builds a local
+`CopilotSdkChatClient` on the remote (distinct from `ChatClientTransportListener`'s whole-AgentChat
+build). This commit is inserted as **6B** so existing Commit numbers 7/8/9 (and their issue titles) do
+NOT renumber.
+**Files:** `Phantom.Workspaces.Llm.Core/CopilotSdkChatClient.cs` (session seam:
+`EnsureSessionAsync` `:1230` → `copilotClientFactory.Create` `:1277` → `CreateOrResumeSessionAsync`
+`:1324-1357`); `Phantom.Workspaces.Llm.Core/AgentFactory.cs` (thread the resolved `model` descriptor);
+a new `CopilotSessionOverTransport` under `Phantom.Workspaces.Llm.Core/Transport/Chat/`;
+`Phantom.Workspaces/Services/WorkspacesTransportComposition.cs` (client-only host listener, alongside
+`ChatClientTransportListener` at `:54-63`).
+**Tests:** `CopilotSdkChatClientExecutorTests`, `AgentChatExecutorBindingTests`,
+`WorkspacesTransportCompositionTests`.
+**Dependencies:** Commits 4 (#1436), 5 (#1437). **Required by:** Commit 9 (#1441).
+
 ### Commit 7 — MCP `mcp-server-entity` resolution scoped to the bound executor
 
 **Scope:** When a tool `id` is `mcp-server-entity`, evaluate the search prefixes (machine profile →
@@ -855,8 +1093,9 @@ implements the documented prefix search).
 **Scope:** Add an `Executor` value to `AgentManifestParameterKind` (renamed from the earlier
 `UserComputerProfile`) and a combined picker in the Launchpad that lists **both** `trust-profile`
 entities **and** `user-computer-profile` entities; the selection records the **disambiguated** value
-(`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`) in
-`parameter-values`. It is no longer a user-computer-profile-only picker. Honour the manifest
+(`{"trust-profile":"<name-or-id>"}` or `{"user-computer-profile":"<entity-id>"}`) in the typed
+`parameter-selections` map (`string→JsonElement`, not the `string→string` `parameter-values`). It is no
+longer a user-computer-profile-only picker. Honour the manifest
 parameter `kind` field (see Contradiction #2 about name-based inference).
 **Files:** `Phantom.Workspaces/ViewModels/AgentManifestParameterKind.cs`,
 `Phantom.Workspaces/ViewModels/AgentManifestParameterRowViewModel.cs`,
@@ -878,6 +1117,27 @@ JSON shapes against `features/docs/examples/github-copilot-remote-chat.json`.
 (new); the manifest/validation code that enforces the OAuth-local rule.
 **Tests:** `CopilotSplitExecutorManifestTests`, `SplitExecutorIntegrationTests`.
 **Dependencies:** Commits 1–6.
+
+### Commit 10 — LLM-readable executor authoring guide
+
+**Scope:** *(mapped to #1442.)* Add a single, self-contained, machine-consumable authoring reference
+(`Phantom.Workspaces.Data.Core/JsonEntities/documentation/agent-manifest-executors.md`) so an LLM can
+reliably author a valid executor-bound manifest or reason about a session. It documents the
+`kind:"executor"` resource and its five `id` strategies, the `executor` reference on the model/tools,
+the `kind:"executor"` launch parameter and its disambiguated recorded value, the reused
+connection-descriptor `type`s + host-outer/target-inner nesting, the persisted `executor-bindings`
+session shape, two worked end-to-end examples (the split-executor topology from #1441, and a trivial
+all-local baseline), and the OAuth-local guidance. Every fenced JSON block is a real, parseable example
+guarded by tests so the docs cannot drift from the schema/model. Complements #1441 (which ships one
+concrete manifest) by documenting the GENERAL authoring rules.
+**Files:** `Phantom.Workspaces.Data.Core/JsonEntities/documentation/agent-manifest-executors.md` (new);
+cross-links in `agent-options-parameters.md`; schema-comment alignment in `agent-manifest.json`.
+**Tests:** `ExecutorAuthoringGuideTests`
+(`AuthoringGuide_EmbeddedManifestExamples_ParseAndRoundTrip`,
+`AuthoringGuide_EmbeddedSessionExamples_ResolveToDescriptors`,
+`AuthoringGuide_DocumentsAllFiveIdStrategies`,
+`AuthoringGuide_ExecutorParameterValueShapes_Documented`).
+**Dependencies:** Commits 1 (#1433), 2 (#1434), 3 (#1435), 5 (#1437); complements Commit 9 (#1441).
 
 ---
 
