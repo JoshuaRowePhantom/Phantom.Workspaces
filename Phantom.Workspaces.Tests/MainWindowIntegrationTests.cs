@@ -1306,6 +1306,32 @@ public sealed class MainWindowIntegrationTests
         Assert.NotNull(sessionTab.Lease);
     }
 
+    [AvaloniaTheory(Timeout = 30_000)]
+    [InlineData("session")]
+    [InlineData("definition")]
+    [InlineData("manifest")]
+    [InlineData("profile")]
+    public async Task AllGuiSessionLaunchPaths_ProduceSlashCommandEnabledSession(string launchPath)
+    {
+        // #1429 regression guard: all four GUI session launch paths (loaded agent-session,
+        // agent-definition launchpad, auto-started agent-manifest, and profile-definition) must
+        // centralize materialization through ComposeSessionAgentViewModel and therefore end up
+        // with slash commands wired on the resulting AgentViewModel.
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var agent = launchPath switch
+        {
+            "session" => await MaterializeAgentSessionSlashSessionAsync(viewModel),
+            "definition" => await MaterializeAgentDefinitionSlashSessionAsync(viewModel),
+            "manifest" => await MaterializeAgentManifestSlashSessionAsync(viewModel),
+            "profile" => await MaterializeProfileDefinitionSlashSessionAsync(viewModel),
+            _ => throw new ArgumentOutOfRangeException(nameof(launchPath)),
+        };
+
+        await AssertSlashCommandsEnabledAsync(agent);
+    }
+
     [AvaloniaFact(Timeout = 15_000)]
     public async Task OpenAgentDefinitionShortcutHandler_WorkspaceEntityTool_IsMappedInWorkspacesGui()
     {
@@ -5859,6 +5885,154 @@ public sealed class MainWindowIntegrationTests
         {
             tab.PropertyChanged -= OnPropertyChanged;
         }
+    }
+
+    internal static async Task AssertSlashCommandsEnabledAsync(AgentViewModel agent)
+    {
+        // #1429: every GUI session launch path must route through ComposeSessionAgentViewModel so
+        // the input composer gets its slash-command interceptor and completions provider wired.
+        Assert.NotNull(agent.InputQueue);
+        var composer = agent.InputQueue!.DefaultComposer;
+        Assert.NotNull(composer.SlashCommandInterceptorAsync);
+        Assert.NotNull(composer.SlashCompletionsProviderAsync);
+
+        var completions = await composer.SlashCompletionsProviderAsync!(
+            string.Empty, string.Empty, CancellationToken.None);
+        var labels = completions
+            .Select(c => c.Label ?? c.CompletionText)
+            .ToList();
+        Assert.Contains(labels, l => l.Contains("rename", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(labels, l => l.Contains("title", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(labels, l => l.Contains("restart", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(labels, l => l.Contains("clone", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string EchoAgentDefinitionEntityJson(string entityId, string nameSegment)
+        => $$"""
+        {
+          "entity-id": "{{entityId}}",
+          "entity-types": ["entity", "agent-definition"],
+          "names": [["tests", "agent-definitions", "{{nameSegment}}"]],
+          "display-name": { "default": "Echo {{nameSegment}}" },
+          "definition": {
+            "kind": "prompt",
+            "name": "{{nameSegment}}",
+            "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+            "tools": []
+          }
+        }
+        """;
+
+    internal static async Task<AgentViewModel> MaterializeAgentSessionSlashSessionAsync(MainWindowViewModel viewModel)
+    {
+        var entityBroker = GetEntityBroker(viewModel);
+        var definitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("bbbb0001-0000-4000-8000-000000000001"),
+            EchoAgentDefinitionEntityJson("bbbb0001-0000-4000-8000-000000000001", "slash-session"));
+
+        var context = new AgentSessionShortcutContext();
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel, definitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(sessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            context, CreateLocalTrustedExecutorSelector(), CreateTestRunningAgentChatTable());
+        Assert.True(await handler.Handle(viewModel, Shortcut.Open, sessionEntity!));
+
+        var tab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane.SelectedTab);
+        await WaitForAgentReadyAsync(tab);
+        Assert.Equal(AgentTabState.Ready, tab.State);
+        Assert.NotNull(tab.Agent);
+        return tab.Agent!;
+    }
+
+    internal static async Task<AgentViewModel> MaterializeAgentDefinitionSlashSessionAsync(MainWindowViewModel viewModel)
+    {
+        var entityBroker = GetEntityBroker(viewModel);
+        var definitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("bbbb0002-0000-4000-8000-000000000001"),
+            EchoAgentDefinitionEntityJson("bbbb0002-0000-4000-8000-000000000001", "slash-definition"));
+
+        var context = new AgentSessionShortcutContext();
+        var handler = new OpenAgentSessionShortcutHandler(
+            context, CreateLocalTrustedExecutorSelector(), CreateTestRunningAgentChatTable());
+        var definitionHandler = new OpenAgentDefinitionShortcutHandler(context, handler);
+        Assert.True(await definitionHandler.Handle(viewModel, Shortcut.Open, definitionEntity));
+
+        var launchpad = await WaitForSelectedTabAsync<AgentManifestLaunchpadViewModel>(viewModel.SelectedWorkspacePane);
+        Assert.True(launchpad.CanStart);
+        launchpad.StartSessionCommand.Execute(null);
+
+        var tab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane);
+        await WaitForAgentReadyAsync(tab);
+        Assert.Equal(AgentTabState.Ready, tab.State);
+        Assert.NotNull(tab.Agent);
+        return tab.Agent!;
+    }
+
+    internal static async Task<AgentViewModel> MaterializeAgentManifestSlashSessionAsync(MainWindowViewModel viewModel)
+    {
+        var entityBroker = GetEntityBroker(viewModel);
+        var manifestEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("bbbb0003-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "bbbb0003-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-manifest"],
+              "names": [["tests", "agent-manifests", "slash-manifest"]],
+              "display-name": { "default": "Slash Manifest" },
+              "manifest": {
+                "name": "slash-manifest",
+                "displayName": "Slash Manifest",
+                "template": {
+                  "kind": "prompt",
+                  "name": "slash-manifest",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+                },
+                "resources": [
+                  { "kind": "tool", "id": "fixed", "name": "workspace-entity" }
+                ]
+              }
+            }
+            """);
+
+        var context = new AgentSessionShortcutContext();
+        var handler = new OpenAgentSessionShortcutHandler(
+            context, CreateLocalTrustedExecutorSelector(), CreateTestRunningAgentChatTable());
+        var manifestHandler = new OpenAgentManifestShortcutHandler(context, handler);
+        Assert.True(await manifestHandler.Handle(viewModel, Shortcut.Open, manifestEntity));
+
+        var tab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane);
+        await WaitForAgentReadyAsync(tab);
+        Assert.Equal(AgentTabState.Ready, tab.State);
+        Assert.NotNull(tab.Agent);
+        return tab.Agent!;
+    }
+
+    internal static async Task<AgentViewModel> MaterializeProfileDefinitionSlashSessionAsync(MainWindowViewModel viewModel)
+    {
+        var entityBroker = GetEntityBroker(viewModel);
+        var definitionEntity = await UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("bbbb0004-0000-4000-8000-000000000001"),
+            EchoAgentDefinitionEntityJson("bbbb0004-0000-4000-8000-000000000001", "slash-profile"));
+
+        var context = new AgentSessionShortcutContext();
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel, definitionEntity, Guid.NewGuid().ToString("n"));
+        Assert.NotNull(sessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            context, CreateLocalTrustedExecutorSelector(), CreateTestRunningAgentChatTable());
+        var chat = await CreateEchoAgentChatAsync();
+        var tab = await handler.CreateAgentSessionTabAsync(viewModel, sessionEntity!, chat);
+        await WaitForAgentReadyAsync(tab);
+        Assert.Equal(AgentTabState.Ready, tab.State);
+        Assert.NotNull(tab.Agent);
+        return tab.Agent!;
     }
 
     private static Task WaitForLayoutAsync(Window window)

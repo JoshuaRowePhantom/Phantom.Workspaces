@@ -150,6 +150,44 @@ public sealed class AgentSessionWorkspaceTabIntegrationTests
         Assert.Equal("Original Session (2)", fixture.OpenedCloneNames.Single());
     }
 
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenAgentDefinition_MaterializedSession_EnablesSlashCommands()
+    {
+        // #1429: opening an agent-definition presents the launchpad; starting the session must
+        // materialize through the shared seam so slash commands are wired.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var agent = await MainWindowIntegrationTests.MaterializeAgentDefinitionSlashSessionAsync(viewModel);
+
+        await MainWindowIntegrationTests.AssertSlashCommandsEnabledAsync(agent);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task OpenAgentManifest_MaterializedSession_EnablesSlashCommands()
+    {
+        // #1429: a parameter-less manifest auto-starts a session; that path must wire slash commands.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var agent = await MainWindowIntegrationTests.MaterializeAgentManifestSlashSessionAsync(viewModel);
+
+        await MainWindowIntegrationTests.AssertSlashCommandsEnabledAsync(agent);
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task ProfileDefinitionSession_Materialized_EnablesSlashCommands()
+    {
+        // #1429: the start-on-profile path builds the tab via CreateAgentSessionTabAsync, which must
+        // also route through the shared seam so slash commands are wired.
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var agent = await MainWindowIntegrationTests.MaterializeProfileDefinitionSlashSessionAsync(viewModel);
+
+        await MainWindowIntegrationTests.AssertSlashCommandsEnabledAsync(agent);
+    }
+
     private sealed class SlashCommandFixture : IAsyncDisposable
     {
         private readonly AgentChat chat;

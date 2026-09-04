@@ -270,8 +270,9 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         try
         {
             var (agentChat, loggerFactory) = await createChatAsync();
-            var agent = this.openAgentSessionShortcutHandler.BuildAgentViewModelPublic(
-                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity.DisplayName, loadingTab.Id, foregroundScheduler);
+            // #1429: materialize through the single composition seam so slash commands are always wired.
+            var agent = this.openAgentSessionShortcutHandler.ComposeSessionAgentViewModel(
+                this.mainWindowViewModel, loggerFactory, agentChat, createdAgentSessionEntity, loadingTab, foregroundScheduler);
             loadingTab.SetReady(agent, loggerFactory);
         }
         catch (Exception ex)
