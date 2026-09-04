@@ -68,7 +68,6 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private ICopilotSession? copilotSession;
     private string? currentSessionSignature;
     private string? pendingResumeSessionId;
-    private bool forceCreateNewSession;
     private int disposeStarted;
     private volatile string? workingDirectoryOverride;
 
@@ -440,16 +439,24 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal string? WorkingDirectoryOverride => this.workingDirectoryOverride;
 
     /// <summary>
-    /// Changes the active model for this client. The current session signature is invalidated so
-    /// the next turn creates a fresh session with the new model.
+    /// Changes the active model for this client. When a session is already live, the model is
+    /// retuned in place via <see cref="ICopilotSession.SetModelAsync"/> so the conversation history
+    /// is preserved (issue #1418); the cached session signature is left intact so the next turn
+    /// reuses the same session rather than recreating it. When no session is live yet, the model id
+    /// is simply stashed and applied by the next created/resumed session.
     /// </summary>
-    public void SetModelId(string modelId)
+    public async Task SetModelIdAsync(string modelId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         this.modelId = modelId;
-        this.currentSessionSignature = null;
-        this.pendingResumeSessionId = null; // force CreateSessionAsync with the new model
-        this.forceCreateNewSession = true;  // prevent the recreate path re-arming the stale resume id
+
+        if (this.copilotSession is { } session)
+        {
+            await session.SetModelAsync(modelId, cancellationToken).ConfigureAwait(false);
+        }
+
+        // No live session yet: BuildSessionConfig/BuildResumeSessionConfig already read this.modelId
+        // when the next session is created or resumed.
     }
 
     /// <summary>
@@ -1287,20 +1294,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             {
                 // Preserve the existing session id so the next CreateOrResumeSessionAsync call
                 // resumes the Copilot CLI session with the updated config (e.g. new working
-                // directory) rather than creating a blank new session. A model change is the
-                // exception: it must create a brand-new session so the new model takes effect,
-                // because resuming an established session keeps its original model.
-                if (!this.forceCreateNewSession)
-                {
-                    this.pendingResumeSessionId ??= staleSession.SessionId;
-                }
+                // directory) rather than creating a blank new session. Model changes no longer
+                // reach this teardown path: SetModelIdAsync retunes the live session in place via
+                // CopilotSession.SetModelAsync, preserving the conversation history (issue #1418).
+                this.pendingResumeSessionId ??= staleSession.SessionId;
 
                 await staleSession.DisposeAsync().ConfigureAwait(false);
                 this.copilotSession = null;
                 this.currentSessionSignature = null;
             }
-
-            this.forceCreateNewSession = false;
 
             var session = await this.CreateOrResumeSessionAsync(options, cancellationToken).ConfigureAwait(false);
 

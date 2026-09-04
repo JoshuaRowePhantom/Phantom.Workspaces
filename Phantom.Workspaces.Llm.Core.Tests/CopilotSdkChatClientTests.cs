@@ -1218,55 +1218,77 @@ public sealed class CopilotSdkChatClientTests
     }
 
     [Fact]
-    public void SetModelId_ChangesModelId()
+    public async Task SetModelIdAsync_ChangesModelId()
     {
         using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
 
-        client.SetModelId("claude-4");
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
 
         Assert.Equal("claude-4", client.ModelId);
     }
 
     [Fact]
-    public void SetModelId_InvalidatesPreviousSession()
+    public async Task SetModelId_WithLiveSession_CallsSessionSetModelAsync_AndKeepsSession()
     {
-        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        // Issue #1418: switching the model must retune the LIVE session via SetModelAsync (retaining
+        // history), NOT tear it down. The cached session and its signature must remain intact.
+        var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
+        var fakeFactory = new Infrastructure.FakeCopilotClientFactory(fakeClient);
 
-        // Access the internal currentSessionSignature field via reflection to verify invalidation.
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        client.SetCopilotClientFactoryForTest(fakeFactory);
+
+        // Establish the live session.
+        await InvokeEnsureSessionAsync(client);
+
+        var sessionField = typeof(CopilotSdkChatClient).GetField(
+            "copilotSession", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.NotNull(sessionField.GetValue(client));
+
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
+
+        // The live session was retuned in place, not disposed/recreated.
+        Assert.Equal(1, fakeSession.SetModelAsyncCallCount);
+        Assert.Equal("claude-4", fakeSession.LastModelSet);
+        Assert.Same(fakeSession, sessionField.GetValue(client));
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Empty(fakeSession.ResumeSessionCalls);
+    }
+
+    [Fact]
+    public async Task SetModelId_WithLiveSession_RefreshesSignature_SoNextTurnReusesSession()
+    {
+        // After the in-place model change the cached signature must remain valid so the next turn
+        // REUSES the same session (no recreation, no resume) — preserving the conversation history.
+        var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
+        var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
+        var fakeFactory = new Infrastructure.FakeCopilotClientFactory(fakeClient);
+
+        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        client.SetCopilotClientFactoryForTest(fakeFactory);
+
+        await InvokeEnsureSessionAsync(client);
+
         var signatureField = typeof(CopilotSdkChatClient).GetField(
-            "currentSessionSignature",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
+            "currentSessionSignature", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var signatureBefore = signatureField.GetValue(client);
+        Assert.NotNull(signatureBefore);
 
-        // Pre-set a fake signature to simulate an established session.
-        signatureField.SetValue(client, "fake-session-signature");
-        Assert.NotNull(signatureField.GetValue(client));
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
 
-        client.SetModelId("new-model");
+        // The signature is unchanged (the constructor model id is deliberately not part of it), so
+        // the session stays valid for reuse.
+        Assert.Equal(signatureBefore, signatureField.GetValue(client));
 
-        Assert.Null(signatureField.GetValue(client));
+        // Next turn reuses the existing session: no additional create/resume.
+        await InvokeEnsureSessionAsync(client);
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Empty(fakeSession.ResumeSessionCalls);
     }
 
     [Fact]
-    public void SetModelId_ClearsPendingResumeSessionId()
-    {
-        using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
-
-        // Arm a pending resume id, as a prior session would, then change the model.
-        client.SetResumeSessionId("old-session-id");
-
-        var resumeField = typeof(CopilotSdkChatClient).GetField(
-            "pendingResumeSessionId",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        Assert.Equal("old-session-id", resumeField.GetValue(client));
-
-        client.SetModelId("claude-4");
-
-        // The next session must be created (not resumed), so the pending resume id is cleared.
-        Assert.Null(resumeField.GetValue(client));
-    }
-
-    [Fact]
-    public async Task SetModelId_NextTurn_CreatesFreshSessionWithNewModel()
+    public async Task SetModelId_WithNoLiveSession_AppliesModelToNextCreatedSession()
     {
         var fakeSession = new Infrastructure.FakeCopilotSession { SessionId = "session-1" };
         var fakeClient = new Infrastructure.FakeCopilotClient(fakeSession);
@@ -1275,19 +1297,15 @@ public sealed class CopilotSdkChatClientTests
         using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
         client.SetCopilotClientFactoryForTest(fakeFactory);
 
-        // First turn establishes the initial session with the original model.
+        // No session yet: the model id is stashed for the next created session.
+        await client.SetModelIdAsync("claude-4", CancellationToken.None);
+        Assert.Equal(0, fakeSession.SetModelAsyncCallCount);
+
         await InvokeEnsureSessionAsync(client);
+
         Assert.Single(fakeSession.CreateSessionConfigs);
-        Assert.Equal("gpt-5", fakeSession.CreateSessionConfigs[0].Model);
-
-        // Switching the model must force the next turn to CREATE a brand-new session with the new
-        // model, not RESUME the old session id (which would keep the original model).
-        client.SetModelId("claude-4");
-        await InvokeEnsureSessionAsync(client);
-
+        Assert.Equal("claude-4", fakeSession.CreateSessionConfigs[0].Model);
         Assert.Empty(fakeSession.ResumeSessionCalls);
-        Assert.Equal(2, fakeSession.CreateSessionConfigs.Count);
-        Assert.Equal("claude-4", fakeSession.CreateSessionConfigs[1].Model);
     }
 
     private static async Task InvokeEnsureSessionAsync(CopilotSdkChatClient client)

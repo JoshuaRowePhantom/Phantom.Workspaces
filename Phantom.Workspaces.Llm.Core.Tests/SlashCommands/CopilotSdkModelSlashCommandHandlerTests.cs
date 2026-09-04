@@ -21,7 +21,7 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     /// <summary>
     /// Deterministic in-memory test double for <see cref="IModelSlashCommandClient"/>.
     /// Lets tests control the model list, simulate a failing <c>ListModelsAsync</c>,
-    /// and observe <c>SetModelId</c> calls without any Copilot connectivity.
+    /// and observe <c>SetModelIdAsync</c> calls without any Copilot connectivity.
     /// </summary>
     private sealed class FakeModelClient : IModelSlashCommandClient
     {
@@ -37,7 +37,15 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
 
         public string ModelId { get; private set; }
 
-        public void SetModelId(string modelId) => this.ModelId = modelId;
+        /// <summary>The number of times <see cref="SetModelIdAsync"/> has been invoked.</summary>
+        public int SetModelIdCallCount { get; private set; }
+
+        public Task SetModelIdAsync(string modelId, CancellationToken cancellationToken)
+        {
+            this.ModelId = modelId;
+            this.SetModelIdCallCount++;
+            return Task.CompletedTask;
+        }
 
         public Task<IReadOnlyList<ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
         {
@@ -283,11 +291,11 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
     }
 
     [Fact]
-    public async Task ModelSlashCommand_AfterExecute_LiveTurnUsesNewModel()
+    public async Task ModelSlashCommand_AfterExecute_KeepsSameSessionAndHistory()
     {
-        // End-to-end: running /model then sending a message must make the SDK session use the new
-        // model. Because resuming an established Copilot session keeps its original model, the next
-        // turn must CREATE a fresh session with the new model rather than RESUME the old id.
+        // End-to-end: running /model must retune the LIVE Copilot session in place (via
+        // ICopilotSession.SetModelAsync) rather than tearing it down and creating a fresh, empty
+        // session. Keeping the same session is what preserves the conversation history (issue #1418).
         var fakeSession = new FakeCopilotSession { SessionId = "session-1" };
         var fakeClient = new FakeCopilotClient(fakeSession);
         var fakeFactory = new FakeCopilotClientFactory(fakeClient);
@@ -300,14 +308,20 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
 
         // Establish the initial live session with the original model.
         await InvokeEnsureSessionAsync(client);
+        Assert.Single(fakeSession.CreateSessionConfigs);
         Assert.Equal("gpt-5", fakeSession.CreateSessionConfigs[0].Model);
 
         // Run /model claude-4, then the next live turn.
         await handler.ExecuteAsync(context, "claude-4", CancellationToken.None);
         await InvokeEnsureSessionAsync(client);
 
+        // The live session was retuned in place: SetModelAsync called, no teardown/resume, and no
+        // second session created — so the prior conversation history survives the switch.
+        Assert.Equal(1, fakeSession.SetModelAsyncCallCount);
+        Assert.Equal("claude-4", fakeSession.LastModelSet);
         Assert.Empty(fakeSession.ResumeSessionCalls);
-        Assert.Equal("claude-4", fakeSession.CreateSessionConfigs[^1].Model);
+        Assert.Single(fakeSession.CreateSessionConfigs);
+        Assert.Equal("claude-4", client.ModelId);
     }
 
     private static async Task InvokeEnsureSessionAsync(CopilotSdkChatClient client)

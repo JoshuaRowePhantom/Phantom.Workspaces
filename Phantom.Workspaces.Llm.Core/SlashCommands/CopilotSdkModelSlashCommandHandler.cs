@@ -55,7 +55,7 @@ internal sealed class CopilotSdkModelSlashCommandHandler : ISlashCommandHandler
             .ToArray();
     }
 
-    public Task<SlashCommandResult> ExecuteAsync(
+    public async Task<SlashCommandResult> ExecuteAsync(
         SlashCommandContext context,
         string arguments,
         CancellationToken cancellationToken)
@@ -63,11 +63,11 @@ internal sealed class CopilotSdkModelSlashCommandHandler : ISlashCommandHandler
         var modelId = arguments.Trim();
         if (string.IsNullOrEmpty(modelId))
         {
-            return Task.FromResult(new SlashCommandResult { StatusMessage = $"Active model: {this.client.ModelId}" });
+            return new SlashCommandResult { StatusMessage = $"Active model: {this.client.ModelId}" };
         }
 
-        this.client.SetModelId(modelId);
-        return Task.FromResult(new SlashCommandResult { StatusMessage = $"Model set to: {modelId}" });
+        await this.client.SetModelIdAsync(modelId, cancellationToken).ConfigureAwait(false);
+        return new SlashCommandResult { StatusMessage = $"Model set to: {modelId}" };
     }
 
     private static string FormatDescription(ModelInfo model)

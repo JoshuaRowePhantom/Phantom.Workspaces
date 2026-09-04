@@ -25,5 +25,8 @@ internal sealed class RealCopilotSessionAdapter : ICopilotSession
     public Task AbortAsync(CancellationToken cancellationToken) =>
         this.inner.AbortAsync(cancellationToken);
 
+    public Task SetModelAsync(string modelId, CancellationToken cancellationToken) =>
+        this.inner.SetModelAsync(modelId, cancellationToken);
+
     public ValueTask DisposeAsync() => this.inner.DisposeAsync();
 }

@@ -79,6 +79,23 @@ internal sealed class FakeCopilotSession : ICopilotSession
         return Task.CompletedTask;
     }
 
+    /// <summary>The model id passed to the most recent <see cref="SetModelAsync"/> call, or null.</summary>
+    public string? LastModelSet { get; private set; }
+
+    /// <summary>The number of times <see cref="SetModelAsync"/> has been invoked.</summary>
+    public int SetModelAsyncCallCount { get; private set; }
+
+    public Task SetModelAsync(string modelId, CancellationToken cancellationToken)
+    {
+        lock (this.lockObject)
+        {
+            this.LastModelSet = modelId;
+            this.SetModelAsyncCallCount++;
+        }
+
+        return Task.CompletedTask;
+    }
+
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
     public void EnqueueEvent(SessionEvent sessionEvent)
