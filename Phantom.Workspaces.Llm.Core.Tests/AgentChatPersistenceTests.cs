@@ -248,6 +248,8 @@ public sealed class AgentChatPersistenceTests
             AgentServices = new AgentServices { ToolsetFactory = toolsetFactory },
         });
 
+        await chat.Initialization;
+
         static string DiagnosticText(AgentChatHistoryItem item)
             => string.Concat(item.Contents.OfType<TextContent>().Select(static content => content.Text));
 

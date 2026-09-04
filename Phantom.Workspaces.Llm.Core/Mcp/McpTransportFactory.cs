@@ -203,10 +203,31 @@ internal static class McpTransportFactory
         }
         else
         {
+            // #1430: surface a "gathering credentials" status so a running item can show progress
+            // while secret/env resolution (which may consult an async secret provider and prompt for
+            // consent) runs. The report is a no-op when no reporter is wired (headless/unit hosts).
+            services?.McpCredentialStatusReporter?.Invoke(
+                displayName,
+                $"Gathering credentials for {displayName}\u2026");
             clientId = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
                 oauth.ClientId, services, serverName, cancellationToken).ConfigureAwait(false);
             clientSecret = await AgentFactory.ResolveOptionalSecretOrEnvAsync(
                 oauth.ClientSecret, services, serverName, cancellationToken).ConfigureAwait(false);
+        }
+
+        // #1430: wrap the interactive redirect delegate so the running item flips to "waiting for
+        // sign-in" the moment the SDK opens the browser for the authorization-code flow. Only wrap
+        // when a status reporter is actually wired: hosts (and the #1402 tests) that inject a redirect
+        // delegate without a reporter must observe that exact delegate instance unchanged.
+        var innerRedirectDelegate = oauthOptions.ResolveRedirectDelegate(displayName);
+        AuthorizationRedirectDelegate redirectDelegate = innerRedirectDelegate;
+        if (services?.McpCredentialStatusReporter is { } signInReporter)
+        {
+            redirectDelegate = (authorizationUri, redirectUri, redirectCancellationToken) =>
+            {
+                signInReporter(displayName, "Waiting for sign-in\u2026");
+                return innerRedirectDelegate(authorizationUri, redirectUri, redirectCancellationToken);
+            };
         }
 
         var clientOAuthOptions = new ClientOAuthOptions
@@ -220,7 +241,7 @@ internal static class McpTransportFactory
             // headless/unit contexts the default AuthorizationRedirectDelegate throws before this URI
             // is ever used.
             RedirectUri = oauthOptions.RedirectUri ?? DefaultLoopbackRedirectUri,
-            AuthorizationRedirectDelegate = oauthOptions.ResolveRedirectDelegate(displayName),
+            AuthorizationRedirectDelegate = redirectDelegate,
         };
 
         if (oauthOptions.ResolveTokenCache(displayName) is { } tokenCache)

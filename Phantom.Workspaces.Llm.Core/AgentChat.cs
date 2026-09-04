@@ -67,6 +67,11 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly AgentChatRunningItemCollection runningItems = new();
     private readonly AgentRunningItems runningItemOperations;
+    // #1430: standalone "gathering credentials"/"waiting for sign-in" running items, keyed by MCP
+    // server name, plus the set of servers whose load has finished so a late status report cannot
+    // resurrect an already-removed item. All access is serialized on the foreground scheduler.
+    private readonly Dictionary<string, AgentChatRunningItem> credentialRunningItems = new(StringComparer.Ordinal);
+    private readonly HashSet<string> completedCredentialServers = new(StringComparer.Ordinal);
     private readonly ObservableCollection<AgentChatPendingApprovalItem> pendingApprovalItems = [];
     private readonly List<IAsyncDisposable> ownedResources;
     private readonly object ownedResourcesLock = new();
@@ -78,6 +83,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly SlashCommandRegistry outerSlashCommands = new();
     private readonly ReplaceableSlashCommandHandlerRegistry replaceableCommands = new();
     private Task processTask = Task.CompletedTask;
+    // #1430: tracks background MCP/toolset initialization started (but no longer awaited) by
+    // InitializeAsync, so consumers can observe completion/failure without gating view rendering
+    // on it. Assigned once during initialization; Task.CompletedTask when the agent has no tools.
+    private Task initialization = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
 
     private bool isBusy;
@@ -461,12 +470,19 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // dispatch when there is actual tool work: a tool-less agent performs no running-item
        // mutations, so skipping the dispatch keeps CreateAsync from blocking on a foreground
        // scheduler that defers execution until externally pumped (e.g. sub-agent restore tests).
+       //
+       // #1430: this dispatch is deliberately NOT awaited. Returning from InitializeAsync (and thus
+       // CreateAsync) as soon as history is populated lets the GUI transition to Ready and render the
+       // HTML chat view immediately; MCP connection + interactive secret/OAuth acquisition + tool
+       // discovery run in the background and surface as per-server running items. The task is tracked
+       // on `initialization` (exposed via Initialization) so failures are observable and testable.
+       // InitializeMcpToolsAsync catches per-server and orchestration errors internally, so a single
+       // failing server never faults this task.
        var hasToolWork = this.runtimeContextProviderRegistrations.Count > 0;
-       if (hasToolWork)
-       {
-           await this.RunOnForegroundAsync(
-               () => this.InitializeMcpToolsAsync(this.request.CancellationToken));
-       }
+       this.initialization = hasToolWork
+           ? this.RunOnForegroundAsync(
+               () => this.InitializeMcpToolsAsync(this.request.CancellationToken))
+           : Task.CompletedTask;
     }
 
     // Binds the continuation chain of the supplied action to the foreground scheduler, mirroring
@@ -508,6 +524,18 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// empty/partial history on first open (issue #1009).
     /// </summary>
     public Task HistoryPopulated => this.historyPopulated.Task;
+
+    /// <summary>
+    /// Completes once background MCP/toolset initialization (connecting to MCP servers, interactive
+    /// secret/OAuth acquisition, and tool discovery) finishes. Unlike <see cref="HistoryPopulated"/>,
+    /// which gates first render, this is intentionally NOT awaited by <c>CreateAsync</c>: the chat
+    /// object and its history are available — and the view renders — before this completes so the
+    /// user can read history and start typing while servers authenticate in the background (issue
+    /// #1430). A single MCP server failing does not fault this task; it surfaces as a failed running
+    /// item while the chat stays usable. Await this in tests (or hosts) that need initialization to
+    /// have settled.
+    /// </summary>
+    public Task Initialization => this.initialization;
 
     /// <summary>Currently executing agent response items.</summary>
     public AgentChatRunningItemCollection RunningItems => this.runningItems;
@@ -900,6 +928,71 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         this.runningItemOperations.Remove(item);
+    }
+
+    // #1430: credential-status running items for background MCP connection.
+    //
+    // McpTransportFactory reports "gathering credentials"/"waiting for sign-in" while a server
+    // authenticates during background initialization. Those reports arrive on the connecting thread
+    // (off the foreground scheduler), so both entry points marshal onto foregroundScheduler via
+    // RunOnForegroundAsync before touching the non-thread-safe running-item collections and the
+    // credentialRunningItems / completedCredentialServers maps (issue #1068). A per-server
+    // "completed" guard makes a status report that races behind load completion a no-op, so a
+    // finished server can never leave an orphaned running item behind.
+    private void ReportMcpCredentialStatus(string serverName, string status)
+    {
+        if (string.IsNullOrEmpty(serverName))
+        {
+            return;
+        }
+
+        _ = this.RunOnForegroundAsync(() =>
+        {
+            if (this.completedCredentialServers.Contains(serverName))
+            {
+                return Task.CompletedTask;
+            }
+
+            var item = new AgentChatHistoryItem
+            {
+                Role = AgentChatHistoryItem.DiagnosticChatRole,
+                Contents = new AIContent[] { new TextContent(status) },
+                Timestamp = this.timeProvider.GetUtcNow(),
+            };
+
+            if (this.credentialRunningItems.TryGetValue(serverName, out var existing))
+            {
+                this.UpdateRunningItem(existing, [item]);
+            }
+            else
+            {
+                this.credentialRunningItems[serverName] = this.CreateRunningItem(item);
+            }
+
+            return Task.CompletedTask;
+        });
+    }
+
+    private void CompleteMcpCredentialStatus(string serverName)
+    {
+        if (string.IsNullOrEmpty(serverName))
+        {
+            return;
+        }
+
+        _ = this.RunOnForegroundAsync(() =>
+        {
+            this.completedCredentialServers.Add(serverName);
+            if (this.credentialRunningItems.TryGetValue(serverName, out var existing))
+            {
+                this.credentialRunningItems.Remove(serverName);
+                // Do not persist the transient credential progress into history: the per-server MCP
+                // "Loading …"/"Loaded tools" running item is the durable record.
+                this.CompleteRunningItem(existing, false);
+            }
+
+            return Task.CompletedTask;
+        });
     }
 
     /// <summary>
@@ -2400,13 +2493,26 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // exposing MCP tools to the model exactly like CustomTool toolsets (issue #1395). No network
         // connection happens here — McpToolContextProvider.ProvideAIContextAsync connects lazily — so
         // the registration/reference exists at construction time without blocking on the network.
+        // #1430: wire this chat's credential-status reporter into the services handed to each MCP
+        // provider so that, during background connection, the transport factory can surface a
+        // "gathering credentials"/"waiting for sign-in" running item without the Llm.Core.Mcp layer
+        // needing any AgentChat reference. Chaining preserves any reporter a host already supplied.
+        var hostReporter = services?.McpCredentialStatusReporter;
+        var mcpServices = (services ?? new AgentServices()) with
+        {
+            McpCredentialStatusReporter = (server, status) =>
+            {
+                hostReporter?.Invoke(server, status);
+                this.ReportMcpCredentialStatus(server, status);
+            },
+        };
         var mcpRegistrations = mcpTools.Select(tool =>
         {
             var provider = new McpToolContextProvider(
                 tool,
                 services?.LoggerFactory,
                 Core.Transport.ExecutorTargetResolver.ForTool(tool),
-                services);
+                mcpServices);
             this.RegisterOwnedResource(provider);
             return new RuntimeContextProviderRegistration(
                 tool,
@@ -2684,6 +2790,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
         finally
         {
+            // #1430: retire any credential-status running item this server produced during connection,
+            // and mark it completed so a late status report cannot resurrect one. Cover both the
+            // resolved server name and the display fallback so the key matches whatever the transport
+            // factory reported under.
+            this.CompleteMcpCredentialStatus(toolServerName ?? displayName);
+            if (!string.Equals(toolServerName, displayName, StringComparison.Ordinal))
+            {
+                this.CompleteMcpCredentialStatus(displayName);
+            }
+
             this.CompleteRunningItem(runningItem, true);
         }
     }

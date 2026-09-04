@@ -233,6 +233,32 @@ public sealed class McpTransportFactoryTests
     }
 
     [Fact]
+    public async Task ResolveOptionalSecretOrEnv_ReportsStatusCallback_ForGatheringCredentials()
+    {
+        // #1430: while the OAuth arm resolves its client id/secret, it invokes the credential-status
+        // reporter with a "gathering credentials" message (naming the server) so the host can surface
+        // a running item. This happens before any network connection is attempted.
+        var reported = new List<(string Server, string Status)>();
+        var services = new AgentServices
+        {
+            McpCredentialStatusReporter = (server, status) =>
+            {
+                lock (reported)
+                {
+                    reported.Add((server, status));
+                }
+            },
+        };
+
+        _ = await CreateAsync(OAuthTool(clientId: "client-123", serverName: "reporting-server"), services);
+
+        Assert.Contains(
+            reported,
+            entry => entry.Server == "reporting-server"
+                && entry.Status.Contains("Gathering credentials", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task CreateMcpTransport_AnonymousAndKey_StillProduceSameTransportAfterConsolidation()
     {
         var anonymousTransport = await CreateAsync(new McpTool

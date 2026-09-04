@@ -7,6 +7,7 @@ using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
+using Phantom.Workspaces.Llm.Tests;
 using System.Security;
 using System.Collections.Concurrent;
 using System.Reflection;
@@ -1949,6 +1950,46 @@ public class AgentFactoryTests
         public void Dispose() => _queue.CompleteAdding();
     }
 
+    [Fact]
+    public async Task CreateAgentChatAsync_SlowMcpServer_ReturnsBeforeMcpToolInitializationCompletes()
+    {
+        // #1430: CreateAgentChatAsync must return as soon as the chat is constructed and history is
+        // populated, without waiting for a slow toolset/MCP server to finish initializing. The gated
+        // scripted toolset stands in for a slow MCP server so no network is involved.
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var services = new AgentServices
+        {
+            ToolsetFactory = ToolsetFactory.CreateNamedToolsetFactory(
+                kind: "scripted_kind",
+                createToolsetAsync: (_, _) => Task.FromResult<Microsoft.Agents.AI.AIContextProvider?>(provider)),
+        };
+        var agent = AgentDefinitionLoader.LoadAgentFromJson(
+            """
+            {
+              "kind": "prompt",
+              "name": "echo-agent",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+              "tools": [ { "kind": "scripted_kind", "description": "Slow toolset" } ]
+            }
+            """);
+
+        await using var chat = await CreateChatAsync(agent, services);
+
+        // Creation returned while the toolset load is still gated (i.e. before it completed).
+        await invoked.Task;
+        Assert.False(chat.Initialization.IsCompleted);
+
+        // Releasing the gate lets the background initialization finish and the tool attach.
+        release.TrySetResult();
+        await chat.Initialization;
+        Assert.Contains(chat.Tools, root => root.Kind == "scripted_kind");
+    }
+
     private static Task<AgentChat> CreateChatAsync(
         AgentDefinition agentDefinition,
         AgentServices? agentServices = null,
@@ -1960,7 +2001,6 @@ public class AgentFactoryTests
                 AgentServices = agentServices,
                 PersistenceStoreFactory = persistenceStoreFactory,
             });
-
     // Reads the persistence store the AgentChat was configured with. AgentChat holds it on the
     // internal request record; InternalsVisibleTo makes the type visible to the test project.
     private static IAgentPersistenceStore GetConfiguredStore(AgentChat chat)

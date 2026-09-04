@@ -108,6 +108,18 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? CurrentAgentChatRef { get; init; }
 
+    /// <summary>
+    /// Optional callback invoked while an MCP server's credentials are being resolved during
+    /// connection — secret/env retrieval and, when the SDK runs the interactive authorization-code
+    /// flow, the redirect/sign-in step. The host uses it to surface a live "gathering
+    /// credentials"/"waiting for sign-in" running item so an agent session that is otherwise ready
+    /// still shows progress while a server authenticates in the background (issue #1430). The first
+    /// argument is the MCP server name; the second is a human-readable status. May be invoked off
+    /// the host's foreground thread, so the host is responsible for marshaling running-item
+    /// mutations onto its own scheduler. When null, no status is reported.
+    /// </summary>
+    public Action<string, string>? McpCredentialStatusReporter { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

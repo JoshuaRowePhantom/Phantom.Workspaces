@@ -5,8 +5,11 @@ using Microsoft.Extensions.Time.Testing;
 using Moq;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Secrets;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
+using System.Security;
 
 namespace Phantom.Workspaces.Llm.Tests;
 
@@ -252,6 +255,7 @@ public sealed class AgentChatTests
             }
             """);
 
+        await chat.Initialization;
         Assert.Collection(
             chat.Tools.OrderBy(static tool => tool.Kind),
             item =>
@@ -296,6 +300,7 @@ public sealed class AgentChatTests
             """,
             client);
 
+        await chat.Initialization;
         Assert.Equal(2, chat.Tools.Count);
 
         using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -334,6 +339,7 @@ public sealed class AgentChatTests
             """,
             client);
 
+        await chat.Initialization;
         var requestTool = chat.Tools.Single(static tool => tool.Kind == "web_request");
         await chat.SetToolEnabledAsync(requestTool.Id, enabled: false);
 
@@ -370,6 +376,7 @@ public sealed class AgentChatTests
             }
             """);
 
+        await chat.Initialization;
         var tool = Assert.Single(chat.Tools);
         Assert.Equal("not-a-real-tool", tool.Kind);
         Assert.False(tool.IsEnabled);
@@ -425,6 +432,8 @@ public sealed class AgentChatTests
             [new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }],
             client);
 
+        await chat.Initialization;
+
         // The placeholder must never appear in the UI tool tree.
         Assert.DoesNotContain(chat.Tools, tool => tool.Kind == UnresolvedToolResourceTool.KindValue);
 
@@ -443,6 +452,8 @@ public sealed class AgentChatTests
         var resolvedTool = new CustomTool { Kind = "web_search", Description = "Search docs" };
         await using var chat = CreateChatWithTools(
             [resolvedTool, new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }]);
+
+        await chat.Initialization;
 
         // The resolved tool still attaches despite the unresolved placeholder.
         var searchTool = Assert.Single(chat.Tools, tool => tool.Kind == "web_search");
@@ -501,6 +512,7 @@ public sealed class AgentChatTests
             }
             """);
 
+        await chat.Initialization;
         var root = Assert.Single(chat.Tools);
         Assert.Equal("filesystem", root.Kind);
         Assert.Equal("filesystem", root.Name);
@@ -531,6 +543,7 @@ public sealed class AgentChatTests
             """,
             client);
 
+        await chat.Initialization;
         chat.EnqueueUserMessage("hello");
         using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         await client.WaitForRequestAsync(requestTimeout.Token);
@@ -583,6 +596,7 @@ public sealed class AgentChatTests
             """,
             agentServices: services);
 
+        await chat.Initialization;
         var root = Assert.Single(chat.Tools);
         Assert.Equal("custom_kind", root.Kind);
         Assert.Single(root.Children);
@@ -1954,6 +1968,7 @@ public sealed class AgentChatTests
 
         // Completes without a concurrent-mutation exception and leaves no leftover running item.
         await createTask;
+        await chat.Initialization;
         await WaitForConditionAsync(
             chat.RunningItems,
             () => chat.RunningItems.Count == 0,
@@ -2054,6 +2069,7 @@ public sealed class AgentChatTests
         var (createTask, chat) = StartChatWithScriptedToolset(provider);
         await using var _ = chat;
         await createTask;
+        await chat.Initialization;
 
         var diagnostics = chat.History.Select(DiagnosticText).ToArray();
         Assert.Contains(diagnostics, text =>
@@ -2115,6 +2131,8 @@ public sealed class AgentChatTests
         };
         await using var chat = await AgentChat.CreateAsync(request, Capture);
 
+        await chat.Initialization;
+
         Assert.Contains(seenRunningTexts, text => text == "Loading toolset kind_a");
         Assert.Contains(seenRunningTexts, text => text == "Loading toolset kind_b");
         Assert.DoesNotContain(seenRunningTexts, text => text.Contains("Agent ready", StringComparison.Ordinal));
@@ -2124,6 +2142,205 @@ public sealed class AgentChatTests
         Assert.Equal(
             2,
             diagnostics.Count(text => text.Contains("Opened toolset", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task CreateAsync_ExposesInitializationTask_CompletesAfterBackgroundMcpInitFinishes()
+    {
+        // #1430: CreateAsync must return as soon as the chat object and history are available; the
+        // toolset/MCP initialization runs in the background and is observable via Initialization.
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        // CreateAsync completes without waiting for the gated background tool initialization.
+        await createTask;
+        await invoked.Task;
+        Assert.False(chat.Initialization.IsCompleted);
+
+        // Once the background work is released, the Initialization task completes and the tools land.
+        release.TrySetResult();
+        await chat.Initialization;
+        Assert.True(chat.Initialization.IsCompletedSuccessfully);
+        Assert.Contains(chat.Tools, root => root.Kind == "scripted_kind");
+    }
+
+    [Fact]
+    public async Task InitializeMcpToolsAsync_PerServer_CreatesRunningItemAndUpdatesStatusAsItProgresses()
+    {
+        // #1430: each background load operation gets its own running item whose status advances from
+        // "loading" while in progress to the "opened tools" summary once it finishes.
+        var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new ScriptedToolsetContextProvider(
+            tools: [new WebSearchTool()],
+            invoked: invoked,
+            release: release.Task);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        await createTask;
+
+        // While the operation is in progress the per-operation running item shows a live "loading"
+        // status.
+        await invoked.Task;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Any(item => FirstDiagnosticText(item) == "Loading toolset scripted_kind"),
+            "a per-operation 'loading' running item to appear while initialization is in progress");
+
+        // Completing the operation updates that same running item to the opened-tools summary and
+        // then drains it.
+        release.TrySetResult();
+        await chat.Initialization;
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => chat.RunningItems.Count == 0,
+            "the per-operation running item to drain once initialization completes");
+        Assert.Contains(
+            chat.History.Select(DiagnosticText),
+            text => text.Contains("Opened toolset", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task InitializeMcpToolsAsync_SingleServerFails_ProducesFailedRunningItemButChatStaysUsable()
+    {
+        // #1430: a single toolset/server failing must surface a failed running item without faulting
+        // Initialization or making the chat unusable.
+        var failure = new InvalidOperationException("toolset boom");
+        var provider = new ScriptedToolsetContextProvider(failure: failure);
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        await using var _ = chat;
+
+        await createTask;
+
+        // The background initialization completes successfully (failures are caught per-operation).
+        await chat.Initialization;
+        Assert.True(chat.Initialization.IsCompletedSuccessfully);
+        Assert.Contains(
+            chat.History.Select(DiagnosticText),
+            text => text.Contains("Failed to load toolset 'scripted_kind'", StringComparison.Ordinal)
+                && text.Contains("toolset boom", StringComparison.Ordinal));
+
+        // The chat is still usable: a queued turn is processed and answered.
+        chat.EnqueueUserMessage("still-there");
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "the chat to answer a queued turn after a single server failed");
+    }
+
+    [Fact]
+    public async Task InitializeMcpRuntimeToolAsync_InteractiveOAuth_ProducesGatheringCredentialsRunningItem()
+    {
+        // #1430: while an OAuth MCP server resolves its credentials during background connection, a
+        // "gathering credentials" running item is surfaced so the otherwise-ready session shows the
+        // in-flight authentication. The credential resolver signals and then throws so the assertion
+        // is deterministic and no network connection is attempted.
+        const string clientIdPlaceholder = "${SECRET:OAuthClientId}";
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolver = new SignalingThenThrowingSecretResolver(clientIdPlaceholder, reached);
+
+        var seenRunningTexts = new List<string>();
+        void Capture(AgentChat chat)
+            => ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged +=
+                (_, e) =>
+                {
+                    if (e.NewItems is null)
+                    {
+                        return;
+                    }
+
+                    foreach (AgentChatRunningItem item in e.NewItems)
+                    {
+                        lock (seenRunningTexts)
+                        {
+                            seenRunningTexts.Add(FirstDiagnosticText(item));
+                        }
+                    }
+                };
+
+        var agentDefinition = (PromptAgent)AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        agentDefinition.Tools =
+        [
+            new McpTool
+            {
+                ServerName = "oauth-server",
+                Connection = new OAuthConnection
+                {
+                    Endpoint = "https://example.test/mcp",
+                    ClientId = clientIdPlaceholder,
+                },
+            },
+        ];
+        var request = new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = CreateEchoClient(),
+            DisplayNameOverride = "test-chat",
+            AgentServices = new AgentServices { SecretPlaceholderResolver = resolver },
+        };
+
+        await using var chat = await AgentChat.CreateAsync(request, Capture);
+
+        // The background init reached credential resolution, and Initialization completes (the OAuth
+        // failure is caught per-server).
+        await reached.Task;
+        await chat.Initialization;
+
+        List<string> Snapshot()
+        {
+            lock (seenRunningTexts)
+            {
+                return [.. seenRunningTexts];
+            }
+        }
+
+        await WaitForConditionAsync(
+            chat.RunningItems,
+            () => Snapshot().Any(text => text.Contains("Gathering credentials for oauth-server", StringComparison.Ordinal)),
+            "a 'gathering credentials' running item to be surfaced during OAuth connection");
+    }
+
+    // Resolves the given placeholder to a retriever that signals it was reached and then throws, so a
+    // test can deterministically observe that credential resolution began (and the "gathering
+    // credentials" status was reported) without attempting any real network connection (issue #1430).
+    private sealed class SignalingThenThrowingSecretResolver : ISecretPlaceholderResolver
+    {
+        private readonly string placeholder;
+        private readonly TaskCompletionSource reached;
+
+        public SignalingThenThrowingSecretResolver(string placeholder, TaskCompletionSource reached)
+        {
+            this.placeholder = placeholder;
+            this.reached = reached;
+        }
+
+        public bool TryResolve(string candidate, [NotNullWhen(true)] out SecretRetriever? retriever)
+        {
+            if (!string.Equals(candidate, this.placeholder, StringComparison.Ordinal))
+            {
+                retriever = null;
+                return false;
+            }
+
+            retriever = new SecretRetriever
+            {
+                SecretName = "OAuthClientId",
+                Secret = _ =>
+                {
+                    this.reached.TrySetResult();
+                    throw new InvalidOperationException("credential resolution failed (test).");
+                },
+            };
+            return true;
+        }
     }
 
     private static string GetText(IReadOnlyList<AIContent> contents)

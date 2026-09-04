@@ -1382,6 +1382,19 @@ public sealed class MainWindowIntegrationTests
         var sessionTab = await WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(viewModel.SelectedWorkspacePane);
         await WaitForAgentReadyAsync(sessionTab);
         Assert.NotNull(sessionTab.Agent);
+
+        // #1430: the tab reaches Ready before background MCP/tool initialization completes, so wait
+        // for that initialization (and the resulting UI tool-tree update) before asserting the tool
+        // is mapped.
+        await sessionTab.Agent!.AgentChat.Initialization;
+        using var toolCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (!sessionTab.Agent.Tools.Any(static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal)))
+        {
+            toolCts.Token.ThrowIfCancellationRequested();
+            Dispatcher.UIThread.RunJobs();
+            await Task.Delay(25, toolCts.Token);
+        }
+
         Assert.Contains(sessionTab.Agent.Tools, static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal));
     }
 
