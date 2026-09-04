@@ -469,11 +469,19 @@ public static class AgentFactory
         {
             var tool = await toolResourceFactory
                 .ResolveToolResourceAsync(toolResource, cancellationToken)
-                .ConfigureAwait(false)
-                ?? throw new InvalidOperationException(
-                    $"Tool resource '{toolResource.Id}:{toolResource.Name}' could not be resolved.");
+                .ConfigureAwait(false);
 
-            promptAgent.Tools.Add(tool);
+            // A null resolution means a runtime data gap (e.g. a renamed/deleted mcp-server entity),
+            // not a configuration error. Rather than aborting the whole session, keep the unresolved
+            // resource in the tools list as an in-band placeholder so the session still loads, every
+            // other tool still attaches, and AgentChat can surface a diagnostic naming the missing
+            // resource (issue #1417). Genuine configuration errors above (missing factory, non-prompt
+            // template) remain fatal.
+            promptAgent.Tools.Add(tool ?? new UnresolvedToolResourceTool
+            {
+                ResourceId = toolResource.Id,
+                ResourceName = toolResource.Name,
+            });
         }
 
         return definition;

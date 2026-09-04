@@ -377,6 +377,87 @@ public sealed class AgentChatTests
         Assert.Empty(tool.Children);
     }
 
+    private static AgentChat CreateChatWithTools(
+        IReadOnlyList<Tool> tools,
+        IChatClient? client = null)
+    {
+        // Placeholder tools (UnresolvedToolResourceTool) cannot be loaded from JSON — the AgentSchema
+        // loader drops unknown kinds — so the definition is built from JSON and the tools are attached
+        // programmatically, mirroring how AgentFactory materializes them (issue #1417).
+        var agentDefinition = (PromptAgent)AgentDefinitionLoader.LoadAgentFromJson(DefaultAgentDefinitionJson);
+        agentDefinition.Tools = [.. tools];
+        var persistenceStore = new InMemoryAgentPersistenceStore();
+        return AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            ConfiguredStore = persistenceStore,
+            ClientOverride = client ?? new DeterministicTestChatClient(),
+            DisplayNameOverride = "test-chat",
+        }).GetAwaiter().GetResult();
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenDefinitionHasUnresolvedPlaceholderTool_EmitsDiagnostic()
+    {
+        await using var chat = CreateChatWithTools(
+            [new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }]);
+
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item =>
+                item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                && item.Contents.OfType<ErrorContent>().Any(error =>
+                    error.Message.Contains("mcp-server-entity:IcM", StringComparison.Ordinal))),
+            "a diagnostic naming the unresolved tool resource to appear in history");
+
+        var diagnostic = chat.History.Single(item =>
+            item.Role == AgentChatHistoryItem.DiagnosticChatRole
+            && item.Contents.OfType<ErrorContent>().Any());
+        var error = Assert.Single(diagnostic.Contents.OfType<ErrorContent>());
+        Assert.Contains("mcp-server-entity:IcM", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenDefinitionHasUnresolvedPlaceholderTool_DoesNotExposeItToModel()
+    {
+        var client = new DeterministicTestChatClient();
+        await using var chat = CreateChatWithTools(
+            [new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }],
+            client);
+
+        // The placeholder must never appear in the UI tool tree.
+        Assert.DoesNotContain(chat.Tools, tool => tool.Kind == UnresolvedToolResourceTool.KindValue);
+
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        chat.EnqueueUserMessage("hello");
+        await client.WaitForRequestAsync(requestTimeout.Token);
+
+        // The placeholder produced no AIContextProvider, so no tool is exposed to the model.
+        var exposedTools = client.LastRequestOptions?.Tools ?? [];
+        Assert.Empty(exposedTools);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_WhenDefinitionHasUnresolvedPlaceholderTool_DoesNotAbortSession()
+    {
+        var resolvedTool = new CustomTool { Kind = "web_search", Description = "Search docs" };
+        await using var chat = CreateChatWithTools(
+            [resolvedTool, new UnresolvedToolResourceTool { ResourceId = "mcp-server-entity", ResourceName = "IcM" }]);
+
+        // The resolved tool still attaches despite the unresolved placeholder.
+        var searchTool = Assert.Single(chat.Tools, tool => tool.Kind == "web_search");
+        Assert.True(searchTool.IsEnabled);
+
+        // And the diagnostic for the unresolved resource is still surfaced.
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item =>
+                item.Role == AgentChatHistoryItem.DiagnosticChatRole
+                && item.Contents.OfType<ErrorContent>().Any(error =>
+                    error.Message.Contains("mcp-server-entity:IcM", StringComparison.Ordinal))),
+            "a diagnostic naming the unresolved tool resource to appear in history");
+    }
+
     [Fact]
     public async Task EnqueueUserMessage_DoesNotDuplicateCurrentUserMessageInRequestHistory()
     {

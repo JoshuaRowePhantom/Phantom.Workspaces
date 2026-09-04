@@ -2327,6 +2327,9 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                     registration.Provider,
                     registration.ErrorMessage,
                     cancellationToken),
+                UnresolvedToolResourceTool unresolvedTool => this.InitializeUnresolvedToolResourceAsync(
+                    unresolvedTool,
+                    registration.ErrorMessage),
                 _ => Task.FromResult(new ToolInitializationResult([], [])),
             });
             var results = await Task.WhenAll(toolTasks);
@@ -2372,7 +2375,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             .Where(tool => !string.Equals(tool.Kind, "chat-history", StringComparison.OrdinalIgnoreCase))
             .ToArray();
         var mcpTools = agentTools.OfType<McpTool>().ToArray();
-        if (customTools.Length == 0 && mcpTools.Length == 0)
+        var unresolvedTools = agentTools.OfType<UnresolvedToolResourceTool>().ToArray();
+        if (customTools.Length == 0 && mcpTools.Length == 0 && unresolvedTools.Length == 0)
         {
             return [];
         }
@@ -2411,7 +2415,41 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 Core.Transport.ExecutorTargetResolver.ForTool(tool));
         }).ToArray();
 
-        return [.. customRegistrations, .. mcpRegistrations];
+        // Unresolved tool-resource placeholders register with a NULL provider (so they are never
+        // wired into chatOptions.AIContextProviders and thus never exposed to the model) plus an
+        // error message naming the missing resource. Including them here keeps hasToolWork true so
+        // InitializeMcpToolsAsync runs and emits the per-resource diagnostic (issue #1417).
+        var unresolvedRegistrations = unresolvedTools.Select(tool =>
+            new RuntimeContextProviderRegistration(
+                tool,
+                null,
+                $"Tool resource '{tool.ResourceId}:{tool.ResourceName}' could not be resolved; "
+                    + "the session loaded without it.",
+                Core.Transport.ExecutorTargetResolver.ForTool(tool))).ToArray();
+
+        return [.. customRegistrations, .. mcpRegistrations, .. unresolvedRegistrations];
+    }
+
+    private Task<ToolInitializationResult> InitializeUnresolvedToolResourceAsync(
+        UnresolvedToolResourceTool tool,
+        string? errorMessage)
+    {
+        // Emit a per-resource diagnostic naming the missing id:name and produce NO tool node and NO
+        // runtime tool. Because the registration carried a null provider, the placeholder is never
+        // wired into chatOptions.AIContextProviders, so it is never exposed to the model or the UI
+        // tool tree — the session still reaches a usable state with every resolved tool attached
+        // (issue #1417).
+        var errorText = errorMessage
+            ?? $"Tool resource '{tool.ResourceId}:{tool.ResourceName}' could not be resolved; "
+                + "the session loaded without it.";
+        var runningItem = this.CreateRunningItem(new AgentChatHistoryItem
+        {
+            Role = AgentChatHistoryItem.DiagnosticChatRole,
+            Contents = new AIContent[] { new ErrorContent(errorText) },
+            Timestamp = this.timeProvider.GetUtcNow(),
+        });
+        this.CompleteRunningItem(runningItem, true);
+        return Task.FromResult(new ToolInitializationResult([], []));
     }
 
     private async Task<ToolInitializationResult> InitializeCustomToolRuntimeAsync(

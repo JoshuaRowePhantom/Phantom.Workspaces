@@ -33,6 +33,21 @@ public sealed class AgentFactoryManifestTests
     }
     """;
 
+    private const string UnresolvableManifestJson = """
+    {
+      "name": "example",
+      "displayName": "Example Manifest",
+      "template": {
+        "kind": "prompt",
+        "name": "example",
+        "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+      },
+      "resources": [
+        { "kind": "tool", "id": "mcp-server-entity", "name": "github" }
+      ]
+    }
+    """;
+
     [Fact]
     public async Task CreateAgentDefinitionAsync_ResolvesToolResourcesIntoTemplateTools()
     {
@@ -67,7 +82,41 @@ public sealed class AgentFactoryManifestTests
     }
 
     [Fact]
-    public async Task CreateAgentDefinitionAsync_WhenResourceUnresolved_Throws()
+    public async Task CreateAgentDefinitionAsync_WhenResourceUnresolved_DoesNotThrow()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson(UnresolvableManifestJson);
+
+        var definition = await AgentFactory.CreateAgentDefinitionAsync(
+            new CreateAgentDefinitionRequest
+            {
+                AgentManifest = manifest,
+                ToolResourceFactory = CreateFixedFactory(),
+            });
+
+        Assert.IsType<PromptAgent>(definition);
+    }
+
+    [Fact]
+    public async Task CreateAgentDefinitionAsync_WhenResourceUnresolved_AddsUnresolvedPlaceholderTool()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson(UnresolvableManifestJson);
+
+        var definition = await AgentFactory.CreateAgentDefinitionAsync(
+            new CreateAgentDefinitionRequest
+            {
+                AgentManifest = manifest,
+                ToolResourceFactory = CreateFixedFactory(),
+            });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        var placeholder = Assert.IsType<UnresolvedToolResourceTool>(Assert.Single(promptAgent.Tools!));
+        Assert.Equal("unresolved-tool-resource", placeholder.Kind);
+        Assert.Equal("mcp-server-entity", placeholder.ResourceId);
+        Assert.Equal("github", placeholder.ResourceName);
+    }
+
+    [Fact]
+    public async Task CreateAgentDefinitionAsync_WhenSomeResourcesResolve_AttachesResolvedToolsAndPlaceholderForRest()
     {
         var manifest = AgentManifestLoader.LoadManifestFromJson("""
         {
@@ -79,20 +128,45 @@ public sealed class AgentFactoryManifestTests
             "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
           },
           "resources": [
+            { "kind": "tool", "id": "fixed", "name": "workspace-entity" },
             { "kind": "tool", "id": "mcp-server-entity", "name": "github" }
           ]
         }
         """);
+
+        var definition = await AgentFactory.CreateAgentDefinitionAsync(
+            new CreateAgentDefinitionRequest
+            {
+                AgentManifest = manifest,
+                ToolResourceFactory = CreateFixedFactory(),
+            });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.Equal(2, promptAgent.Tools!.Count);
+
+        // The resolved tool keeps its original leading position; the unresolved one is a placeholder.
+        Assert.Equal("workspace-entity", promptAgent.Tools[0].Kind);
+        Assert.IsNotType<UnresolvedToolResourceTool>(promptAgent.Tools[0]);
+
+        var placeholder = Assert.IsType<UnresolvedToolResourceTool>(promptAgent.Tools[1]);
+        Assert.Equal("mcp-server-entity", placeholder.ResourceId);
+        Assert.Equal("github", placeholder.ResourceName);
+    }
+
+    [Fact]
+    public async Task CreateAgentDefinitionAsync_WhenToolResourceFactoryMissing_StillThrows()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson(UnresolvableManifestJson);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => AgentFactory.CreateAgentDefinitionAsync(
                 new CreateAgentDefinitionRequest
                 {
                     AgentManifest = manifest,
-                    ToolResourceFactory = CreateFixedFactory(),
+                    // No ToolResourceFactory supplied while the manifest references tool resources.
                 }));
 
-        Assert.Contains("mcp-server-entity:github", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("tool resource factory", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
