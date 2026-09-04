@@ -55,7 +55,7 @@ public sealed class McpOAuthRedirectHandlerTests
         var captured = await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
         await browser.LastCallbackTask!;
 
-        Assert.Equal("127.0.0.1", captured.Host);
+        Assert.Equal("localhost", captured.Host);
         Assert.Equal(redirectUri.Port, captured.Port);
     }
 
@@ -264,7 +264,7 @@ public sealed class McpOAuthRedirectHandlerTests
 
         Assert.NotNull(options.RedirectDelegateProvider);
         Assert.NotNull(options.RedirectUri);
-        Assert.Equal("127.0.0.1", options.RedirectUri!.Host);
+        Assert.Equal("localhost", options.RedirectUri!.Host);
 
         var redirectDelegate = options.ResolveRedirectDelegate("server-a");
         Assert.NotNull(redirectDelegate);
@@ -513,7 +513,7 @@ public sealed class McpOAuthRedirectHandlerTests
         var options = McpOAuthComposition.CreateOptions(consent, browser);
 
         Assert.NotNull(options.RedirectUri);
-        Assert.Equal("127.0.0.1", options.RedirectUri!.Host);
+        Assert.Equal("localhost", options.RedirectUri!.Host);
 
         // The redirect URI is derived from a continuously-held shared listener rather than a
         // reserve-then-free port: binding a fresh HttpListener to the same prefix conflicts because
@@ -521,6 +521,56 @@ public sealed class McpOAuthRedirectHandlerTests
         using var probe = new HttpListener();
         probe.Prefixes.Add(McpOAuthRedirectHandler.NormalizeLoopbackPrefix(options.RedirectUri!));
         Assert.Throws<HttpListenerException>(() => probe.Start());
+    }
+
+    [Fact]
+    public void NormalizeLoopbackPrefix_LoopbackRedirectUri_ReturnsLocalhostPrefix()
+    {
+        var redirectUri = new Uri("http://127.0.0.1:52446/");
+
+        var prefix = McpOAuthRedirectHandler.NormalizeLoopbackPrefix(redirectUri);
+
+        Assert.Equal("http://localhost:52446/", prefix);
+        Assert.Equal("localhost", new Uri(prefix).Host);
+        Assert.EndsWith("/", prefix);
+    }
+
+    [Fact]
+    public void CreateLoopbackRedirectUri_WhenInvoked_ReturnsLocalhostRedirectUri()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+
+        var redirectUri = handler.EnsureListenerBound();
+
+        Assert.Equal("localhost", redirectUri.Host);
+        Assert.Equal("http", redirectUri.Scheme);
+    }
+
+    [Fact]
+    public void CreateOptions_InteractiveServer_RedirectUriUsesLocalhostHost()
+    {
+        var consent = new FakeSecretProvider();
+        var browser = new FakeSystemBrowserLauncher();
+
+        var options = McpOAuthComposition.CreateOptions(consent, browser);
+
+        Assert.NotNull(options.RedirectUri);
+        Assert.Equal("localhost", options.RedirectUri!.Host);
+        Assert.Equal("http", options.RedirectUri.Scheme);
+    }
+
+    [Fact]
+    public void LoopbackRedirect_SdkHostAndListenerHost_AreConsistent()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+
+        var redirectUri = handler.EnsureListenerBound();
+        var listenerPrefix = McpOAuthRedirectHandler.NormalizeLoopbackPrefix(redirectUri);
+
+        Assert.Equal(redirectUri.Host, new Uri(listenerPrefix).Host);
+        Assert.Equal("localhost", redirectUri.Host);
     }
 
     private static async Task<string> SendCallbackAsync(Uri redirectUri, string rawQuery)

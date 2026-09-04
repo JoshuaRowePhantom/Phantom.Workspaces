@@ -125,7 +125,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 
     /// <summary>
     /// Binds the single shared loopback <see cref="HttpListener"/> to an OS-assigned loopback port (if it
-    /// is not already bound) and returns its <c>http://127.0.0.1:&lt;port&gt;/</c> redirect URI. Used by
+    /// is not already bound) and returns its <c>http://localhost:&lt;port&gt;/</c> redirect URI. Used by
     /// the composition root so <c>McpOAuthOptions.RedirectUri</c> is derived from the continuously-held
     /// listener rather than a reserve-then-free port (issue #1425).
     /// </summary>
@@ -295,7 +295,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
                 reservation.Stop();
             }
 
-            var prefix = $"http://127.0.0.1:{port}/";
+            var prefix = $"http://localhost:{port}/";
             var listener = new HttpListener();
             listener.Prefixes.Add(prefix);
             try
@@ -444,14 +444,15 @@ public sealed class McpOAuthRedirectHandler : IDisposable
     }
 
     /// <summary>
-    /// Derives the loopback listener prefix (<c>http://127.0.0.1:&lt;port&gt;/</c>) from
+    /// Derives the loopback listener prefix (<c>http://localhost:&lt;port&gt;/</c>) from
     /// <paramref name="redirectUri"/>. HttpListener requires the host/port authority form and a
-    /// trailing slash.
+    /// trailing slash. The host is <c>localhost</c> (not <c>127.0.0.1</c>) because Microsoft Entra
+    /// performs port-agnostic loopback redirect matching only for <c>localhost</c> (issue #1426).
     /// </summary>
     internal static string NormalizeLoopbackPrefix(Uri redirectUri)
     {
         ArgumentNullException.ThrowIfNull(redirectUri);
-        var builder = new UriBuilder("http", "127.0.0.1", redirectUri.Port);
+        var builder = new UriBuilder("http", "localhost", redirectUri.Port);
         var prefix = builder.Uri.GetLeftPart(UriPartial.Authority);
         return prefix.EndsWith('/') ? prefix : prefix + "/";
     }
