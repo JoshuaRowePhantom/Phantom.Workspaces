@@ -121,19 +121,24 @@ Do not call `workspaces_entity_generate_guid` for normal single-entity adds.
 
 Only call `workspaces_entity_generate_guid` when you must pre-assign IDs (for example, creating multiple related entities in one update where they must reference each other).
 
-## Do not modify default entities
+## Prefer not to modify default entities
 
 Entities whose name is under the `defaults` namespace — the first name component is `defaults`, for
 example `["defaults", "mcp-servers", "<name>"]`, `["defaults", "agent-manifests", "<name>"]`, or
 `["defaults", "profiles", "default"]` — are system-provided defaults that ship with the workspace.
+They are managed by the system and may be re-seeded or reset, so direct edits can be lost or cause
+conflicts.
 
-Do **not** modify, replace, or delete these `defaults/...` entities directly with
-`workspaces_entity_update`. They are managed by the system and may be re-seeded or reset, so direct
-edits can be lost or cause conflicts.
+By default, do **not** modify, replace, or delete these `defaults/...` entities on your own
+initiative. To customize behavior, prefer creating your own entity in a non-`defaults` namespace (for
+example a profile-specific entity such as `["computer-user-profiles", ..., "mcp-servers", "<name>"]`)
+instead of editing the `defaults` entity. Reading `defaults/...` entities is always fine.
 
-To customize behavior, create your own entity in a non-`defaults` namespace (for example a
-profile-specific entity such as `["computer-user-profiles", ..., "mcp-servers", "<name>"]`) instead of
-editing the `defaults` entity. Reading `defaults/...` entities is fine.
+However, if the user **explicitly and unambiguously asks you to edit, replace, or delete a specific
+`defaults/...` entity**, you may do so. First briefly warn them that the entity is system-managed and
+that the change may be lost if the workspace re-seeds or resets, then proceed with the requested
+`workspaces_entity_update`. Do not refuse a direct, explicit user instruction to change a `defaults`
+entity solely because it is under `defaults`.
 
 ## Exact query: get one entity type explicitly
 

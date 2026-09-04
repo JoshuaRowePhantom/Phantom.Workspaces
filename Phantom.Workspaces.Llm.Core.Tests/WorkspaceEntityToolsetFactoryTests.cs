@@ -320,6 +320,56 @@ public sealed class WorkspaceEntityToolsetFactoryTests
         Assert.Contains("requires a valid GetRequest payload", textResult, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void InstructionDetails_DefaultEntitiesSection_AllowsEditOnExplicitUserRequest()
+    {
+        var text = ReadInstructionDetailsMarkdown();
+
+        Assert.Contains("explicitly", text, StringComparison.Ordinal);
+        Assert.Contains("you may", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InstructionDetails_DefaultEntitiesSection_RetainsReSeedWarning()
+    {
+        var text = ReadInstructionDetailsMarkdown();
+
+        Assert.Contains("system", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("re-seeded", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("reset", text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void InstructionDetails_DefaultEntitiesSection_DoesNotContainCategoricalProhibition()
+    {
+        var text = ReadInstructionDetailsMarkdown();
+
+        Assert.DoesNotContain(
+            "Do **not** modify, replace, or delete these `defaults/...` entities directly",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InstructionDetails_DefaultEntitiesSection_StillPrefersNonDefaultsOverride()
+    {
+        var text = ReadInstructionDetailsMarkdown();
+
+        Assert.Contains("non-`defaults` namespace", text, StringComparison.Ordinal);
+        Assert.Contains("computer-user-profiles", text, StringComparison.Ordinal);
+    }
+
+    private static string ReadInstructionDetailsMarkdown()
+    {
+        const string resourceName =
+            "Phantom.Workspaces.Data.JsonEntities.documentation.entity-workspace-agent-tool-instruction-details.md";
+        var assembly = typeof(SchemaPopulator).Assembly;
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Embedded resource not found: {resourceName}");
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
+    }
+
     private static JsonElement ReadJsonResult(object? result)
     {
         return Assert.IsType<JsonElement>(result);
