@@ -99,4 +99,91 @@ public sealed class RemoteAccessSettingsViewModelTests
 
         Assert.Equal("second-instance", viewModel.UserComputerProfileOverride);
     }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_WildcardStarListenUrl_WhenHostingEnabled_IsValid()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel
+        {
+            HostingEnabled = true,
+            ListenUrl = "http://*:5280",
+        };
+
+        Assert.True(viewModel.IsValid);
+        Assert.Null(viewModel.ValidationMessage);
+    }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_WildcardPlusListenUrl_WhenHostingEnabled_IsValid()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel
+        {
+            HostingEnabled = true,
+            ListenUrl = "http://+:5280",
+        };
+
+        Assert.True(viewModel.IsValid);
+        Assert.Null(viewModel.ValidationMessage);
+    }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_AbsoluteListenUrl_WhenHostingEnabled_RemainsValid()
+    {
+        foreach (var listenUrl in new[] { "http://[::]:5280", "http://0.0.0.0:5280", "http://localhost:5280" })
+        {
+            var viewModel = new RemoteAccessSettingsViewModel
+            {
+                HostingEnabled = true,
+                ListenUrl = listenUrl,
+            };
+
+            Assert.True(viewModel.IsValid, $"Expected {listenUrl} to be valid.");
+            Assert.Null(viewModel.ValidationMessage);
+        }
+    }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_MalformedListenUrl_WhenHostingEnabled_IsInvalid()
+    {
+        foreach (var listenUrl in new[] { "not a url", "*", "http://*:99999999" })
+        {
+            var viewModel = new RemoteAccessSettingsViewModel
+            {
+                HostingEnabled = true,
+                ListenUrl = listenUrl,
+            };
+
+            Assert.False(viewModel.IsValid, $"Expected {listenUrl} to be invalid.");
+            Assert.Equal(
+                "Listen URL must be a valid absolute URL, or a wildcard binding such as http://*:5280 or http://+:5280, when hosting is enabled.",
+                viewModel.ValidationMessage);
+        }
+    }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_WildcardListenUrl_WhenHostingDisabled_IsValid()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel
+        {
+            HostingEnabled = false,
+            ListenUrl = "not a url",
+        };
+
+        Assert.True(viewModel.IsValid);
+        Assert.Null(viewModel.ValidationMessage);
+    }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_WildcardListenUrl_RoundTripsThroughToRemoteHostingSettings()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel
+        {
+            HostingEnabled = true,
+            ListenUrl = "http://*:5280",
+        };
+
+        var settings = viewModel.ToRemoteHostingSettings();
+
+        Assert.Equal("http://*:5280", settings.ListenUrl);
+    }
 }
