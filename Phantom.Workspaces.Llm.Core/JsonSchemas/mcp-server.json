@@ -185,6 +185,11 @@
         "type": "string"
       },
       "description": "Optional allow-list of tool names exposed by the server. When omitted, all tools are available."
+    },
+    "type": {
+      "enum": ["streamable", "sse", "auto"],
+      "default": "streamable",
+      "description": "MCP HTTP transport. 'streamable' = Streamable HTTP (modern, default); 'sse' = legacy HTTP+SSE; 'auto' = SDK auto-detect. Ignored for stdio:// endpoints."
     }
   }
 }

@@ -83,7 +83,7 @@ public sealed class AgentDefinitionMcpToolTests
 
         var prompt = Assert.IsType<PromptAgent>(agent);
         var tool = Assert.Single(prompt.Tools!);
-        var mcpTool = Assert.IsType<McpTool>(tool);
+        var mcpTool = Assert.IsAssignableFrom<McpTool>(tool);
 
         Assert.Equal("filesystem", mcpTool.Name);
         Assert.Equal("mcp", mcpTool.Kind);
@@ -162,7 +162,7 @@ public sealed class AgentDefinitionMcpToolTests
 
         var prompt = Assert.IsType<PromptAgent>(agent);
         var tool = Assert.Single(prompt.Tools!);
-        var mcpTool = Assert.IsType<McpTool>(tool);
+        var mcpTool = Assert.IsAssignableFrom<McpTool>(tool);
 
         Assert.Equal("github", mcpTool.Name);
         Assert.Equal("github", mcpTool.ServerName);
@@ -286,7 +286,7 @@ public sealed class AgentDefinitionMcpToolTests
 
         var agent = AgentDefinitionLoader.LoadAgentFromJson(json);
         var prompt = Assert.IsType<PromptAgent>(agent);
-        var tool = Assert.IsType<McpTool>(Assert.Single(prompt.Tools!));
+        var tool = Assert.IsAssignableFrom<McpTool>(Assert.Single(prompt.Tools!));
         var conn = Assert.IsType<AgentSchema.OAuthConnection>(tool.Connection);
 
         Assert.Equal("oauth", conn.Kind);

@@ -85,7 +85,7 @@ public static class AgentDefinitionToolExtractor
         {
             return new AgentDefinitionResolveRequest
             {
-                AgentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText()),
+                AgentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionElement.GetRawText()),
                 Parameters = parameters,
                 ToolResourceFactory = toolResourceFactory,
             };

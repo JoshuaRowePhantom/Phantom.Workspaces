@@ -48,7 +48,7 @@ public sealed partial class SecretUsageScanner
         var root = JsonNode.Parse(definition.ToJson());
         RewriteNode(root, RootPath, usageToHandleToken);
 
-        var rewritten = AgentDefinition.FromJson(root!.ToJsonString())
+        var rewritten = PhantomAgentSchema.AgentDefinitionFromJson(root!.ToJsonString())
             ?? throw new InvalidOperationException("Failed to re-parse the rewritten agent definition.");
 
         CopyState(rewritten, definition);

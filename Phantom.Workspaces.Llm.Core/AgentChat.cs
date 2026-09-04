@@ -216,7 +216,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        var resolvedAgentDefinition = this.request.AgentDefinition
            ?? (restoredAgentDefinitionJson is not null
-               ? AgentDefinition.FromJson(restoredAgentDefinitionJson.ToJson())
+               ? PhantomAgentSchema.AgentDefinitionFromJson(restoredAgentDefinitionJson.ToJson())
                : null);
        if (resolvedAgentDefinition is null && restoredAgent.HasValue)
        {

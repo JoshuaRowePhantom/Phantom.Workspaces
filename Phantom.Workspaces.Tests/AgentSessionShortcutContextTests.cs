@@ -153,7 +153,7 @@ public sealed class AgentSessionShortcutContextTests
             },
             CancellationToken.None);
 
-        var mcpTool = Assert.IsType<McpTool>(tool);
+        var mcpTool = Assert.IsAssignableFrom<McpTool>(tool);
         Assert.Equal("issue1399-server", mcpTool.ServerName);
         var connection = Assert.IsType<ApiKeyConnection>(mcpTool.Connection);
         Assert.Equal("https://user-created.example/mcp/", connection.Endpoint);
@@ -382,3 +382,4 @@ public sealed class AgentSessionShortcutContextTests
         await Task.CompletedTask;
     }
 }
+

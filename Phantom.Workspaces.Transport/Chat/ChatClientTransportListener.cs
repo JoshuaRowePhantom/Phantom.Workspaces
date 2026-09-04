@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using AgentSchema;
 using Microsoft.Extensions.AI;
+using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Transport.Chat;
 
@@ -49,7 +50,7 @@ public sealed class ChatClientTransportListener : ITransportListener
                 throw new InvalidOperationException("Agent definition property is present but null.");
             }
 
-            var definition = AgentDefinition.FromJson(agentDefJson);
+            var definition = PhantomAgentSchema.AgentDefinitionFromJson(agentDefJson);
             if (definition is null)
             {
                 throw new InvalidOperationException("Failed to parse agent definition from JSON.");

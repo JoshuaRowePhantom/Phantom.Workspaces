@@ -44,7 +44,7 @@ public sealed class ToolResourceFactoryTests
 
         var machineFactory = ToolResourceFactory.CreateMcpServerResolution(machineWins, UserName, ComputerName);
         var machineTool = await machineFactory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
-        var machineConnection = Assert.IsType<ApiKeyConnection>(Assert.IsType<McpTool>(machineTool).Connection);
+        var machineConnection = Assert.IsType<ApiKeyConnection>(Assert.IsAssignableFrom<McpTool>(machineTool).Connection);
         Assert.Equal("https://machine.example/mcp/", machineConnection.Endpoint);
 
         // With no machine registration, the ${USER}/mcp-servers location must win over global defaults.
@@ -54,7 +54,7 @@ public sealed class ToolResourceFactoryTests
 
         var userFactory = ToolResourceFactory.CreateMcpServerResolution(userWins, UserName, ComputerName);
         var userTool = await userFactory.ResolveToolResourceAsync(McpServerResource("github"), TestContext.Current.CancellationToken);
-        var userConnection = Assert.IsType<ApiKeyConnection>(Assert.IsType<McpTool>(userTool).Connection);
+        var userConnection = Assert.IsType<ApiKeyConnection>(Assert.IsAssignableFrom<McpTool>(userTool).Connection);
         Assert.Equal("https://user.example/mcp/", userConnection.Endpoint);
     }
 
@@ -105,3 +105,4 @@ public sealed class ToolResourceFactoryTests
         Assert.DoesNotContain(updateResult.EntityResults, static result => result.UpdateState == UpdateState.Failed);
     }
 }
+

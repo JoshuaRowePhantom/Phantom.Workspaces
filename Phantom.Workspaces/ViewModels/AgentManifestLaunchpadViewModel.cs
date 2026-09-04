@@ -242,7 +242,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 var loggerFactory = new ObservableLoggerFactory();
                 var agentServices = await this.agentSessionShortcutContext
                     .CreateAgentServicesAsync(this.mainWindowViewModel, loggerFactory);
-                var agentDefinition = AgentDefinition.FromJson(definitionJson);
+                var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionJson);
                 var lease = await this.openAgentSessionShortcutHandler.RunningAgentChatTable.AcquireAsync(
                     new AcquireAgentChatRequest
                     {

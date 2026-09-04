@@ -21,7 +21,7 @@ public static class AgentDefinitionParameterSubstitutor
 
         var template = manifest.Template
             ?? throw new InvalidOperationException("Agent manifest does not specify a template agent definition.");
-        var definition = AgentDefinition.FromJson(template.ToJson())
+        var definition = PhantomAgentSchema.AgentDefinitionFromJson(template.ToJson())
             ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
 
         if (definition is PromptAgent promptAgent

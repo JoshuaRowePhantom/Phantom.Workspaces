@@ -265,7 +265,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                 };
                 if (defJson is not null)
                 {
-                    definition = AgentDefinition.FromJson(defJson);
+                    definition = PhantomAgentSchema.AgentDefinitionFromJson(defJson);
                     if (definition is null)
                         return Serialize(new { error = "Could not parse the supplied definition." });
                 }

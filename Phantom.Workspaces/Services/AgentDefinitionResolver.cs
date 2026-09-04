@@ -52,7 +52,7 @@ public sealed class AgentDefinitionResolver : IAgentDefinitionResolver
 
         if (entityData.TryGetProperty("definition", out var inlineDefinition))
         {
-            return new ResolvedAgentDefinition(AgentDefinition.FromJson(inlineDefinition.GetRawText()));
+            return new ResolvedAgentDefinition(PhantomAgentSchema.AgentDefinitionFromJson(inlineDefinition.GetRawText()));
         }
 
         if (entityData.TryGetProperty("manifest", out var inlineManifest))
@@ -96,7 +96,7 @@ public sealed class AgentDefinitionResolver : IAgentDefinitionResolver
     {
         if (entityData.TryGetProperty("definition", out var definitionElement))
         {
-            return new ResolvedAgentDefinition(AgentDefinition.FromJson(definitionElement.GetRawText()), reference);
+            return new ResolvedAgentDefinition(PhantomAgentSchema.AgentDefinitionFromJson(definitionElement.GetRawText()), reference);
         }
 
         if (entityData.TryGetProperty("manifest", out var manifestElement))

@@ -68,7 +68,7 @@ public static class AgentDefinitionLoader
         {
             ValidateJsonAgainstSchema(content, sourceLabel);
 
-            var agent = AgentDefinition.FromJson(content)
+            var agent = PhantomAgentSchema.AgentDefinitionFromJson(content)
                 ?? throw new InvalidOperationException("Failed to deserialize agent definition from JSON.");
             return RehydrateGithubCliBuiltinTools(agent, content);
         }
@@ -184,7 +184,7 @@ public static class AgentDefinitionLoader
     {
         try
         {
-            return AgentDefinition.FromYaml(content)
+            return PhantomAgentSchema.AgentDefinitionFromYaml(content)
                 ?? throw new InvalidOperationException("Failed to deserialize agent definition from YAML.");
         }
         catch (YamlException ex)

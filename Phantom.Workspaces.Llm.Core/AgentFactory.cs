@@ -442,7 +442,7 @@ public static class AgentFactory
             var template = manifest.Template
                 ?? throw new InvalidOperationException("Agent manifest does not specify a template agent definition.");
 
-            definition = AgentDefinition.FromJson(template.ToJson())
+            definition = PhantomAgentSchema.AgentDefinitionFromJson(template.ToJson())
                 ?? throw new InvalidOperationException("Failed to clone the agent manifest template.");
         }
 
@@ -1218,7 +1218,7 @@ public static class AgentFactory
             return model;
         }
 
-        var clonedAgent = AgentDefinition.FromJson(agent.ToJson())
+        var clonedAgent = PhantomAgentSchema.AgentDefinitionFromJson(agent.ToJson())
             ?? throw new InvalidOperationException("Failed to clone the agent definition for secret option resolution.");
         var clonedModel = (clonedAgent as PromptAgent)?.Model
             ?? throw new InvalidOperationException("Cloned agent definition does not specify a model.");

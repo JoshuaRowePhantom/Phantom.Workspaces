@@ -322,6 +322,65 @@ public sealed class McpTransportFactoryTests
         }
     }
 
+    [Fact]
+    public async Task CreateMcpTransport_WithoutType_DefaultsToStreamableHttp()
+    {
+        // #1416: a plain McpTool carries no 'type', so the transport must default to Streamable HTTP
+        // (never AutoDetect, whose SSE GET probe is 405-rejected by Streamable-HTTP-only servers).
+        var transport = await CreateAsync(new McpTool
+        {
+            ServerName = "no-type",
+            Connection = new AnonymousConnection { Endpoint = HttpEndpoint },
+        });
+
+        var options = GetHttpOptions(transport);
+        Assert.Equal(HttpTransportMode.StreamableHttp, options.TransportMode);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_WithTypeSse_UsesSse()
+    {
+        var transport = await CreateAsync(new PhantomMcpTool
+        {
+            ServerName = "sse-server",
+            Connection = new AnonymousConnection { Endpoint = HttpEndpoint },
+            Transport = McpHttpTransport.Sse,
+        });
+
+        var options = GetHttpOptions(transport);
+        Assert.Equal(HttpTransportMode.Sse, options.TransportMode);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_WithTypeAuto_UsesAutoDetect()
+    {
+        var transport = await CreateAsync(new PhantomMcpTool
+        {
+            ServerName = "auto-server",
+            Connection = new AnonymousConnection { Endpoint = HttpEndpoint },
+            Transport = McpHttpTransport.Auto,
+        });
+
+        var options = GetHttpOptions(transport);
+        Assert.Equal(HttpTransportMode.AutoDetect, options.TransportMode);
+    }
+
+    [Fact]
+    public async Task CreateMcpTransport_OAuthWithTypeStreamable_UsesStreamableHttp()
+    {
+        // The OAuth construction site must honor Transport too — both HTTP sites set TransportMode.
+        var transport = await CreateAsync(new PhantomMcpTool
+        {
+            ServerName = "oauth-streamable",
+            Connection = new OAuthConnection { Endpoint = HttpEndpoint, ClientId = "client-123" },
+            Transport = McpHttpTransport.Streamable,
+        });
+
+        var options = GetHttpOptions(transport);
+        Assert.NotNull(options.OAuth);
+        Assert.Equal(HttpTransportMode.StreamableHttp, options.TransportMode);
+    }
+
     private sealed class FakeSecretPlaceholderResolver : ISecretPlaceholderResolver
     {
         private readonly string placeholder;

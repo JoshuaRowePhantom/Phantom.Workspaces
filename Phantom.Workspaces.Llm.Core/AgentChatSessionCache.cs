@@ -75,7 +75,7 @@ public sealed class AgentChatSessionCache : IAsyncDisposable
         var services = this.defaultServices;
         return await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
-            AgentDefinition = AgentDefinition.FromJson(request.AgentDefinitionJson),
+            AgentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(request.AgentDefinitionJson),
             AgentSessionId = request.AgentSessionId,
             AgentServices = services,
         }).ConfigureAwait(false);

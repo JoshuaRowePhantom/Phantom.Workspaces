@@ -44,6 +44,11 @@ internal static class McpTransportFactory
     {
         ArgumentNullException.ThrowIfNull(tool);
 
+        // #1416: resolve the Phantom transport mode from the (possibly Phantom-subclassed) tool. A
+        // plain McpTool has no 'type' field, so it defaults to Streamable HTTP rather than the SDK's
+        // AutoDetect (whose SSE GET probe is rejected 405 by Streamable-HTTP-only servers).
+        var transportMode = tool is PhantomMcpTool phantomTool ? phantomTool.Transport : McpHttpTransport.Streamable;
+
         switch (tool.Connection)
         {
             case AnonymousConnection anonymous:
@@ -51,6 +56,7 @@ internal static class McpTransportFactory
                     anonymous.Endpoint,
                     apiKey: null,
                     tool.ServerName,
+                    transportMode,
                     loggerFactory);
 
             case ApiKeyConnection apiKey:
@@ -63,12 +69,14 @@ internal static class McpTransportFactory
                     apiKey.Endpoint,
                     resolvedKey,
                     tool.ServerName,
+                    transportMode,
                     loggerFactory);
 
             case OAuthConnection oauth:
                 return await CreateOAuthTransportAsync(
                     oauth,
                     tool.ServerName,
+                    transportMode,
                     services,
                     loggerFactory,
                     cancellationToken).ConfigureAwait(false);
@@ -86,6 +94,7 @@ internal static class McpTransportFactory
         string? endpoint,
         string? apiKey,
         string? serverName,
+        McpHttpTransport transportMode,
         ILoggerFactory? loggerFactory)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
@@ -108,12 +117,13 @@ internal static class McpTransportFactory
             return CreateStdioTransport(endpointUri, serverName);
         }
 
-        return CreateHttpTransport(endpointUri, apiKey, serverName, loggerFactory);
+        return CreateHttpTransport(endpointUri, apiKey, serverName, transportMode, loggerFactory);
     }
 
     private static async Task<IClientTransport> CreateOAuthTransportAsync(
         OAuthConnection oauth,
         string? serverName,
+        McpHttpTransport transportMode,
         AgentServices? services,
         ILoggerFactory? loggerFactory,
         CancellationToken cancellationToken)
@@ -178,6 +188,7 @@ internal static class McpTransportFactory
         {
             Endpoint = endpointUri,
             OAuth = clientOAuthOptions,
+            TransportMode = ToHttpTransportMode(transportMode),
         };
 
         if (!string.IsNullOrWhiteSpace(serverName))
@@ -193,6 +204,16 @@ internal static class McpTransportFactory
 
     private static bool IsStdioEndpoint(Uri endpointUri)
         => string.Equals(endpointUri.Scheme, "stdio", StringComparison.OrdinalIgnoreCase);
+
+    // #1416: map the Phantom transport enum onto the MCP SDK's HttpTransportMode. Streamable is the
+    // default so POST-only (Streamable-HTTP-only) servers are not probed with an SSE GET (405).
+    private static HttpTransportMode ToHttpTransportMode(McpHttpTransport transportMode)
+        => transportMode switch
+        {
+            McpHttpTransport.Sse => HttpTransportMode.Sse,
+            McpHttpTransport.Auto => HttpTransportMode.AutoDetect,
+            _ => HttpTransportMode.StreamableHttp,
+        };
 
     private static IClientTransport CreateStdioTransport(Uri endpointUri, string? serverName)
         => new StdioClientTransport(BuildStdioTransportOptions(endpointUri, serverName));
@@ -258,11 +279,13 @@ internal static class McpTransportFactory
         Uri endpointUri,
         string? apiKey,
         string? serverName,
+        McpHttpTransport transportMode,
         ILoggerFactory? loggerFactory)
     {
         var transportOptions = new HttpClientTransportOptions
         {
             Endpoint = endpointUri,
+            TransportMode = ToHttpTransportMode(transportMode),
         };
 
         if (!string.IsNullOrWhiteSpace(serverName))

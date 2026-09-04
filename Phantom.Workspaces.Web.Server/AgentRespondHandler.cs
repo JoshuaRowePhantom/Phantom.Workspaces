@@ -25,7 +25,7 @@ public static class AgentRespondHandler
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var agentDefinition = AgentDefinition.FromJson(request.AgentDefinitionJson);
+        var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(request.AgentDefinitionJson);
         var (chatClient, _) = await AgentFactory.CreateChatClientAsync(
             agentDefinition,
             services: null,

@@ -214,7 +214,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
             return;
         }
 
-        var agentDefinition = AgentDefinition.FromJson(definitionElement.GetRawText());
+        var agentDefinition = PhantomAgentSchema.AgentDefinitionFromJson(definitionElement.GetRawText());
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(this.mainWindowViewModel);
 
         // #1309: Route through IRunningAgentChatTable → AgentChatFactory.GetOrCreateAsync so
