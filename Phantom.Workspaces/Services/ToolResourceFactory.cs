@@ -26,6 +26,27 @@ public static class ToolResourceFactory
         string userName,
         string effectiveComputerName)
     {
+        return new ComposingToolResourceFactory(
+            new FixedToolResourceFactory(CreateFixedToolMapping()),
+            new McpServerEntityToolResourceFactory(
+                dataAccessLayer,
+                CreateMcpServerSearchPrefixes(userName, effectiveComputerName)));
+    }
+
+    /// <summary>
+    /// Builds the ordered <c>mcp-server</c> search prefixes for the given execution identity, highest
+    /// priority first: the machine profile, then <c>${USER}/mcp-servers</c>, then
+    /// <c>defaults/mcp-servers</c> (issue #1399). Because the machine profile is built from the supplied
+    /// <paramref name="userName"/> / <paramref name="effectiveComputerName"/>, resolution is scoped to
+    /// that machine — when constructed with the <b>bound</b> executor's identity (for example the remote
+    /// MCP host from issue #1438), the bound machine's profile prefix is searched FIRST (issue #1439).
+    /// </summary>
+    /// <param name="userName">The user name whose machine profile prefix is searched first.</param>
+    /// <param name="effectiveComputerName">The computer/host name whose machine profile prefix is searched first.</param>
+    public static IReadOnlyList<EntityName> CreateMcpServerSearchPrefixes(
+        string userName,
+        string effectiveComputerName)
+    {
         var machineProfilePrefix = new EntityName(
             "computer-user-profiles",
             "users",
@@ -37,20 +58,17 @@ public static class ToolResourceFactory
             "copilot",
             "mcp-servers");
 
-        return new ComposingToolResourceFactory(
-            new FixedToolResourceFactory(CreateFixedToolMapping()),
-            new McpServerEntityToolResourceFactory(
-                dataAccessLayer,
-                [
-                    machineProfilePrefix,
-                    // ${USER}/mcp-servers is the mcp-server entity-type's default creation location
-                    // (its default-name-prefixes), so the UI create flow places servers here. The
-                    // session data-access layer binds ${USER} to the concrete user prefix, matching
-                    // the create flow. Searched after the machine profile but before global defaults
-                    // so machine > user > global precedence is preserved (issue #1399).
-                    new EntityName(WorkspaceEntityMetaVariables.User, "mcp-servers"),
-                    new EntityName("defaults", "mcp-servers"),
-                ]));
+        return
+        [
+            machineProfilePrefix,
+            // ${USER}/mcp-servers is the mcp-server entity-type's default creation location
+            // (its default-name-prefixes), so the UI create flow places servers here. The
+            // session data-access layer binds ${USER} to the concrete user prefix, matching
+            // the create flow. Searched after the machine profile but before global defaults
+            // so machine > user > global precedence is preserved (issue #1399).
+            new EntityName(WorkspaceEntityMetaVariables.User, "mcp-servers"),
+            new EntityName("defaults", "mcp-servers"),
+        ];
     }
 
     private static IReadOnlyDictionary<(string Id, string Name), Tool> CreateFixedToolMapping()

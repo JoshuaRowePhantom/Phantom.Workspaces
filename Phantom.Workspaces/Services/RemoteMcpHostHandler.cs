@@ -2,8 +2,10 @@ using System;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using AgentSchema;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Mcp;
@@ -23,9 +25,11 @@ namespace Phantom.Workspaces.Services;
 /// <see cref="McpChannelClientTransport.CreateServerTransport"/> and relayed to the real server
 /// transport by the existing <see cref="DelegatingMcpServer"/> message pumps. An unrecognised
 /// connection yields <see langword="null"/> so the listener declines the channel. Secret placeholders
-/// in the connection resolve in <b>this host's</b> context. The <c>mcp-server-entity</c> scoped,
-/// machine-prefix-first resolution of a stored tool config is issue #1439's touchpoint and is not
-/// performed here; this handler hosts the inline connection descriptor directly.
+/// in the connection resolve in <b>this host's</b> context. When the request is a stored-tool
+/// <c>tool-type-name</c> / <c>tool-entity-id</c> reference (issue #1439), the MCP config is resolved
+/// on this host through <see cref="AgentServices.ToolResourceFactory"/> — the machine-prefix-first
+/// <c>McpServerEntityToolResourceFactory</c> scoped to THIS (the bound executor's) machine — so the
+/// remote machine's profile registration wins; an inline connection descriptor is hosted directly.
 /// </remarks>
 public sealed class RemoteMcpHostHandler
 {
@@ -47,7 +51,7 @@ public sealed class RemoteMcpHostHandler
     {
         ArgumentNullException.ThrowIfNull(channel);
 
-        var tool = McpConnectionRequest.ToTool(request);
+        var tool = await this.ResolveConnectionAsync(request, ct).ConfigureAwait(false);
         if (tool is null)
         {
             return null;
@@ -64,6 +68,38 @@ public sealed class RemoteMcpHostHandler
         var cts = new CancellationTokenSource();
         var relay = Task.Run(() => delegatingServer.RunAsync(incoming, cts.Token), CancellationToken.None);
         return new HostSession(delegatingServer, incoming, cts, relay);
+    }
+
+    /// <summary>
+    /// Resolves the MCP server this host must open for <paramref name="request"/>. A stored-tool
+    /// <c>tool-type-name</c> / <c>tool-entity-id</c> reference (issue #1439) is resolved on THIS host via
+    /// the executor-scoped <see cref="AgentServices.ToolResourceFactory"/> (machine-prefix-first), so the
+    /// bound executor's profile/user context — not the caller's — determines the config; any other
+    /// <c>mcp</c> request is parsed as an inline connection descriptor. Returns <see langword="null"/>
+    /// when the request is not a hostable MCP connection (so the caller declines it).
+    /// </summary>
+    public async Task<McpTool?> ResolveConnectionAsync(JsonElement request, CancellationToken ct = default)
+    {
+        if (McpConnectionRequest.TryGetToolReference(request, out var toolTypeName, out var toolEntityId))
+        {
+            if (this.services?.ToolResourceFactory is not { } toolResourceFactory)
+            {
+                return null;
+            }
+
+            var resolved = await toolResourceFactory.ResolveToolResourceAsync(
+                new ToolResource
+                {
+                    Kind = "tool",
+                    Id = toolTypeName,
+                    Name = toolEntityId,
+                },
+                ct).ConfigureAwait(false);
+
+            return resolved as McpTool;
+        }
+
+        return McpConnectionRequest.ToTool(request);
     }
 
     private sealed class HostSession(

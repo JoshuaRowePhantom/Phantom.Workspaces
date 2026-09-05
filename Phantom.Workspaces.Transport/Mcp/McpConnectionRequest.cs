@@ -35,6 +35,64 @@ public static class McpConnectionRequest
     public const string ToolEntityIdProperty = "tool-entity-id";
 
     /// <summary>
+    /// Builds a <c>{"type":"mcp","connection":{"tool-type-name":…,"tool-entity-id":…}}</c> request that
+    /// references a stored tool config by its resource <c>id</c> (<paramref name="toolTypeName"/>, e.g.
+    /// <c>mcp-server-entity</c>) and resource name (<paramref name="toolEntityId"/>). Unlike
+    /// <see cref="FromTool"/>, this carries NO inline endpoint: the remote host resolves the actual MCP
+    /// server config in its <b>own</b> (bound-executor) context via the machine-prefix-first
+    /// <c>McpServerEntityToolResourceFactory</c> (issue #1439).
+    /// </summary>
+    public static JsonElement FromToolReference(string toolTypeName, string toolEntityId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolTypeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolEntityId);
+
+        var request = new JsonObject
+        {
+            [TypeProperty] = TypeValue,
+            [ConnectionProperty] = new JsonObject
+            {
+                [ToolTypeNameProperty] = toolTypeName,
+                [ToolEntityIdProperty] = toolEntityId,
+            },
+        };
+
+        return JsonSerializer.Deserialize<JsonElement>(request.ToJsonString());
+    }
+
+    /// <summary>
+    /// Reads the <c>tool-type-name</c> / <c>tool-entity-id</c> reference from an <c>mcp</c> request, if
+    /// present. Returns <see langword="true"/> when this is a stored-tool-reference request that the
+    /// remote host must resolve through the executor-scoped resolver (issue #1439) rather than host as an
+    /// inline connection descriptor.
+    /// </summary>
+    public static bool TryGetToolReference(JsonElement request, out string toolTypeName, out string toolEntityId)
+    {
+        toolTypeName = string.Empty;
+        toolEntityId = string.Empty;
+
+        if (request.ValueKind != JsonValueKind.Object
+            || !request.TryGetProperty(TypeProperty, out var type)
+            || !string.Equals(type.GetString(), TypeValue, StringComparison.OrdinalIgnoreCase)
+            || !request.TryGetProperty(ConnectionProperty, out var connection)
+            || connection.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var typeName = GetString(connection, ToolTypeNameProperty);
+        var entityId = GetString(connection, ToolEntityIdProperty);
+        if (string.IsNullOrWhiteSpace(typeName) || string.IsNullOrWhiteSpace(entityId))
+        {
+            return false;
+        }
+
+        toolTypeName = typeName;
+        toolEntityId = entityId;
+        return true;
+    }
+
+    /// <summary>
     /// Builds the <c>{"type":"mcp","connection":{...}}</c> request from an MCP tool's connection. The
     /// endpoint / api-key / transport mode are copied verbatim (no secret resolution here).
     /// </summary>
