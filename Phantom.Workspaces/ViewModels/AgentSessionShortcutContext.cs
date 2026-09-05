@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
@@ -55,6 +56,7 @@ public sealed class AgentSessionShortcutContext
         SubscribedEntityViewModel agentDefinitionEntity,
         string agentSessionId,
         IReadOnlyDictionary<string, string>? parameterValues = null,
+        IReadOnlyDictionary<string, JsonElement>? parameterSelections = null,
         EntityId? hostProfileEntityId = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
@@ -78,7 +80,8 @@ public sealed class AgentSessionShortcutContext
             currentTime,
             computerName,
             parameterValues,
-            hostProfileEntityId);
+            hostProfileEntityId,
+            parameterSelections: parameterSelections);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest
             {

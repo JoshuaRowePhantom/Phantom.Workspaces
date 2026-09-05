@@ -23,7 +23,20 @@
                          Opacity="0.7"
                          IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
               <Grid ColumnDefinitions="*,Auto">
-                <TextBox Grid.Column="0" Text="{Binding Value}" />
+                <TextBox Grid.Column="0"
+                         Text="{Binding Value}"
+                         IsVisible="{Binding !IsExecutorPicker}" />
+                <ComboBox Grid.Column="0"
+                          HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding ExecutorOptions}"
+                          SelectedItem="{Binding SelectedExecutorOption}"
+                          IsVisible="{Binding IsExecutorPicker}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate DataType="vm:ExecutorOptionViewModel">
+                      <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
                 <Button Grid.Column="1"
                         Content="Browse…"
                         Margin="4,0,0,0"

@@ -9,7 +9,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
@@ -22,6 +24,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
     private readonly OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler;
     private readonly MainWindowViewModel mainWindowViewModel;
     private readonly IReadOnlyDictionary<string, string>? initialParameterValues;
+    private readonly Task executorOptionsLoadTask;
     private bool canStart;
 
     public SubscribedEntityViewModel ManifestEntity { get; }
@@ -61,11 +64,21 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
 
         this.Parameters.CollectionChanged += this.OnParametersCollectionChanged;
 
+        this.executorOptionsLoadTask = this.Parameters.Any(p => p.IsExecutorPicker)
+            ? this.LoadExecutorOptionsAsync(this.Lifetime.Token)
+            : Task.CompletedTask;
+
         if (this.Parameters.Count == 0)
         {
             Lifetime.Run(this.StartSessionAsync);
         }
     }
+
+    /// <summary>
+    /// Completes once the combined <c>executor</c> picker options (trust-profile and
+    /// user-computer-profile entities) have been loaded (issue #1440). Exposed for deterministic tests.
+    /// </summary>
+    internal Task ExecutorOptionsLoaded => this.executorOptionsLoadTask;
 
     private void LoadParameters()
     {
@@ -100,7 +113,7 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
                 DisplayName = paramName,
                 Description = param.Description ?? string.Empty,
                 IsRequired = param.Required == true,
-                ParameterKind = DetermineParameterKind(paramName),
+                ParameterKind = DetermineParameterKind(param.Kind, paramName),
             };
 
             if (this.initialParameterValues is not null
@@ -154,20 +167,34 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
 
         // Collect parameter values
         var parameterValues = new Dictionary<string, string>(StringComparer.Ordinal);
+        var parameterSelections = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var row in this.Parameters)
         {
+            if (row.IsExecutorPicker)
+            {
+                if (row.Selection is { } selection)
+                {
+                    parameterSelections[row.Name] = selection;
+                }
+
+                continue;
+            }
+
             if (!string.IsNullOrWhiteSpace(row.Value))
             {
                 parameterValues[row.Name] = row.Value;
             }
         }
         IReadOnlyDictionary<string, string>? parametersDict = parameterValues.Count > 0 ? parameterValues : null;
+        IReadOnlyDictionary<string, JsonElement>? parameterSelectionsDict =
+            parameterSelections.Count > 0 ? parameterSelections : null;
 
         var createdAgentSessionEntity = await this.agentSessionShortcutContext.CreateAgentSessionEntityAsync(
             this.mainWindowViewModel,
             this.ManifestEntity,
             agentSessionId,
-            parametersDict);
+            parametersDict,
+            parameterSelectionsDict);
 
         if (createdAgentSessionEntity is null)
         {
@@ -294,5 +321,141 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         return parameterName == "working-directory"
             ? AgentManifestParameterKind.Directory
             : AgentManifestParameterKind.Text;
+    }
+
+    /// <summary>
+    /// Determines the launchpad row kind, honouring the manifest parameter's explicit <c>kind</c> field
+    /// first (issue #1440, per-component-executor-binding) and falling back to name-based inference when
+    /// no kind is declared. Replaces the earlier name-only heuristic that could never surface the
+    /// <c>executor</c> picker.
+    /// </summary>
+    internal static AgentManifestParameterKind DetermineParameterKind(string? kind, string parameterName)
+    {
+        if (!string.IsNullOrWhiteSpace(kind))
+        {
+            if (string.Equals(kind, AgentManifestParameterKinds.Executor, StringComparison.Ordinal))
+            {
+                return AgentManifestParameterKind.Executor;
+            }
+
+            if (string.Equals(kind, "directory", StringComparison.Ordinal))
+            {
+                return AgentManifestParameterKind.Directory;
+            }
+        }
+
+        return DetermineParameterKind(parameterName);
+    }
+
+    private async Task LoadExecutorOptionsAsync(CancellationToken ct = default)
+    {
+        var executorRows = this.Parameters.Where(p => p.IsExecutorPicker).ToList();
+        if (executorRows.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var dataAccessLayer = this.mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
+
+            var queryRequest = new QueryRequest
+            {
+                Clauses =
+                [
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier { Value = "trust-profiles" },
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet { Values = ["llm-trust-profile"] },
+                        },
+                    },
+                    new TopLevelQueryClause
+                    {
+                        ClauseIdentifier = new QueryClauseIdentifier { Value = "user-computer-profiles" },
+                        Clause = new EntityTypeQueryClause
+                        {
+                            EntityTypeNames = new EntityTypeNameSet { Values = ["user-computer-profile"] },
+                        },
+                    },
+                ],
+            };
+
+            var queryResult = await dataAccessLayer.QueryAsync(queryRequest);
+            var snapshotIds = queryResult.Batches
+                .SelectMany(batch => batch.Entities)
+                .Select(snapshot => snapshot.EntityId)
+                .Distinct()
+                .ToArray();
+
+            var entities = await this.mainWindowViewModel.EntityBroker.GetEntitiesAsync(snapshotIds);
+
+            var options = new List<ExecutorOptionViewModel>();
+            foreach (var entity in entities)
+            {
+                if (entity.IsEntityType("user-computer-profile"))
+                {
+                    options.Add(new ExecutorOptionViewModel
+                    {
+                        Kind = ExecutorParameterSelection.UserComputerProfileKind,
+                        DisplayName = $"{entity.DisplayName} (computer)",
+                        Selection = ExecutorParameterSelection.ForUserComputerProfile(entity.EntityId.ToString()),
+                    });
+                }
+                else if (entity.IsEntityType("llm-trust-profile"))
+                {
+                    options.Add(new ExecutorOptionViewModel
+                    {
+                        Kind = ExecutorParameterSelection.TrustProfileKind,
+                        DisplayName = $"{entity.DisplayName} (trust policy)",
+                        Selection = ExecutorParameterSelection.ForTrustProfile(GetTrustProfileNameOrId(entity)),
+                    });
+                }
+            }
+
+            foreach (var row in executorRows)
+            {
+                foreach (var option in options)
+                {
+                    row.ExecutorOptions.Add(option);
+                }
+            }
+        }
+        catch (Exception)
+        {
+            // Best-effort population; leave the picker empty on failure (required rows stay invalid).
+        }
+    }
+
+    private static string GetTrustProfileNameOrId(SubscribedEntityViewModel entity)
+    {
+        if (entity.Data is JsonElement data
+            && data.TryGetProperty("names", out var names)
+            && names.ValueKind == JsonValueKind.Array
+            && names.GetArrayLength() > 0)
+        {
+            var first = names[0];
+            if (first.ValueKind == JsonValueKind.String
+                && !string.IsNullOrWhiteSpace(first.GetString()))
+            {
+                return first.GetString()!;
+            }
+
+            if (first.ValueKind == JsonValueKind.Array)
+            {
+                var parts = first.EnumerateArray()
+                    .Where(static item => item.ValueKind == JsonValueKind.String)
+                    .Select(static item => item.GetString())
+                    .Where(static value => !string.IsNullOrWhiteSpace(value))
+                    .ToArray();
+                if (parts.Length > 0)
+                {
+                    return parts[^1]!;
+                }
+            }
+        }
+
+        return entity.EntityId.ToString();
     }
 }
