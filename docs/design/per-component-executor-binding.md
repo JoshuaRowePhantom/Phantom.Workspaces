@@ -17,7 +17,7 @@ individual MCP server/tool — bindable to a named **executor** (the local orche
 named remote machine), by:
 
 - introducing a manifest `kind:"executor"` resource and an optional `executor` reference on
-  the model and on tools;
+  tools (and, for the model, an `executor` NAME under the SDK-specific `model.options` bag);
 - making `McpToolContextProvider` actually connect through `ExecutorTargetRouter` when its
   bound executor is non-local (it always connects in-process today);
 - registering a production remote MCP-hosting handler on `McpTransportListener`;
@@ -63,8 +63,9 @@ to an explicitly named executor, and the split is expressed declaratively in the
    client, and each individual MCP server/tool — can be bound to a specific executor (the local
    orchestrator, or a named remote machine), instead of routing uniformly by tool-kind.
 2. **Executors are named manifest resources.** Executors are expressed as manifest `resources[]`
-   entries of `kind:"executor"`, referenced by name from the model and from tools via an
-   optional `executor` field.
+   entries of `kind:"executor"`, referenced by name from tools via an optional `executor` field, and
+   from the model via the SDK-specific `model.options.executor` key (round-tripped through
+   `ModelOptions.AdditionalProperties`).
 3. **Unset inherits the session executor.** An unset `executor` inherits the **session's overall
    executor**, which is the local orchestrator machine today (`"."`). The system MUST NOT require
    or emit `executor:"local"`.
@@ -134,8 +135,10 @@ to an explicitly named executor, and the split is expressed declaratively in the
 
 ### Option A — Per-component executor binding via manifest `kind:"executor"` resources (CHOSEN)
 
-**Architecture:** Add a manifest `kind:"executor"` resource and an optional `executor` string on
-the model and on tools. A new resolver maps each executor resource (given `parameter-selections` and
+**Architecture:** Add a manifest `kind:"executor"` resource, an optional `executor` string on
+each tool, and (for the model) an `executor` NAME authored under the SDK-specific `model.options`
+bag (`model.options.executor`, round-tripped via `ModelOptions.AdditionalProperties` — not a
+first-class model field). A new resolver maps each executor resource (given `parameter-selections` and
 trust context) to a transport **connection-descriptor** `JsonElement` (`{"type":"local"}`,
 `{"type":"user-computer-profile","entity-id":...}`, or — via the raw escape hatch — any inline
 connection-descriptor), reusing the shapes already produced by
@@ -556,8 +559,9 @@ session build path and threads it into `McpToolContextProvider` (closing G8).
    `string→JsonElement` channel — NOT `parameter-values`) and trust context, delegating to
    `Llm.Trust.ExecutionTargetResolver` for the local/profile shapes. The result is an `ExecutorBindings`
    (with `SessionExecutor` = `{"type":"local"}` by default).
-4. For each component: the model's `executor` and each tool's `executor` are resolved through
-   `ExecutorBindings.ResolveComponent` to a connection-descriptor; unset → `SessionExecutor`.
+4. For each component: the model's executor NAME (sourced from `model.options.executor`) and each
+   tool's `executor` are resolved through `ExecutorBindings.ResolveComponent` to a connection-descriptor;
+   unset → `SessionExecutor`.
 5. `AgentChat` constructs each `McpToolContextProvider` with its bound connection-descriptor and the
    production `ExecutorTargetRouter` (built from `ExecutorBindings.ToTopology()` and the
    `ITransportFactoryRegistry`). **(M1)** The bound descriptor is also stored on the component's
@@ -772,11 +776,36 @@ The only remote path today, `TransportTrustedExecutor.CreateAgentChatAsync`
 `AgentChat` by setting `AgentServices.ChatClientOverride = new ChatClientOverTransport(...)` (`:50`,
 `:54`) — router included. That is the OPPOSITE of "client remote, router local."
 
-**Resolution (Commit 6B / #1443).** Invert the nesting: transport only `CopilotSdkChatClient`'s inner
-SDK session (`EnsureSessionAsync` `:1230` → `copilotClientFactory.Create` `:1277` →
-`CreateOrResumeSessionAsync` `:1324-1357`), while the router (`IChatClient` decorators) and the
-`AIContextProviders` stay **local**. This is a NEW commit (6B), dependencies #1436 + #1437, required by
-#1441.
+**Resolution (Commit 6B / #1443).** The model's executor is authored as a Copilot-SDK-specific key
+under the model's `options` bag — `model.options.executor`, whose value is an executor **NAME** (a
+string), exactly like `PhantomMcpTool.Executor` on a tool. It resolves to a connection-descriptor
+through the SAME code path as every other component (there is no model-specific resolution logic):
+`ModelOptions.AdditionalProperties` already round-trips arbitrary keys through save/load
+(`Phantom.Workspaces.Llm.Core/AgentFactory.cs:88` `var modelOptions = promptAgent.Model?.Options;`,
+`:106-114` forwards `modelOptions.AdditionalProperties`), and `CopilotSdkChatClient` is ALREADY
+constructed with `modelOptions: model.Options` (`AgentFactory.cs:841`) and already reads sibling
+SDK-specific keys out of that bag (`cliPath` `CopilotSdkChatClient.cs:197`,
+`wireApi`/`wireModel`/`headers` `:237-249`, `working-directory` `:1424-1440`). Adding `executor` is one
+more such key — NO new `PhantomModel` subclass, NO `JsonDerivedType`, NO schema change — and it
+persists automatically in a session's embedded `AgentDefinitionJson` so a manifest-less resumed session
+keeps it. `CopilotSdkChatClient` reads the name from `model.Options`, resolves it via the SAME resolver
+as tools (#1436 `ExecutorResolver`), and the resolved descriptor is recorded in the session
+`executor-bindings` (#1437) under the `model` component — same as any other component.
+
+Then invert the nesting: transport only `CopilotSdkChatClient`'s inner SDK session (`EnsureSessionAsync`
+`:1230` → `copilotClientFactory.Create` `:1277` → `CreateOrResumeSessionAsync` `:1324-1357`), while the
+router (`IChatClient` decorators) and the `AIContextProviders` stay **local**. This is a NEW commit
+(6B), dependencies #1436 + #1437, required by #1441.
+
+**Considered / Background (rejected).**
+(a) A `PhantomModel` subclass with a first-class `Executor` property + `Save()` override mirroring
+`PhantomMcpTool` — rejected: unnecessary because `ModelOptions.AdditionalProperties` already
+round-trips, and it would add schema surface.
+(b) A generic new `CopilotSdkChatClient` ctor parameter `JsonElement? modelExecutor` threaded from a
+separate top-level `model` executor component — rejected in favour of sourcing the name from
+`model.options.executor` and resolving through the shared path.
+(c) Wrapping the produced `IChatClient` in a transport adapter — rejected: recreates the
+whole-session-remote model and cannot keep the router local.
 
 ### M5 — Executor-resource resolution is a PRE-PASS, not an `IToolResourceFactory`
 
@@ -842,8 +871,9 @@ convention (read `Scenario2_GuiLocalToolRoutingTests`, `ExecutorTargetRouterTest
 
 ### 1. Schema and model round-trip
 
-- **Manifest round-trip.** A manifest carrying `kind:"executor"` resources, `executor` refs on the
-  model and on tools, and an `executor` parameter loads through `PhantomAgentSchema`
+- **Manifest round-trip.** A manifest carrying `kind:"executor"` resources, `executor` refs on
+  tools, a `model.options.executor` name on the model, and an `executor` parameter loads through
+  `PhantomAgentSchema`
   and re-serialises losslessly, remaining compliant with the AgentSchema source-scan guard test.
   → `AgentManifestExecutorResourceTests`.
 - **`PhantomMcpTool.Executor` round-trip + guard.** `Save` emits `executor`, `From` copies it, a
@@ -1058,22 +1088,34 @@ production consumer (G8) and provides the arbitrary stdio/HTTP MCP host (G9).
 
 ### Commit 6B — Model / chat-client executor binding (remote client, local router)
 
-**Scope:** *(M4 — mapped to #1443.)* Honour a `model.executor` binding by transporting ONLY
+**Scope:** *(M4 — mapped to #1443.)* Honour a `model.options.executor` binding by transporting ONLY
 `CopilotSdkChatClient`'s inner SDK session while the router (`IChatClient` decorators) and the
-`AIContextProviders` stay **local**. This is the structural inverse of `TransportTrustedExecutor`, which
-remotes the whole `AgentChat`. When the model's resolved descriptor is `{"type":"local"}`, behaviour is
-unchanged (in-process CLI). When non-local, `CopilotSdkChatClient` obtains its SDK session over a
-transport (`ITransportFactoryRegistry.ConnectToAsync(modelExecutor)`) instead of the in-process
+`AIContextProviders` stay **local**. The model's executor is authored as an SDK-specific key in the
+model's `options` bag (`model.options.executor`), whose value is an executor **NAME** — exactly like
+`PhantomMcpTool.Executor` on a tool — and resolves to a connection-descriptor through the SAME resolver
+and `executor-bindings` path as tools (no model-specific resolution, no new `PhantomModel` subclass, no
+schema change; `ModelOptions.AdditionalProperties` already round-trips the key and
+`CopilotSdkChatClient` already reads sibling SDK keys out of `model.Options`). This is the structural
+inverse of `TransportTrustedExecutor`, which remotes the whole `AgentChat`. When the model's resolved
+descriptor is `{"type":"local"}`, behaviour is unchanged (in-process CLI). When non-local,
+`CopilotSdkChatClient` obtains its SDK session over a transport
+(`ITransportFactoryRegistry.ConnectToAsync(<resolved descriptor>)`) instead of the in-process
 `copilotClientFactory.Create(...)`. A production client-only host path builds a local
 `CopilotSdkChatClient` on the remote (distinct from `ChatClientTransportListener`'s whole-AgentChat
 build). This commit is inserted as **6B** so existing Commit numbers 7/8/9 (and their issue titles) do
 NOT renumber.
-**Files:** `Phantom.Workspaces.Llm.Core/CopilotSdkChatClient.cs` (session seam:
-`EnsureSessionAsync` `:1230` → `copilotClientFactory.Create` `:1277` → `CreateOrResumeSessionAsync`
-`:1324-1357`); `Phantom.Workspaces.Llm.Core/AgentFactory.cs` (thread the resolved `model` descriptor);
-a new `CopilotSessionOverTransport` under `Phantom.Workspaces.Llm.Core/Transport/Chat/`;
+**Files:** `Phantom.Workspaces.Llm.Core/CopilotSdkChatClient.cs` (read `options.executor`, resolve via
+the shared resolver, and transport the session seam when non-local: `EnsureSessionAsync` `:1230` →
+`copilotClientFactory.Create` `:1277` → `CreateOrResumeSessionAsync` `:1324-1357`);
+`Phantom.Workspaces.Llm.Core/AgentFactory.cs` (already forwards `model.Options` at `:841`; ensure the
+resolved `model` descriptor is available/recorded — no new ctor param needed since the name rides in
+`model.options`); a new `CopilotSessionOverTransport` under
+`Phantom.Workspaces.Llm.Core/Transport/Chat/`;
 `Phantom.Workspaces/Services/WorkspacesTransportComposition.cs` (client-only host listener, alongside
 `ChatClientTransportListener` at `:54-63`).
+**Considered / rejected:** a `PhantomModel` subclass with a first-class `Executor` property; a generic
+`JsonElement? modelExecutor` ctor param threaded from a separate top-level `model` component; wrapping
+the produced `IChatClient` in a transport adapter (recreates the whole-session-remote model).
 **Tests:** `CopilotSdkChatClientExecutorTests`, `AgentChatExecutorBindingTests`,
 `WorkspacesTransportCompositionTests`.
 **Dependencies:** Commits 4 (#1436), 5 (#1437). **Required by:** Commit 9 (#1441).
@@ -1108,7 +1150,8 @@ parameter `kind` field (see Contradiction #2 about name-based inference).
 
 **Scope:** Add `defaults/agent-manifests/copilot-split-executor` with: one `kind:"executor"`
 resource `worker` (id `parameter` → `worker-profile`); a `worker-profile` parameter (kind
-`executor`) + a `working-directory` parameter; a model with `executor:"worker"`;
+`executor`) + a `working-directory` parameter; a model bound to the executor via
+`model.options.executor:"worker"` (the SDK-specific `options` key, not a top-level `model.executor`);
 `workspace-gui` / `workspace-entity` tools with **no** `executor` (inherit local); a GitHub web MCP
 tool with **no** `executor` (local, for OAuth). Add load-time validation that rejects/warns an
 OAuth-interactive MCP whose `executor` is non-local. Cross-check the exact tool/model/connection
@@ -1123,7 +1166,8 @@ JSON shapes against `features/docs/examples/github-copilot-remote-chat.json`.
 **Scope:** *(mapped to #1442.)* Add a single, self-contained, machine-consumable authoring reference
 (`Phantom.Workspaces.Data.Core/JsonEntities/documentation/agent-manifest-executors.md`) so an LLM can
 reliably author a valid executor-bound manifest or reason about a session. It documents the
-`kind:"executor"` resource and its five `id` strategies, the `executor` reference on the model/tools,
+`kind:"executor"` resource and its five `id` strategies, the `executor` reference on tools and the
+`model.options.executor` name on the model,
 the `kind:"executor"` launch parameter and its disambiguated recorded value, the reused
 connection-descriptor `type`s + host-outer/target-inner nesting, the persisted `executor-bindings`
 session shape, two worked end-to-end examples (the split-executor topology from #1441, and a trivial
