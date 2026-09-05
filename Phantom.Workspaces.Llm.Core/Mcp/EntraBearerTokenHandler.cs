@@ -1,4 +1,6 @@
 using System.Net.Http.Headers;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Llm.Mcp;
 
@@ -21,6 +23,7 @@ public sealed class EntraBearerTokenHandler : DelegatingHandler
 {
     private readonly EntraPinnedTokenProvider tokenProvider;
     private readonly Uri allowedOrigin;
+    private readonly ILogger logger;
 
     /// <summary>
     /// Creates a handler that attaches tokens from <paramref name="tokenProvider"/> only to requests
@@ -28,13 +31,18 @@ public sealed class EntraBearerTokenHandler : DelegatingHandler
     /// </summary>
     /// <param name="tokenProvider">Supplies the bearer token (single-flight, cached).</param>
     /// <param name="allowedOrigin">The exact HTTPS origin the bearer may be attached to.</param>
-    public EntraBearerTokenHandler(EntraPinnedTokenProvider tokenProvider, Uri allowedOrigin)
+    /// <param name="logger">
+    /// Optional logger. Records only whether the bearer was attached or stripped and for which origin,
+    /// never the token value (#1446/#1408 redaction).
+    /// </param>
+    public EntraBearerTokenHandler(EntraPinnedTokenProvider tokenProvider, Uri allowedOrigin, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(tokenProvider);
         ArgumentNullException.ThrowIfNull(allowedOrigin);
 
         this.tokenProvider = tokenProvider;
         this.allowedOrigin = allowedOrigin;
+        this.logger = logger ?? NullLogger<EntraBearerTokenHandler>.Instance;
     }
 
     /// <inheritdoc />
@@ -48,12 +56,18 @@ public sealed class EntraBearerTokenHandler : DelegatingHandler
         {
             var token = await this.tokenProvider.GetAccessTokenAsync(cancellationToken).ConfigureAwait(false);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            this.logger.LogDebug(
+                "Attached host-pinned Entra bearer to request for origin {Origin}.",
+                this.allowedOrigin.GetLeftPart(UriPartial.Authority));
         }
         else
         {
             // Defensively strip any authorization the caller (or a prior hop) may have set: this
             // handler pins the bearer to exactly one origin and never forwards it elsewhere.
             request.Headers.Authorization = null;
+            this.logger.LogDebug(
+                "Stripped authorization from a request that did not match the pinned origin {Origin}.",
+                this.allowedOrigin.GetLeftPart(UriPartial.Authority));
         }
 
         return await base.SendAsync(request, cancellationToken).ConfigureAwait(false);

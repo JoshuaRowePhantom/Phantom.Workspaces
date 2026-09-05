@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Azure.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Mcp;
 
@@ -84,6 +85,33 @@ public sealed class EntraPinnedTokenProviderTests
         var token = await provider.GetAccessTokenAsync(CancellationToken.None);
         Assert.Equal("token-after", token);
         Assert.Equal(2, credential.CallCount);
+    }
+
+    [Fact]
+    public async Task EntraPinnedTokenProvider_AcquireAndCacheHit_AreLogged()
+    {
+        var clock = new FakeTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var logger = new CapturingLogger<EntraPinnedTokenProvider>();
+        var credential = new CountingCredential(
+            () => new AccessToken("secret-access-token", clock.GetUtcNow().AddHours(1)));
+        var provider = new EntraPinnedTokenProvider(credential, Scopes, clock, logger);
+
+        await provider.GetAccessTokenAsync(CancellationToken.None);
+        await provider.GetAccessTokenAsync(CancellationToken.None);
+
+        // The first call acquires (Information); the second is served from cache (Debug).
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Information
+            && entry.Message.Contains("Acquir", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Debug
+            && entry.Message.Contains("cache hit", StringComparison.OrdinalIgnoreCase));
+
+        // #1408 redaction: the token value is never logged; scope names are safe to log.
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains("secret-access-token", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry =>
+            entry.Message.Contains(Scopes[0], StringComparison.Ordinal));
     }
 
     private sealed class CountingCredential : TokenCredential

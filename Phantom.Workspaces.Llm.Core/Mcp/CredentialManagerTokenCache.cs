@@ -1,5 +1,7 @@
 using System.Security;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Authentication;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -26,18 +28,23 @@ public sealed class CredentialManagerTokenCache : ITokenCache
 
     private readonly IPlatformSecretStore store;
     private readonly string key;
+    private readonly string serverName;
+    private readonly ILogger logger;
 
     /// <summary>
     /// Creates a cache that persists <paramref name="serverName"/>'s tokens through
-    /// <paramref name="store"/>.
+    /// <paramref name="store"/>. The optional <paramref name="logger"/> records cache hits/misses at
+    /// Debug — only the server name is ever logged, never a token value (#1446/#1408 redaction).
     /// </summary>
-    public CredentialManagerTokenCache(IPlatformSecretStore store, string serverName)
+    public CredentialManagerTokenCache(IPlatformSecretStore store, string serverName, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentException.ThrowIfNullOrEmpty(serverName);
 
         this.store = store;
+        this.serverName = serverName;
         this.key = KeyPrefix + serverName;
+        this.logger = logger ?? NullLogger<CredentialManagerTokenCache>.Instance;
     }
 
     /// <summary>
@@ -46,15 +53,17 @@ public sealed class CredentialManagerTokenCache : ITokenCache
     /// real secret store is available, and null (SDK in-memory fallback) when it is not — e.g. on
     /// non-Windows platforms where the host supplies a <see cref="NullPlatformSecretStore"/> or none.
     /// </summary>
-    public static Func<string, ITokenCache?> CreateProvider(IPlatformSecretStore? store)
-        => serverName => TokenCacheFor(store, serverName);
+    public static Func<string, ITokenCache?> CreateProvider(IPlatformSecretStore? store, ILoggerFactory? loggerFactory = null)
+        => serverName => TokenCacheFor(store, serverName, loggerFactory);
 
     /// <summary>
     /// Returns a persistent cache for <paramref name="serverName"/>, or null when
     /// <paramref name="store"/> is not a real persistent secret store (SDK in-memory fallback).
     /// </summary>
-    public static ITokenCache? TokenCacheFor(IPlatformSecretStore? store, string serverName)
-        => IsPersistent(store) ? new CredentialManagerTokenCache(store!, serverName) : null;
+    public static ITokenCache? TokenCacheFor(IPlatformSecretStore? store, string serverName, ILoggerFactory? loggerFactory = null)
+        => IsPersistent(store)
+            ? new CredentialManagerTokenCache(store!, serverName, loggerFactory?.CreateLogger<CredentialManagerTokenCache>())
+            : null;
 
     /// <inheritdoc />
     public async ValueTask StoreTokensAsync(TokenContainer tokens, CancellationToken cancellationToken)
@@ -64,6 +73,11 @@ public sealed class CredentialManagerTokenCache : ITokenCache
         var json = JsonSerializer.Serialize(tokens);
         var secret = ToSecureString(json);
         await this.store.WriteAsync(this.key, secret, cancellationToken).ConfigureAwait(false);
+
+        // Redaction (#1446/#1408): record only that tokens were cached and for which server — never
+        // the serialized token value, access/refresh token, or scope values.
+        this.logger.LogDebug(
+            "Stored MCP OAuth tokens in the persistent cache for server '{ServerName}'.", this.serverName);
     }
 
     /// <inheritdoc />
@@ -72,8 +86,16 @@ public sealed class CredentialManagerTokenCache : ITokenCache
         var secret = await this.store.ReadAsync(this.key, cancellationToken).ConfigureAwait(false);
         if (secret is null)
         {
+            // A cache miss means there is no stored refresh token, so a fresh interactive login is
+            // required. Only the server name is logged (#1446/#1408).
+            this.logger.LogDebug(
+                "No cached MCP OAuth tokens for server '{ServerName}'; interactive login is required.",
+                this.serverName);
             return null;
         }
+
+        this.logger.LogDebug(
+            "Loaded cached MCP OAuth tokens for server '{ServerName}' (cache hit).", this.serverName);
 
         return Phantom.Workspaces.Llm.Secrets.SecureStringMarshal.Use(
             secret, json => JsonSerializer.Deserialize<TokenContainer>(json));

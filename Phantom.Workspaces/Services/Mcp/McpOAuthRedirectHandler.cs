@@ -152,6 +152,11 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 
         await this.EnsureConsentAsync(serverName, cancellationToken).ConfigureAwait(false);
 
+        // Redaction (#1446/#1408): only the server name is logged for the sign-in request — never the
+        // authorization URI (which can carry client id/scope) or any code/state value.
+        this.logger.LogInformation(
+            "Starting interactive MCP OAuth sign-in for server '{ServerName}'.", serverName);
+
         // Reuse the single shared listener — never a second Start(). The first sign-in in the process
         // binds it; every subsequent server (concurrent or overlapping) demultiplexes on the same prefix.
         this.EnsureListener(redirectUri);
@@ -370,6 +375,9 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             if (state is null || !this.pending.TryGetValue(state, out var authorization))
             {
                 // Unknown/duplicate state: page already shown; drop it without faulting other waiters.
+                // The state value itself is never logged (#1446/#1408).
+                this.logger.LogWarning(
+                    "Received an MCP OAuth loopback callback with an unknown or missing state; ignoring it.");
                 continue;
             }
 
@@ -399,6 +407,11 @@ public sealed class McpOAuthRedirectHandler : IDisposable
             }
             else
             {
+                // Redaction (#1446/#1408): log only the server name and outcome — never the captured
+                // redirect URI, which carries the authorization code/state.
+                this.logger.LogInformation(
+                    "MCP OAuth sign-in for server '{ServerName}' completed successfully.",
+                    authorization.ServerName);
                 authorization.Completion.TrySetResult(requestUri);
             }
         }

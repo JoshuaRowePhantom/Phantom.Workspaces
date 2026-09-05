@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Security;
 using AgentSchema;
 using Azure.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
 using ModelContextProtocol.Authentication;
@@ -448,6 +449,63 @@ public sealed class McpTransportFactoryTests
         Assert.True(
             string.IsNullOrEmpty(options.OAuth.ClientSecret),
             "The static fallback build must not send a client secret (public client on PKCE).");
+    }
+
+    [Fact]
+    public async Task CreateOAuthTransport_DcrAttemptAndOutcome_AreLogged()
+    {
+        // #1446: the DCR-first connect attempt, the DCR rejection, and the static-fallback outcome are
+        // all logged so an operator can follow which client-id strategy was used.
+        var logger = new CapturingLogger<McpTransportFactoryTests>();
+        var tool = OAuthTool(clientId: null);
+        var attempts = new List<string?>();
+
+        var client = await McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync(
+            tool,
+            (clientIdOverride, _) =>
+            {
+                attempts.Add(clientIdOverride);
+                if (clientIdOverride is null)
+                {
+                    throw new McpException(
+                        "Failed to handle unauthorized response with 'Bearer' scheme. Authorization server does not support dynamic client registration");
+                }
+
+                return Task.FromResult("connected");
+            },
+            logger,
+            "oauth-server",
+            CancellationToken.None);
+
+        Assert.Equal("connected", client);
+        Assert.Equal([null, McpTransportFactory.DefaultDynamicRegistrationFallbackClientId], attempts);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("dynamic client registration", StringComparison.OrdinalIgnoreCase)
+            && e.Message.Contains("oauth-server", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Warning && e.Message.Contains("rejected", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Information
+            && e.Message.Contains("default public client id", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task CreateOAuthTransport_Logs_OmitClientSecretAndTokens()
+    {
+        // #1446/#1408: wiring an interactive OAuth transport logs the endpoint but never the configured
+        // client secret or client id.
+        var loggerFactory = new CapturingLoggerFactory();
+        var tool = OAuthTool(clientId: "client-xyz-value", clientSecret: "super-secret-value");
+
+        await McpTransportFactory.CreateMcpTransportAsync(tool, services: null, loggerFactory, CancellationToken.None);
+
+        Assert.NotEmpty(loggerFactory.Entries);
+        Assert.DoesNotContain(loggerFactory.Entries, e =>
+            e.Message.Contains("super-secret-value", StringComparison.Ordinal));
+        Assert.DoesNotContain(loggerFactory.Entries, e =>
+            e.Message.Contains("client-xyz-value", StringComparison.Ordinal));
     }
 
     [Fact]

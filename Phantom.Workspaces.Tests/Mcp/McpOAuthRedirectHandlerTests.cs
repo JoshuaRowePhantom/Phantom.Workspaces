@@ -474,6 +474,74 @@ public sealed class McpOAuthRedirectHandlerTests
     }
 
     [Fact]
+    public async Task RedirectHandler_SuccessfulSignIn_LogsServerAndOutcome()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+
+        await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Information
+            && entry.Message.Contains("server-a", StringComparison.Ordinal)
+            && entry.Message.Contains("completed successfully", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RedirectHandler_StateMismatch_LogsWarning()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token);
+
+        // A callback whose state matches no pending authorization is answered with the close page and
+        // then a warning is logged (never the state value).
+        var body = await SendCallbackAsync(redirectUri, "code=stray&state=unknown-state");
+        Assert.Contains("close this window", body, StringComparison.OrdinalIgnoreCase);
+
+        for (var i = 0; i < 100 && !logger.Entries.Any(entry => entry.Level == LogLevel.Warning); i++)
+        {
+            await Task.Delay(20, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Warning
+            && entry.Message.Contains("unknown or missing state", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains("unknown-state", StringComparison.Ordinal));
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_Logs_DoNotContainCodeOrState()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        var logger = new CapturingLogger<McpOAuthRedirectHandler>();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider(), logger);
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=secret-code-value&state=secret-state-value");
+
+        await handler.HandleAsync("server-a", AuthUri("secret-state-value"), redirectUri, CancellationToken.None);
+        await browser.LastCallbackTask!;
+
+        Assert.NotEmpty(logger.Entries);
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains("secret-code-value", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains("secret-state-value", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task RedirectHandler_TimeoutOrCancel_RemovesPendingStateAndKeepsListenerAlive()
     {
         var browser = new FakeSystemBrowserLauncher();

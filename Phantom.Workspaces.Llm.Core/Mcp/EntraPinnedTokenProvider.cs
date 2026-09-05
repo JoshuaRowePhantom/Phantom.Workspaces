@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Linq;
 using Azure.Core;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Phantom.Workspaces.Llm.Mcp;
 
@@ -24,6 +26,7 @@ public sealed class EntraPinnedTokenProvider
     private readonly TokenCredential credential;
     private readonly string[] scopes;
     private readonly TimeProvider timeProvider;
+    private readonly ILogger logger;
     private readonly SemaphoreSlim acquisitionGate = new(1, 1);
 
     private AccessToken? cachedToken;
@@ -35,10 +38,15 @@ public sealed class EntraPinnedTokenProvider
     /// <param name="credential">The first-party credential that performs the actual acquisition.</param>
     /// <param name="scopes">The statically configured v2 scopes; never sourced from remote metadata.</param>
     /// <param name="timeProvider">Clock used for cache-expiry decisions; defaults to <see cref="TimeProvider.System"/>.</param>
+    /// <param name="logger">
+    /// Optional logger. Acquisitions and cache hits are recorded with the (safe) scope names and expiry,
+    /// never the access token value (#1446/#1408 redaction).
+    /// </param>
     public EntraPinnedTokenProvider(
         TokenCredential credential,
         IEnumerable<string> scopes,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(credential);
         ArgumentNullException.ThrowIfNull(scopes);
@@ -51,6 +59,7 @@ public sealed class EntraPinnedTokenProvider
         }
 
         this.timeProvider = timeProvider ?? TimeProvider.System;
+        this.logger = logger ?? NullLogger<EntraPinnedTokenProvider>.Instance;
     }
 
     /// <summary>
@@ -62,6 +71,7 @@ public sealed class EntraPinnedTokenProvider
     {
         if (this.TryGetCachedToken(out var token))
         {
+            this.logger.LogDebug("Reusing cached host-pinned Entra access token (cache hit).");
             return token;
         }
 
@@ -71,12 +81,20 @@ public sealed class EntraPinnedTokenProvider
             // Re-check under the gate: a peer may have populated the cache while we waited.
             if (this.TryGetCachedToken(out token))
             {
+                this.logger.LogDebug("Reusing cached host-pinned Entra access token (cache hit).");
                 return token;
             }
+
+            // Log only the (safe) scope names, never the token value (#1446/#1408).
+            this.logger.LogInformation(
+                "Acquiring host-pinned Entra access token for scopes {Scopes}.", string.Join(" ", this.scopes));
 
             var context = new TokenRequestContext(this.scopes);
             var acquired = await this.credential.GetTokenAsync(context, cancellationToken).ConfigureAwait(false);
             this.cachedToken = acquired;
+
+            this.logger.LogInformation(
+                "Acquired host-pinned Entra access token (expires {ExpiresOn:o}).", acquired.ExpiresOn);
             return acquired.Token;
         }
         finally

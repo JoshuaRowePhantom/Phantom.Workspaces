@@ -1,5 +1,6 @@
 using Azure.Core;
 using Azure.Identity;
+using Microsoft.Extensions.Logging;
 
 namespace Phantom.Workspaces.Llm.Mcp;
 
@@ -23,8 +24,31 @@ public static class EntraInteractiveCredentialFactory
     /// loopback redirect URI are applied when present.
     /// </summary>
     public static TokenCredential Create(McpEntraPinnedTokenRequest request)
+        => Create(request, loggerFactory: null);
+
+    /// <summary>
+    /// Creates an <see cref="InteractiveBrowserCredential"/> for <paramref name="request"/>, logging the
+    /// credential creation through <paramref name="loggerFactory"/> when supplied. Only the server name
+    /// and (safe) authority host are logged — never a client secret or token (#1446/#1408 redaction).
+    /// </summary>
+    public static TokenCredential Create(McpEntraPinnedTokenRequest request, ILoggerFactory? loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Mcp.EntraInteractiveCredentialFactory");
+        if (TryParseAuthority(request.Authority, out var authorityHost, out _))
+        {
+            logger?.LogInformation(
+                "Creating host-pinned Entra credential for MCP server '{ServerName}' against authority host {AuthorityHost}.",
+                request.ServerName,
+                authorityHost.GetLeftPart(UriPartial.Authority));
+        }
+        else
+        {
+            logger?.LogInformation(
+                "Creating host-pinned Entra credential for MCP server '{ServerName}'.", request.ServerName);
+        }
+
         return new InteractiveBrowserCredential(BuildOptions(request));
     }
 

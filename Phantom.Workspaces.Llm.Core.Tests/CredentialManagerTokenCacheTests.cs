@@ -1,4 +1,5 @@
 using System.Security;
+using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Authentication;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
@@ -126,6 +127,47 @@ public sealed class CredentialManagerTokenCacheTests
         Assert.Equal(tokens.RefreshToken, loaded!.RefreshToken);
         Assert.Equal(tokens.ExpiresIn, loaded.ExpiresIn);
         Assert.Equal(tokens.ObtainedAt, loaded.ObtainedAt);
+    }
+
+    [Fact]
+    public async Task TokenCache_LoadMiss_LogsInteractiveLoginRequired()
+    {
+        var logger = new CapturingLogger<CredentialManagerTokenCache>();
+        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), ServerName, logger);
+
+        var loaded = await cache.GetTokensAsync(CancellationToken.None);
+
+        Assert.Null(loaded);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Debug
+            && entry.Message.Contains("interactive login", StringComparison.OrdinalIgnoreCase)
+            && entry.Message.Contains(ServerName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TokenCache_StoreAndHit_LogAtDebug_WithoutTokenValue()
+    {
+        var logger = new CapturingLogger<CredentialManagerTokenCache>();
+        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), ServerName, logger);
+        var tokens = SampleTokens();
+
+        await cache.StoreTokensAsync(tokens, CancellationToken.None);
+        var loaded = await cache.GetTokensAsync(CancellationToken.None);
+
+        Assert.NotNull(loaded);
+
+        // Store and cache-hit are both recorded at Debug.
+        Assert.All(logger.Entries, entry => Assert.Equal(LogLevel.Debug, entry.Level));
+        Assert.Contains(logger.Entries, entry =>
+            entry.Message.Contains("Stored", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logger.Entries, entry =>
+            entry.Message.Contains("cache hit", StringComparison.OrdinalIgnoreCase));
+
+        // #1408 redaction: no access/refresh token value ever appears in a log message.
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains(tokens.AccessToken!, StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry =>
+            entry.Message.Contains(tokens.RefreshToken!, StringComparison.Ordinal));
     }
 
     [Fact]

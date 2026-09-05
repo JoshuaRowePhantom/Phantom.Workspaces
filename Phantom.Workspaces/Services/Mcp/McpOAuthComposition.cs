@@ -50,14 +50,14 @@ public static class McpOAuthComposition
             // #1384: persistent per-server token cache over the platform secret store. Returns null
             // per server when no real store is available (non-Windows) so the SDK in-memory cache is
             // used.
-            TokenCacheProvider = CredentialManagerTokenCache.CreateProvider(secretStore),
+            TokenCacheProvider = CredentialManagerTokenCache.CreateProvider(secretStore, loggerFactory),
 
             // #1420 (integration point D): host-pinned Entra credential builder. It does NOT reuse the
             // shared DCR loopback redirect URI above (#1427) — MSAL's InteractiveBrowserCredential binds
             // its own ephemeral localhost loopback listener, which Entra matches port-agnostically, so the
             // two subsystems never contend for one port. Tokens persist through MSAL's OS-backed cache
             // keyed per server.
-            EntraCredentialProvider = EntraInteractiveCredentialFactory.Create,
+            EntraCredentialProvider = request => EntraInteractiveCredentialFactory.Create(request, loggerFactory),
         };
     }
 }

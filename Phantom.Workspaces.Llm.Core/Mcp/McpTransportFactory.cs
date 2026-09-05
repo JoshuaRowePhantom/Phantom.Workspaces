@@ -339,12 +339,14 @@ internal static class McpTransportFactory
         var credential = oauthOptions.ResolveEntraCredential(
             new McpEntraPinnedTokenRequest(authority, clientId, RedirectUri: null, displayName));
 
-        var tokenProvider = new EntraPinnedTokenProvider(credential, scopes);
+        var tokenProvider = new EntraPinnedTokenProvider(
+            credential, scopes, timeProvider: null, logger: loggerFactory?.CreateLogger<EntraPinnedTokenProvider>());
         var allowedOrigin = new Uri(endpointUri.GetLeftPart(UriPartial.Authority));
 
         // AllowAutoRedirect is disabled so a cross-origin redirect never carries the bearer; the handler
         // re-checks the origin on every hop regardless.
-        var bearerHandler = new EntraBearerTokenHandler(tokenProvider, allowedOrigin)
+        var bearerHandler = new EntraBearerTokenHandler(
+            tokenProvider, allowedOrigin, loggerFactory?.CreateLogger<EntraBearerTokenHandler>())
         {
             InnerHandler = new SocketsHttpHandler { AllowAutoRedirect = false },
         };
@@ -389,19 +391,32 @@ internal static class McpTransportFactory
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(connectAsync);
 
+        var serverLabel = serverName ?? "(mcp server)";
+
         try
         {
-            return await connectAsync(null, cancellationToken).ConfigureAwait(false);
+            // Log the DCR-first attempt and its outcome so an operator can see which client-id strategy
+            // won. Only the server name is logged — never a client id/secret or token (#1446/#1408).
+            logger?.LogInformation(
+                "Connecting to MCP server {ServerName} using dynamic client registration.", serverLabel);
+            var client = await connectAsync(null, cancellationToken).ConfigureAwait(false);
+            logger?.LogInformation(
+                "Connected to MCP server {ServerName} via dynamic client registration.", serverLabel);
+            return client;
         }
         catch (Exception ex) when (ShouldFallBackToStaticClientId(tool, ex))
         {
             logger?.LogWarning(
                 "Dynamic client registration was rejected for MCP server {ServerName}; retrying once with the default public client id.",
-                serverName ?? "(mcp server)");
+                serverLabel);
 
             // Single retry with the static public client id. No further fallback is attempted, so a
             // second failure propagates unchanged.
-            return await connectAsync(DefaultDynamicRegistrationFallbackClientId, cancellationToken).ConfigureAwait(false);
+            var client = await connectAsync(DefaultDynamicRegistrationFallbackClientId, cancellationToken).ConfigureAwait(false);
+            logger?.LogInformation(
+                "Connected to MCP server {ServerName} using the default public client id (dynamic client registration fallback).",
+                serverLabel);
+            return client;
         }
     }
 
