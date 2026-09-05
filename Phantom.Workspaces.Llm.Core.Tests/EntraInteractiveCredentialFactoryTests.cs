@@ -35,4 +35,46 @@ public sealed class EntraInteractiveCredentialFactoryTests
 
         Assert.Equal(redirectUri, options.RedirectUri);
     }
+
+    [Fact]
+    public void BuildOptions_EntraPinned_SetsBrowserSuccessMessageWithServerName()
+    {
+        // #1445 Part B: MSAL's loopback success page must name the authorized server.
+        var request = new McpEntraPinnedTokenRequest(Authority, ClientId: null, RedirectUri: null, "GitHub MCP");
+
+        var options = EntraInteractiveCredentialFactory.BuildOptions(request);
+
+        Assert.NotNull(options.BrowserCustomization);
+        Assert.NotNull(options.BrowserCustomization!.SuccessMessage);
+        Assert.Contains("GitHub MCP", options.BrowserCustomization.SuccessMessage!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildOptions_EntraPinned_ServerName_IsHtmlEncodedInBrowserMessage()
+    {
+        // #1445 Part B: MSAL renders SuccessMessage/ErrorMessage as raw HTML, so a server name with
+        // metacharacters must be HTML-encoded to avoid injection.
+        var request = new McpEntraPinnedTokenRequest(
+            Authority, ClientId: null, RedirectUri: null, "<script>alert(1)</script>");
+
+        var options = EntraInteractiveCredentialFactory.BuildOptions(request);
+
+        Assert.DoesNotContain(
+            "<script>alert(1)</script>", options.BrowserCustomization!.SuccessMessage!, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "<script>alert(1)</script>", options.BrowserCustomization.ErrorMessage!, StringComparison.Ordinal);
+        Assert.Contains("&lt;script&gt;", options.BrowserCustomization.SuccessMessage!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BuildOptions_EntraPinned_SetsBrowserErrorMessageNamingServer()
+    {
+        // #1445 Part B: a failed Entra sign-in page must also identify the server.
+        var request = new McpEntraPinnedTokenRequest(Authority, ClientId: null, RedirectUri: null, "GitHub MCP");
+
+        var options = EntraInteractiveCredentialFactory.BuildOptions(request);
+
+        Assert.NotNull(options.BrowserCustomization!.ErrorMessage);
+        Assert.Contains("GitHub MCP", options.BrowserCustomization.ErrorMessage!, StringComparison.Ordinal);
+    }
 }

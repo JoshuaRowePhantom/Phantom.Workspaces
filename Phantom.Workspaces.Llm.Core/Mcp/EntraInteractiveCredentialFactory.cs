@@ -68,6 +68,14 @@ public static class EntraInteractiveCredentialFactory
             {
                 Name = "phantom-mcp-oauth:" + request.ServerName,
             },
+
+            // #1445 Part B: name the authorized server on MSAL's loopback success/error page (rendered as
+            // raw HTML) using the same shared, HTML-encoded builder as the Phantom-owned DCR page.
+            BrowserCustomization = new BrowserCustomizationOptions
+            {
+                SuccessMessage = McpOAuthClosePage.Success(request.ServerName),
+                ErrorMessage = McpOAuthClosePage.Error(request.ServerName),
+            },
         };
 
         if (TryParseAuthority(request.Authority, out var authorityHost, out var tenantId))

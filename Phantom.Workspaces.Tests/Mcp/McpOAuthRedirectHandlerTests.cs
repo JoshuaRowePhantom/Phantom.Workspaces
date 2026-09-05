@@ -542,6 +542,108 @@ public sealed class McpOAuthRedirectHandlerTests
     }
 
     [Fact]
+    public async Task RedirectHandler_SuccessfulSignIn_ShowsServerName()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+
+        await handler.HandleAsync("GitHub MCP", AuthUri("xyz"), redirectUri, CancellationToken.None);
+        var body = await browser.LastCallbackTask!;
+
+        Assert.Contains("GitHub MCP", body, StringComparison.Ordinal);
+        Assert.Contains("close this window", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_SuccessfulSignIn_ShowsSessionIdentity_WhenProvided()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(
+            browser, new FakeSecretProvider(), sessionIdentityProvider: () => "alice@example.com");
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+
+        await handler.HandleAsync("server-a", AuthUri("xyz"), redirectUri, CancellationToken.None);
+        var withIdentity = await browser.LastCallbackTask!;
+
+        Assert.Contains("alice@example.com", withIdentity, StringComparison.Ordinal);
+
+        // When no identity provider is configured, the identity line is omitted.
+        var browser2 = new FakeSystemBrowserLauncher();
+        using var handler2 = new McpOAuthRedirectHandler(browser2, new FakeSecretProvider());
+        var redirectUri2 = handler2.EnsureListenerBound();
+        browser2.OnOpen = _ => SendCallbackAsync(redirectUri2, "code=abc&state=xyz");
+
+        await handler2.HandleAsync("server-a", AuthUri("xyz"), redirectUri2, CancellationToken.None);
+        var withoutIdentity = await browser2.LastCallbackTask!;
+
+        Assert.DoesNotContain("Signed in as", withoutIdentity, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_UnknownState_FallsBackToGenericPage()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        using var cts = new CancellationTokenSource();
+
+        var taskA = handler.HandleAsync("server-a", AuthUri("state-a"), redirectUri, cts.Token);
+
+        // A callback whose state matches no pending authorization still returns a valid generic page.
+        var body = await SendCallbackAsync(redirectUri, "code=stray&state=unknown-state");
+
+        Assert.Contains("close this window", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Signed in to", body, StringComparison.OrdinalIgnoreCase);
+
+        cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => taskA);
+    }
+
+    [Fact]
+    public async Task RedirectHandler_ServerName_IsHtmlEncoded()
+    {
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+
+        await handler.HandleAsync("<script>alert(1)</script>", AuthUri("xyz"), redirectUri, CancellationToken.None);
+        var body = await browser.LastCallbackTask!;
+
+        Assert.DoesNotContain("<script>alert(1)</script>", body, StringComparison.Ordinal);
+        Assert.Contains("&lt;script&gt;", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ClosePageBuilder_SharedMarkup_UsedByBothLoopbackPaths()
+    {
+        const string serverName = "Shared MCP";
+        var expected = McpOAuthClosePage.Success(serverName);
+
+        // Part A: the Phantom-owned loopback page is produced by the shared builder.
+        var browser = new FakeSystemBrowserLauncher();
+        using var handler = new McpOAuthRedirectHandler(browser, new FakeSecretProvider());
+        var redirectUri = handler.EnsureListenerBound();
+        browser.OnOpen = _ => SendCallbackAsync(redirectUri, "code=abc&state=xyz");
+
+        await handler.HandleAsync(serverName, AuthUri("xyz"), redirectUri, CancellationToken.None);
+        var partABody = await browser.LastCallbackTask!;
+
+        // Part B: the Entra-pinned MSAL page uses the same builder for its SuccessMessage.
+        var partBSuccess = EntraInteractiveCredentialFactory.BuildOptions(
+                new McpEntraPinnedTokenRequest(
+                    "https://login.microsoftonline.com/tenant/v2.0", ClientId: null, RedirectUri: null, serverName))
+            .BrowserCustomization!.SuccessMessage;
+
+        Assert.Contains("Signed in to", expected, StringComparison.Ordinal);
+        Assert.Equal(expected, partABody);
+        Assert.Equal(expected, partBSuccess);
+    }
+
+    [Fact]
     public async Task RedirectHandler_TimeoutOrCancel_RemovesPendingStateAndKeepsListenerAlive()
     {
         var browser = new FakeSystemBrowserLauncher();

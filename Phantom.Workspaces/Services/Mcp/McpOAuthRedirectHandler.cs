@@ -6,6 +6,7 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Authentication;
+using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Services.Mcp;
@@ -47,10 +48,6 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 {
     /// <summary>Overall time the loopback listener waits for the browser redirect before failing.</summary>
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
-
-    private const string CloseWindowHtml =
-        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Sign-in complete</title></head>" +
-        "<body><p>You can close this window and return to Phantom.Workspaces.</p></body></html>";
 
     private readonly ISystemBrowserLauncher browserLauncher;
     private readonly ISecretProvider consentProvider;
@@ -357,9 +354,20 @@ public sealed class McpOAuthRedirectHandler : IDisposable
 
             var requestUri = context.Request.Url;
 
+            // Resolve the pending authorization (by OAuth `state`) and any error BEFORE writing the
+            // close page, so the page can name the authorized server (#1445 Part A).
+            var state = requestUri is null ? null : GetQueryValue(requestUri, "state");
+            PendingAuthorization? authorization = null;
+            if (state is not null)
+            {
+                this.pending.TryGetValue(state, out authorization);
+            }
+
+            var error = requestUri is null ? null : GetQueryValue(requestUri, "error");
+
             try
             {
-                await WriteClosePageAsync(context.Response).ConfigureAwait(false);
+                await this.WriteClosePageAsync(context.Response, authorization, error).ConfigureAwait(false);
             }
             catch (Exception)
             {
@@ -371,8 +379,7 @@ public sealed class McpOAuthRedirectHandler : IDisposable
                 continue;
             }
 
-            var state = GetQueryValue(requestUri, "state");
-            if (state is null || !this.pending.TryGetValue(state, out var authorization))
+            if (state is null || authorization is null)
             {
                 // Unknown/duplicate state: page already shown; drop it without faulting other waiters.
                 // The state value itself is never logged (#1446/#1408).
@@ -381,7 +388,6 @@ public sealed class McpOAuthRedirectHandler : IDisposable
                 continue;
             }
 
-            var error = GetQueryValue(requestUri, "error");
             if (!string.IsNullOrEmpty(error))
             {
                 var errorDescription = GetQueryValue(requestUri, "error_description");
@@ -483,9 +489,29 @@ public sealed class McpOAuthRedirectHandler : IDisposable
         return prefix.EndsWith('/') ? prefix : prefix + "/";
     }
 
-    private static async Task WriteClosePageAsync(HttpListenerResponse response)
+    private async Task WriteClosePageAsync(
+        HttpListenerResponse response,
+        PendingAuthorization? authorization,
+        string? error)
     {
-        var payload = Encoding.UTF8.GetBytes(CloseWindowHtml);
+        // Render the enriched, server-named page when the callback resolved to a pending authorization;
+        // otherwise fall back to the generic page so unmatched-state/error paths still return valid HTML
+        // (#1445 Part A). All interpolated values are HTML-encoded inside the shared builder.
+        string html;
+        if (authorization is null)
+        {
+            html = McpOAuthClosePage.Generic();
+        }
+        else if (!string.IsNullOrEmpty(error))
+        {
+            html = McpOAuthClosePage.Error(authorization.ServerName);
+        }
+        else
+        {
+            html = McpOAuthClosePage.Success(authorization.ServerName, this.sessionIdentityProvider?.Invoke());
+        }
+
+        var payload = Encoding.UTF8.GetBytes(html);
         response.StatusCode = (int)HttpStatusCode.OK;
         response.ContentType = "text/html; charset=utf-8";
         response.ContentLength64 = payload.Length;
