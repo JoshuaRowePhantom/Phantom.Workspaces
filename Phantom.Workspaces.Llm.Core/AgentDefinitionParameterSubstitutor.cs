@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 using AgentSchema;
+using Phantom.Workspaces.Llm.Core.Manifest;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -62,6 +63,7 @@ public static class AgentDefinitionParameterSubstitutor
 
         return parameters
             .Where(static p => p.Name is not null)
+            .Where(static p => !AgentManifestParameterKinds.IsExecutor(p.Kind))
             .Select(static p => p.Name!)
             .ToHashSet(StringComparer.Ordinal);
     }
@@ -98,6 +100,12 @@ public static class AgentDefinitionParameterSubstitutor
         {
             var name = param.Name;
             if (name is null) continue;
+
+            // Executor parameters are a structured launch-time selection recorded in the typed
+            // parameter-selections map (M7, #1434), not a ${param} text substitution. They never flow
+            // through the string->string parameter-values map, so skip them here — a required executor
+            // parameter must not force an ArgumentException for a missing text value.
+            if (AgentManifestParameterKinds.IsExecutor(param.Kind)) continue;
 
             string? value = null;
             if (parameterValues?.TryGetValue(name, out var providedValue) == true

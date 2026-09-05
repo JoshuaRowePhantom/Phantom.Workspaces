@@ -124,6 +124,51 @@ public sealed class AgentDefinitionParameterSubstitutorTests
     }
 
     [Fact]
+    public void Substitute_WithExecutorParameter_DoesNotRequireOrSubstituteExecutorSelection()
+    {
+        // A required 'executor' parameter is a structured launch-time selection recorded in the typed
+        // parameter-selections map (#1434, M7). It never flows through the string->string
+        // parameter-values map, so the substitutor must NOT throw for a missing text value and must NOT
+        // treat it as a ${param} substitution — while text/directory parameters are unchanged.
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "test",
+          "displayName": "Test",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": true },
+              { "name": "worker-executor", "kind": "executor", "required": true }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "test-agent",
+            "model": {
+              "id": "echo",
+              "provider": "echo",
+              "apiType": "Echo",
+              "options": {
+                "additionalProperties": {
+                  "working-directory": "${working-directory}"
+                }
+              }
+            }
+          }
+        }
+        """);
+
+        // Only the text parameter is supplied; the required executor parameter is deliberately omitted.
+        var definition = AgentDefinitionParameterSubstitutor.Substitute(
+            manifest,
+            new Dictionary<string, string> { ["working-directory"] = "C:\\Projects\\MyApp" });
+
+        var promptAgent = Assert.IsType<PromptAgent>(definition);
+        Assert.Equal(
+            "C:\\Projects\\MyApp",
+            promptAgent.Model?.Options?.AdditionalProperties?["working-directory"]);
+    }
+
+    [Fact]
     public void AgentDefinitionParameterSubstitutor_WorkingDirectory_SubstitutedIntoModelOptions()
     {
         var manifest = AgentManifestLoader.LoadManifestFromJson("""

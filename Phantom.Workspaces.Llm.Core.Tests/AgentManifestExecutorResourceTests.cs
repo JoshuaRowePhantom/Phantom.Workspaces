@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -116,5 +118,91 @@ public sealed class AgentManifestExecutorResourceTests
                 JsonNode.DeepEquals(firstNode, secondNode),
                 $"Executor resource '{executor.Name}' did not round-trip losslessly.");
         }
+    }
+
+    [Fact]
+    public void Load_ExecutorParameter_Recognised()
+    {
+        var manifest = AgentManifestLoader.LoadManifestFromJson("""
+        {
+          "name": "executor-parameter-example",
+          "displayName": "Executor Parameter Example",
+          "parameters": {
+            "properties": [
+              { "name": "working-directory", "kind": "string", "required": false },
+              { "name": "worker-executor", "kind": "executor", "required": true }
+            ]
+          },
+          "template": {
+            "kind": "prompt",
+            "name": "executor-parameter-example",
+            "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+          }
+        }
+        """);
+
+        var properties = manifest.Parameters?.Properties;
+        Assert.NotNull(properties);
+
+        var executorParameter = Assert.Single(
+            properties!,
+            property => string.Equals(property.Name, "worker-executor", StringComparison.Ordinal));
+
+        // Parameter kind is read from the manifest 'kind' field, not inferred by name.
+        Assert.Equal(AgentManifestParameterKinds.Executor, executorParameter.Kind);
+        Assert.True(AgentManifestParameterKinds.IsExecutor(executorParameter.Kind));
+
+        var textParameter = Assert.Single(
+            properties!,
+            property => string.Equals(property.Name, "working-directory", StringComparison.Ordinal));
+        Assert.False(AgentManifestParameterKinds.IsExecutor(textParameter.Kind));
+    }
+
+    [Fact]
+    public void ExecutorParameterSelection_RecordedInParameterSelections()
+    {
+        // Both disambiguated selection shapes, recorded in the typed parameter-selections map
+        // (string -> JsonElement) — NOT as a JSON-encoded string in the string->string parameter-values.
+        var parameterSelections = new Dictionary<string, JsonElement>(StringComparer.Ordinal)
+        {
+            ["trust-worker"] = ExecutorParameterSelection.ForTrustProfile("defaults/trust-profiles/remote"),
+            ["machine-worker"] = ExecutorParameterSelection.ForUserComputerProfile(
+                "11111111-2222-3333-4444-555555555555"),
+        };
+
+        // The string->string parameter-values map is a separate channel, reserved for ${param} text
+        // templating, and is unaffected by executor selections.
+        var parameterValues = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["working-directory"] = "C:\\Projects\\MyApp",
+        };
+
+        // Round-trip the parameter-selections map through JSON (as it is persisted alongside
+        // parameter-values on the agent-session entity).
+        var serialized = new JsonObject();
+        foreach (var selection in parameterSelections)
+        {
+            serialized[selection.Key] = JsonNode.Parse(selection.Value.GetRawText());
+        }
+
+        using var reloaded = JsonDocument.Parse(serialized.ToJsonString());
+        var root = reloaded.RootElement;
+
+        // Each recorded selection is a typed JSON OBJECT (not a string), and identifies both kind and id.
+        var trust = root.GetProperty("trust-worker");
+        Assert.Equal(JsonValueKind.Object, trust.ValueKind);
+        Assert.True(ExecutorParameterSelection.TryGetTrustProfile(trust, out var trustProfile));
+        Assert.Equal("defaults/trust-profiles/remote", trustProfile);
+        Assert.False(ExecutorParameterSelection.TryGetUserComputerProfile(trust, out _));
+
+        var machine = root.GetProperty("machine-worker");
+        Assert.Equal(JsonValueKind.Object, machine.ValueKind);
+        Assert.True(ExecutorParameterSelection.TryGetUserComputerProfile(machine, out var entityId));
+        Assert.Equal("11111111-2222-3333-4444-555555555555", entityId);
+        Assert.False(ExecutorParameterSelection.TryGetTrustProfile(machine, out _));
+
+        // parameter-values remains a plain string->string map with no structured selection leakage.
+        Assert.IsType<string>(parameterValues["working-directory"]);
+        Assert.DoesNotContain("trust-worker", parameterValues.Keys);
     }
 }
