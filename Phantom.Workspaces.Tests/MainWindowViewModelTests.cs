@@ -1,6 +1,8 @@
 using System.Net;
 using System.Reflection;
 using System.Text.Json;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
@@ -483,6 +485,172 @@ public sealed class MainWindowViewModelTests
         Assert.Equal("fallback-tab", activeDoc!.Id);
     }
 
+    [AvaloniaFact]
+    public async Task ViewPopulation_EntityDataChanged_UpdatesItemInPlaceWithoutRebuild()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+
+        var workspaceA = new EntityId("14500001-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("14500001-0000-4000-8000-000000000002");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1450-a", "Issue1450 A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1450-b", "Issue1450 B");
+        await SelectWorkspacesViewAsync(viewModel);
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var roots = viewModel.CurrentViewPopulation.RootEntities;
+        var before = Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString());
+        var structuralActions = TrackStructuralCollectionActions(entities, roots);
+
+        await UpdateWorkspaceDisplayNameAsync(broker, workspaceA, "Issue1450 A Updated");
+        await WaitForDisplayNameAsync(before, "Issue1450 A Updated");
+
+        Assert.Same(before, Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString()));
+        Assert.Empty(structuralActions);
+    }
+
+    [AvaloniaFact]
+    public async Task ViewPopulation_EntityAdded_InsertsSingleItem()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+
+        var workspaceA = new EntityId("14500002-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("14500002-0000-4000-8000-000000000002");
+        var workspaceC = new EntityId("14500002-0000-4000-8000-000000000003");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1450-add-a", "Issue1450 Add A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1450-add-b", "Issue1450 Add B");
+        await SelectWorkspacesViewAsync(viewModel);
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var roots = viewModel.CurrentViewPopulation.RootEntities;
+        var referencesBefore = entities.ToDictionary(vm => vm.EntityId, vm => vm, StringComparer.Ordinal);
+        var structuralActions = TrackStructuralCollectionActions(entities, roots);
+
+        await UpsertWorkspaceAsync(broker, workspaceC, "issue1450-add-c", "Issue1450 Add C");
+        await WaitForEntityInCollectionAsync(entities, workspaceC.ToString());
+
+        Assert.Equal(2, structuralActions.Count(action => action == NotifyCollectionChangedAction.Add));
+        Assert.DoesNotContain(structuralActions, action => action is NotifyCollectionChangedAction.Reset or NotifyCollectionChangedAction.Remove);
+        Assert.Same(referencesBefore[workspaceA.ToString()], Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString()));
+        Assert.Same(referencesBefore[workspaceB.ToString()], Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString()));
+    }
+
+    [AvaloniaFact]
+    public async Task ViewPopulation_EntityDeleted_RemovesSingleItem()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+
+        var workspaceA = new EntityId("14500003-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("14500003-0000-4000-8000-000000000002");
+        var workspaceC = new EntityId("14500003-0000-4000-8000-000000000003");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1450-del-a", "Issue1450 Del A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1450-del-b", "Issue1450 Del B");
+        await UpsertWorkspaceAsync(broker, workspaceC, "issue1450-del-c", "Issue1450 Del C");
+        await SelectWorkspacesViewAsync(viewModel);
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var roots = viewModel.CurrentViewPopulation.RootEntities;
+        var referencesBefore = entities.ToDictionary(vm => vm.EntityId, vm => vm, StringComparer.Ordinal);
+        var structuralActions = TrackStructuralCollectionActions(entities, roots);
+
+        await DeleteEntityAsync(broker, workspaceB);
+        await WaitForEntityAbsenceAsync(entities, workspaceB.ToString());
+
+        Assert.Equal(2, structuralActions.Count(action => action == NotifyCollectionChangedAction.Remove));
+        Assert.DoesNotContain(structuralActions, action => action == NotifyCollectionChangedAction.Reset);
+        Assert.Same(referencesBefore[workspaceA.ToString()], Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString()));
+        Assert.Same(referencesBefore[workspaceC.ToString()], Assert.Single(entities, vm => vm.EntityId == workspaceC.ToString()));
+    }
+
+    [AvaloniaFact]
+    public async Task ViewPopulation_EntityChange_PreservesSelectionAndExpansion()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+
+        var workspaceA = new EntityId("14500004-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("14500004-0000-4000-8000-000000000002");
+        var child = new EntityId("14500004-0000-4000-8000-000000000003");
+        var related = new EntityId("14500004-0000-4000-8000-000000000004");
+        await UpsertWorkspaceEntityTypeViewAsync(broker, new EntityId("14500004-0000-4000-8000-000000000005"));
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1450-preserve-a", "Issue1450 Preserve A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1450-preserve-b", "Issue1450 Preserve B");
+        await UpsertNoteAsync(broker, child, "issue1450-preserve-child", "Issue1450 Preserve Child");
+        await UpsertRelatedRelationshipAsync(broker, related, workspaceA, child, "issue1450-preserve-link");
+        await SelectWorkspacesViewAsync(viewModel);
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var workspaceAVm = Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString());
+        var workspaceBVm = Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString());
+        var childVm = Assert.Single(entities, vm => vm.EntityId == child.ToString());
+        workspaceAVm.IsExpanded = false;
+        workspaceBVm.EntityCardNode.Card.IsSelected = true;
+
+        await UpdateNoteDisplayNameAsync(broker, child, "Issue1450 Preserve Child Updated");
+        await WaitForDisplayNameAsync(childVm, "Issue1450 Preserve Child Updated");
+
+        Assert.False(workspaceAVm.IsExpanded);
+        Assert.True(workspaceBVm.EntityCardNode.Card.IsSelected);
+        Assert.Same(workspaceBVm, Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString()));
+    }
+
+    [AvaloniaFact]
+    public async Task ViewPopulation_NoMembershipChange_DoesNotMutateCollectionStructure()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+
+        var workspaceA = new EntityId("14500005-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("14500005-0000-4000-8000-000000000002");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1450-nostruct-a", "Issue1450 NoStruct A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1450-nostruct-b", "Issue1450 NoStruct B");
+        await SelectWorkspacesViewAsync(viewModel);
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var roots = viewModel.CurrentViewPopulation.RootEntities;
+        var beforeA = Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString());
+        var structuralActions = TrackStructuralCollectionActions(entities, roots);
+
+        await UpdateWorkspaceDisplayNameAsync(broker, workspaceA, "Issue1450 NoStruct A Updated");
+        await WaitForDisplayNameAsync(beforeA, "Issue1450 NoStruct A Updated");
+
+        Assert.Empty(structuralActions);
+    }
+
+    [AvaloniaFact]
+    public async Task ViewPopulation_ExistingItemReferences_ArePreservedAcrossRefresh()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var broker = GetEntityBroker(viewModel);
+
+        var workspaceA = new EntityId("14500006-0000-4000-8000-000000000001");
+        var workspaceB = new EntityId("14500006-0000-4000-8000-000000000002");
+        var workspaceC = new EntityId("14500006-0000-4000-8000-000000000003");
+        await UpsertWorkspaceAsync(broker, workspaceA, "issue1450-ref-a", "Issue1450 Ref A");
+        await UpsertWorkspaceAsync(broker, workspaceB, "issue1450-ref-b", "Issue1450 Ref B");
+        await SelectWorkspacesViewAsync(viewModel);
+
+        var entities = viewModel.CurrentViewPopulation.Entities;
+        var beforeA = Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString());
+        var beforeB = Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString());
+
+        await UpsertWorkspaceAsync(broker, workspaceC, "issue1450-ref-c", "Issue1450 Ref C");
+        await WaitForEntityInCollectionAsync(entities, workspaceC.ToString());
+        await UpdateWorkspaceDisplayNameAsync(broker, workspaceB, "Issue1450 Ref B Updated");
+        await WaitForDisplayNameAsync(beforeB, "Issue1450 Ref B Updated");
+
+        Assert.Same(beforeA, Assert.Single(entities, vm => vm.EntityId == workspaceA.ToString()));
+        Assert.Same(beforeB, Assert.Single(entities, vm => vm.EntityId == workspaceB.ToString()));
+    }
+
     private static DirectoryInfo FindRepositoryRoot()
     {
         var current = new DirectoryInfo(AppContext.BaseDirectory);
@@ -497,5 +665,247 @@ public sealed class MainWindowViewModelTests
         }
 
         throw new DirectoryNotFoundException("Could not locate repository root from test base directory.");
+    }
+
+    private static async Task SelectWorkspacesViewAsync(MainWindowViewModel viewModel)
+    {
+        var workspacesView = Assert.Single(
+            viewModel.TopLevelViews,
+            static view => string.Equals(view.Title, "Workspaces", StringComparison.Ordinal));
+        viewModel.SelectedTopLevelView = workspacesView;
+        await InvokeApplySelectedViewAsync(viewModel);
+    }
+
+    private static async Task InvokeApplySelectedViewAsync(MainWindowViewModel viewModel)
+    {
+        var method = typeof(MainWindowViewModel).GetMethod(
+            "ApplySelectedViewAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        await (Task)method!.Invoke(viewModel, [])!;
+    }
+
+    private static List<NotifyCollectionChangedAction> TrackStructuralCollectionActions(
+        System.Collections.ObjectModel.ObservableCollection<ViewEntityViewModel> entities,
+        System.Collections.ObjectModel.ObservableCollection<ViewEntityViewModel> roots)
+    {
+        var actions = new List<NotifyCollectionChangedAction>();
+        void Capture(object? _, NotifyCollectionChangedEventArgs e)
+        {
+            if (e.Action is NotifyCollectionChangedAction.Add
+                or NotifyCollectionChangedAction.Remove
+                or NotifyCollectionChangedAction.Move
+                or NotifyCollectionChangedAction.Reset)
+            {
+                actions.Add(e.Action);
+            }
+        }
+
+        entities.CollectionChanged += Capture;
+        roots.CollectionChanged += Capture;
+        return actions;
+    }
+
+    private static async Task WaitForDisplayNameAsync(ViewEntityViewModel viewEntity, string expectedDisplayName)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, PropertyChangedEventArgs e)
+        {
+            if (string.Equals(viewEntity.DisplayName, expectedDisplayName, StringComparison.Ordinal))
+            {
+                viewEntity.PropertyChanged -= Handler;
+                tcs.TrySetResult();
+            }
+        }
+
+        viewEntity.PropertyChanged += Handler;
+        if (string.Equals(viewEntity.DisplayName, expectedDisplayName, StringComparison.Ordinal))
+        {
+            viewEntity.PropertyChanged -= Handler;
+            return;
+        }
+
+        await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task WaitForEntityInCollectionAsync(
+        System.Collections.ObjectModel.ObservableCollection<ViewEntityViewModel> entities,
+        string entityId)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, NotifyCollectionChangedEventArgs __)
+        {
+            if (entities.Any(vm => string.Equals(vm.EntityId, entityId, StringComparison.Ordinal)))
+            {
+                entities.CollectionChanged -= Handler;
+                tcs.TrySetResult();
+            }
+        }
+
+        entities.CollectionChanged += Handler;
+        if (entities.Any(vm => string.Equals(vm.EntityId, entityId, StringComparison.Ordinal)))
+        {
+            entities.CollectionChanged -= Handler;
+            return;
+        }
+
+        await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task WaitForEntityAbsenceAsync(
+        System.Collections.ObjectModel.ObservableCollection<ViewEntityViewModel> entities,
+        string entityId)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Handler(object? _, NotifyCollectionChangedEventArgs __)
+        {
+            if (entities.All(vm => !string.Equals(vm.EntityId, entityId, StringComparison.Ordinal)))
+            {
+                entities.CollectionChanged -= Handler;
+                tcs.TrySetResult();
+            }
+        }
+
+        entities.CollectionChanged += Handler;
+        if (entities.All(vm => !string.Equals(vm.EntityId, entityId, StringComparison.Ordinal)))
+        {
+            entities.CollectionChanged -= Handler;
+            return;
+        }
+
+        await tcs.Task.WaitAsync(TestContext.Current.CancellationToken);
+    }
+
+    private static async Task UpdateWorkspaceDisplayNameAsync(EntityBroker broker, EntityId id, string displayName)
+    {
+        await UpsertEntityAsync(
+            broker,
+            id,
+            $$"""
+            {
+              "entity-id": "{{id.Value}}",
+              "entity-types": ["entity", "workspace"],
+              "names": [["tests", "workspaces", "update-{{id.Value}}"]],
+              "display-name": { "default": "{{displayName}}" },
+              "regions": []
+            }
+            """);
+    }
+
+    private static async Task UpdateNoteDisplayNameAsync(EntityBroker broker, EntityId id, string displayName)
+    {
+        await UpsertEntityAsync(
+            broker,
+            id,
+            $$"""
+            {
+              "entity-id": "{{id.Value}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "update-{{id.Value}}"]],
+              "display-name": { "default": "{{displayName}}" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "note" } }
+            }
+            """);
+    }
+
+    private static async Task DeleteEntityAsync(EntityBroker broker, EntityId id)
+    {
+        var current = (await broker.GetEntitiesAsync([id])).Single(entity => entity.EntityId == id);
+        var result = await broker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Delete test entity" } },
+            Changes =
+            [
+                new EntityChange
+                {
+                    EntityId = id,
+                    EntityChangeMode = EntityChangeMode.Replace,
+                    ConcurrencyTag = current.ConcurrencyTag,
+                    Data = null,
+                },
+            ],
+        });
+        AssertNoFailedEntityResult(result);
+    }
+
+    private static Task UpsertWorkspaceEntityTypeViewAsync(EntityBroker broker, EntityId id) =>
+        UpsertEntityAsync(
+            broker,
+            id,
+            $$"""
+            {
+              "entity-id": "{{id.Value}}",
+              "entity-types": ["entity", "entity-type-view"],
+              "names": [["entity-type-views", "workspace"]],
+              "display-name": { "default": "Workspace View" },
+              "traverse-relationships": [
+                { "relationship-type-ids": ["related"] }
+              ]
+            }
+            """);
+
+    private static Task UpsertNoteAsync(EntityBroker broker, EntityId id, string name, string displayName) =>
+        UpsertEntityAsync(
+            broker,
+            id,
+            $$"""
+            {
+              "entity-id": "{{id.Value}}",
+              "entity-types": ["entity", "note"],
+              "names": [["notes", "{{name}}"]],
+              "display-name": { "default": "{{displayName}}" },
+              "content": { "mime-type": "text/markdown", "content": { "text": "{{displayName}}" } }
+            }
+            """);
+
+    private static Task UpsertRelatedRelationshipAsync(
+        EntityBroker broker,
+        EntityId relationshipId,
+        EntityId left,
+        EntityId right,
+        string name) =>
+        UpsertEntityAsync(
+            broker,
+            relationshipId,
+            $$"""
+            {
+              "entity-id": "{{relationshipId.Value}}",
+              "entity-types": ["entity", "related", "relationship"],
+              "names": [["relationships", "{{name}}"]],
+              "participants": { "entities": ["{{left.Value}}", "{{right.Value}}"] }
+            }
+            """);
+
+    private static async Task UpsertEntityAsync(EntityBroker broker, EntityId id, string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var current = (await broker.GetEntitiesAsync([id])).SingleOrDefault(entity => entity.EntityId == id);
+        var result = await broker.UpdateAsync(
+            new UpdateRequest
+            {
+                UpdateMetadata = new UpdateMetadata
+                {
+                    Comment = new Markdown { Text = "Test upsert" },
+                },
+                Changes =
+                [
+                    new EntityChange
+                    {
+                        EntityId = id,
+                        EntityChangeMode = EntityChangeMode.Replace,
+                        ConcurrencyTag = current?.ConcurrencyTag,
+                        Data = document.RootElement.Clone(),
+                    },
+                ],
+            });
+        AssertNoFailedEntityResult(result);
+    }
+
+    private static void AssertNoFailedEntityResult(UpdateResult result)
+    {
+        var failure = result.EntityResults.FirstOrDefault(static entityResult => entityResult.UpdateState == UpdateState.Failed);
+        Assert.True(
+            failure is null,
+            failure is null ? string.Empty : string.Join(" | ", failure.Errors.Select(static error => error.Message)));
     }
 }

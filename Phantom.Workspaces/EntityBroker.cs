@@ -342,6 +342,23 @@ public sealed class EntityBroker
         return null;
     }
 
+    /// <summary>
+    /// Re-registers <paramref name="entity"/> as the canonical instance for its id, replacing any
+    /// other instance currently tracked for that id. An in-place view reconcile can reuse a view model
+    /// wired to an earlier <see cref="SubscribedEntityViewModel"/> instance while a fresh query has
+    /// produced a different one; without this the broker would keep routing updates to the query's
+    /// instance and leave the reused (displayed) instance permanently stale. Re-pointing the canonical
+    /// entry to the displayed instance ensures subsequent data-only updates reach the UI.
+    /// </summary>
+    internal void AdoptCanonicalEntity(SubscribedEntityViewModel entity)
+    {
+        lock (this.gate)
+        {
+            this.subscribedEntitiesById[entity.EntityId] =
+                new WeakReference<SubscribedEntityViewModel>(entity);
+        }
+    }
+
     public async Task RefreshAsync(
         CancellationToken cancellationToken = default)
     {
@@ -941,34 +958,50 @@ internal static class SubscribedResults
         ObservableCollection<SubscribedEntityViewModel> results,
         IReadOnlyList<SubscribedEntityViewModel> nextResults)
     {
+        return ObservableCollectionReconciler.Merge(results, nextResults, static result => result.EntityId);
+    }
+}
+
+internal static class ObservableCollectionReconciler
+{
+    public static bool Merge<T, TKey>(
+        ObservableCollection<T> existing,
+        IReadOnlyList<T> next,
+        Func<T, TKey> keySelector)
+        where TKey : notnull
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+        ArgumentNullException.ThrowIfNull(next);
+        ArgumentNullException.ThrowIfNull(keySelector);
+
         bool membershipChanged = false;
-        var nextIds = nextResults.Select(static result => result.EntityId).ToHashSet();
-        for (var index = results.Count - 1; index >= 0; index--)
+        var nextIds = next.Select(keySelector).ToHashSet();
+        for (var index = existing.Count - 1; index >= 0; index--)
         {
-            if (!nextIds.Contains(results[index].EntityId))
+            if (!nextIds.Contains(keySelector(existing[index])))
             {
-                results.RemoveAt(index);
+                existing.RemoveAt(index);
                 membershipChanged = true;
             }
         }
 
-        for (var targetIndex = 0; targetIndex < nextResults.Count; targetIndex++)
+        for (var targetIndex = 0; targetIndex < next.Count; targetIndex++)
         {
-            var expected = nextResults[targetIndex];
-            if (targetIndex < results.Count
-                && ReferenceEquals(results[targetIndex], expected))
+            var expected = next[targetIndex];
+            if (targetIndex < existing.Count
+                && ReferenceEquals(existing[targetIndex], expected))
             {
                 continue;
             }
 
-            var existingIndex = results.IndexOf(expected);
+            var existingIndex = existing.IndexOf(expected);
             if (existingIndex >= 0)
             {
-                results.Move(existingIndex, targetIndex);
+                existing.Move(existingIndex, targetIndex);
                 continue;
             }
 
-            results.Insert(targetIndex, expected);
+            existing.Insert(targetIndex, expected);
             membershipChanged = true;
         }
 

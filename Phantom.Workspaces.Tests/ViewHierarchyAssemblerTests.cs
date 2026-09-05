@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Collections.ObjectModel;
+using System.Collections.Specialized;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.ViewModels;
 
@@ -1153,6 +1155,34 @@ public sealed class ViewHierarchyAssemblerTests
         Assert.False(noMatchVm.EntityCardNode.Card.Matches);
         Assert.True(matchVm.IsVisible);
         Assert.False(noMatchVm.IsVisible);
+    }
+
+    [AvaloniaFact]
+    public void ViewPopulation_EntityReordered_MovesItemInsteadOfRebuilding()
+    {
+        var mainWindowViewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        var existing = new ObservableCollection<ViewEntityViewModel>
+        {
+            new(CreateTestEntity("alpha", "note"), mainWindowViewModel, new ShortcutManager(), 0),
+            new(CreateTestEntity("beta", "note"), mainWindowViewModel, new ShortcutManager(), 0),
+            new(CreateTestEntity("gamma", "note"), mainWindowViewModel, new ShortcutManager(), 0),
+        };
+
+        var first = existing[0];
+        var second = existing[1];
+        var third = existing[2];
+        var next = new[] { second, first, third };
+
+        var actions = new List<NotifyCollectionChangedAction>();
+        existing.CollectionChanged += (_, e) => actions.Add(e.Action);
+
+        var membershipChanged = ObservableCollectionReconciler.Merge(existing, next, vm => vm.EntityId);
+
+        Assert.False(membershipChanged);
+        Assert.Equal([NotifyCollectionChangedAction.Move], actions);
+        Assert.Same(second, existing[0]);
+        Assert.Same(first, existing[1]);
+        Assert.Same(third, existing[2]);
     }
 
     private static SubscribedEntityViewModel CreateTestEntity(string displayName, string entityType)

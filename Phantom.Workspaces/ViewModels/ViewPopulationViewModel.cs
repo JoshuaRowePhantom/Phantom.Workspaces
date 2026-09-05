@@ -109,10 +109,15 @@ public sealed class ViewPopulationViewModel : IAsyncDisposable
     /// </summary>
     internal void PrepareForRebuild()
     {
-        DetachQuerySubscriptions();
-        _getSubscriptions.Clear();
+        this.PrepareForIncrementalReconcile();
         this.Entities.Clear();
         this.RootEntities.Clear();
+    }
+
+    internal void PrepareForIncrementalReconcile()
+    {
+        DetachQuerySubscriptions();
+        _getSubscriptions.Clear();
     }
 
     public async ValueTask DisposeAsync()

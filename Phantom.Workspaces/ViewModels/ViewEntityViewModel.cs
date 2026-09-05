@@ -184,6 +184,13 @@ public sealed class ViewEntityViewModel : ViewModelBase
         this.HasTraversedChildren = true;
     }
 
+    internal void RefreshFromEntity()
+    {
+        this.RaisePropertyChanged(nameof(this.DisplayName));
+        this.RaisePropertyChanged(nameof(this.EntityType));
+        this.RaisePropertyChanged(nameof(this.HasShortcuts));
+    }
+
     private void OnEntityPropertyChanged(
         object? sender,
         PropertyChangedEventArgs e)
@@ -192,9 +199,7 @@ public sealed class ViewEntityViewModel : ViewModelBase
             || string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.DisplayName), System.StringComparison.Ordinal)
             || string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.EntityType), System.StringComparison.Ordinal))
         {
-            this.RaisePropertyChanged(nameof(this.DisplayName));
-            this.RaisePropertyChanged(nameof(this.EntityType));
-            this.RaisePropertyChanged(nameof(this.HasShortcuts));
+            this.RefreshFromEntity();
         }
     }
 

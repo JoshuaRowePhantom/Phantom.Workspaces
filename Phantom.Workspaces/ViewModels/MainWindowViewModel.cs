@@ -403,7 +403,9 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             if (this.SetProperty(ref this.showHiddenItems, value))
             {
-                _ = this.ApplySelectedViewAsync();
+                _ = this.UpdateSelectedViewIncrementallyAsync(
+                    changedEntityIds: null,
+                    hasQueryMembershipChanges: true);
             }
         }
     }
@@ -1376,8 +1378,171 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             return;
         }
 
-        population.PrepareForRebuild();
-        await this.PopulateViewAsync(population);
+        await this.UpdateSelectedViewIncrementallyAsync(
+            changedEntityIds: null,
+            hasQueryMembershipChanges: true,
+            targetPopulation: population);
+    }
+
+    private async Task UpdateSelectedViewIncrementallyAsync(
+        IReadOnlyCollection<EntityId>? changedEntityIds,
+        bool hasQueryMembershipChanges,
+        ViewPopulationViewModel? targetPopulation = null)
+    {
+        // The broker raises Changed on a thread-pool thread (its refresh pipeline awaits with
+        // ConfigureAwait(false)), so this reconcile can otherwise mutate view models and the broker's
+        // canonical entity map off the UI thread while the broker applies its own snapshot updates on the
+        // UI thread. Those concurrent mutations produced a preserved-reference item that intermittently
+        // never observed a later rename. Marshal the whole reconcile onto the UI thread so every view-model
+        // and entity mutation is serialized with the broker's UI-thread updates.
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            await Dispatcher.UIThread.InvokeAsync(
+                () => this.UpdateSelectedViewIncrementallyAsync(
+                    changedEntityIds,
+                    hasQueryMembershipChanges,
+                    targetPopulation));
+            return;
+        }
+
+        if ((this.selectedTopLevelView ?? EmptyView).IsEntityBrowser)
+        {
+            return;
+        }
+
+        var population = targetPopulation ?? this.currentPopulation;
+        if (!ReferenceEquals(this.currentPopulation, population)
+            || population.CancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (!hasQueryMembershipChanges)
+        {
+            this.RefreshPopulationEntityData(
+                population,
+                changedEntityIds?.Select(static id => id.ToString()).ToHashSet(StringComparer.Ordinal));
+            return;
+        }
+
+        var candidate = new ViewPopulationViewModel();
+        await this.PopulateViewAsync(candidate);
+
+        if (!ReferenceEquals(this.currentPopulation, population)
+            || population.CancellationToken.IsCancellationRequested)
+        {
+            await candidate.DisposeAsync();
+            return;
+        }
+
+        this.ReconcilePopulationInPlace(population, candidate);
+        await candidate.DisposeAsync();
+    }
+
+    private void RefreshPopulationEntityData(
+        ViewPopulationViewModel population,
+        HashSet<string>? changedEntityIds)
+    {
+        foreach (var entity in population.Entities)
+        {
+            if (changedEntityIds is not null
+                && changedEntityIds.Count > 0
+                && !changedEntityIds.Contains(entity.EntityId))
+            {
+                continue;
+            }
+
+            // A data-only update is applied by the broker to the canonical SubscribedEntityViewModel it
+            // tracks for the id. If an earlier in-place reconcile left this reused view entity wired to a
+            // different instance, RefreshFromEntity alone would observe stale data. Pull the broker's
+            // canonical (authoritative, latest) snapshot forward and adopt the reused instance as canonical
+            // so this and every future update reach the instance the UI is observing.
+            var canonical = this.entityBroker?.GetEntity(entity.Entity.EntityId);
+            if (canonical is not null && !ReferenceEquals(canonical, entity.Entity))
+            {
+                entity.Entity.UpdateSnapshot(canonical.Snapshot);
+                this.entityBroker!.AdoptCanonicalEntity(entity.Entity);
+            }
+
+            this.ProjectEntityBadges(entity.Entity);
+            entity.RefreshFromEntity();
+        }
+    }
+
+    private void ReconcilePopulationInPlace(
+        ViewPopulationViewModel population,
+        ViewPopulationViewModel candidate)
+    {
+        var existingByEntityId = population.Entities
+            .GroupBy(static entity => entity.EntityId, StringComparer.Ordinal)
+            .ToDictionary(static group => group.Key, static group => group.First(), StringComparer.Ordinal);
+        var desiredEntities = new List<ViewEntityViewModel>();
+        var desiredRoots = new List<ViewEntityViewModel>();
+
+        foreach (var candidateRoot in candidate.RootEntities)
+        {
+            var resolvedRoot = this.ResolveOrReuseViewEntity(candidateRoot, existingByEntityId);
+            desiredRoots.Add(resolvedRoot);
+            this.ReconcileNodeChildren(resolvedRoot, candidateRoot, existingByEntityId, desiredEntities);
+        }
+
+        ObservableCollectionReconciler.Merge(population.RootEntities, desiredRoots, static entity => entity.EntityId);
+        ObservableCollectionReconciler.Merge(population.Entities, desiredEntities, static entity => entity.EntityId);
+        population.ReapplyFindAfterAssembly();
+    }
+
+    private void ReconcileNodeChildren(
+        ViewEntityViewModel targetNode,
+        ViewEntityViewModel candidateNode,
+        Dictionary<string, ViewEntityViewModel> existingByEntityId,
+        List<ViewEntityViewModel> desiredEntities)
+    {
+        desiredEntities.Add(targetNode);
+        var desiredChildren = new List<ViewEntityViewModel>();
+        foreach (var candidateChild in candidateNode.Children)
+        {
+            var resolvedChild = this.ResolveOrReuseViewEntity(candidateChild, existingByEntityId);
+            desiredChildren.Add(resolvedChild);
+            this.ReconcileNodeChildren(resolvedChild, candidateChild, existingByEntityId, desiredEntities);
+        }
+
+        ObservableCollectionReconciler.Merge(targetNode.Children, desiredChildren, static entity => entity.EntityId);
+        targetNode.HasTraversedChildren = desiredChildren.Count > 0;
+    }
+
+    private ViewEntityViewModel ResolveOrReuseViewEntity(
+        ViewEntityViewModel candidate,
+        Dictionary<string, ViewEntityViewModel> existingByEntityId)
+    {
+        if (!existingByEntityId.TryGetValue(candidate.EntityId, out var existing))
+        {
+            this.ProjectEntityBadges(candidate.Entity);
+            candidate.RefreshFromEntity();
+            return candidate;
+        }
+
+        if (!ReferenceEquals(existing.Entity, candidate.Entity))
+        {
+            // The candidate came from a fresh query that produced a different SubscribedEntityViewModel
+            // instance for this entity id than the one the reused view model is wired to. Copying the
+            // candidate's snapshot is unsafe: a reconcile can be raised from a query captured before a
+            // more recent data-only update, so the candidate may be staler than the entity the UI is
+            // already showing and blindly copying it would regress the display. Pull the broker's
+            // canonical (authoritative, latest) snapshot instead, then re-register the reused instance
+            // as canonical so every future update targets the instance the UI is actually observing.
+            var canonical = this.entityBroker?.GetEntity(existing.Entity.EntityId);
+            var freshest = canonical ?? candidate.Entity;
+            if (!ReferenceEquals(freshest, existing.Entity))
+            {
+                existing.Entity.UpdateSnapshot(freshest.Snapshot);
+            }
+
+            this.entityBroker?.AdoptCanonicalEntity(existing.Entity);
+        }
+
+        this.ProjectEntityBadges(existing.Entity);
+        existing.RefreshFromEntity();
+        return existing;
     }
 
     private async Task PopulateViewAsync(ViewPopulationViewModel next)
@@ -1704,25 +1869,14 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         bool isExpanded = true,
         bool isParentContext = false)
     {
-        // Project the entity's interests (from its loaded relationships) into toggleable badge glyphs.
-        if (this.interestCatalog is { } interestCatalog && this.entityTypeCatalog is { } entityTypeCatalog)
+        this.ProjectEntityBadges(entity);
+        entity.PropertyChanged += (_, e) =>
         {
-            var session = this.entityBroker!.EntityRepository.WorkspaceEntitySession;
-            var userId = session.UserEntityId;
-            var profileId = session.UserComputerProfileEntityId;
-            entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot, userId, profileId));
-
-            // Re-project interest badges whenever the entity's snapshot changes so relationship-only
-            // updates (for example toggling an interest, which the broker now pushes live) refresh the
-            // badges without requiring the user to navigate away and back.
-            entity.PropertyChanged += (_, e) =>
+            if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
             {
-                if (string.Equals(e.PropertyName, nameof(SubscribedEntityViewModel.Snapshot), StringComparison.Ordinal))
-                {
-                    entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot, userId, profileId));
-                }
-            };
-        }
+                this.ProjectEntityBadges(entity);
+            }
+        };
 
         // Project the entity's annotated status fields into colored status badges. Discovery is
         // asynchronous (each field's status annotation is resolved through the schema), so the badges
@@ -1751,6 +1905,21 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         };
 
         return vm;
+    }
+
+    private void ProjectEntityBadges(SubscribedEntityViewModel entity)
+    {
+        if (this.interestCatalog is not { } interestCatalog
+            || this.entityTypeCatalog is not { } entityTypeCatalog
+            || this.entityBroker is not { } broker)
+        {
+            return;
+        }
+
+        var session = broker.EntityRepository.WorkspaceEntitySession;
+        var userId = session.UserEntityId;
+        var profileId = session.UserComputerProfileEntityId;
+        entity.Badges.SetBadges(InterestBadgeProjector.Project(interestCatalog, entityTypeCatalog, entity.Snapshot, userId, profileId));
     }
 
     /// <summary>
@@ -1872,22 +2041,26 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.InitializeTopLevelViews();
         }
 
-        if (navigationEntityChanged || e.HasQueryMembershipChanges)
+        if (navigationEntityChanged || e.HasQueryMembershipChanges || e.ChangedEntityIds.Count > 0)
         {
-            _ = this.ApplySelectedViewAsync();
+            _ = this.UpdateSelectedViewIncrementallyAsync(
+                e.ChangedEntityIds,
+                e.HasQueryMembershipChanges);
         }
     }
 
     private void OnInterestCatalogChanged(object? sender, EventArgs e)
     {
-        // Interest types changed - refresh the current view to update badge glyphs
-        _ = this.ApplySelectedViewAsync();
+        _ = this.UpdateSelectedViewIncrementallyAsync(
+            changedEntityIds: null,
+            hasQueryMembershipChanges: false);
     }
 
     private void OnEntityTypeCatalogChanged(object? sender, EventArgs e)
     {
-        // Entity types changed - refresh the current view to update badge filtering
-        _ = this.ApplySelectedViewAsync();
+        _ = this.UpdateSelectedViewIncrementallyAsync(
+            changedEntityIds: null,
+            hasQueryMembershipChanges: false);
     }
 
     internal async Task OpenWorkspaceAsync(
