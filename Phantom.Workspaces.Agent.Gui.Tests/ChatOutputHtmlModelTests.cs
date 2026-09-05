@@ -730,6 +730,8 @@ public sealed class ChatOutputHtmlModelTests
     [AvaloniaFact(Timeout = 15_000)]
     public async Task ToolResultMessage_CrossMessage_MatchedByCallId_InjectedIntoCallItem()
     {
+        // Two same-named calls so the target call lives inside a message-level tool group; the
+        // cross-message result must still be matched by CallId and injected into the grouped row.
         var history = new ObservableCollection<AgentChatHistoryItem>
         {
             new()
@@ -737,26 +739,54 @@ public sealed class ChatOutputHtmlModelTests
                 Role = ChatRole.Assistant,
                 Contents = [new FunctionCallContent("call-1", "my_tool")],
             },
+            new()
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new FunctionCallContent("call-2", "my_tool")],
+            },
         };
         var sink = new RecordingSink();
         using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
         await model.HistoryLoaded;
+
+        // Confirm the target call really is inside a message-level tool group, and capture the
+        // ids that exist in the materialized group DOM.
+        var domIds = new HashSet<string>();
+        var sawGroup = false;
+        foreach (var op in sink.Operations.Where(o => o.Kind == "update"))
+        {
+            if (op.Content.Contains("chat-tool-group-body"))
+            {
+                sawGroup = true;
+            }
+
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(op.Content, "id=\"([^\"]+)\""))
+            {
+                domIds.Add(m.Groups[1].Value);
+            }
+        }
+
+        Assert.True(sawGroup, "Expected the calls to be coalesced into a message-level tool group.");
         sink.Clear();
 
         history.Add(new AgentChatHistoryItem
         {
             Role = ChatRole.Tool,
-            Contents = [new FunctionResultContent("call-1", "\"result data\"")],
+            Contents = [new FunctionResultContent("call-2", "\"result data\"")],
         });
 
         var contentOps = sink.ContentOperations;
 
-        // The call message should be updated (Replace) to include the result sub-detail.
+        // The grouped call row should be updated (Replace) to include the result sub-detail.
         var updateOp = contentOps.FirstOrDefault(op =>
             op.Location == ChatOutputUpdateLocation.Replace &&
-            op.Content.Contains("chat-tool-group-item"));
+            op.Content.Contains("chat-tool-group-item") &&
+            op.Content.Contains("chat-tool-result"));
         Assert.NotNull(updateOp);
-        Assert.Contains("chat-tool-result", updateOp.Content);
+
+        // The injection must target a row that exists inside the already-built group, so the result
+        // is not stranded outside the pre-rendered group HTML.
+        Assert.True(domIds.Contains(updateOp!.Path), $"Result targeted missing id '{updateOp.Path}'.");
 
         // No standalone "tool result:" element should appear as a separate DOM operation.
         Assert.DoesNotContain(contentOps, op => op.Content.Contains("tool result:"));
@@ -3246,24 +3276,33 @@ public sealed class ChatOutputHtmlModelTests
     [Fact]
     public void CoalescedToolCalls_ListEachInvocationWithNameArgsAndResult()
     {
+        // Includes two same-named ("read_file") invocations to assert same-name multiplicity:
+        // each same-named call must render as its own row with its own CallId-matched result.
         var snapshot = new List<AgentChatHistoryItem>
         {
             ToolCallMessage("read_file", "c1"),
             new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c1", "file contents")] },
-            ToolCallMessage("write_file", "c2"),
-            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c2", "ok")] },
+            ToolCallMessage("read_file", "c2"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c2", "OTHER-FILE-CONTENTS")] },
+            ToolCallMessage("write_file", "c3"),
+            new() { Role = ChatRole.Tool, Contents = [new FunctionResultContent("c3", "ok")] },
         };
         var sink = new RecordingSink();
         var plan = BuildPlan(snapshot, sink);
 
         var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
 
-        // Each tool invocation present as its own chat-tool-group-item.
-        Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group-item").Count);
+        // Each tool invocation present as its own chat-tool-group-item — same-named calls are NOT
+        // collapsed into a single row.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group-item").Count);
         Assert.Contains("read_file", html);
         Assert.Contains("write_file", html);
-        // Results injected.
+        // The group count reflects the true number of calls, not the de-duplicated name list.
+        Assert.Contains("3 calls", html);
+        // Every result injected, including both same-named-call results (distinct by CallId).
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-result").Count);
         Assert.Contains("file contents", html);
+        Assert.Contains("OTHER-FILE-CONTENTS", html);
     }
 
     [Fact]
@@ -3533,5 +3572,110 @@ public sealed class ChatOutputHtmlModelTests
 
         Assert.Contains("<span>assistant</span>", html);
         Assert.DoesNotContain("chat-header-suppressed", html);
+    }
+
+    // ── #1448 — grouped same-name tool calls keep per-call results when results
+    // stream in a separate message (correlation strictly by CallId, never by Name) ─────
+
+    [Fact]
+    public void ToolCallGroup_SameNameMultipleCalls_ResultsFromSeparateMessage_EachCallShowsResult()
+    {
+        // Three same-named calls form a message-level group; their results arrive in a single
+        // SEPARATE tool message. Each call row must render with its own CallId-matched result.
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            ToolCallMessage("issue_write", "c1"),
+            ToolCallMessage("issue_write", "c2"),
+            ToolCallMessage("issue_write", "c3"),
+            new()
+            {
+                Role = ChatRole.Tool,
+                Contents =
+                [
+                    new FunctionResultContent("c1", "RES-ALPHA"),
+                    new FunctionResultContent("c2", "RES-BETA"),
+                    new FunctionResultContent("c3", "RES-GAMMA"),
+                ],
+            },
+        };
+        var sink = new RecordingSink();
+        var plan = BuildPlan(snapshot, sink);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // Grouped as one collapsed frame with the true call count (not the de-duplicated name count).
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        Assert.Contains("3 calls", html);
+
+        // Each same-named call keeps its own result — three distinct result rows, one per CallId.
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-result").Count);
+        Assert.Contains("RES-ALPHA", html);
+        Assert.Contains("RES-BETA", html);
+        Assert.Contains("RES-GAMMA", html);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ToolCallGroup_ResultsInjectedAfterGroupBuilt_AreCorrelatedByCallId()
+    {
+        // The group is materialized first (results unknown); results are injected AFTER via a
+        // separate message. Each injected result must land on its own CallId-matched call row —
+        // regardless of render order, and never keyed by the (identical) tool Name.
+        var history = new ObservableCollection<AgentChatHistoryItem>
+        {
+            ToolCallMessage("issue_write", "c1"),
+            ToolCallMessage("issue_write", "c2"),
+            ToolCallMessage("issue_write", "c3"),
+        };
+        var sink = new RecordingSink();
+        using var model = new ChatOutputHtmlModel(history, new ObservableCollection<AgentChatRunningItem>(), () => true, sink);
+        await model.HistoryLoaded;
+
+        // Collect the ids that actually exist in the materialized group DOM.
+        var domIds = new HashSet<string>();
+        foreach (var op in sink.Operations.Where(o => o.Kind == "update"))
+        {
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(op.Content, "id=\"([^\"]+)\""))
+            {
+                domIds.Add(m.Groups[1].Value);
+            }
+        }
+
+        sink.Clear();
+
+        history.Add(new AgentChatHistoryItem
+        {
+            Role = ChatRole.Tool,
+            Contents =
+            [
+                new FunctionResultContent("c1", "RES-ALPHA"),
+                new FunctionResultContent("c2", "RES-BETA"),
+                new FunctionResultContent("c3", "RES-GAMMA"),
+            ],
+        });
+
+        var contentOps = sink.ContentOperations;
+        var perCall = new (string CallResult, string OtherA, string OtherB)[]
+        {
+            ("RES-ALPHA", "RES-BETA", "RES-GAMMA"),
+            ("RES-BETA", "RES-ALPHA", "RES-GAMMA"),
+            ("RES-GAMMA", "RES-ALPHA", "RES-BETA"),
+        };
+
+        foreach (var (callResult, otherA, otherB) in perCall)
+        {
+            var op = contentOps.FirstOrDefault(o =>
+                o.Location == ChatOutputUpdateLocation.Replace &&
+                o.Content.Contains(callResult) &&
+                o.Content.Contains("chat-tool-result"));
+            Assert.NotNull(op);
+
+            // The injection must target an element that exists inside the already-built group,
+            // otherwise the result is stranded outside the pre-rendered group HTML.
+            Assert.True(domIds.Contains(op!.Path), $"Result {callResult} targeted missing id '{op.Path}'.");
+
+            // Strict CallId correlation: a same-named call's row carries ONLY its own result.
+            Assert.DoesNotContain(otherA, op.Content);
+            Assert.DoesNotContain(otherB, op.Content);
+        }
     }
 }

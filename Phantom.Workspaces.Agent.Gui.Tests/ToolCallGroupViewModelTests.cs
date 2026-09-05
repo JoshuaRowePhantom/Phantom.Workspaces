@@ -119,4 +119,45 @@ public sealed class ToolCallGroupViewModelTests
         var replaceOps = sink.Operations.Where(op => op.Location == ChatOutputUpdateLocation.Replace).ToList();
         Assert.Contains(replaceOps, op => op.Content.Contains("chat-tool-group"));
     }
+
+    [Fact]
+    public void ToolCallGroup_SameNameCalls_ResultsNotCollapsedToSingleRow()
+    {
+        // N invocations of the SAME tool name, each with a distinct CallId, and results delivered
+        // in a separate tool message. They must produce N distinct result rows correlated strictly
+        // by CallId — never one shared/duplicated result row.
+        var snapshot = new List<AgentChatHistoryItem>
+        {
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c1", "issue_write")] },
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c2", "issue_write")] },
+            new() { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("c3", "issue_write")] },
+            new()
+            {
+                Role = ChatRole.Tool,
+                Contents =
+                [
+                    new FunctionResultContent("c1", "RES-ONE"),
+                    new FunctionResultContent("c2", "RES-TWO"),
+                    new FunctionResultContent("c3", "RES-THREE"),
+                ],
+            },
+        };
+        var sink = new RecordingSink();
+        var plan = ChatOutputHtmlModel.BuildHistoryRenderPlan(snapshot, sink, () => true);
+
+        var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
+
+        // One collapsed group, three distinct call rows and three distinct result rows.
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group\""));
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-group-item").Count);
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Matches(html, "chat-tool-result").Count);
+
+        // Every per-call result is present and distinct (not collapsed to a single value).
+        Assert.Contains("RES-ONE", html);
+        Assert.Contains("RES-TWO", html);
+        Assert.Contains("RES-THREE", html);
+
+        // Count badge reflects the true number of calls; the display name is de-duplicated.
+        Assert.Contains("3 calls", html);
+    }
 }
