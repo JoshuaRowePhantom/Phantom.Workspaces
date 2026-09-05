@@ -53,6 +53,27 @@
       "description": "Parameter values supplied when this session was created. Keyed by parameter name; all values are strings. The well-known key `working-directory` (kind: string) sets the working directory forwarded to the agent process; supported by the `github-copilot` and `workspaces` manifests.",
       "additionalProperties": { "type": "string" }
     },
+    "parameter-selections": {
+      "type": "object",
+      "description": "NEW (#1434/#1437, per-component-executor-binding, M7). Typed launch-parameter selections keyed by parameter name; each value is a structured JSON selection object (e.g. an `executor` parameter records `{\"trust-profile\":\"<name-or-id>\"}` or `{\"user-computer-profile\":\"<entity-id>\"}`). This is a sibling of the `string->string` `parameter-values` text-templating map; the executor selection is NOT stored as a JSON-encoded string in `parameter-values`, which stays string-only.",
+      "additionalProperties": true
+    },
+    "executor-bindings": {
+      "type": "object",
+      "description": "NEW (#1437, per-component-executor-binding). The resolved executors for this session, so the topology reconstructs on resume. Every value is a transport connection-descriptor object (the same type-discriminated JSON consumed by ITransportFactory.ConnectToAsync: `local`, `user-computer-profile`, `http`, `reverse-http`, ...) - there is NO parallel executor schema. Back-compat (on read): if `session` is absent but `host-profile-entity-id` is present, the session executor is derived as `{\"type\":\"user-computer-profile\",\"entity-id\":<that id>}`.",
+      "properties": {
+        "session": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "The explicit overall session executor connection-descriptor (default `{\"type\":\"local\"}`); per-component executors override it."
+        },
+        "components": {
+          "type": "object",
+          "additionalProperties": { "type": "object", "additionalProperties": true },
+          "description": "Per-executor map of executor name -> resolved connection-descriptor object (never a bare client-instance string)."
+        }
+      }
+    },
     "auto-resume": {
       "type": "object",
       "description": "When present, the identified trusted executor will automatically resume this agent session on startup, sending the configured resume prompt as the opening message.",

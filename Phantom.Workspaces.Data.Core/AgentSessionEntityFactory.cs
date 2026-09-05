@@ -34,7 +34,8 @@ public static class AgentSessionEntityFactory
 
     /// <summary>
     /// Authors the agent-session entity document (names, display name, source-definition reference,
-    /// session id, and optional parameter-values / host-profile) as a JSON-safe <see cref="JsonElement"/>.
+    /// session id, optional parameter-values / host-profile, and the #1437 executor-bindings +
+    /// typed parameter-selections keys) as a JSON-safe <see cref="JsonElement"/>.
     /// </summary>
     public static JsonElement CreateEntityData(
         EntityId agentDefinitionEntityId,
@@ -44,7 +45,10 @@ public static class AgentSessionEntityFactory
         DateTimeOffset currentTime,
         string computerName,
         IReadOnlyDictionary<string, string>? parameterValues = null,
-        EntityId? hostProfileEntityId = null)
+        EntityId? hostProfileEntityId = null,
+        JsonElement? sessionExecutor = null,
+        JsonElement? executorComponentBindings = null,
+        IReadOnlyDictionary<string, JsonElement>? parameterSelections = null)
     {
         var entityId = new EntityId();
 
@@ -88,6 +92,46 @@ public static class AgentSessionEntityFactory
         if (hostProfileEntityId is { } profileId && profileId != default)
         {
             root["host-profile-entity-id"] = profileId.ToString();
+        }
+
+        // NEW (#1437): the typed executor selections and resolved executor bindings. parameter-selections
+        // is a sibling of the string->string parameter-values map (M7); executor-bindings carries the
+        // explicit session executor plus per-component connection-descriptor objects (M6). All values are
+        // authored via JsonNode so the JsonElement descriptors round-trip verbatim.
+        if (parameterSelections is { Count: > 0 })
+        {
+            var parameterSelectionsObject = new JsonObject();
+            foreach (var parameterSelection in parameterSelections)
+            {
+                parameterSelectionsObject[parameterSelection.Key] =
+                    JsonNode.Parse(parameterSelection.Value.GetRawText());
+            }
+
+            root["parameter-selections"] = parameterSelectionsObject;
+        }
+
+        var hasComponentBindings = executorComponentBindings is { ValueKind: JsonValueKind.Object } componentsProbe
+            && componentsProbe.EnumerateObject().Any();
+        if (sessionExecutor is { } || hasComponentBindings)
+        {
+            var executorBindings = new JsonObject
+            {
+                [AgentSessionExecutorBindings.SessionKey] = sessionExecutor is { } session
+                    ? JsonNode.Parse(session.GetRawText())
+                    : new JsonObject { ["type"] = AgentSessionExecutorBindings.LocalDescriptorType },
+            };
+
+            var components = new JsonObject();
+            if (executorComponentBindings is { ValueKind: JsonValueKind.Object } componentsElement)
+            {
+                foreach (var component in componentsElement.EnumerateObject())
+                {
+                    components[component.Name] = JsonNode.Parse(component.Value.GetRawText());
+                }
+            }
+
+            executorBindings[AgentSessionExecutorBindings.ComponentsKey] = components;
+            root[AgentSessionExecutorBindings.RootKey] = executorBindings;
         }
 
         return JsonSerializer.Deserialize<JsonElement>(root.ToJsonString());
