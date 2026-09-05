@@ -9,14 +9,17 @@ public sealed class ToolFilteringAIContextProvider : AIContextProvider
     private readonly string stateKey = $"tool-filtering:{Guid.NewGuid():n}";
     private readonly AIContextProvider provider;
     private readonly Func<AITool, bool> isEnabled;
+    private readonly Func<bool>? isProviderEnabled;
 
     public ToolFilteringAIContextProvider(
         AIContextProvider provider,
-        Func<AITool, bool> isEnabled)
+        Func<AITool, bool> isEnabled,
+        Func<bool>? isProviderEnabled = null)
         : base(null, null, null)
     {
         this.provider = provider ?? throw new ArgumentNullException(nameof(provider));
         this.isEnabled = isEnabled ?? throw new ArgumentNullException(nameof(isEnabled));
+        this.isProviderEnabled = isProviderEnabled;
     }
 
     public override IReadOnlyList<string> StateKeys => [this.stateKey];
@@ -26,6 +29,14 @@ public sealed class ToolFilteringAIContextProvider : AIContextProvider
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+
+        // Consult the SERVER node's enabled state (ToolStateNode.IsEnabled) BEFORE invoking the inner
+        // provider. A disabled or failure-latched server node means no connect, no OAuth browser
+        // launch, and no per-message retry (issue #1447).
+        if (this.isProviderEnabled is { } serverEnabled && !serverEnabled())
+        {
+            return new AIContext { Tools = [] };
+        }
 
         AIContext underlyingContext;
         try

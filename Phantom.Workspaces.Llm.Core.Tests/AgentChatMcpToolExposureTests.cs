@@ -47,6 +47,7 @@ public sealed class AgentChatMcpToolExposureTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("test-mcp", server.BoundUrl.ToString())));
         await using var _chat = chat;
+        await chat.Initialization;
 
         var diagnosticTools = ParseLoadedToolsDiagnostic(chat);
         Assert.NotEmpty(diagnosticTools);
@@ -88,6 +89,7 @@ public sealed class AgentChatMcpToolExposureTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("test-mcp", server.BoundUrl.ToString())));
         await using var _chat = chat;
+        await chat.Initialization;
 
         var pingNode = chat.Tools
             .SelectMany(root => root.Children)
@@ -121,6 +123,7 @@ public sealed class AgentChatMcpToolExposureTests
             """;
         var (chat, client) = await CreateChatAsync(agentJson);
         await using var _chat = chat;
+        await chat.Initialization;
 
         var toolNames = await ExposedToolNamesAsync(chat, client);
 
@@ -134,6 +137,7 @@ public sealed class AgentChatMcpToolExposureTests
         // A refused endpoint makes the MCP server fail to open at enumeration time.
         var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("bad-mcp", "http://127.0.0.1:1")));
         await using var _chat = chat;
+        await chat.Initialization;
 
         var diagnostics = chat.History.Select(DiagnosticText).ToArray();
         Assert.Contains(diagnostics, text => text.Contains("Failed to open MCP server 'bad-mcp'", StringComparison.Ordinal));
@@ -212,6 +216,78 @@ public sealed class AgentChatMcpToolExposureTests
         Assert.DoesNotContain("SECRET-AUTH-CODE", diagnostic, StringComparison.Ordinal);
         Assert.DoesNotContain("SECRET-CODE-VERIFIER", diagnostic, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task AgentChat_WithFailedMcpServer_DisablesServerNodeAndDoesNotReinvokeProvider()
+    {
+        // A refused endpoint makes the MCP server fail to open at enumeration time.
+        var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("bad-mcp", "http://127.0.0.1:1")));
+        await using var _chat = chat;
+        await chat.Initialization;
+
+        // Failed init marks the server ToolStateNode disabled (issue #1447).
+        var serverNode = Assert.Single(chat.Tools);
+        Assert.False(serverNode.IsEnabled);
+        Assert.Empty(serverNode.Children);
+
+        // The provider latched its terminal failure, so a subsequent turn will not reconnect.
+        var provider = GetRegistrationProviders(chat).OfType<McpToolContextProvider>().Single();
+        Assert.True(GetInitializationFailed(provider));
+
+        // A second turn exposes no tools and does not throw (graceful degradation preserved).
+        var toolNames = await ExposedToolNamesAsync(chat, client);
+        Assert.DoesNotContain(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
+        Assert.True(GetInitializationFailed(provider));
+    }
+
+    [Fact]
+    public async Task AgentChat_WithDisabledMcpServerNode_ProviderNeverInvoked()
+    {
+        await using var server = await TestMcpServerProcess.StartAsync();
+        var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("test-mcp", server.BoundUrl.ToString())));
+        await using var _chat = chat;
+        await chat.Initialization;
+
+        // Disable the SERVER node (not a leaf sub-tool) via SetToolEnabledAsync.
+        var serverNode = Assert.Single(chat.Tools);
+        Assert.True(serverNode.IsEnabled);
+        await chat.SetToolEnabledAsync(serverNode.Id, enabled: false);
+        Assert.False(chat.Tools.Single().IsEnabled);
+
+        // With the server node disabled, its wrapped provider is gated off and exposes no tools.
+        var toolNames = await ExposedToolNamesAsync(chat, client);
+        Assert.DoesNotContain(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AgentChat_ReenablingFailedMcpServer_ResetsProviderAndRetriesOnce()
+    {
+        var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("bad-mcp", "http://127.0.0.1:1")));
+        await using var _chat = chat;
+        await chat.Initialization;
+
+        var serverNode = Assert.Single(chat.Tools);
+        Assert.False(serverNode.IsEnabled);
+
+        var provider = GetRegistrationProviders(chat).OfType<McpToolContextProvider>().Single();
+        Assert.True(GetInitializationFailed(provider));
+
+        // Re-enabling the server flips IsEnabled back to true AND clears the terminal-failure latch
+        // (ResetInitialization) so exactly one fresh attempt runs next turn (issue #1447).
+        await chat.SetToolEnabledAsync(serverNode.Id, enabled: true);
+        Assert.True(chat.Tools.Single().IsEnabled);
+        Assert.False(GetInitializationFailed(provider));
+
+        // The next turn makes one fresh connect attempt, which fails again and re-latches.
+        var toolNames = await ExposedToolNamesAsync(chat, client);
+        Assert.DoesNotContain(toolNames, name => string.Equals(name, "ping", StringComparison.OrdinalIgnoreCase));
+        Assert.True(GetInitializationFailed(provider));
+    }
+
+    private static bool GetInitializationFailed(McpToolContextProvider provider)
+        => (bool)typeof(McpToolContextProvider)
+            .GetField("initializationFailed", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(provider)!;
 
     private static string BuildMcpAgentJson((string ServerName, string Endpoint) server)
         => $$"""

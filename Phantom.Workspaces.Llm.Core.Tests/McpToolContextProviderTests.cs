@@ -1,6 +1,11 @@
 using AgentSchema;
+using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Transport;
+using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Mcp;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -144,5 +149,116 @@ public sealed class McpToolContextProviderTests
         Assert.Same(sentinel, result);
         Assert.Single(overridesSeen);
         Assert.Null(overridesSeen[0]);
+    }
+
+    // --- issue #1447: terminal-failure latch on the provider instance -----------------------------
+
+    [Fact]
+    public async Task McpToolContextProvider_InitFailure_MarksTerminalAndNotRetriedOnNextInvocation()
+    {
+        var attempts = 0;
+        var provider = CreateProvider(_ =>
+        {
+            attempts++;
+            throw new McpException("connect failed");
+        });
+        await using var disposable = provider;
+
+        // First invocation attempts the connect, which fails and sets the terminal latch.
+        await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
+
+        // The second invocation short-circuits on the latch and must NOT retry the connect.
+        var tools = await InvokeAsync(provider);
+
+        Assert.Empty(tools);
+        Assert.Equal(1, attempts);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_SuccessfulInit_CachesSingleClientAcrossInvocations()
+    {
+        var attempts = 0;
+        var sampleTool = AIFunctionFactory.Create(() => "ok", "sampleTool");
+        var provider = CreateProvider(_ =>
+        {
+            attempts++;
+            return Task.FromResult<AITool[]>([sampleTool]);
+        });
+        await using var disposable = provider;
+
+        var first = await InvokeAsync(provider);
+        var second = await InvokeAsync(provider);
+
+        // A successful init is cached: the connect ran exactly once, and tools are still returned.
+        Assert.Equal(1, attempts);
+        Assert.Single(first);
+        Assert.Single(second);
+        Assert.Equal("sampleTool", second[0].Name);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_TerminalFailure_DoesNotRelaunchOAuthRedirect()
+    {
+        var redirectLaunches = 0;
+        var provider = CreateProvider(_ =>
+        {
+            // Model the OAuth authorization-code flow launching the browser redirect, then failing.
+            redirectLaunches++;
+            throw new McpException("authorization failed");
+        });
+        await using var disposable = provider;
+
+        await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
+        _ = await InvokeAsync(provider);
+        _ = await InvokeAsync(provider);
+
+        // The redirect (browser relaunch) fires at most once despite repeated invocations.
+        Assert.Equal(1, redirectLaunches);
+    }
+
+    [Fact]
+    public async Task McpToolContextProvider_ResetInitialization_ClearsFailureAndAllowsOneNewAttempt()
+    {
+        var attempts = 0;
+        var provider = CreateProvider(_ =>
+        {
+            attempts++;
+            throw new McpException("connect failed");
+        });
+        await using var disposable = provider;
+
+        await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
+        Assert.Equal(1, attempts);
+
+        // Latched: further invocations do not retry.
+        _ = await InvokeAsync(provider);
+        Assert.Equal(1, attempts);
+
+        provider.ResetInitialization();
+
+        // Exactly one fresh attempt is made after reset (it fails again and re-latches).
+        await Assert.ThrowsAsync<McpException>(() => InvokeAsync(provider));
+        Assert.Equal(2, attempts);
+
+        _ = await InvokeAsync(provider);
+        Assert.Equal(2, attempts);
+    }
+
+    private static McpToolContextProvider CreateProvider(Func<CancellationToken, Task<AITool[]>> initialize)
+        => new(
+            OAuthTool(),
+            NullLoggerFactory.Instance,
+            ExecutorTarget.AgentExecutor,
+            services: null,
+            initializeOverride: initialize);
+
+    private static async Task<AITool[]> InvokeAsync(McpToolContextProvider provider)
+    {
+        var agent = new ChatClientAgent(new EchoChatClient(), new ChatClientAgentOptions
+        {
+            UseProvidedChatClientAsIs = true,
+        });
+        var session = await agent.CreateSessionAsync(CancellationToken.None);
+        return await AIContextProviderToolReader.GetToolsAsync(provider, agent, session, CancellationToken.None);
     }
 }

@@ -351,7 +351,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            .Where(registration => registration.Provider is not null)
            .Select(registration => new ToolFilteringAIContextProvider(
                registration.Provider!,
-               this.IsToolEnabledForRuntime))
+               this.IsToolEnabledForRuntime,
+               this.CreateProviderEnabledGate(registration)))
            .ToArray();
 
        this.chatClientAgent = new ChatClientAgent(streamingMiddleware, this.chatOptions);
@@ -662,6 +663,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         try
         {
             var changed = false;
+            string? reenabledServerId = null;
             lock (this.toolsLock)
             {
                 if (!this.toolIndex.TryGetValue(toolId, out var node))
@@ -674,11 +676,24 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 {
                     RecomputeAncestorEnabled(node.Parent);
                 }
+
+                if (enabled && node.Parent is null && string.Equals(node.Kind, "mcp", StringComparison.Ordinal))
+                {
+                    reenabledServerId = node.Id;
+                }
             }
 
             if (!changed)
             {
                 return;
+            }
+
+            // Re-enabling an MCP server clears its provider's terminal-failure latch so exactly one
+            // fresh connection attempt is made on the next turn (issue #1447). A healthy provider is
+            // left untouched by ResetInitialization.
+            if (reenabledServerId is not null)
+            {
+                this.ResetMcpServerProvider(reenabledServerId);
             }
 
             this.ToolsChanged?.Invoke(this, EventArgs.Empty);
@@ -2982,6 +2997,57 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 node.IsEnabled
                 && node.RuntimeTool is not null
                 && string.Equals(node.RuntimeTool.Name, tool.Name, StringComparison.Ordinal));
+        }
+    }
+
+    /// <summary>
+    /// Builds the optional server-level enabled gate consulted by
+    /// <see cref="ToolFilteringAIContextProvider"/> before it invokes the wrapped provider. For an
+    /// MCP registration this reports the owning server <c>ToolStateNode.IsEnabled</c> so a disabled or
+    /// failure-latched server is never connected/invoked on subsequent turns (issue #1447). Non-MCP
+    /// registrations return <c>null</c> (no server-level gate; only the per-tool name filter applies).
+    /// </summary>
+    private Func<bool>? CreateProviderEnabledGate(RuntimeContextProviderRegistration registration)
+    {
+        if (registration.Tool is not McpTool mcpTool)
+        {
+            return null;
+        }
+
+        var serverId = BuildMcpServerToolId(
+            string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName);
+        return () =>
+        {
+            lock (this.toolsLock)
+            {
+                // Before the tool tree is first built the server node is absent; treat that as enabled
+                // so the single initial connection attempt proceeds. Once the node exists, honor its
+                // IsEnabled — false for a user-disabled server or one whose init failed (issue #1447).
+                return !this.toolIndex.TryGetValue(serverId, out var node) || node.IsEnabled;
+            }
+        };
+    }
+
+    /// <summary>
+    /// Clears the terminal-failure latch on the <see cref="McpToolContextProvider"/> that owns the
+    /// server node with <paramref name="serverId"/>, so that re-enabling a failed MCP server makes
+    /// exactly one fresh connection attempt on the next turn (issue #1447).
+    /// </summary>
+    private void ResetMcpServerProvider(string serverId)
+    {
+        foreach (var registration in this.runtimeContextProviderRegistrations)
+        {
+            if (registration.Tool is McpTool mcpTool
+                && registration.Provider is McpToolContextProvider mcpProvider)
+            {
+                var candidateId = BuildMcpServerToolId(
+                    string.IsNullOrWhiteSpace(mcpTool.ServerName) ? mcpTool.Name : mcpTool.ServerName);
+                if (string.Equals(candidateId, serverId, StringComparison.Ordinal))
+                {
+                    mcpProvider.ResetInitialization();
+                    return;
+                }
+            }
         }
     }
 
