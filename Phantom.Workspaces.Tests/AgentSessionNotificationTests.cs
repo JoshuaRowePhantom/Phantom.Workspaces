@@ -1,9 +1,12 @@
 using Avalonia.Headless.XUnit;
 using System;
 using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using AgentSchema;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
@@ -479,6 +482,331 @@ public sealed class AgentSessionNotificationTests
             Assert.DoesNotContain(notificationService.Calls, call =>
                 call.TabDescriptor.WorkspaceId == "stale-active-pane");
         }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // #1451: Resume-notification suppression tests. These drive the restore window deterministically
+    // via a controllable HistoryPopulated gate (SetHistoryPopulatedForTest) and control running
+    // state via DeterministicTestChatClient — no timing/sleeps.
+    // ---------------------------------------------------------------------------------------------
+
+    private static async Task<(AgentChat Chat, DeterministicTestChatClient Client)> CreateControllableAgentChatAsync()
+    {
+        var client = new DeterministicTestChatClient();
+        var agentDefinition = AgentDefinitionLoader.LoadAgentFromJson(EchoAgentDefinitionJson);
+        var chat = await AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
+        {
+            AgentDefinition = agentDefinition,
+            AgentServices = new AgentServices { ChatClientOverride = client },
+        });
+        return (chat, client);
+    }
+
+    private static async Task WaitForRunningItemsNonEmptyAsync(AgentChat chat)
+    {
+        var runningItems = chat.RunningItems;
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (runningItems.Count > 0)
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        ((INotifyCollectionChanged)runningItems).CollectionChanged += OnCollectionChanged;
+        try
+        {
+            if (runningItems.Count > 0)
+            {
+                return;
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            timeoutCts.Token.Register(() => tcs.TrySetCanceled());
+            await tcs.Task;
+        }
+        finally
+        {
+            ((INotifyCollectionChanged)runningItems).CollectionChanged -= OnCollectionChanged;
+        }
+    }
+
+    // Completes once the agent view model has raised (and thus its earlier-subscribed tab handler has
+    // processed) an IsChatRunning transition to the desired value. Because the tab subscribes to
+    // PropertyChanged before this test handler, when this completes the tab has already observed the
+    // same edge.
+    private static async Task WaitForChatRunningAsync(AgentViewModel vm, bool desired)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void Handler(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(AgentViewModel.IsChatRunning) && vm.IsChatRunning == desired)
+            {
+                tcs.TrySetResult();
+            }
+        }
+
+        vm.PropertyChanged += Handler;
+        try
+        {
+            if (vm.IsChatRunning == desired)
+            {
+                return;
+            }
+
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            timeoutCts.Token.Register(() => tcs.TrySetCanceled());
+            await tcs.Task;
+        }
+        finally
+        {
+            vm.PropertyChanged -= Handler;
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ResumedSession_RestoredIdle_DoesNotRaiseNotification()
+    {
+        // A persisted session that rehydrates to idle must raise no notification on open.
+        await using var agentChat = await CreateEchoAgentChatAsync();
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "resume-idle",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+
+        tab.SetReady(agentViewModel, loggerFactory);
+        await tab.RestoreSettledTask;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Empty(notificationService.Calls);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ResumedSession_RestoreTimeRunningTransition_IsSuppressed()
+    {
+        // A 0 -> N -> 0 running-state change occurring while the session is still restoring must
+        // produce no Running/Completed/Interrupted notification.
+        var (agentChat, client) = await CreateControllableAgentChatAsync();
+        await using var chatScope = agentChat;
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        // Hold the restore window open by gating HistoryPopulated on a task we control.
+        var historyGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        agentViewModel.SetHistoryPopulatedForTest(historyGate.Task);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "resume-transition",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        // Drive a genuine 0 -> N -> 0 while the window is still open (isRestoring == true).
+        var stream = client.EnqueueStreamingResponse();
+        agentChat.EnqueueUserMessage("restore-run");
+        await WaitForChatRunningAsync(agentViewModel, desired: true);
+
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "done"));
+        stream.Complete();
+        await WaitForChatRunningAsync(agentViewModel, desired: false);
+
+        // Now close the restore window and let it settle.
+        historyGate.SetResult();
+        await tab.RestoreSettledTask;
+
+        lock (notificationService.Calls)
+        {
+            Assert.Empty(notificationService.Calls);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ResumedSession_PersistedWhileRunning_SettlesWithoutInterruptedNotification()
+    {
+        // A session restored with running items already present, settling to idle during restore,
+        // must not emit an Interrupted/Completed Interesting notification.
+        var (agentChat, client) = await CreateControllableAgentChatAsync();
+        await using var chatScope = agentChat;
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        // Session is mid-run when rehydrated: start (and hold) a run BEFORE SetReady so the tab seeds
+        // from a running state. Keep the restore window open via the history gate.
+        var historyGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        agentViewModel.SetHistoryPopulatedForTest(historyGate.Task);
+
+        var stream = client.EnqueueStreamingResponse();
+        agentChat.EnqueueUserMessage("mid-run");
+        await WaitForRunningItemsNonEmptyAsync(agentChat);
+        Assert.True(agentViewModel.IsChatRunning);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "resume-mid-run",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        // The persisted run finishes while still restoring: N -> 0 must be suppressed.
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "done"));
+        stream.Complete();
+        await WaitForChatRunningAsync(agentViewModel, desired: false);
+
+        historyGate.SetResult();
+        await tab.RestoreSettledTask;
+
+        lock (notificationService.Calls)
+        {
+            Assert.DoesNotContain(notificationService.Calls, call =>
+                call.NotificationState == NotificationState.Interesting);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task ResumedSession_AfterRestoreCompletes_NewUserRunRaisesNotification()
+    {
+        // Guard against over-suppression: once restore completes, a genuinely new user-initiated run
+        // must still raise the expected Running notification.
+        var (agentChat, client) = await CreateControllableAgentChatAsync();
+        await using var chatScope = agentChat;
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "post-restore-run",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+        await tab.RestoreSettledTask;
+
+        // A brand-new user run after restore settles.
+        var runningTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Running
+                && notification.NotificationState == NotificationState.Interesting
+                && notification.TabDescriptor.TabId == "post-restore-run")
+            {
+                runningTcs.TrySetResult();
+            }
+        };
+
+        var stream = client.EnqueueStreamingResponse();
+        agentChat.EnqueueUserMessage("new-run");
+
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            cts.Token.Register(() => runningTcs.TrySetCanceled());
+            await runningTcs.Task;
+        }
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running
+                && call.NotificationState == NotificationState.Interesting
+                && call.TabDescriptor.TabId == "post-restore-run");
+        }
+
+        stream.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "done"));
+        stream.Complete();
+        await WaitForRunningItemsEmptyAsync(agentChat);
+    }
+
+    [AvaloniaFact]
+    public async Task SetReady_SeedsWasRunningFromSettledState_NoInitialTransitionNotification()
+    {
+        // A session seeded running at SetReady but settling to idle must re-baseline wasRunning from
+        // the settled (idle) state: the phantom N -> 0 restore edge raises nothing, and a subsequent
+        // genuine run is correctly detected as a 0 -> N edge (proving the baseline is idle).
+        var (agentChat, client) = await CreateControllableAgentChatAsync();
+        await using var chatScope = agentChat;
+        var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(agentChat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+
+        var historyGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        agentViewModel.SetHistoryPopulatedForTest(historyGate.Task);
+
+        // Running at SetReady (transient restore-time running state).
+        var stream1 = client.EnqueueStreamingResponse();
+        agentChat.EnqueueUserMessage("mid-run");
+        await WaitForRunningItemsNonEmptyAsync(agentChat);
+        Assert.True(agentViewModel.IsChatRunning);
+
+        var notificationService = new FakeNotificationService { ActiveTabId = "other-tab" };
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = "seed-settled",
+            Title = "Agent",
+            NotificationService = notificationService,
+        };
+        tab.SetReady(agentViewModel, loggerFactory);
+
+        // The transient run settles to idle while restoring (phantom N -> 0 — must be suppressed).
+        stream1.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "done"));
+        stream1.Complete();
+        await WaitForChatRunningAsync(agentViewModel, desired: false);
+
+        historyGate.SetResult();
+        await tab.RestoreSettledTask;
+
+        // No phantom restore edge produced a notification.
+        lock (notificationService.Calls)
+        {
+            Assert.Empty(notificationService.Calls);
+        }
+
+        // A subsequent genuine run must be detected as a fresh 0 -> N edge (baseline is idle).
+        var runningTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        notificationService.NotifyCallReceived += notification =>
+        {
+            if (notification.RunningState == RunningState.Running
+                && notification.NotificationState == NotificationState.Interesting
+                && notification.TabDescriptor.TabId == "seed-settled")
+            {
+                runningTcs.TrySetResult();
+            }
+        };
+
+        var stream2 = client.EnqueueStreamingResponse();
+        agentChat.EnqueueUserMessage("new-run");
+
+        using (var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+        {
+            cts.Token.Register(() => runningTcs.TrySetCanceled());
+            await runningTcs.Task;
+        }
+
+        lock (notificationService.Calls)
+        {
+            Assert.Contains(notificationService.Calls, call =>
+                call.RunningState == RunningState.Running
+                && call.NotificationState == NotificationState.Interesting
+                && call.TabDescriptor.TabId == "seed-settled");
+        }
+
+        stream2.EnqueueUpdate(new ChatResponseUpdate(ChatRole.Assistant, "done"));
+        stream2.Complete();
+        await WaitForRunningItemsEmptyAsync(agentChat);
     }
 
     private static SubscribedEntityViewModel CreateWorkspaceEntity()

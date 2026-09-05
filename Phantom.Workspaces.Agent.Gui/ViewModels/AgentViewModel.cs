@@ -46,6 +46,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private readonly AgentDetailDockFactory detailDockFactory;
     private AgentDetailDocumentItem? selectedDetailItem;
 
+    // #1451: Restore-settle tracking. Sub-agent lease-acquisition continuations registered while the
+    // constructor seeds restored sub-agents are collected here so RestoreSettled can await them: the
+    // running-state churn those continuations drive during rehydration must not be surfaced as a
+    // user-initiated run by notification consumers.
+    private readonly List<Task> restoreAcquisitionContinuations = [];
+    private bool capturingRestoreContinuations;
+    private Task? restoreSettled;
+
     // #1122: foregroundScheduler is a required constructor parameter. A silent
     // TaskScheduler.Default fallback caused sub-agent restore continuations to run on the
     // thread pool and mutate UI-bound collections off the UI thread, crashing the app.
@@ -164,10 +172,14 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             this.subAgentsNavItem);
 
         // Seed slots for any sub-agents already present (e.g. restored from persistence).
+        // #1451: capture the restore-time sub-agent lease-acquisition continuations so RestoreSettled
+        // can span them.
+        this.capturingRestoreContinuations = true;
         foreach (var subAgent in agentChat.SubAgents)
         {
             this.AddSubAgentSlot(subAgent);
         }
+        this.capturingRestoreContinuations = false;
 
         this.ApplyToolSnapshot(agentChat.GetToolSnapshot());
     }
@@ -315,6 +327,52 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     internal AgentDetailDockFactory DetailDockFactory => this.detailDockFactory;
 
     public bool IsChatRunning => this.RunningItems.Count > 0;
+
+    /// <summary>
+    /// #1451: Completes once this agent has finished rehydrating from persistence — both persisted
+    /// history population (<see cref="HistoryPopulated"/>) AND any restore-time sub-agent
+    /// lease-acquisition continuations captured while the constructor seeds restored sub-agents.
+    /// Consumers gate resume-time notification suppression on this signal so the running-state churn
+    /// produced while a session rehydrates (including sub-agent/lease acquisition continuations that
+    /// settle asynchronously after the view model is wired up) is never surfaced as a user-initiated
+    /// run. The task is created lazily on first access so a caller-controlled
+    /// <see cref="SetHistoryPopulatedForTest"/> gate is honoured.
+    /// </summary>
+    public Task RestoreSettled => this.restoreSettled ??= this.ComputeRestoreSettledAsync();
+
+    private async Task ComputeRestoreSettledAsync()
+    {
+        try
+        {
+            await this.HistoryPopulated.ConfigureAwait(true);
+        }
+        catch
+        {
+            // History-population failures surface elsewhere; the restore window still closes so the
+            // tab does not stay wedged in its restoring state.
+        }
+
+        Task[] continuations;
+        lock (this.restoreAcquisitionContinuations)
+        {
+            continuations = this.restoreAcquisitionContinuations.ToArray();
+        }
+
+        if (continuations.Length == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            await Task.WhenAll(continuations).ConfigureAwait(true);
+        }
+        catch
+        {
+            // Individual acquisition failures are already logged in AddSubAgentSlotLazy; settle
+            // regardless so notifications resume once rehydration has fully drained.
+        }
+    }
 
     public AgentEditorNavigationItemViewModel? SelectedEditorItem
     {
@@ -771,7 +829,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // work is observed and logged rather than surfacing as an unobserved-task exception on
         // the finalizer thread (which previously crashed the process).
         var acquisitionTask = stub.AcquireLeaseAsync();
-        acquisitionTask.ContinueWith(
+        var acquisitionContinuation = acquisitionTask.ContinueWith(
             task =>
             {
                 if (task.IsCompletedSuccessfully)
@@ -799,6 +857,16 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             CancellationToken.None,
             TaskContinuationOptions.None,
             this.foregroundScheduler);
+
+        // #1451: while the constructor seeds restored sub-agents, record each acquisition
+        // continuation so RestoreSettled awaits the UI-affine running-state mutations they perform.
+        if (this.capturingRestoreContinuations)
+        {
+            lock (this.restoreAcquisitionContinuations)
+            {
+                this.restoreAcquisitionContinuations.Add(acquisitionContinuation);
+            }
+        }
     }
 
     /// <summary>

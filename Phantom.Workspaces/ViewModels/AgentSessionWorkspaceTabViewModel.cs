@@ -27,6 +27,8 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     private AgentViewModel? agent;
     private ObservableLoggerFactory? loggerFactory;
     private bool wasRunning;
+    private bool isRestoring;
+    private Task? restoreSettleTask;
     private long lastStreamingNotifyTicks;
     private const long StreamingThrottleMs = 500;
     private readonly StatusItem tabStatus = new();
@@ -122,6 +124,13 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     {
         this.loggerFactory = factory;
         this.Agent = agentViewModel;
+
+        // #1451: open a restoring window before wiring up the notification handler. While the agent
+        // rehydrates, running-state churn (persisted running items settling, and sub-agent
+        // lease-acquisition continuations that run on the foreground scheduler after this method
+        // returns) must update the running indicator but must not raise notifications.
+        this.isRestoring = true;
+
         agentViewModel.PropertyChanged += this.OnAgentPropertyChanged;
         agentViewModel.AltKeyStateChanged += this.OnAgentAltKeyStateChanged;
         agentViewModel.GoToTabAtIndexRequested += this.OnAgentGoToTabAtIndexRequested;
@@ -140,7 +149,38 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         this.TabHeader = header;
 
         this.State = AgentTabState.Ready;
+
+        // Close the restoring window once rehydration has fully settled, re-baselining wasRunning
+        // from the settled state so the first observed transition is a genuine user edge.
+        this.restoreSettleTask = this.CompleteRestoreWhenSettledAsync(agentViewModel);
     }
+
+    private async Task CompleteRestoreWhenSettledAsync(AgentViewModel agentViewModel)
+    {
+        try
+        {
+            // ConfigureAwait(true): SetReady runs on the UI thread, so the re-baseline below is
+            // serialized with OnAgentPropertyChanged (which is marshaled to the UI thread).
+            await agentViewModel.RestoreSettled.ConfigureAwait(true);
+        }
+        catch
+        {
+            // Settle regardless — a rehydration failure must not leave the tab permanently muted.
+        }
+
+        var isRunning = agentViewModel.IsChatRunning;
+        this.wasRunning = isRunning;
+        this.tabStatus.RunningStatus = isRunning ? RunningStatus.Running : RunningStatus.Idle;
+        if (this.runningIndicator is not null)
+        {
+            this.runningIndicator.IsRunning = isRunning;
+        }
+
+        this.isRestoring = false;
+    }
+
+    /// <summary>Test seam: completes once the restoring window has closed after <see cref="SetReady"/>.</summary>
+    internal Task RestoreSettledTask => this.restoreSettleTask ?? Task.CompletedTask;
 
     /// <summary>
     /// Detaches and disposes the current agent and logger so the tab can be re-initialized
@@ -192,6 +232,16 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
         if (this.runningIndicator is not null)
         {
             this.runningIndicator.IsRunning = isRunning;
+        }
+
+        // #1451: during rehydration, update the running indicator/status but suppress notifications.
+        // The running-state churn observed here is restore-driven (persisted running items settling,
+        // sub-agent lease-acquisition continuations), not a user-initiated run. wasRunning is
+        // re-baselined from the settled state in CompleteRestoreWhenSettledAsync.
+        if (this.isRestoring)
+        {
+            this.wasRunning = isRunning;
+            return;
         }
 
         if (isRunning && !this.wasRunning)
