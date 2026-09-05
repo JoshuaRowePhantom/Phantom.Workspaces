@@ -119,6 +119,54 @@ public sealed class WorkspacesTransportCompositionTests
         await handle!.DisposeAsync();
     }
 
+    [Fact]
+    public async Task ClientOnlyHost_BuildsLocalCopilotClient()
+    {
+        // Issue #1443: the production composition must register a client-only
+        // CopilotClientTransportListener on LocalListeners so an incoming
+        // `{"type":"copilot-sdk-session"}` channel — opened by a model-bound CopilotSdkChatClient on
+        // another machine — is served by building a LOCAL ICopilotClient here (via the injected
+        // AgentServices.CopilotClientFactory) and bridging only its SDK session over the channel.
+        var factory = new StubCopilotClientFactory();
+        var agentServices = new Phantom.Workspaces.Llm.AgentServices { CopilotClientFactory = factory };
+        await using var composition = CreateComposition(agentServices);
+
+        var openRequest = Json("""{"type":"copilot-sdk-session"}""");
+        var channel = new StubMessageChannel();
+        var handle = await composition.LocalListeners.OnChannelOpenAsync(openRequest, channel, Ct());
+
+        Assert.NotNull(handle);
+        Assert.True(factory.CreateCalled);
+        await handle!.DisposeAsync();
+    }
+
+    private sealed class StubCopilotClientFactory : Phantom.Workspaces.Llm.Copilot.ICopilotClientFactory
+    {
+        public bool CreateCalled { get; private set; }
+
+        public Phantom.Workspaces.Llm.Copilot.ICopilotClient Create(GitHub.Copilot.CopilotClientOptions options)
+        {
+            this.CreateCalled = true;
+            return new StubCopilotClient();
+        }
+
+        private sealed class StubCopilotClient : Phantom.Workspaces.Llm.Copilot.ICopilotClient
+        {
+            public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+            public Task<System.Collections.Generic.IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+                => Task.FromResult<System.Collections.Generic.IReadOnlyList<GitHub.Copilot.ModelInfo>>(System.Array.Empty<GitHub.Copilot.ModelInfo>());
+
+            public Task<Phantom.Workspaces.Llm.Copilot.ICopilotSession> CreateSessionAsync(GitHub.Copilot.SessionConfig config, CancellationToken cancellationToken)
+                => throw new System.NotSupportedException();
+
+            public Task<Phantom.Workspaces.Llm.Copilot.ICopilotSession> ResumeSessionAsync(string sessionId, GitHub.Copilot.ResumeSessionConfig config, CancellationToken cancellationToken)
+                => throw new System.NotSupportedException();
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
 
     private sealed class StubMessageChannel : IMessageChannel
@@ -163,6 +211,9 @@ public sealed class WorkspacesTransportCompositionTests
     }
 
     private static WorkspacesTransportComposition CreateComposition()
+        => CreateComposition(agentServices: null);
+
+    private static WorkspacesTransportComposition CreateComposition(Phantom.Workspaces.Llm.AgentServices? agentServices)
     {
         var dataAccessLayer = new EntityLookupDataAccessLayer(
             (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
@@ -172,7 +223,7 @@ public sealed class WorkspacesTransportCompositionTests
             ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
             UserComputerProfileEntityId = LocalProfileId,
         };
-        return new WorkspacesTransportComposition(dataAccessLayer, session);
+        return new WorkspacesTransportComposition(dataAccessLayer, session, hubFactories: null, agentServices: agentServices);
     }
 
     private static CancellationToken Ct() => new CancellationTokenSource(System.TimeSpan.FromSeconds(10)).Token;

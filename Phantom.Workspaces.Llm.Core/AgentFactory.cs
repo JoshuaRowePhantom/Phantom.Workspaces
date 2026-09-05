@@ -849,8 +849,21 @@ public static class AgentFactory
                 client.SetCopilotClientFactoryForTest(factory);
             }
 
+            ConfigureModelExecutorRouting(client, services);
+
             return (client, displayName);
         }
+    }
+
+    // Issue #1443 (per-component-executor-binding): thread the shared executor-bindings map and
+    // transport registry into the constructed Copilot SDK client so a model.options.executor binding
+    // can be honoured by transporting only the innermost SDK session. When either is absent, or the
+    // model's resolved descriptor is local, the client keeps its in-process CLI session.
+    private static void ConfigureModelExecutorRouting(CopilotSdkChatClient client, AgentServices? services)
+    {
+        client.ConfigureExecutorRouting(
+            services?.ExecutorBindings as Core.Manifest.ExecutorBindings,
+            services?.ExecutorTransportFactoryRegistry as Phantom.Workspaces.Transport.ITransportFactoryRegistry);
     }
 
     private static async Task<(IChatClient client, string displayName)> CreateGitHubCopilotByokClientAsync(
@@ -911,6 +924,8 @@ public static class AgentFactory
             {
                 client.SetCopilotClientFactoryForTest(factory);
             }
+
+            ConfigureModelExecutorRouting(client, services);
 
             return (client, displayName);
         }

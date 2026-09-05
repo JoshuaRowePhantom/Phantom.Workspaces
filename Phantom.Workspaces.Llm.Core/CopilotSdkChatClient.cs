@@ -1,12 +1,17 @@
 using System;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Threading.Channels;
 using AgentSchema;
 using GitHub.Copilot;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Core.Transport.Chat;
+using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
 
 namespace Phantom.Workspaces.Llm;
@@ -45,6 +50,15 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly IGitHubAccountUpsertService? accountUpsertService;
     private ICopilotClientFactory copilotClientFactory;
+
+    // Issue #1443 (per-component-executor-binding): the model's executor NAME sourced from
+    // model.options.executor (sibling to cliPath / wireApi / working-directory). When it resolves —
+    // through the SAME shared executor-bindings path as tools — to a non-local connection-descriptor,
+    // the innermost SDK session is obtained over a transport instead of the in-process CLI factory,
+    // while the router and context providers stay local.
+    private readonly string? modelExecutorName;
+    private ExecutorBindings? executorBindings;
+    private ITransportFactoryRegistry? executorTransportFactoryRegistry;
 
     /// <summary>
     /// The account-upsert service wired in by the factory, or <see langword="null"/> when none was
@@ -195,6 +209,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.modelOptions = modelOptions;
         this.builtinToolPolicy = builtinToolPolicy;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
+        this.modelExecutorName = GetStringModelOption(modelOptions, "executor");
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
         this.accountUpsertService = accountUpsertService;
@@ -215,6 +230,27 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     {
         this.copilotClientFactory = factory ?? throw new ArgumentNullException(nameof(factory));
     }
+
+    /// <summary>
+    /// Supplies the shared executor-bindings map and transport registry used to honour a
+    /// <c>model.options.executor</c> binding (issue #1443). When the model's resolved
+    /// connection-descriptor is non-local, <see cref="EnsureSessionAsync"/> obtains the innermost SDK
+    /// session over a transport instead of the in-process CLI factory. Passing <see langword="null"/>
+    /// for either argument keeps the behaviour-preserving in-process path.
+    /// </summary>
+    internal void ConfigureExecutorRouting(ExecutorBindings? bindings, ITransportFactoryRegistry? registry)
+    {
+        this.executorBindings = bindings;
+        this.executorTransportFactoryRegistry = registry;
+    }
+
+    /// <summary>
+    /// Test seam (issue #1443): resolves the model's executor binding to a session-only remote
+    /// <see cref="ICopilotClient"/>, or <see langword="null"/> when the model runs in-process. Exposes
+    /// the private routing decision so it can be asserted without spinning up a live streaming turn.
+    /// </summary>
+    internal Task<ICopilotClient?> ResolveRemoteClientForTestAsync(CancellationToken cancellationToken = default)
+        => this.TryCreateRemoteClientAsync(cancellationToken);
 
     /// <summary>
     /// Builds the Copilot SDK <see cref="ProviderConfig"/> for a BYOK session. The provider type
@@ -1249,43 +1285,54 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             // takes effect by recreating the session. The CLI client is reused across recreations.
             if (this.copilotClient is null)
             {
-                var clientOptions = new CopilotClientOptions
+                // Issue #1443: when the model's resolved executor descriptor is non-local, obtain the
+                // innermost SDK session over a transport; the router and context providers stay local.
+                var remoteClient = await this.TryCreateRemoteClientAsync(cancellationToken).ConfigureAwait(false);
+                if (remoteClient is not null)
                 {
-                    GitHubToken = this.gitHubToken,
-                    Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                    Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
-                };
-
-                if (!string.IsNullOrWhiteSpace(this.cliPath))
-                {
-                    clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
+                    await StartClientAsync(remoteClient, cancellationToken).ConfigureAwait(false);
+                    this.copilotClient = remoteClient;
                 }
-
-                var workingDirectory = GetWorkingDirectory(options);
-                if (!string.IsNullOrWhiteSpace(workingDirectory))
+                else
                 {
-                    clientOptions.WorkingDirectory = workingDirectory;
-                }
-
-                if (clientOptions.Mode == CopilotClientMode.Empty)
-                {
-                    clientOptions.BaseDirectory = !string.IsNullOrWhiteSpace(workingDirectory)
-                        ? workingDirectory
-                        : Directory.GetCurrentDirectory();
-                }
-
-                var client = this.copilotClientFactory.Create(clientOptions);
-                await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
-                this.copilotClient = client;
-
-                if (this.accountUpsertService is not null)
-                {
-                    // Resolve the token that the SDK is actually using. When this.gitHubToken is null
-                    // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
-                    var tokenForUpsert = this.gitHubToken ?? await GitHubAuthTokenResolver.ResolveAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-                    if (!string.IsNullOrWhiteSpace(tokenForUpsert))
+                    var clientOptions = new CopilotClientOptions
                     {
-                        await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
+                        GitHubToken = this.gitHubToken,
+                        Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+                        Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
+                    };
+
+                    if (!string.IsNullOrWhiteSpace(this.cliPath))
+                    {
+                        clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
+                    }
+
+                    var workingDirectory = GetWorkingDirectory(options);
+                    if (!string.IsNullOrWhiteSpace(workingDirectory))
+                    {
+                        clientOptions.WorkingDirectory = workingDirectory;
+                    }
+
+                    if (clientOptions.Mode == CopilotClientMode.Empty)
+                    {
+                        clientOptions.BaseDirectory = !string.IsNullOrWhiteSpace(workingDirectory)
+                            ? workingDirectory
+                            : Directory.GetCurrentDirectory();
+                    }
+
+                    var client = this.copilotClientFactory.Create(clientOptions);
+                    await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
+                    this.copilotClient = client;
+
+                    if (this.accountUpsertService is not null)
+                    {
+                        // Resolve the token that the SDK is actually using. When this.gitHubToken is null
+                        // the SDK falls back to the ambient gh CLI user, so resolve it the same way.
+                        var tokenForUpsert = this.gitHubToken ?? await GitHubAuthTokenResolver.ResolveAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                        if (!string.IsNullOrWhiteSpace(tokenForUpsert))
+                        {
+                            await this.accountUpsertService.UpsertForTokenAsync(tokenForUpsert, cancellationToken).ConfigureAwait(false);
+                        }
                     }
                 }
             }
@@ -1354,6 +1401,51 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             sessionConfig.WorkingDirectory = this.workingDirectoryOverride;
         }
         return await this.copilotClient!.CreateSessionAsync(sessionConfig, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Issue #1443: resolves model.options.executor (via the shared executor-bindings path) and, when
+    // it maps to a non-local connection-descriptor, connects a transport and builds a session-only
+    // remote ICopilotClient. Returns null — so the caller uses the in-process CLI factory — when no
+    // bindings/registry are wired, when the name is unbound, or when the descriptor is local.
+    private async Task<ICopilotClient?> TryCreateRemoteClientAsync(CancellationToken cancellationToken)
+    {
+        if (this.executorBindings is null || this.executorTransportFactoryRegistry is null)
+        {
+            return null;
+        }
+
+        JsonElement descriptor;
+        try
+        {
+            descriptor = this.executorBindings.ResolveComponent(this.modelExecutorName);
+        }
+        catch (InvalidOperationException)
+        {
+            // An unbound executor name falls back to the local in-process session rather than failing
+            // session creation; the manifest pre-pass is responsible for surfacing binding errors.
+            return null;
+        }
+
+        if (IsLocalDescriptor(descriptor))
+        {
+            return null;
+        }
+
+        var transport = await this.executorTransportFactoryRegistry
+            .ConnectToAsync(descriptor, cancellationToken)
+            .ConfigureAwait(false);
+        return new CopilotClientOverTransport(transport);
+    }
+
+    private static bool IsLocalDescriptor(JsonElement descriptor)
+    {
+        if (descriptor.ValueKind != JsonValueKind.Object)
+        {
+            return true;
+        }
+
+        return !descriptor.TryGetProperty("type", out var type)
+            || string.Equals(type.GetString(), ExecutionTargetResolver.LocalDescriptorType, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

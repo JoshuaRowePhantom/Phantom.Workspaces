@@ -71,6 +71,13 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         this.LocalListeners.Register(new Phantom.Workspaces.Transport.Mcp.McpTransportListener(
             this.RemoteMcpHostHandler.OpenAsync));
 
+        // Issue #1443 (per-component-executor-binding): register this machine's client-only Copilot
+        // SDK model host so that an incoming `{"type":"copilot-sdk-session"}` channel — opened by a
+        // model-bound CopilotSdkChatClient on another machine — is served by building a LOCAL
+        // ICopilotClient here and bridging only its SDK session back over the channel. This is
+        // distinct from ChatClientTransportListener above, which remotes the whole AgentChat.
+        this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(agentServices));
+
         var registry = new TransportFactoryRegistry();
         this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);
         this.userComputerProfileTransportFactory =
