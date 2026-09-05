@@ -46,8 +46,9 @@ public static class PhantomAgentSchema
         // second pass (already a Phantom subclass) is a no-op.
         PostProcess = static (result, data) => result switch
         {
-            // #1416: attach the dropped 'type' transport field.
-            McpTool tool and not PhantomMcpTool => PhantomMcpTool.From(tool, ReadTransport(data)),
+            // #1416: attach the dropped 'type' transport field. #1435: also recover the dropped
+            // 'executor' binding field.
+            McpTool tool and not PhantomMcpTool => PhantomMcpTool.From(tool, ReadTransport(data), ReadExecutor(data)),
 
             // #1420: for host-pinned Entra, attach the dropped 'authority' field. Only entra-pinned
             // connections are upgraded — every other OAuth connection stays a plain OAuthConnection and
@@ -77,4 +78,9 @@ public static class PhantomAgentSchema
                 _ => McpHttpTransport.Streamable,
             }
             : McpHttpTransport.Streamable;
+
+    private static string? ReadExecutor(Dictionary<string, object?> data)
+        => data.TryGetValue("executor", out var value) && value is string text && !string.IsNullOrWhiteSpace(text)
+            ? text.Trim()
+            : null;
 }

@@ -37,10 +37,17 @@ public sealed class PhantomMcpTool : McpTool
     public McpHttpTransport Transport { get; set; } = McpHttpTransport.Streamable;
 
     /// <summary>
-    /// Builds a <see cref="PhantomMcpTool"/> from a plain <see cref="McpTool"/>, copying every base
-    /// field and attaching <paramref name="transport"/>.
+    /// The name (or id) of the executor this tool is bound to (issue #1435, per-component-executor).
+    /// <c>null</c> when the tool inherits the agent's default executor. AgentSchema drops the unknown
+    /// <c>executor</c> property on load, so <see cref="PhantomAgentSchema"/> recovers it.
     /// </summary>
-    public static PhantomMcpTool From(McpTool source, McpHttpTransport transport)
+    public string? Executor { get; set; }
+
+    /// <summary>
+    /// Builds a <see cref="PhantomMcpTool"/> from a plain <see cref="McpTool"/>, copying every base
+    /// field and attaching <paramref name="transport"/> and <paramref name="executor"/>.
+    /// </summary>
+    public static PhantomMcpTool From(McpTool source, McpHttpTransport transport, string? executor = null)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -56,13 +63,15 @@ public sealed class PhantomMcpTool : McpTool
             ApprovalMode = source.ApprovalMode,
             AllowedTools = source.AllowedTools,
             Transport = transport,
+            Executor = executor,
         };
     }
 
     /// <summary>
-    /// Re-emits the Phantom <c>type</c> field so <c>ToJson()</c> → <c>FromJson()</c> round-trips
-    /// preserve the transport instead of silently reverting to <c>AutoDetect</c> (issue #1416,
-    /// integration point E).
+    /// Re-emits the Phantom <c>type</c> and <c>executor</c> fields so <c>ToJson()</c> →
+    /// <c>FromJson()</c> round-trips preserve the transport instead of silently reverting to
+    /// <c>AutoDetect</c> (issue #1416, integration point E) and preserve the executor binding
+    /// (issue #1435). The <c>executor</c> field is omitted when unset to keep the JSON clean.
     /// </summary>
     public override Dictionary<string, object?> Save(SaveContext? context = null)
     {
@@ -73,6 +82,10 @@ public sealed class PhantomMcpTool : McpTool
             McpHttpTransport.Auto => "auto",
             _ => "streamable",
         };
+        if (!string.IsNullOrWhiteSpace(this.Executor))
+        {
+            result["executor"] = this.Executor;
+        }
         return result;
     }
 }
