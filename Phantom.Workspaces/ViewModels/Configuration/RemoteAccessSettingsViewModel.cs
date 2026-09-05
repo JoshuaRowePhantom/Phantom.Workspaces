@@ -31,7 +31,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         ArgumentNullException.ThrowIfNull(remoteHosting);
         ArgumentNullException.ThrowIfNull(devTunnel);
         this.hostingEnabled = remoteHosting.Enabled;
-        this.listenUrl = remoteHosting.ListenUrl;
+        this.listenUrl = string.Join("; ", remoteHosting.ListenUrls);
         this.acceptReverseExecution = remoteHosting.AcceptReverseExecution;
         // Persist legacy Token configs as Private — Token is retired; connect tokens are automatic.
 #pragma warning disable CS0618 // Token is obsolete
@@ -126,7 +126,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     /// <see cref="IsValid"/> is <see langword="false"/>; <see langword="null"/> otherwise.
     /// </summary>
     public string? ValidationMessage =>
-        this.HostingEnabled && !IsAcceptableListenUrl(this.ListenUrl)
+        this.HostingEnabled && !AreAcceptableListenUrls(this.ListenUrl)
             ? "Listen URL must be a valid absolute URL, or a wildcard binding such as http://*:5280 or http://+:5280, when hosting is enabled."
             : null;
 
@@ -162,6 +162,17 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         return WildcardListenUrlRegex.IsMatch(url);
     }
 
+    private static bool AreAcceptableListenUrls(string? value)
+    {
+        var listenUrls = ParseListenUrls(value);
+        if (listenUrls.Count == 0)
+        {
+            return false;
+        }
+
+        return listenUrls.All(IsAcceptableListenUrl);
+    }
+
     /// <summary>
     /// Whether the current settings are valid. Derived from <see cref="ValidationMessage"/> so
     /// the gate and the message share a single predicate: settings are valid iff there is no
@@ -173,9 +184,14 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     public RemoteHostingSettings ToRemoteHostingSettings() => new()
     {
         Enabled = this.HostingEnabled,
-        ListenUrl = this.ListenUrl,
+        ListenUrls = ParseListenUrls(this.ListenUrl),
         AcceptReverseExecution = this.AcceptReverseExecution,
     };
+
+    private static IReadOnlyList<string> ParseListenUrls(string? value)
+        => string.IsNullOrWhiteSpace(value)
+            ? []
+            : value.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>Projects the current settings into a <see cref="DevTunnelConfiguration"/>.</summary>
     public DevTunnelConfiguration ToDevTunnelConfiguration(DevTunnelConfiguration existing) => existing with

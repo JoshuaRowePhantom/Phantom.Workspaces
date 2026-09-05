@@ -73,7 +73,7 @@ public sealed class RemoteAccessSettingsViewModelTests
         var settings = viewModel.ToRemoteHostingSettings();
 
         Assert.True(settings.Enabled);
-        Assert.Equal("http://localhost:6001", settings.ListenUrl);
+        Assert.Equal("http://localhost:6001", Assert.Single(settings.ListenUrls));
         Assert.True(settings.AcceptReverseExecution);
     }
 
@@ -184,6 +184,24 @@ public sealed class RemoteAccessSettingsViewModelTests
 
         var settings = viewModel.ToRemoteHostingSettings();
 
-        Assert.Equal("http://*:5280", settings.ListenUrl);
+        Assert.Equal("http://*:5280", Assert.Single(settings.ListenUrls));
+    }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_MultipleListenUrls_WhenHostingEnabled_AreValid()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel
+        {
+            HostingEnabled = true,
+            ListenUrl = "http://localhost:5280; http://0.0.0.0:5281; http://*:5282",
+        };
+
+        Assert.True(viewModel.IsValid);
+        Assert.Null(viewModel.ValidationMessage);
+
+        var settings = viewModel.ToRemoteHostingSettings();
+        Assert.Equal(
+            ["http://localhost:5280", "http://0.0.0.0:5281", "http://*:5282"],
+            settings.ListenUrls);
     }
 }

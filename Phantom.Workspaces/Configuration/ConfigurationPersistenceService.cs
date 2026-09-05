@@ -15,7 +15,7 @@ namespace Phantom.Workspaces.Configuration;
 /// path is provided. Only secret <em>sources</em> (for example, environment variable names) are
 /// persisted; raw secret values are never written, by construction of the model.
 /// </remarks>
-public sealed class ConfigurationPersistenceService
+public sealed class ConfigurationPersistenceService : IConfigurationStore
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -47,6 +47,12 @@ public sealed class ConfigurationPersistenceService
 
     /// <summary>The default configuration file path used when no explicit path is provided.</summary>
     public string DefaultConfigurationPath => this.defaultConfigurationPath;
+
+    public string ConfigurationPath => this.defaultConfigurationPath;
+
+    public string WebViewDataFolderPath => GetWebViewDataFolderPath(this.defaultConfigurationPath);
+
+    public string LogDirectoryPath => GetDefaultLogDirectoryPath(this.defaultConfigurationPath);
 
     /// <summary>
     /// Computes the default configuration path under the user's application data directory.
@@ -84,6 +90,9 @@ public sealed class ConfigurationPersistenceService
     public bool ConfigurationExists(string? path = null)
         => File.Exists(path ?? this.defaultConfigurationPath);
 
+    bool IConfigurationStore.ConfigurationExists()
+        => this.ConfigurationExists(path: null);
+
     /// <summary>
     /// Loads the configuration from the given (or default) path. When the file does not exist,
     /// a configuration populated with defaults is returned.
@@ -112,6 +121,9 @@ public sealed class ConfigurationPersistenceService
 
         return configuration ?? new WorkspacesConfiguration();
     }
+
+    Task<WorkspacesConfiguration> IConfigurationStore.LoadAsync(CancellationToken ct)
+        => this.LoadAsync(path: null, cancellationToken: ct);
 
     /// <summary>
     /// Saves the configuration to the given (or default) path, creating directories as needed.
@@ -142,6 +154,9 @@ public sealed class ConfigurationPersistenceService
             .SerializeAsync(stream, configuration, SerializerOptions, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    Task IConfigurationStore.SaveAsync(WorkspacesConfiguration configuration, CancellationToken ct)
+        => this.SaveAsync(configuration, path: null, cancellationToken: ct);
 
     /// <summary>
     /// Serializes the configuration to a JSON string using the canonical serializer options.

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Phantom.Workspaces.Configuration;
 
@@ -87,8 +88,31 @@ public sealed record RemoteHostingSettings
     /// <summary>Whether remote hosting (the web DAL endpoint) is enabled.</summary>
     public bool Enabled { get; init; }
 
-    /// <summary>The URL the web server binds to when hosting is enabled.</summary>
-    public string ListenUrl { get; init; } = "http://localhost:5280";
+    private static readonly IReadOnlyList<string> DefaultListenUrls = ["http://localhost:5280"];
+    private readonly IReadOnlyList<string> listenUrls = DefaultListenUrls;
+
+    /// <summary>The URLs the web server binds to when hosting is enabled.</summary>
+    public IReadOnlyList<string> ListenUrls
+    {
+        get => this.listenUrls;
+        init => this.listenUrls = value is { Count: > 0 } ? value : DefaultListenUrls;
+    }
+
+    [JsonPropertyName("listenUrl")]
+    public string? ListenUrl
+    {
+        get => null;
+        init
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                this.listenUrls = [value];
+            }
+        }
+    }
+
+    [JsonIgnore]
+    public string PrimaryListenUrl => this.ListenUrls[0];
 
     /// <summary>
     /// Whether this instance accepts reverse-direction trusted execution from instances it connects

@@ -2,6 +2,7 @@ using Avalonia.Headless.XUnit;
 using System.IO;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
+using Phantom.Workspaces.Services;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -21,6 +22,35 @@ public sealed class ConfigurationPersistenceServiceTests
         Assert.Equal(DataAccessMode.LocalMongoContainer, configuration.DataAccess.Mode);
         Assert.False(configuration.RemoteHosting.Enabled);
         Assert.Equal(DevTunnelAccessMode.Private, configuration.DevTunnel.AccessMode);
+    }
+
+    [AvaloniaFact]
+    public void ConfigurationStore_ResolvedOnce_AllConsumersShareInstancePath()
+    {
+        var customPath = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(customPath);
+        IConfigurationStore store = service;
+
+        try
+        {
+            Assert.Equal(customPath, store.ConfigurationPath);
+            Assert.Equal(
+                Path.Combine(Path.GetDirectoryName(customPath)!, "WebViewData"),
+                store.WebViewDataFolderPath);
+            Assert.Equal(
+                Path.Combine(Path.GetDirectoryName(customPath)!, "logs"),
+                store.LogDirectoryPath);
+
+            var applicationServices = new ApplicationServices(
+                MainWindowIntegrationTests.CreateTestRunningAgentChatTable(),
+                new AgentPersistenceStoreCache(),
+                configurationPersistence: service);
+            Assert.Same(service, applicationServices.ConfigurationStore);
+        }
+        finally
+        {
+            DeleteTempConfig(customPath);
+        }
     }
 
     [AvaloniaFact]

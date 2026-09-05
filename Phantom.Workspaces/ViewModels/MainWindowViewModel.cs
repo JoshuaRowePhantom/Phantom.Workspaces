@@ -29,6 +29,7 @@ using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Notifications;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.ViewModels.Configuration;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -44,7 +45,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         IconGlyph = "◻",
     };
     private readonly Task<EntityBroker> entityBrokerTask;
-    private readonly WorkspacesConfiguration? configuration;
+    private WorkspacesConfiguration? configuration;
     private WorkspacesWebHost? webHost;
     private Services.WorkspacesTransportComposition? transportComposition;
     private readonly Trust.DeferredTrustedExecutorSelector trustedExecutorSelector;
@@ -91,6 +92,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
     /// <summary>The process log-directory provider (the single source of truth), or <c>null</c> when unwired.</summary>
     public Services.Logging.ILogDirectoryProvider? LogDirectoryProvider => this.logDirectoryProvider;
+
+    public ConfigurationPersistenceService? ConfigurationStore => this.configurationPersistence;
     private readonly NotificationService notificationService;
     private NotificationsViewModel? notificationsViewModel;
     private readonly NavigationHistoryService navigationHistoryService = new();
@@ -517,6 +520,23 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     /// once <c>App.axaml.cs</c> has registered it.</summary>
     internal Services.ApplicationServices ApplicationServices => this.applicationServices;
 
+    public async Task<WorkspacesSettingsViewModel> CreateSettingsDialogViewModelAsync()
+    {
+        var store = this.configurationPersistence ?? new ConfigurationPersistenceService();
+        var configuration = store.ConfigurationExists()
+            ? await store.LoadAsync().ConfigureAwait(false)
+            : new WorkspacesConfiguration();
+
+        return new WorkspacesSettingsViewModel(
+            store,
+            configuration,
+            this,
+            this.applicationServices.UpdateController,
+            action => Avalonia.Threading.Dispatcher.UIThread.Post(action),
+            this.LogDirectoryProvider,
+            new Phantom.Workspaces.Install.RealProcessLauncher());
+    }
+
     /// <summary>
     /// Reflects the persisted scheduled-tools pause state on the clock / scheduled-tools button, and
     /// toggles it. Null until <see cref="InitializeAsync"/> has composed the scheduled-tools runtime.
@@ -894,6 +914,50 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
                 this.logDirectoryProvider);
             this.ConnectionStatus.SetLocalAccessPoint(this.webHost.ListenUrl);
             this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
+        }
+    }
+
+    public async Task<bool> ApplyRemoteHostingChangeAsync(RemoteHostingSettings newSettings)
+    {
+        ArgumentNullException.ThrowIfNull(newSettings);
+
+        if (this.webHost is null)
+        {
+            return false;
+        }
+
+        await this.StopDevTunnelHostAsync().ConfigureAwait(false);
+        await this.webHost.StopAsync().ConfigureAwait(false);
+
+        if (newSettings.Enabled && this.entityBroker is not null)
+        {
+            await this.webHost.StartAsync(
+                newSettings,
+                this.entityBroker.EntityRepository.DataAccessLayer,
+                this.logDirectoryProvider).ConfigureAwait(false);
+            this.ConnectionStatus?.SetLocalAccessPoint(this.webHost.ListenUrl);
+            this.StartDevTunnelHostIfConfigured(this.webHost.ListenUrl);
+        }
+        else
+        {
+            this.ConnectionStatus?.SetLocalAccessPoint(null);
+        }
+
+        this.configuration = (this.configuration ?? new WorkspacesConfiguration()) with
+        {
+            RemoteHosting = newSettings,
+        };
+
+        return true;
+    }
+
+    private async Task StopDevTunnelHostAsync()
+    {
+        if (this.devTunnelHostService is not null)
+        {
+            await this.devTunnelHostService.DisposeAsync().ConfigureAwait(false);
+            this.devTunnelHostService = null;
+            this.devTunnelHostStartTask = null;
         }
     }
 

@@ -69,10 +69,10 @@
                 <StackPanel Spacing="4">
                     <TextBlock Text="Listen URL" />
                     <TextBox x:Name="WizardListenUrlTextBox"
-                             PlaceholderText="http://localhost:5280"
+                             PlaceholderText="http://localhost:5280; http://0.0.0.0:5281"
                              Text="{Binding RemoteAccess.ListenUrl}"
                              IsEnabled="{Binding RemoteAccess.HostingEnabled}" />
-                    <TextBlock Text="URL this instance listens on when hosting the data-access endpoint. Default http://localhost:5280 is fine for local development."
+                    <TextBlock Text="HTTP listen address(es) for this instance when hosting is enabled. Enter multiple addresses separated by semicolons. HTTP only; TLS is not configured here. Default http://localhost:5280 is fine for local development."
                                Opacity="0.7"
                                TextWrapping="Wrap" />
                 </StackPanel>

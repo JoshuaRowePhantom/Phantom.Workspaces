@@ -4,8 +4,12 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Data;
@@ -45,6 +49,8 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
 
     /// <summary>The listen URL the server is bound to (null if not running).</summary>
     public string? ListenUrl { get; private set; }
+
+    public IReadOnlyList<string> ListenUrls { get; private set; } = [];
 
     /// <summary>Test-only: the running application's endpoint route patterns.</summary>
     internal IReadOnlyList<string> GetMappedRoutePatterns()
@@ -98,7 +104,7 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         }
 
         this.cancellationTokenSource = new CancellationTokenSource();
-        var builder = WebApplication.CreateBuilder(["--urls", remoteHostingSettings.ListenUrl]);
+        var builder = WebApplication.CreateBuilder();
 
         if (logDirectoryProvider is not null)
         {
@@ -108,6 +114,7 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         }
 
         builder.Services.AddSingleton(dataAccessLayer);
+        builder.WebHost.UseUrls(remoteHostingSettings.ListenUrls.ToArray());
 
         this.application = builder.Build();
         this.application.UseWebSockets();
@@ -128,9 +135,24 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
 
         this.application.MapTransportReverseEndpoints(serverTransportFactory, this.statusRegistry);
 
-        this.ListenUrl = remoteHostingSettings.ListenUrl;
+        var lifetime = this.application.Services.GetRequiredService<IHostApplicationLifetime>();
         this.runTask = this.application.RunAsync();
-        await Task.Yield();
+        var startedTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cancellationRegistration = cancellationToken.Register(
+            () => startedTcs.TrySetCanceled(cancellationToken));
+        using var startedRegistration = lifetime.ApplicationStarted.Register(
+            () => startedTcs.TrySetResult());
+        await startedTcs.Task.ConfigureAwait(false);
+
+        var boundAddresses = this.application.Services
+            .GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()?.Addresses;
+        this.ListenUrls = boundAddresses is { Count: > 0 }
+            ? boundAddresses.ToList()
+            : remoteHostingSettings.ListenUrls.ToList();
+        this.ListenUrl = this.ListenUrls.Count > 0
+            ? this.ListenUrls[0]
+            : remoteHostingSettings.PrimaryListenUrl;
     }
 
     /// <summary>
@@ -165,6 +187,7 @@ public sealed class WorkspacesWebHost : IAsyncDisposable
         this.application = null;
         this.runTask = null;
         this.ListenUrl = null;
+        this.ListenUrls = [];
         this.cancellationTokenSource?.Dispose();
         this.cancellationTokenSource = null;
     }

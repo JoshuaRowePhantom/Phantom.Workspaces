@@ -188,6 +188,46 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task SettingsDialog_NonDefaultConfigPath_LoadsAndSavesInstanceFile()
+    {
+        var customPath = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(customPath);
+        var defaultPath = ConfigurationPersistenceService.GetDefaultConfigurationPath();
+        var defaultExisted = File.Exists(defaultPath);
+        var seedConfiguration = new WorkspacesConfiguration
+        {
+            RemoteHosting = new RemoteHostingSettings
+            {
+                Enabled = true,
+                ListenUrls = ["http://0.0.0.0:5999"],
+            },
+        };
+
+        try
+        {
+            await service.SaveAsync(seedConfiguration);
+            var settings = new WorkspacesSettingsViewModel(service, await service.LoadAsync());
+            Assert.Equal("http://0.0.0.0:5999", settings.RemoteAccess.ListenUrl);
+
+            settings.RemoteAccess.ListenUrl = "http://localhost:6007";
+            await settings.SaveAsync(path: null);
+
+            var reloaded = await service.LoadAsync();
+            Assert.Equal("http://localhost:6007", reloaded.RemoteHosting.PrimaryListenUrl);
+            Assert.True(File.Exists(customPath));
+            Assert.Equal(customPath, service.DefaultConfigurationPath);
+            if (!defaultExisted)
+            {
+                Assert.False(File.Exists(defaultPath));
+            }
+        }
+        finally
+        {
+            DeleteTempConfig(customPath);
+        }
+    }
+
+    [AvaloniaFact]
     public void Windows_BindSharedViewModel_AndConstruct()
     {
         var service = new ConfigurationPersistenceService(CreateTempConfigPath());

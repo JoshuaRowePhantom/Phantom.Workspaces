@@ -194,19 +194,7 @@ public partial class App : Application
             return;
         }
 
-        var persistenceService = new ConfigurationPersistenceService();
-        var configuration = persistenceService.ConfigurationExists()
-            ? await persistenceService.LoadAsync()
-            : new WorkspacesConfiguration();
-
-        var settingsViewModel = new WorkspacesSettingsViewModel(
-            persistenceService,
-            configuration,
-            viewModel,
-            (Current as App)?.UpdateController,
-            action => Dispatcher.UIThread.Post(action),
-            viewModel.LogDirectoryProvider,
-            new Phantom.Workspaces.Install.RealProcessLauncher());
+        var settingsViewModel = await viewModel.CreateSettingsDialogViewModelAsync();
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
         await settingsWindow.ShowDialog(mainWindow);
     }

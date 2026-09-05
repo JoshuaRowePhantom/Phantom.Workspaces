@@ -122,6 +122,53 @@ public sealed class WorkspacesWebHostTests
         Assert.True(host.HttpServerTransportFactoryWasDisposed);
     }
 
+    [Fact]
+    public async Task WorkspacesWebHost_NonLoopbackListenUrl_BindsRequestedAddress()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        var port = GetFreePort();
+        var settings = new RemoteHostingSettings { Enabled = true, ListenUrls = [$"http://0.0.0.0:{port}"] };
+        var dal = new InMemoryDataAccessLayer();
+
+        await host.StartAsync(settings, dal, ct);
+        try
+        {
+            await WaitForHostAsync($"http://127.0.0.1:{port}", ct);
+            Assert.Contains(host.ListenUrls, address => Uri.TryCreate(address, UriKind.Absolute, out var uri) && uri.Host == "0.0.0.0");
+        }
+        finally
+        {
+            await host.StopAsync(ct);
+        }
+    }
+
+    [Fact]
+    public async Task WorkspacesWebHost_MultipleListenUrls_BindsAllRequestedAddresses()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var host = new WorkspacesWebHost(new ReverseConnectionStatusRegistry());
+        var port1 = GetFreePort();
+        var port2 = GetFreePort();
+        var url1 = $"http://127.0.0.1:{port1}";
+        var url2 = $"http://127.0.0.1:{port2}";
+        var settings = new RemoteHostingSettings { Enabled = true, ListenUrls = [url1, url2] };
+        var dal = new InMemoryDataAccessLayer();
+
+        await host.StartAsync(settings, dal, ct);
+        try
+        {
+            await WaitForHostAsync(url1, ct);
+            await WaitForHostAsync(url2, ct);
+            Assert.Contains(host.ListenUrls, address => string.Equals(address, url1, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(host.ListenUrls, address => string.Equals(address, url2, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            await host.StopAsync(ct);
+        }
+    }
+
     private static int GetFreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);

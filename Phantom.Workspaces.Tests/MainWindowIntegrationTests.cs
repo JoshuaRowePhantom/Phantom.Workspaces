@@ -70,6 +70,59 @@ public sealed class MainWindowIntegrationTests
         Assert.IsType<FontFamily>(fontFamilyResource);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task OpenSettings_UsesStartupResolvedPersistenceService_NotDefaultPath()
+    {
+        var customPath = Path.Combine(Path.GetTempPath(), "Phantom.Workspaces.Tests", Guid.NewGuid().ToString("N"), "custom-config.json");
+        var store = new ConfigurationPersistenceService(customPath);
+        var services = new ApplicationServices(
+            CreateTestRunningAgentChatTable(),
+            new AgentPersistenceStoreCache(),
+            configurationPersistence: store);
+
+        try
+        {
+            await using var viewModel = CreateTestMainWindowViewModel(
+                applicationServices: services,
+                configuration: new WorkspacesConfiguration());
+
+            var settingsViewModel = await viewModel.CreateSettingsDialogViewModelAsync();
+            settingsViewModel.RemoteAccess.HostingEnabled = true;
+            settingsViewModel.RemoteAccess.ListenUrl = "http://localhost:6012";
+            await settingsViewModel.SaveAsync(path: null);
+
+            var reloaded = await store.LoadAsync();
+            Assert.Equal("http://localhost:6012", reloaded.RemoteHosting.PrimaryListenUrl);
+            Assert.NotNull(viewModel.ConfigurationStore);
+            Assert.Equal(customPath, viewModel.ConfigurationStore!.ConfigurationPath);
+            Assert.True(File.Exists(customPath));
+        }
+        finally
+        {
+            var directory = Path.GetDirectoryName(customPath);
+            if (directory is not null && Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task MainWindowViewModel_ListenUrlChanged_RebindsOrSignalsRestart()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel(
+            configuration: new WorkspacesConfiguration());
+
+        var changed = await viewModel.ApplyRemoteHostingChangeAsync(
+            new RemoteHostingSettings
+            {
+                Enabled = true,
+                ListenUrls = ["http://127.0.0.1:6000"],
+            });
+
+        Assert.False(changed);
+    }
+
     // Regression tests for issue #1162: the top-right button cluster (network status,
     // scheduled tasks, running-agents brain, AI usage, notifications bell, settings gear)
     // must share a single uniform, content-driven height (no hard-coded pixel constant).

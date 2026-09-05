@@ -17,7 +17,10 @@
 
         <StackPanel Spacing="4">
             <TextBlock Text="Listen URL" />
-            <TextBox PlaceholderText="http://localhost:5280" Text="{Binding ListenUrl}" />
+            <TextBox PlaceholderText="http://localhost:5280; http://0.0.0.0:5281" Text="{Binding ListenUrl}" />
+            <TextBlock Text="Enter one or more HTTP listen addresses separated by semicolons (for example: http://localhost:5280; http://0.0.0.0:5281). HTTP only; TLS is not configured here."
+                       Opacity="0.7"
+                       TextWrapping="Wrap" />
         </StackPanel>
 
         <StackPanel Spacing="4">

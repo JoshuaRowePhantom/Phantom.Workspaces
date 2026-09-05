@@ -95,6 +95,8 @@ public sealed class ApplicationServices
     /// </summary>
     public ConfigurationPersistenceService? ConfigurationPersistence { get; }
 
+    public IConfigurationStore? ConfigurationStore => this.ConfigurationPersistence;
+
 
     /// <summary>The process-wide provider that materializes manifest secret requests.</summary>
     public ISecretProvider SecretProvider { get; }
