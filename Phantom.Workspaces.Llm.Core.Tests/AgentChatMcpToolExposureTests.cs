@@ -22,6 +22,8 @@ public sealed class AgentChatMcpToolExposureTests
         var (chat, _) = await CreateChatAsync(BuildMcpAgentJson(("test-mcp", server.BoundUrl.ToString())));
         await using var _chat = chat;
 
+        await chat.Initialization;
+
         var providers = GetAIContextProviders(chat);
         Assert.NotEmpty(providers);
 
@@ -35,6 +37,8 @@ public sealed class AgentChatMcpToolExposureTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var (chat, client) = await CreateChatAsync(BuildMcpAgentJson(("test-mcp", server.BoundUrl.ToString())));
         await using var _chat = chat;
+
+        await chat.Initialization;
 
         var toolNames = await ExposedToolNamesAsync(chat, client);
 
@@ -66,6 +70,8 @@ public sealed class AgentChatMcpToolExposureTests
         await using var server = await TestMcpServerProcess.StartAsync();
         var (chat, _) = await CreateChatAsync(BuildMcpAgentJson(("test-mcp", server.BoundUrl.ToString())));
         await using var _chat = chat;
+
+        await chat.Initialization;
 
         var registrationProviders = GetRegistrationProviders(chat)
             .OfType<McpToolContextProvider>()
