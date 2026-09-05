@@ -88,6 +88,8 @@ The chosen selection is recorded in the session's dedicated typed **`parameter-s
 
 The resolver (`ExecutorResourceResolver`) reads this typed `JsonElement` selection directly — no JSON-string parsing. Model helpers: `ExecutorParameterSelection.ForTrustProfile` / `ForUserComputerProfile` build it; `TryGetTrustProfile` / `TryGetUserComputerProfile` read it.
 
+For the **complete executor authoring contract** — the `kind:"executor"` resource and all five `id` strategies, the `executor` reference on the model/tools, the reused connection-descriptor `type`s + host-outer/target-inner nesting, the persisted `executor-bindings` session shape, worked end-to-end examples, and the OAuth-local rule — see the dedicated guide `["documentation", "agent-manifest-executors"]` (`/JsonEntities/documentation/agent-manifest-executors.md`).
+
 **Why a separate map (M7).** `parameter-values` stays `string→string` for `${param}` text templating only. Storing the selection there — as a JSON-encoded string or by widening the map to `string→object` — was rejected: it conflates structured selection with text templating and would be a breaking type change across ~20 call sites (incl. Mongo/Web persistence DTOs). The general typed-value model is filed separately as #1444 (non-blocking).
 
 ---

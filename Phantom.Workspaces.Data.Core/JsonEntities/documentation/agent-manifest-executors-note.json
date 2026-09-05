@@ -1,0 +1,22 @@
+{
+  "entity-id": "cb1ec242-6db8-4f63-b04d-45785fbdc2cf",
+  "entity-types": [
+    "entity",
+    "note"
+  ],
+  "names": [
+    [
+      "documentation",
+      "agent-manifest-executors"
+    ]
+  ],
+  "display-name": {
+    "default": "Agent Manifest — Executors"
+  },
+  "content": {
+    "default": {
+      "mime-type": "text/markdown",
+      "url": "/JsonEntities/documentation/agent-manifest-executors.md"
+    }
+  }
+}
