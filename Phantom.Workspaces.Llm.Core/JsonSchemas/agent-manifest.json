@@ -36,11 +36,11 @@
     "parameters": {
       "type": "object",
       "additionalProperties": true,
-      "description": "Parameter schema for configuring the agent's behavior. Parameters may be referenced within the manifest using {{paramName}} notation."
+      "description": "Parameter schema for configuring the agent's behavior. Parameters may be referenced within the manifest using {{paramName}} notation. Each parameter carries a 'kind' hint (e.g. 'string', 'directory'). NEW (#1434, per-component-executor-binding): a parameter of kind 'executor' lets the user pick, at launch, which executor a 'parameter'-strategy executor resource resolves to; its disambiguated selection is recorded in the session's typed 'parameter-selections' map (string -> JSON), a sibling of the string->string 'parameter-values' text-templating map."
     },
     "resources": {
       "type": "array",
-      "description": "Resources required by the agent, such as tools and models. Tool resources are resolved at runtime based on the execution context (user, machine, workspace).",
+      "description": "Resources required by the agent, such as tools, models, and executors. Tool resources are resolved at runtime based on the execution context (user, machine, workspace).",
       "items": {
         "anyOf": [
           {
@@ -48,6 +48,9 @@
           },
           {
             "$ref": "#/$defs/modelResource"
+          },
+          {
+            "$ref": "#/$defs/executorResource"
           }
         ]
       }
@@ -82,6 +85,11 @@
           "type": "object",
           "additionalProperties": true,
           "description": "Tool-specific configuration options. The structure depends on the tool type."
+        },
+        "executor": {
+          "type": "string",
+          "minLength": 1,
+          "description": "NEW (#1433, per-component-executor-binding). Optional name of the 'executor' resource this tool binds to. Unset inherits the session's overall executor (the local orchestrator, '.'). Never emit 'executor':'local'."
         }
       }
     },
@@ -111,6 +119,47 @@
           "type": "object",
           "additionalProperties": true,
           "description": "Model-specific configuration options."
+        },
+        "executor": {
+          "type": "string",
+          "minLength": 1,
+          "description": "NEW (#1433, per-component-executor-binding). Optional name of the 'executor' resource this model binds to. For the model, an executor NAME is also authored under the SDK-specific 'model.options.executor' key. Unset inherits the session's overall executor ('.')."
+        }
+      }
+    },
+    "executorResource": {
+      "type": "object",
+      "description": "NEW (#1433, per-component-executor-binding). A named executor resource. 'id' selects the resolution strategy and 'name' is referenced by 'executor' fields on tools and models. An executor resolves to a transport CONNECTION-DESCRIPTOR (the same type-discriminated JSON already consumed by ITransportFactory.ConnectToAsync: 'local', 'user-computer-profile', 'http', 'reverse-http', ...). There is NO parallel executor schema.",
+      "additionalProperties": true,
+      "required": [
+        "kind",
+        "id",
+        "name"
+      ],
+      "properties": {
+        "kind": {
+          "const": "executor",
+          "description": "Resource kind discriminator. Always 'executor' for executor resources."
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Convenience resolution strategy: 'local', 'parameter' (bind to an 'executor' launch parameter), 'user-computer-profile-entity' (fixed profile entity-id), 'trust-profile' (fixed trust-profile), or 'connection-descriptor' (a raw escape hatch carrying an inline connection-descriptor used verbatim). The 'connection-descriptor' strategy is what makes the model open-endedly extensible with no schema change."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executor name, referenced by the 'executor' field on tools and models."
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Simple string inputs for the convenience strategies: the parameter name for 'parameter'; the fixed entity-id for 'user-computer-profile-entity'; the trust-profile name for 'trust-profile'."
+        },
+        "connection-descriptor": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "NEW. Inline transport connection-descriptor used verbatim by the 'connection-descriptor' strategy. No bespoke executor schema is introduced; this is the same shape ITransportFactory.ConnectToAsync consumes."
         }
       }
     }

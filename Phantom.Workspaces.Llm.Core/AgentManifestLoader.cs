@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentSchema;
 using Json.Schema;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using YamlDotNet.Core;
 
 namespace Phantom.Workspaces.Llm;
@@ -68,7 +70,12 @@ public static class AgentManifestLoader
         {
             ValidateJsonAgainstSchema(content, sourceLabel);
 
-            return PhantomAgentSchema.AgentManifestFromJson(content)
+            // AgentSchema does not know the 'executor' resource discriminator and throws on it, so
+            // executor resources are stripped before deserialisation (issue #1433). They remain parsable
+            // from the raw manifest JSON via ExecutorResource.ParseManifestResources.
+            var agentSchemaJson = StripExecutorResources(content);
+
+            return PhantomAgentSchema.AgentManifestFromJson(agentSchemaJson)
                 ?? throw new InvalidOperationException("Failed to deserialize agent manifest from JSON.");
         }
         catch (JsonException ex)
@@ -79,6 +86,46 @@ public static class AgentManifestLoader
         {
             throw new InvalidOperationException($"Invalid agent manifest in {sourceLabel}: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Removes <c>kind:"executor"</c> entries from a manifest's <c>resources[]</c> array so the remaining
+    /// JSON deserialises through AgentSchema, which does not recognise the executor discriminator
+    /// (issue #1433). Returns the original string unchanged when the manifest declares no executor
+    /// resources, so non-executor manifests are byte-for-byte unaffected.
+    /// </summary>
+    private static string StripExecutorResources(string json)
+    {
+        var root = JsonNode.Parse(json) as JsonObject;
+        if (root is null || root["resources"] is not JsonArray resources)
+        {
+            return json;
+        }
+
+        var executorIndices = new List<int>();
+        for (var index = 0; index < resources.Count; index++)
+        {
+            if (resources[index] is JsonObject resource
+                && resource.TryGetPropertyValue("kind", out var kind)
+                && kind is JsonValue kindValue
+                && kindValue.TryGetValue(out string? kindText)
+                && string.Equals(kindText, ExecutorResource.ResourceKind, StringComparison.Ordinal))
+            {
+                executorIndices.Add(index);
+            }
+        }
+
+        if (executorIndices.Count == 0)
+        {
+            return json;
+        }
+
+        for (var i = executorIndices.Count - 1; i >= 0; i--)
+        {
+            resources.RemoveAt(executorIndices[i]);
+        }
+
+        return root.ToJsonString();
     }
 
     private static AgentManifest ParseYamlManifest(string content, string sourceLabel)
