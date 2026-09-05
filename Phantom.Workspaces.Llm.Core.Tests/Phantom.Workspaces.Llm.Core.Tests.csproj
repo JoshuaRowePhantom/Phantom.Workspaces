@@ -47,6 +47,7 @@
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\workspaces-agent-manifest.json" Link="workspaces-agent-manifest.json" />
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\github-models-agent-manifest.json" Link="github-models-agent-manifest.json" />
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\github-copilot-agent-manifest.json" Link="github-copilot-agent-manifest.json" />
+    <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\copilot-split-executor.json" Link="copilot-split-executor.json" />
     <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\documentation\agent-manifest-executors.md" Link="agent-manifest-executors.md" />
   </ItemGroup>
 </Project>

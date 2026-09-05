@@ -39,4 +39,7 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="..\Phantom.Workspaces.Data.Core\JsonEntities\defaults\agent-manifests\copilot-split-executor.json" Link="copilot-split-executor.json" />
+  </ItemGroup>
 </Project>

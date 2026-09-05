@@ -2532,6 +2532,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         var mcpRegistrations = mcpTools.Select(tool =>
         {
             var boundExecutor = executorBindings?.ResolveComponent((tool as PhantomMcpTool)?.Executor);
+
+            // OAuth-local rule (issue #1441, Requirement 13): an interactive-OAuth MCP server bound to a
+            // non-local executor is rejected at load — the loopback redirect only completes on the local
+            // machine. Skipped entirely when no bindings were wired (boundExecutor is null), preserving
+            // today's behaviour.
+            if (boundExecutor is { } bound)
+            {
+                Core.Manifest.OAuthExecutorBindingValidator.EnsureValid(tool, bound);
+            }
+
             var provider = new McpToolContextProvider(
                 tool,
                 services?.LoggerFactory,

@@ -1,0 +1,105 @@
+{
+  "entity-id": "ee99ee19-de6f-4f51-b4a8-9561b9b7e98f",
+  "entity-types": [
+    "entity",
+    "agent-manifest"
+  ],
+  "names": [
+    [
+      "defaults",
+      "agent-manifests",
+      "copilot-split-executor"
+    ]
+  ],
+  "display-name": {
+    "default": "GitHub Copilot (split executor)"
+  },
+  "manifest": {
+    "name": "copilot-split-executor",
+    "displayName": "GitHub Copilot (split executor)",
+    "description": "GitHub Copilot SDK agent whose chat client runs on a launch-selected remote worker while the chat router, workspace tools, and the GitHub web MCP (interactive OAuth) stay local.",
+    "parameters": {
+      "properties": [
+        {
+          "name": "worker-profile",
+          "kind": "executor",
+          "description": "The executor the Copilot SDK chat client runs on. Pick a trust-profile or user-computer-profile entity at launch.",
+          "required": true
+        },
+        {
+          "name": "working-directory",
+          "kind": "string",
+          "description": "The working directory for the Copilot agent process. If not specified, the agent uses its default.",
+          "required": false
+        }
+      ]
+    },
+    "template": {
+      "kind": "prompt",
+      "name": "copilot-split-executor",
+      "displayName": "GitHub Copilot (split executor)",
+      "description": "GitHub Copilot SDK agent with a remote chat client and local workspace/OAuth tools.",
+      "model": {
+        "id": "auto",
+        "provider": "github-copilot",
+        "apiType": "OpenAI",
+        "connection": {
+          "kind": "key",
+          "apiKey": "${GITHUB_TOKEN}"
+        },
+        "options": {
+          "temperature": 0.2,
+          "maxOutputTokens": 2048,
+          "additionalProperties": {
+            "executor": "worker",
+            "working-directory": "${working-directory}"
+          }
+        }
+      },
+      "instructions": "You are a helpful AI assistant powered by the GitHub Copilot SDK.\nRespond clearly and concisely.\nUse workspace entity tools to inspect and modify workspace data safely.\nUse the GitHub tools to read and manage repositories, issues, and pull requests when asked.",
+      "metadata": {
+        "version": "1.0",
+        "author": "Phantom Workspaces",
+        "tags": [
+          "github-copilot",
+          "workspace",
+          "split-executor"
+        ],
+        "prerequisites": [
+          "Sign in to the GitHub Copilot CLI, or set GITHUB_TOKEN in your environment with Copilot access.",
+          "Pick the worker executor (a trust-profile or user-computer-profile entity) at launch."
+        ]
+      }
+    },
+    "resources": [
+      {
+        "kind": "executor",
+        "id": "parameter",
+        "name": "worker",
+        "options": {
+          "parameter": "worker-profile"
+        }
+      },
+      {
+        "kind": "tool",
+        "id": "fixed",
+        "name": "workspace-entity"
+      },
+      {
+        "kind": "tool",
+        "id": "fixed",
+        "name": "workspace-gui"
+      },
+      {
+        "kind": "tool",
+        "id": "fixed",
+        "name": "current-session"
+      },
+      {
+        "kind": "tool",
+        "id": "mcp-server-entity",
+        "name": "github"
+      }
+    ]
+  }
+}
