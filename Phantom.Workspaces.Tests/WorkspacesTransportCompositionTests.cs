@@ -93,6 +93,34 @@ public sealed class WorkspacesTransportCompositionTests
         await handle!.DisposeAsync();
     }
 
+    [Fact]
+    public async Task Composition_ExposesRemoteMcpHostHandler()
+    {
+        await using var composition = CreateComposition();
+
+        Assert.NotNull(composition.RemoteMcpHostHandler);
+    }
+
+    [Fact]
+    public async Task Composition_RegistersProductionMcpTransportListener()
+    {
+        // Issue #1438: the production composition must register an McpTransportListener on
+        // LocalListeners so an incoming `{"type":"mcp","connection":{...}}` channel — opened by a
+        // remote-bound McpToolContextProvider on another machine — is served by this machine's
+        // RemoteMcpHostHandler. A connection with no endpoint is not hostable, but the listener still
+        // accepts the `mcp` channel and returns a session handle (with a null inner host).
+        await using var composition = CreateComposition();
+
+        var openRequest = Json("""{"type":"mcp","connection":{}}""");
+        var channel = new StubMessageChannel();
+        var handle = await composition.LocalListeners.OnChannelOpenAsync(openRequest, channel, Ct());
+
+        Assert.NotNull(handle);
+        await handle!.DisposeAsync();
+    }
+
+    private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
     private sealed class StubMessageChannel : IMessageChannel
     {
         private readonly System.Threading.Channels.Channel<JsonElement> reader

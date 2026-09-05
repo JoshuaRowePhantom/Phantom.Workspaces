@@ -62,6 +62,15 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
                 return result.ChatClient;
             }));
 
+        // Issue #1438 (per-component-executor-binding): register this machine's production remote MCP
+        // host so that an incoming `{"type":"mcp","connection":{...}}` channel — opened by a
+        // remote-bound McpToolContextProvider on another machine — is served by opening the requested
+        // MCP server here and bridging its JSON-RPC back over the channel. Unrecognised connections
+        // return null so the listener declines them.
+        this.RemoteMcpHostHandler = new RemoteMcpHostHandler(agentServices);
+        this.LocalListeners.Register(new Phantom.Workspaces.Transport.Mcp.McpTransportListener(
+            this.RemoteMcpHostHandler.OpenAsync));
+
         var registry = new TransportFactoryRegistry();
         this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);
         this.userComputerProfileTransportFactory =
@@ -83,6 +92,9 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
 
     /// <summary>The resolved registry that builds transports for every registered descriptor type.</summary>
     public ITransportFactoryRegistry TransportFactoryRegistry { get; }
+
+    /// <summary>The production remote MCP host that serves inbound `mcp` connection channels (issue #1438).</summary>
+    public RemoteMcpHostHandler RemoteMcpHostHandler { get; }
 
     /// <summary>The local listener registry (chat/mcp/shell) that this machine hosts as an executor.</summary>
     public TransportRegistry LocalListeners { get; }

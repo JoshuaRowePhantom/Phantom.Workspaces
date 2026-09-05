@@ -46,4 +46,15 @@ public sealed class ExecutorTargetRouter
     /// <summary>Connects a transport to the machine the given execution class runs on.</summary>
     public Task<ITransport> ConnectAsync(ExecutorTarget target, CancellationToken ct = default)
         => this.transportFactoryRegistry.ConnectToAsync(this.ResolveDescriptor(target), ct);
+
+    /// <summary>
+    /// Connects a transport directly to a resolved <b>connection-descriptor</b> (issue #1438): the
+    /// bound per-component executor descriptor is fed straight into
+    /// <see cref="ITransportFactoryRegistry.ConnectToAsync"/> — no client-instance string hop and no
+    /// intermediate executor schema. This is the production seam a remote-bound
+    /// <c>McpToolContextProvider</c> uses (closing G8: <see cref="ExecutorTargetRouter"/> gains a
+    /// production consumer).
+    /// </summary>
+    public Task<ITransport> ConnectToDescriptorAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
+        => this.transportFactoryRegistry.ConnectToAsync(connectionDescriptor, ct);
 }

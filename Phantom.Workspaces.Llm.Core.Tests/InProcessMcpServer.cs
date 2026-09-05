@@ -116,3 +116,13 @@ public static class InProcessPingTool
     public static string Ping(string? message = null)
         => string.IsNullOrWhiteSpace(message) ? "pong" : $"pong:{message.Trim()}";
 }
+
+[McpServerToolType]
+public static class InProcessFailingTool
+{
+    public const string ErrorMarker = "boom-remote-tool-error";
+
+    [McpServerTool, System.ComponentModel.Description("Always fails, to exercise the tool-error round-trip.")]
+    public static string Fail(string? message = null)
+        => throw new InvalidOperationException(ErrorMarker);
+}

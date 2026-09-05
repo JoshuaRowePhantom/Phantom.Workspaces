@@ -250,6 +250,8 @@ public sealed class McpToolContextProviderTests
             NullLoggerFactory.Instance,
             ExecutorTarget.AgentExecutor,
             services: null,
+            boundExecutor: null,
+            router: null,
             initializeOverride: initialize);
 
     private static async Task<AITool[]> InvokeAsync(McpToolContextProvider provider)

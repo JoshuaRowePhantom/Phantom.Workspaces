@@ -2521,19 +2521,31 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 this.ReportMcpCredentialStatus(server, status);
             },
         };
+
+        // Per-component executor binding (issue #1438): when the manifest resolved executor bindings
+        // and a transport factory registry were threaded through AgentServices, build the production
+        // router once and resolve each MCP tool's bound connection-descriptor. When either is absent,
+        // executorBindings stays null and every tool falls back to its local in-process executor,
+        // preserving today's behaviour exactly.
+        var executorBindings = mcpServices.ExecutorBindings as Core.Manifest.ExecutorBindings;
+        var executorRouter = BuildExecutorRouter(executorBindings, mcpServices.ExecutorTransportFactoryRegistry);
         var mcpRegistrations = mcpTools.Select(tool =>
         {
+            var boundExecutor = executorBindings?.ResolveComponent((tool as PhantomMcpTool)?.Executor);
             var provider = new McpToolContextProvider(
                 tool,
                 services?.LoggerFactory,
                 Core.Transport.ExecutorTargetResolver.ForTool(tool),
-                mcpServices);
+                mcpServices,
+                boundExecutor,
+                executorRouter);
             this.RegisterOwnedResource(provider);
             return new RuntimeContextProviderRegistration(
                 tool,
                 provider,
                 null,
-                Core.Transport.ExecutorTargetResolver.ForTool(tool));
+                Core.Transport.ExecutorTargetResolver.ForTool(tool),
+                boundExecutor);
         }).ToArray();
 
         // Unresolved tool-resource placeholders register with a NULL provider (so they are never
@@ -2549,6 +2561,22 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 Core.Transport.ExecutorTargetResolver.ForTool(tool))).ToArray();
 
         return [.. customRegistrations, .. mcpRegistrations, .. unresolvedRegistrations];
+    }
+
+    // Builds the production ExecutorTargetRouter (issue #1438) when both the resolved executor
+    // bindings and a transport factory registry are available. Returns null otherwise so
+    // McpToolContextProvider stays on its behaviour-preserving in-process path.
+    private static Core.Transport.ExecutorTargetRouter? BuildExecutorRouter(
+        Core.Manifest.ExecutorBindings? executorBindings,
+        object? transportFactoryRegistry)
+    {
+        if (executorBindings is null
+            || transportFactoryRegistry is not Phantom.Workspaces.Transport.ITransportFactoryRegistry registry)
+        {
+            return null;
+        }
+
+        return new Core.Transport.ExecutorTargetRouter(executorBindings.ToTopology(), registry);
     }
 
     private Task<ToolInitializationResult> InitializeUnresolvedToolResourceAsync(
@@ -3148,6 +3176,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         Tool Tool,
         AIContextProvider? Provider,
         string? ErrorMessage,
-        Core.Transport.ExecutorTarget ExecutorTarget);
+        Core.Transport.ExecutorTarget ExecutorTarget,
+        System.Text.Json.JsonElement? ConnectionDescriptor = null);
 
 }

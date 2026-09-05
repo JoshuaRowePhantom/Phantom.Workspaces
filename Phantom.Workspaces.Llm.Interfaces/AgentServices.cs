@@ -120,6 +120,28 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public Action<string, string>? McpCredentialStatusReporter { get; init; }
 
+    /// <summary>
+    /// Optional per-component executor bindings (issue #1438, per-component-executor-binding): the
+    /// manifest-resolved map of component executor names to transport connection-descriptors, plus
+    /// the session default. Threaded into <see cref="AgentChat"/> and <c>CopilotSdkChatClient</c> so
+    /// each MCP tool / model can be routed to its bound machine. Typed as <see langword="object"/> to
+    /// avoid a reverse project reference from <c>Phantom.Workspaces.Llm.Interfaces</c> to
+    /// <c>Phantom.Workspaces.Llm.Core</c>; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Core.Manifest.ExecutorBindings</c>. When null, every component uses
+    /// its local in-process executor (behaviour-preserving default).
+    /// </summary>
+    public object? ExecutorBindings { get; init; }
+
+    /// <summary>
+    /// Optional transport factory registry used to connect a per-component executor's connection
+    /// descriptor to its machine (issue #1438). Typed as <see langword="object"/> to avoid a reverse
+    /// project reference and a circular dependency on <c>Phantom.Workspaces.Transport</c>; consuming
+    /// code casts to <c>Phantom.Workspaces.Transport.ITransportFactoryRegistry</c>. When null (or when
+    /// <see cref="ExecutorBindings"/> is null), remote routing is disabled and MCP tools connect
+    /// in-process exactly as before.
+    /// </summary>
+    public object? ExecutorTransportFactoryRegistry { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

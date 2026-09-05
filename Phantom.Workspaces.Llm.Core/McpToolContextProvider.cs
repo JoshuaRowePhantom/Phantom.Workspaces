@@ -3,9 +3,14 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
 using AgentSchema;
+using System.Text.Json;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Core.Transport;
+using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Trust;
+using Phantom.Workspaces.Transport;
+using Phantom.Workspaces.Transport.Mcp;
 
 namespace Phantom.Workspaces.Llm;
 
@@ -22,6 +27,14 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     private readonly AgentServices? services;
     private readonly SemaphoreSlim initializeLock = new(1, 1);
 
+    // Per-component executor binding (issue #1438): the resolved connection-descriptor this MCP
+    // server is bound to, and the production router that connects it. When the descriptor is local
+    // (or no router is supplied) the provider connects in-process via <see cref="McpTransportFactory"/>
+    // exactly as before; when it is a remote descriptor the provider routes an MCP channel to the
+    // bound machine and speaks JSON-RPC over it.
+    private readonly JsonElement boundExecutor;
+    private readonly ExecutorTargetRouter? router;
+
     // Test seam: the operation that establishes the MCP connection and lists its tools. Production
     // uses <see cref="ConnectAndListToolsAsync"/> (which connects a live client); unit tests inject a
     // counting stub so the terminal-failure latch and single-initialization caching can be exercised
@@ -30,6 +43,12 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
 
     private McpClient? client;
     private AITool[]? cachedTools;
+
+    // Remote-executor connection resources (issue #1438), disposed with the provider or cleared on
+    // <see cref="ResetInitialization"/>. Null for local (in-process) bindings.
+    private ITransport? remoteTransport;
+    private McpClientOverTransport? remoteChannel;
+    private McpChannelClientTransport? remoteClientTransport;
 
     // Terminal latch: once an initialization attempt fails, further invocations short-circuit and no
     // reconnection (or OAuth browser relaunch) is attempted until an explicit user re-enable calls
@@ -40,8 +59,10 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         McpTool tool,
         ILoggerFactory? loggerFactory,
         ExecutorTarget executorTarget = ExecutorTarget.AgentExecutor,
-        AgentServices? services = null)
-        : this(tool, loggerFactory, executorTarget, services, initializeOverride: null)
+        AgentServices? services = null,
+        JsonElement? boundExecutor = null,
+        ExecutorTargetRouter? router = null)
+        : this(tool, loggerFactory, executorTarget, services, boundExecutor, router, initializeOverride: null)
     {
     }
 
@@ -50,12 +71,16 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         ILoggerFactory? loggerFactory,
         ExecutorTarget executorTarget,
         AgentServices? services,
+        JsonElement? boundExecutor,
+        ExecutorTargetRouter? router,
         Func<CancellationToken, Task<AITool[]>>? initializeOverride)
         : base(null, null, null)
     {
         this.tool = tool;
         this.loggerFactory = loggerFactory;
         this.services = services;
+        this.boundExecutor = boundExecutor ?? ExecutorBindings.LocalDescriptor();
+        this.router = router;
         this.ExecutorTarget = executorTarget;
         this.initializeToolsAsync = initializeOverride ?? this.ConnectAndListToolsAsync;
     }
@@ -119,7 +144,24 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         var logger = this.loggerFactory?.CreateLogger<McpToolContextProvider>();
         var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
 
-        this.client = await McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync(
+        this.client = IsLocalDescriptor(this.boundExecutor) || this.router is null
+            ? await this.ConnectLocalAsync(logger, serverName, cancellationToken)
+            : await this.ConnectRemoteAsync(cancellationToken);
+
+        var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
+        if (this.tool.AllowedTools is { Count: > 0 })
+        {
+            var allowedSet = new HashSet<string>(this.tool.AllowedTools, StringComparer.OrdinalIgnoreCase);
+            mcpTools = [.. mcpTools.Where(tool => allowedSet.Contains(tool.Name))];
+        }
+
+        return mcpTools.Cast<AITool>().ToArray();
+    }
+
+    // Local (in-process) binding: connect the MCP client directly through the shared transport
+    // factory exactly as before the per-component executor work (behaviour-preserving default).
+    private Task<McpClient> ConnectLocalAsync(ILogger? logger, string? serverName, CancellationToken cancellationToken)
+        => McpTransportFactory.ConnectWithDynamicRegistrationFallbackAsync(
             this.tool,
             async (clientIdOverride, ct) =>
             {
@@ -135,14 +177,31 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             serverName,
             cancellationToken);
 
-        var mcpTools = await McpClientToolListing.ListToolsAsync(this.client, cancellationToken);
-        if (this.tool.AllowedTools is { Count: > 0 })
+    // Remote binding (issue #1438): route an MCP channel to the bound machine via the production
+    // ExecutorTargetRouter, wrap it as an MCP SDK client transport, and complete the JSON-RPC
+    // handshake over it. The remote host (RemoteMcpHostHandler) opens the real MCP server there.
+    private async Task<McpClient> ConnectRemoteAsync(CancellationToken cancellationToken)
+    {
+        var request = McpConnectionRequest.FromTool(this.tool);
+        this.remoteTransport = await this.router!.ConnectToDescriptorAsync(this.boundExecutor, cancellationToken);
+
+        this.remoteChannel = new McpClientOverTransport(this.remoteTransport, request);
+        await this.remoteChannel.OpenAsync(cancellationToken);
+
+        var serverName = string.IsNullOrWhiteSpace(this.tool.ServerName) ? this.tool.Name : this.tool.ServerName;
+        this.remoteClientTransport = new McpChannelClientTransport(this.remoteChannel.Channel, serverName);
+        return await McpClient.CreateAsync(this.remoteClientTransport, null, this.loggerFactory, cancellationToken);
+    }
+
+    private static bool IsLocalDescriptor(JsonElement descriptor)
+    {
+        if (descriptor.ValueKind != JsonValueKind.Object)
         {
-            var allowedSet = new HashSet<string>(this.tool.AllowedTools, StringComparer.OrdinalIgnoreCase);
-            mcpTools = [.. mcpTools.Where(tool => allowedSet.Contains(tool.Name))];
+            return true;
         }
 
-        return mcpTools.Cast<AITool>().ToArray();
+        return !descriptor.TryGetProperty("type", out var type)
+            || string.Equals(type.GetString(), ExecutionTargetResolver.LocalDescriptorType, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -161,6 +220,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         this.initializationFailed = false;
         this.cachedTools = null;
         this.client = null;
+        _ = this.DisposeRemoteAsync();
     }
 
     public async ValueTask DisposeAsync()
@@ -171,7 +231,32 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
             this.client = null;
         }
 
+        await this.DisposeRemoteAsync();
         this.initializeLock.Dispose();
+    }
+
+    // Tears down the remote-executor connection resources (issue #1438). The MCP SDK client owns and
+    // disposes the client transport (and thus the underlying channel); the routed transport is
+    // disposed here. All disposals are idempotent so overlap with the SDK client is safe.
+    private async ValueTask DisposeRemoteAsync()
+    {
+        if (this.remoteClientTransport is not null)
+        {
+            await this.remoteClientTransport.DisposeAsync();
+            this.remoteClientTransport = null;
+        }
+
+        if (this.remoteChannel is not null)
+        {
+            await this.remoteChannel.DisposeAsync();
+            this.remoteChannel = null;
+        }
+
+        if (this.remoteTransport is not null)
+        {
+            await this.remoteTransport.DisposeAsync();
+            this.remoteTransport = null;
+        }
     }
 
     /// <summary>
