@@ -285,6 +285,21 @@ public partial class QueueComposerControl : UserControl
 
         if (key == Key.Enter || key == Key.Return)
         {
+            // Ctrl+Shift+Enter submits everything before the caret and keeps the
+            // remainder in the box. This must be evaluated BEFORE the normal-mode
+            // Shift (multi-line) and Control (send) checks, otherwise the chord would
+            // fall into the Shift branch and enter multi-line mode.
+            if (keyModifiers.HasFlag(KeyModifiers.Control) && keyModifiers.HasFlag(KeyModifiers.Shift))
+            {
+                if (vm.SubmitBeforeCursor(caretIndex, out var submitCaret))
+                {
+                    newText = vm.InputText;
+                    newCaretIndex = submitCaret;
+                }
+
+                return true;
+            }
+
             if (vm.IsFormattedMode)
             {
                 if (keyModifiers.HasFlag(KeyModifiers.Control))

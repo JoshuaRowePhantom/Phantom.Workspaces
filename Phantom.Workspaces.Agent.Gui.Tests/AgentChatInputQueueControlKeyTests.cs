@@ -542,6 +542,64 @@ public sealed class AgentChatInputQueueControlKeyTests
         Assert.Equal(0, composer.Completions.SelectedIndex);
     }
 
+    [Fact]
+    public async Task HandleInputKey_CtrlShiftEnter_InNormalMode_SubmitsBeforeCursor()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+        composer.InputText = "hello world";
+
+        // Caret after "hello " (index 6): submit "hello", keep "world".
+        var handled = QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Enter,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            caretLine: 0,
+            caretIndex: 6,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.True(handled);
+        Assert.False(composer.IsFormattedMode);
+        Assert.Equal("world", newText);
+        Assert.Equal(0, newCaretIndex);
+
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2,
+            "ctrl+shift+enter submit-before-cursor to complete");
+        Assert.Equal("hello",
+            string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+    }
+
+    [Fact]
+    public async Task HandleInputKey_CtrlShiftEnter_InFormattedMode_SubmitsBeforeCursor()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var composer = viewModel.DefaultComposer;
+        composer.InputText = "line1\nline2";
+        composer.EnterFormattedMode();
+
+        // Caret after "line1\n" (index 6): submit "line1", keep "line2".
+        var handled = QueueComposerControl.HandleInputKey(
+            composer,
+            Key.Return,
+            KeyModifiers.Control | KeyModifiers.Shift,
+            caretLine: 1,
+            caretIndex: 6,
+            out var newText,
+            out var newCaretIndex);
+
+        Assert.True(handled);
+        Assert.Equal("line2", newText);
+        Assert.Equal(0, newCaretIndex);
+
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2,
+            "ctrl+shift+enter formatted-mode submit-before-cursor to complete");
+        Assert.Equal("line1",
+            string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+    }
+
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,

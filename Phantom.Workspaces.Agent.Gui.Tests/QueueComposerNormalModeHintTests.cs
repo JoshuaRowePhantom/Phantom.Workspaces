@@ -186,4 +186,21 @@ public sealed class QueueComposerNormalModeHintTests
 
         inputQueue.Dispose();
     }
+
+    [Fact]
+    public async Task NormalModeHint_DefaultComposer_ContainsSubmitBeforeCursorShortcut()
+    {
+        await using var chat = await AgentFactory.CreateAgentChatAsync(
+            new CreateAgentChatRequest { AgentDefinition = CreateAgentDefinition() });
+
+        var inputQueue = new InputQueueViewModel(chat, chat.DefaultInputQueue);
+        var composer = inputQueue.DefaultComposer;
+
+        composer.IsFormattedMode = false;
+
+        Assert.NotNull(composer.NormalModeHint);
+        Assert.Contains("Ctrl-Shift-Enter - submit before cursor", composer.NormalModeHint, StringComparison.Ordinal);
+
+        inputQueue.Dispose();
+    }
 }

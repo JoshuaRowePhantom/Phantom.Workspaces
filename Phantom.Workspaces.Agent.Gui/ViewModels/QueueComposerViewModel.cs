@@ -74,12 +74,12 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
 
     public string? FormattedModeHint =>
         this.isFormattedMode && this.IsDefaultComposer
-            ? "Ctrl+Enter · send   Enter · new line   Esc · exit multi-line"
+            ? "Ctrl+Enter · send   Enter · new line   Esc · exit multi-line   Ctrl-Shift-Enter - submit before cursor"
             : null;
 
     public string? NormalModeHint =>
         !this.isFormattedMode && this.IsDefaultComposer
-            ? "Enter · send  ·  Shift+Enter · multi-line  ·  Ctrl+Q · enqueue  ·  Ctrl+Shift+Q · new queue  ·  Ctrl+Break · interrupt  ·  Pause · toggle hold  ·  Shift+Pause · hold all"
+            ? "Enter · send  ·  Shift+Enter · multi-line  ·  Ctrl+Q · enqueue  ·  Ctrl+Shift+Q · new queue  ·  Ctrl+Break · interrupt  ·  Pause · toggle hold  ·  Shift+Pause · hold all  ·  Ctrl-Shift-Enter - submit before cursor"
             : null;
 
     public string? ActiveHint => this.FormattedModeHint ?? this.NormalModeHint;
@@ -330,6 +330,48 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             return false;
         }
 
+        this.SubmitContent(text, targetQueue);
+        this.InputText = string.Empty;
+        return true;
+    }
+
+    public bool SubmitBeforeCursor(int caretIndex) =>
+        this.SubmitBeforeCursor(this.targetQueue, caretIndex, out _);
+
+    public bool SubmitBeforeCursor(int caretIndex, out int newCaretIndex) =>
+        this.SubmitBeforeCursor(this.targetQueue, caretIndex, out newCaretIndex);
+
+    public bool SubmitBeforeCursor(AgentChatQueue targetQueue, int caretIndex, out int newCaretIndex)
+    {
+        var input = this.InputText ?? string.Empty;
+        var clampedCaret = Math.Clamp(caretIndex, 0, input.Length);
+        newCaretIndex = clampedCaret;
+
+        var before = input.Substring(0, clampedCaret);
+        var after = input.Substring(clampedCaret);
+
+        var text = this.SanitizeText(before);
+        if (string.IsNullOrWhiteSpace(text) && this.attachments.Count == 0)
+        {
+            return false;
+        }
+
+        this.SubmitContent(text, targetQueue);
+
+        // Retain everything after the caret and place the caret at the start of it,
+        // rather than hard-clearing the box the way Submit does.
+        this.InputText = after;
+        newCaretIndex = 0;
+        return true;
+    }
+
+    /// <summary>
+    /// Runs the shared submit pipeline for <paramref name="text"/> (slash-command
+    /// interception on the default composer, history commit, queue append, attachments)
+    /// without clearing the input box — the caller decides what the box becomes.
+    /// </summary>
+    private void SubmitContent(string text, AgentChatQueue targetQueue)
+    {
         // Intercept slash commands on the default (primary) composer. Non-default queue
         // composers are used to append steering messages; slash commands are not applicable there.
         if (this.IsDefaultComposer
@@ -338,9 +380,8 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
             && this.SlashCommandInterceptorAsync is { } interceptor)
         {
             this.ResetHistoryNavigation();
-            this.InputText = string.Empty;
             _ = interceptor(text);
-            return true;
+            return;
         }
 
         var contents = new List<AIContent>();
@@ -352,15 +393,12 @@ public sealed class QueueComposerViewModel : ViewModelBase, IQueueImmediacyViewM
         contents.AddRange(this.attachments);
         this.CommitToHistory(text);
         this.parent.AppendToQueue(targetQueue, contents);
-        this.InputText = string.Empty;
         this.ClearAttachments();
         this.IsFormattedMode = false;
         if (!this.IsDefaultComposer)
         {
             this.parent.HideQueueComposer(targetQueue);
         }
-
-        return true;
     }
 
     public bool SubmitToMostRecentQueue()
