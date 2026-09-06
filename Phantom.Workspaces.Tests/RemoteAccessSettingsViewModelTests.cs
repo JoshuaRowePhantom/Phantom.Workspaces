@@ -204,4 +204,38 @@ public sealed class RemoteAccessSettingsViewModelTests
             ["http://localhost:5280", "http://0.0.0.0:5281", "http://*:5282"],
             settings.ListenUrls);
     }
+
+    [AvaloniaFact]
+    public void RemoteAccessSettingsViewModel_ToDevTunnelConfiguration_ProjectsAuthentication()
+    {
+        var existing = new DevTunnelConfiguration();
+        var viewModel = new RemoteAccessSettingsViewModel(new RemoteHostingSettings(), existing);
+        viewModel.AuthScheme.Scheme = RemoteAuthentication.EntraScheme;
+        viewModel.AuthScheme.Entra.ClientId = "client-abc";
+        viewModel.AuthScheme.Entra.Authority = "https://login.microsoftonline.com/tenant";
+
+        var projected = viewModel.ToDevTunnelConfiguration(existing);
+
+        Assert.NotNull(projected.Authentication);
+        Assert.Equal(RemoteAuthentication.EntraScheme, projected.Authentication!.Scheme);
+        Assert.Equal("client-abc", projected.Authentication.ClientId);
+        Assert.Equal("https://login.microsoftonline.com/tenant", projected.Authentication.Authority);
+    }
+
+    [AvaloniaFact]
+    public void AuthScheme_LegacyGitHubConfig_LoadsWithGithubSelected()
+    {
+        // A dev-tunnel config with no authentication (legacy) must default to the github scheme,
+        // valid and ready to save without any additional fields.
+        var viewModel = new RemoteAccessSettingsViewModel(
+            new RemoteHostingSettings(),
+            new DevTunnelConfiguration());
+
+        Assert.Equal(RemoteAuthentication.GithubScheme, viewModel.AuthScheme.Scheme);
+        Assert.True(viewModel.AuthScheme.IsValid);
+        Assert.True(viewModel.IsValid);
+        Assert.Equal(
+            RemoteAuthentication.GithubScheme,
+            viewModel.ToDevTunnelConfiguration(new DevTunnelConfiguration()).Authentication!.Scheme);
+    }
 }

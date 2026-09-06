@@ -41,6 +41,26 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
             : devTunnel.AccessMode;
         this.tunnelName = devTunnel.TunnelName;
         this.userComputerProfileOverride = userComputerProfileOverride;
+        this.AuthScheme = new AuthSchemeSelectorViewModel(devTunnel.Authentication);
+        this.AuthScheme.PropertyChanged += this.OnAuthSchemeChanged;
+    }
+
+    /// <summary>
+    /// Pluggable auth-scheme selector (issue #1457) projected into
+    /// <see cref="DevTunnelConfiguration.Authentication"/>. Shared with the connect-side
+    /// <see cref="DevTunnelWebSettingsViewModel"/> so both the setup wizard and the Settings dialog
+    /// present one scheme picker.
+    /// </summary>
+    public AuthSchemeSelectorViewModel AuthScheme { get; }
+
+    private void OnAuthSchemeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AuthSchemeSelectorViewModel.IsValid)
+            || e.PropertyName == nameof(AuthSchemeSelectorViewModel.ValidationMessage))
+        {
+            this.RaisePropertyChanged(nameof(this.IsValid));
+            this.RaisePropertyChanged(nameof(this.ValidationMessage));
+        }
     }
 
     /// <summary>The selectable dev tunnel access modes for binding.</summary>
@@ -128,7 +148,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     public string? ValidationMessage =>
         this.HostingEnabled && !AreAcceptableListenUrls(this.ListenUrl)
             ? "Listen URL must be a valid absolute URL, or a wildcard binding such as http://*:5280 or http://+:5280, when hosting is enabled."
-            : null;
+            : this.AuthScheme.ValidationMessage;
 
     /// <summary>
     /// Regex matching the ASP.NET Core / Kestrel wildcard host forms that
@@ -198,6 +218,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     {
         TunnelName = this.TunnelName,
         AccessMode = this.DevTunnelAccessMode,
+        Authentication = this.AuthScheme.ToRemoteAuthentication(),
     };
 
     private void SetValidatedProperty<T>(ref T field, T value, [System.Runtime.CompilerServices.CallerMemberName] string? propertyName = null)

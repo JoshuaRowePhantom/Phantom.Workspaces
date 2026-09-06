@@ -1,0 +1,28 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.EntraAuthSchemeView"
+             x:DataType="vm:EntraAuthSchemeViewModel">
+    <StackPanel Spacing="8">
+        <TextBlock Text="{Binding Description}" TextWrapping="Wrap" Opacity="0.7" />
+        <StackPanel Spacing="4">
+            <TextBlock Text="Client (application) id" />
+            <TextBox PlaceholderText="11111111-1111-1111-1111-111111111111" Text="{Binding ClientId}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Authority" />
+            <TextBox PlaceholderText="https://login.microsoftonline.com/&lt;tenant&gt;" Text="{Binding Authority}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Tenant id (optional)" />
+            <TextBox PlaceholderText="00000000-0000-0000-0000-000000000000" Text="{Binding TenantId}" />
+        </StackPanel>
+        <StackPanel Spacing="4">
+            <TextBlock Text="Scopes (optional, space-separated)" />
+            <TextBox PlaceholderText="api://example/.default" Text="{Binding Scopes}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

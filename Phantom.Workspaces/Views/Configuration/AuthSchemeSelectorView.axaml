@@ -1,0 +1,33 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             xmlns:views="using:Phantom.Workspaces.Views.Configuration"
+             mc:Ignorable="d"
+             x:Class="Phantom.Workspaces.Views.Configuration.AuthSchemeSelectorView"
+             x:DataType="vm:AuthSchemeSelectorViewModel">
+    <UserControl.DataTemplates>
+        <DataTemplate DataType="vm:GitHubAuthSchemeViewModel">
+            <views:GitHubAuthSchemeView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:EntraAuthSchemeViewModel">
+            <views:EntraAuthSchemeView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:OAuthAuthSchemeViewModel">
+            <views:OAuthAuthSchemeView />
+        </DataTemplate>
+        <DataTemplate DataType="vm:AnonymousAuthSchemeViewModel">
+            <views:AnonymousAuthSchemeView />
+        </DataTemplate>
+    </UserControl.DataTemplates>
+    <StackPanel Spacing="8">
+        <StackPanel Spacing="4">
+            <TextBlock Text="Authorization scheme" />
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding AvailableSchemes}"
+                      SelectedItem="{Binding Scheme}" />
+        </StackPanel>
+        <ContentControl Content="{Binding ActiveScheme}" />
+    </StackPanel>
+</UserControl>

@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             xmlns:views="using:Phantom.Workspaces.Views.Configuration"
              mc:Ignorable="d"
              x:Class="Phantom.Workspaces.Views.Configuration.RemoteAccessSettingsView"
              x:DataType="vm:RemoteAccessSettingsViewModel">
@@ -43,6 +44,11 @@
             <TextBlock Text="Warning: anonymous tunnel access exposes workspace data without authentication."
                        Foreground="#B00020"
                        TextWrapping="Wrap" />
+        </StackPanel>
+
+        <StackPanel Spacing="4">
+            <TextBlock Text="Authorization" FontWeight="Bold" />
+            <views:AuthSchemeSelectorView DataContext="{Binding AuthScheme}" />
         </StackPanel>
 
         <StackPanel Spacing="4">

@@ -162,6 +162,60 @@ public sealed class WorkspacesSettingsViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task WorkspacesSettingsViewModel_AuthScheme_RoundTripsThroughSaveAndLoad()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var settings = new WorkspacesSettingsViewModel(service);
+        settings.RemoteAccess.AuthScheme.Scheme = RemoteAuthentication.EntraScheme;
+        settings.RemoteAccess.AuthScheme.Entra.ClientId = "client-xyz";
+        settings.RemoteAccess.AuthScheme.Entra.Authority = "https://login.microsoftonline.com/contoso";
+        settings.RemoteAccess.AuthScheme.Entra.TenantId = "contoso";
+
+        try
+        {
+            var saved = await settings.SaveAsync();
+            Assert.Equal(RemoteAuthentication.EntraScheme, saved.DevTunnel.Authentication!.Scheme);
+
+            var reloaded = await service.LoadAsync(path);
+            Assert.NotNull(reloaded.DevTunnel.Authentication);
+            Assert.Equal(RemoteAuthentication.EntraScheme, reloaded.DevTunnel.Authentication!.Scheme);
+            Assert.Equal("client-xyz", reloaded.DevTunnel.Authentication.ClientId);
+            Assert.Equal("https://login.microsoftonline.com/contoso", reloaded.DevTunnel.Authentication.Authority);
+            Assert.Equal("contoso", reloaded.DevTunnel.Authentication.TenantId);
+
+            // Loading the persisted config re-selects the same scheme in a fresh view model.
+            var reopened = new WorkspacesSettingsViewModel(service, reloaded);
+            Assert.Equal(RemoteAuthentication.EntraScheme, reopened.RemoteAccess.AuthScheme.Scheme);
+            Assert.Equal("client-xyz", reopened.RemoteAccess.AuthScheme.Entra.ClientId);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
+    public void AuthSchemeSection_EntraMissingRequiredFields_IsInvalidAndDisablesSave()
+    {
+        var service = new ConfigurationPersistenceService(CreateTempConfigPath());
+        var settings = new WorkspacesSettingsViewModel(service);
+
+        // Default github scheme is valid and permits saving.
+        Assert.True(settings.CanSave);
+
+        // Selecting entra without required fields disables Save and surfaces a validation message.
+        settings.RemoteAccess.AuthScheme.Scheme = RemoteAuthentication.EntraScheme;
+        Assert.False(settings.CanSave);
+        Assert.Contains(settings.ValidationMessages, m => m.Contains("Entra"));
+
+        // Completing the required fields re-enables Save.
+        settings.RemoteAccess.AuthScheme.Entra.ClientId = "client-1";
+        settings.RemoteAccess.AuthScheme.Entra.Authority = "https://login.microsoftonline.com/tenant";
+        Assert.True(settings.CanSave);
+    }
+
+    [AvaloniaFact]
     public async Task Settings_SaveAsync_PersistsConfiguration_UsedByWizardAndDialog()
     {
         var path = CreateTempConfigPath();

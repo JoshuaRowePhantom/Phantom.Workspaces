@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Phantom.Workspaces.ViewModels.Configuration"
+             xmlns:views="using:Phantom.Workspaces.Views.Configuration"
              mc:Ignorable="d"
              x:Class="Phantom.Workspaces.Views.Configuration.DevTunnelWebSettingsView"
              x:DataType="vm:DevTunnelWebSettingsViewModel">
@@ -17,7 +18,8 @@
                        TextWrapping="Wrap"
                        Opacity="0.7" />
         </StackPanel>
-        <TextBlock Text="The dev tunnel endpoint is autodiscovered from the tunnel name. Authorizes automatically with your GitHub auth token (GITHUB_TOKEN or 'gh auth token')."
+        <TextBlock Text="The dev tunnel endpoint is autodiscovered from the tunnel name."
                    TextWrapping="Wrap" />
+        <views:AuthSchemeSelectorView DataContext="{Binding AuthScheme}" />
     </StackPanel>
 </UserControl>

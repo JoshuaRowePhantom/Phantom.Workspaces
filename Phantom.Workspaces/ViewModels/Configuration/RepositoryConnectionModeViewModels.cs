@@ -234,6 +234,7 @@ public sealed class WebSettingsViewModel : RepositoryConnectionModeViewModel
 public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeViewModel
 {
     private readonly RemoteAccessSettingsViewModel? sharedRemoteAccess;
+    private readonly AuthSchemeSelectorViewModel? localAuthScheme;
     private string? endpoint;
     private string? localTunnelName;
 
@@ -257,6 +258,10 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
         ArgumentNullException.ThrowIfNull(profile);
         this.endpoint = profile.WebEndpoint;
         this.sharedRemoteAccess = sharedRemoteAccess;
+        this.localAuthScheme = sharedRemoteAccess is null
+            ? new AuthSchemeSelectorViewModel(profile.Authentication)
+            : null;
+        this.AuthScheme.PropertyChanged += this.OnAuthSchemeChanged;
         if (sharedRemoteAccess is not null)
         {
             sharedRemoteAccess.PropertyChanged += this.OnSharedRemoteAccessChanged;
@@ -308,9 +313,19 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
     /// <summary>Shared helper text describing the "auto" tunnel-name discovery convention.</summary>
     public string TunnelNameHelperText => RemoteAccessSettingsViewModel.TunnelNameHelperText;
 
+    /// <summary>
+    /// Pluggable auth-scheme selector (issue #1457) projected into
+    /// <see cref="DataAccessConnectionProfile.Authentication"/>. When constructed with a shared
+    /// <see cref="RemoteAccessSettingsViewModel"/>, this is that section's selector so the connect-side
+    /// scheme and the host-side scheme are one and the same; otherwise it is a standalone selector
+    /// initialized from the profile's persisted authentication.
+    /// </summary>
+    public AuthSchemeSelectorViewModel AuthScheme =>
+        this.sharedRemoteAccess?.AuthScheme ?? this.localAuthScheme!;
+
     /// <inheritdoc />
     public override string Description =>
-        "Connect to a remote Phantom.Workspaces endpoint through a dev tunnel. Authorizes with your GitHub auth token (GITHUB_TOKEN or 'gh auth token').";
+        "Connect to a remote Phantom.Workspaces endpoint through a dev tunnel. Choose how the connection authorizes below.";
 
     /// <inheritdoc />
     public override string? ValidationMessage
@@ -321,9 +336,8 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
             // treats as auto) discovers the single Workspaces tunnel via
             // DevTunnelEndpointResolver.ResolveAsync, and the endpoint is autodiscovered from the
             // tunnel name. A user-supplied WebEndpoint is an optional override, never required.
-            // We treat blank/null tunnel name AS auto (matching DevTunnelNaming.IsAuto semantics)
-            // so a freshly-loaded wizard with no configuration is valid.
-            return null;
+            // The selected auth scheme must, however, be completely configured.
+            return this.AuthScheme.ValidationMessage;
         }
     }
 
@@ -332,7 +346,18 @@ public sealed class DevTunnelWebSettingsViewModel : RepositoryConnectionModeView
     {
         Mode = this.Mode,
         WebEndpoint = this.Endpoint,
+        Authentication = this.AuthScheme.ToRemoteAuthentication(),
     };
+
+    private void OnAuthSchemeChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(AuthSchemeSelectorViewModel.IsValid)
+            || e.PropertyName == nameof(AuthSchemeSelectorViewModel.ValidationMessage))
+        {
+            this.RaisePropertyChanged(nameof(this.IsValid));
+            this.RaisePropertyChanged(nameof(this.ValidationMessage));
+        }
+    }
 
     private void OnSharedRemoteAccessChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
