@@ -18,6 +18,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
     public static Shortcut Delete { get; } = new("Delete", "🗑");
     public static Shortcut StartAgentSession { get; } = new("StartAgentSession", "🤖");
     public static Shortcut StartShell { get; } = new("StartShell", "💻");
+    public static Shortcut NewAgentOnWorkspace { get; } = new("NewAgentOnWorkspace", "✨");
     public static Shortcut Edit { get; } = new("Edit", "✏️");
     public static Shortcut Clone { get; } = new("Clone", "⧉");
     public static Shortcut Review { get; } = new("Review", "±");
@@ -37,6 +38,7 @@ public sealed class Shortcut : IEquatable<Shortcut>
         "Delete" => "Delete entity",
         "StartAgentSession" => "Start agent session",
         "StartShell" => "Start shell",
+        "NewAgentOnWorkspace" => "New agent on workspace",
         "Edit" => "Edit entity",
         "Clone" => "Clone entity",
         "Review" => "Review changes",

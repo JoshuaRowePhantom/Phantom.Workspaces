@@ -1,0 +1,74 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Phantom.Workspaces.ViewModels"
+             x:Class="Phantom.Workspaces.Templates.NewAgentSelectionView"
+             x:DataType="vm:NewAgentSelectionViewModel">
+  <Grid RowDefinitions="Auto,Auto,*,Auto" Margin="20">
+    <StackPanel Grid.Row="0" Spacing="10" Margin="0,0,0,20">
+      <TextBlock Text="New Agent"
+                 FontSize="24"
+                 FontWeight="Bold" />
+      <TextBlock Text="Pick a manifest and configure its parameters, then start a session."
+                 FontSize="14"
+                 Opacity="0.7" />
+    </StackPanel>
+
+    <ComboBox Grid.Row="1"
+              HorizontalAlignment="Stretch"
+              Margin="0,0,0,16"
+              ItemsSource="{Binding Manifests}"
+              SelectedItem="{Binding SelectedManifest}">
+      <ComboBox.ItemTemplate>
+        <DataTemplate DataType="vm:NewAgentSelectionViewModel+AgentSourceItem">
+          <TextBlock Text="{Binding DisplayName}" />
+        </DataTemplate>
+      </ComboBox.ItemTemplate>
+    </ComboBox>
+
+    <ScrollViewer Grid.Row="2">
+      <ItemsControl ItemsSource="{Binding ManifestParameters.Parameters}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate DataType="vm:AgentManifestParameterRowViewModel">
+            <StackPanel Spacing="4" Margin="0,0,0,12">
+              <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
+              <TextBlock Text="{Binding Description}"
+                         Opacity="0.7"
+                         IsVisible="{Binding Description, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Grid.Column="0"
+                         Text="{Binding Value}"
+                         IsVisible="{Binding !IsExecutorPicker}" />
+                <ComboBox Grid.Column="0"
+                          HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding ExecutorOptions}"
+                          SelectedItem="{Binding SelectedExecutorOption}"
+                          IsVisible="{Binding IsExecutorPicker}">
+                  <ComboBox.ItemTemplate>
+                    <DataTemplate DataType="vm:ExecutorOptionViewModel">
+                      <TextBlock Text="{Binding DisplayName}" />
+                    </DataTemplate>
+                  </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Grid.Column="1"
+                        Content="Browse…"
+                        Margin="4,0,0,0"
+                        IsVisible="{Binding IsDirectoryPicker}"
+                        Click="OnBrowseButtonClick" />
+              </Grid>
+            </StackPanel>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </ScrollViewer>
+
+    <StackPanel Grid.Row="3"
+                Orientation="Horizontal"
+                HorizontalAlignment="Right"
+                Spacing="10"
+                Margin="0,20,0,0">
+      <Button Content="Start Session"
+              Command="{Binding ConfirmCommand}"
+              Classes="accent" />
+    </StackPanel>
+  </Grid>
+</UserControl>

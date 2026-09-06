@@ -156,6 +156,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         this.shortcutManager.AddShortcutHandler(this.openAgentSessionShortcutHandler);
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionFromEntityShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartAgentSessionOnProfileShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
+        this.shortcutManager.AddShortcutHandler(new NewAgentOnWorkspaceShortcutHandler(agentSessionShortcutContext, this.openAgentSessionShortcutHandler));
         this.shortcutManager.AddShortcutHandler(new StartShellFromEntityShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new StartShellOnProfileShortcutHandler(trustedExecutorSelector));
         this.shortcutManager.AddShortcutHandler(new OpenExternalEntityShortcutHandler());
@@ -517,6 +518,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         ?? throw new InvalidOperationException("The view model has not been initialized.");
 
     internal ShortcutManager ShortcutManager => this.shortcutManager;
+
+    /// <summary>#1461: the window-scoped lifetime, used to host background work (such as the
+    /// agent-session chat wiring) that must outlive the short-lived tab that initiated it —
+    /// notably the "New Agent" selection tab, which is dismissed the instant the launch begins.</summary>
+    internal Phantom.Workspaces.Gui.Shared.Utilities.ViewModelLifetime BackgroundLifetime => this.Lifetime;
 
     /// <summary>#1172: shared services holder. Exposes <see cref="ApplicationServices.UrlOpener"/>
     /// once <c>App.axaml.cs</c> has registered it.</summary>

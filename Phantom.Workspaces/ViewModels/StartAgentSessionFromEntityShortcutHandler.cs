@@ -211,54 +211,10 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
         return entityTypeSnapshot?.EntityId;
     }
 
-    private static async Task<EntityId?> FindDefaultAppliedToAsync(
+    private static Task<EntityId?> FindDefaultAppliedToAsync(
         IDataAccessLayer dataAccessLayer,
         EntityId appliedToEntityId)
-    {
-        var queryResult = await dataAccessLayer.QueryAsync(
-            new QueryRequest
-            {
-                Clauses =
-                [
-                    new TopLevelQueryClause
-                    {
-                        ClauseIdentifier = new QueryClauseIdentifier("default-manifest-for-entity"),
-                        Clause = new AndQueryClause
-                        {
-                            Clauses =
-                            [
-                                new EntityTypeQueryClause
-                                {
-                                    EntityTypeNames = new EntityTypeNameSet(["default"]),
-                                },
-                                new EntityFieldQueryClause
-                                {
-                                    FieldPath = new FieldPath("participants", "applied-to"),
-                                    ComparisonOperator = FieldComparisonOperator.Equals,
-                                    Value = JsonSerializer.SerializeToElement(appliedToEntityId.Value.ToString()),
-                                },
-                            ],
-                        },
-                    },
-                ],
-            });
-
-        foreach (var snapshot in queryResult.Batches.SelectMany(static batch => batch.Entities))
-        {
-            if (snapshot.Data is JsonElement data
-                && data.TryGetProperty("participants", out var participants)
-                && participants.TryGetProperty("value", out var valueEl))
-            {
-                var reference = valueEl.TryReadEntityReference();
-                if (reference?.EntityId is { } entityId)
-                {
-                    return entityId;
-                }
-            }
-        }
-
-        return null;
-    }
+        => DefaultRelationshipResolver.FindDefaultValueAppliedToAsync(dataAccessLayer, appliedToEntityId);
 }
 
 

@@ -72,6 +72,10 @@
         <templates:AgentManifestLaunchpadView />
     </DataTemplate>
 
+    <DataTemplate DataType="vm:NewAgentSelectionViewModel">
+        <templates:NewAgentSelectionView />
+    </DataTemplate>
+
     <DataTemplate DataType="vm:AgentManifestEditorViewModel">
         <templates:AgentManifestEditorView />
     </DataTemplate>
