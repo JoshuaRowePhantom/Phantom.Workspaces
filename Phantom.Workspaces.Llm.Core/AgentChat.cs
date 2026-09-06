@@ -1386,11 +1386,19 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 this.subAgentTableMap[childId.Value] = stub;
             }
-            _ = Task.Factory.StartNew(
+            // #1459: The observable-collection Add runs on the foreground scheduler, so it is
+            // fire-and-forget from the restore path's perspective. Track it under a lock (mirroring
+            // restoredSubAgentTerminalTasks) so callers can await restore completion deterministically;
+            // otherwise the Add can still be pending when a caller reads SubAgents.Count, observing 0.
+            var addTask = Task.Factory.StartNew(
                 () => this.subAgentItems.Add(stub),
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach,
                 this.foregroundScheduler);
+            lock (this.restoredSubAgentAddTasksLock)
+            {
+                this.restoredSubAgentAddTasks.Add(addTask);
+            }
 
             // #1128: A reloaded sub-agent's SDK run is no longer executing, so no terminal
             // Complete/Fail event will ever arrive to move it out of the default Running
@@ -1411,19 +1419,31 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private readonly List<Task> restoredSubAgentTerminalTasks = new();
     private readonly object restoredSubAgentTerminalTasksLock = new();
 
+    private readonly List<Task> restoredSubAgentAddTasks = new();
+    private readonly object restoredSubAgentAddTasksLock = new();
+
     /// <summary>
-    /// Test-only: awaits completion of every fire-and-forget "mark restored sub-agent
-    /// terminal" task queued by <see cref="RestoreSubAgentsAsync"/>. Enables deterministic
-    /// verification of the #1128 restore transition without polling.
+    /// Test-only: awaits completion of every fire-and-forget task queued by
+    /// <see cref="RestoreSubAgentsAsync"/> — both the "mark restored sub-agent terminal"
+    /// tasks (#1128) and the foreground-scheduler <c>subAgentItems.Add</c> tasks (#1459).
+    /// Enables deterministic verification of the restore transition (including that
+    /// <see cref="SubAgents"/> is fully populated) without polling.
     /// </summary>
     internal Task WaitForRestoredSubAgentsMarkedTerminalAsync()
     {
-        Task[] tasks;
+        Task[] terminalTasks;
         lock (this.restoredSubAgentTerminalTasksLock)
         {
-            tasks = this.restoredSubAgentTerminalTasks.ToArray();
+            terminalTasks = this.restoredSubAgentTerminalTasks.ToArray();
         }
-        return Task.WhenAll(tasks);
+
+        Task[] addTasks;
+        lock (this.restoredSubAgentAddTasksLock)
+        {
+            addTasks = this.restoredSubAgentAddTasks.ToArray();
+        }
+
+        return Task.WhenAll(terminalTasks.Concat(addTasks));
     }
 
     private Task MarkRestoredSubAgentTerminalAsync(
