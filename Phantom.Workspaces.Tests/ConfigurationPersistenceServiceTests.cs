@@ -305,6 +305,94 @@ public sealed class ConfigurationPersistenceServiceTests
         }
     }
 
+    [AvaloniaFact]
+    public async Task RemoteAuthentication_EachScheme_RoundTripsThroughConfigJson()
+    {
+        foreach (var scheme in new[]
+        {
+            RemoteAuthentication.GithubScheme,
+            RemoteAuthentication.EntraScheme,
+            RemoteAuthentication.OAuthScheme,
+            RemoteAuthentication.AnonymousScheme,
+        })
+        {
+            var path = CreateTempConfigPath();
+            var service = new ConfigurationPersistenceService(path);
+            var configuration = new WorkspacesConfiguration
+            {
+                DataAccess = new DataAccessConnectionProfile
+                {
+                    Mode = DataAccessMode.DevTunnelWeb,
+                    WebEndpoint = "https://example.devtunnels.ms/",
+                    Authentication = new RemoteAuthentication(
+                        Scheme: scheme,
+                        Endpoint: "https://example.devtunnels.ms/",
+                        ClientId: "client-id",
+                        Scopes: ["api://example/.default"],
+                        Remember: true),
+                },
+            };
+
+            try
+            {
+                await service.SaveAsync(configuration);
+                var reloaded = await service.LoadAsync();
+
+                var authentication = reloaded.DataAccess.Authentication;
+                Assert.NotNull(authentication);
+                Assert.Equal(scheme, authentication!.Scheme);
+                Assert.Equal("https://example.devtunnels.ms/", authentication.Endpoint);
+                Assert.Equal("client-id", authentication.ClientId);
+                Assert.Equal(["api://example/.default"], authentication.Scopes);
+                Assert.True(authentication.Remember);
+
+                // Full-configuration equality via the canonical serializer (records compare list
+                // properties by reference, so compare the serialized form instead).
+                Assert.Equal(
+                    ConfigurationPersistenceService.Serialize(configuration),
+                    ConfigurationPersistenceService.Serialize(reloaded));
+            }
+            finally
+            {
+                DeleteTempConfig(path);
+            }
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task RemoteAuthentication_ClientSecretPlaceholder_IsNotWrittenRaw()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.DevTunnelWeb,
+                WebEndpoint = "https://example.devtunnels.ms/",
+                Authentication = new RemoteAuthentication(
+                    Scheme: RemoteAuthentication.EntraScheme,
+                    ClientSecret: "${SECRET:example-secret}"),
+            },
+        };
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var json = await File.ReadAllTextAsync(path);
+
+            // The placeholder is stored verbatim; no raw secret is ever materialized.
+            Assert.Contains("${SECRET:example-secret}", json);
+
+            var reloaded = await service.LoadAsync();
+            Assert.Equal("${SECRET:example-secret}", reloaded.DataAccess.Authentication!.ClientSecret);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
     private static string CreateTempConfigPath()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{System.Guid.NewGuid():N}");

@@ -56,6 +56,73 @@ public sealed class WorkspacesConfigurationTests
         }
     }
 
+    [AvaloniaFact]
+    public void Configuration_LegacyUseGitHubAuthToken_MigratesToSchemeGithub()
+    {
+        // A dev-tunnel config with no explicit Authentication must migrate to the github scheme,
+        // preserving the retired useGitHubAuthToken default.
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.DevTunnelWeb,
+                WebEndpoint = "https://example.devtunnels.ms/",
+            },
+        };
+
+        var web = Assert.IsType<global::Phantom.Workspaces.WebRepositorySource>(configuration.ToRepositorySource());
+
+        Assert.True(web.UseGitHubAuthToken);
+        Assert.NotNull(web.Authentication);
+        Assert.Equal(RemoteAuthentication.GithubScheme, web.Authentication!.Scheme);
+    }
+
+    [AvaloniaFact]
+    public void Configuration_DevTunnelAnonymousAccessMode_MapsToSchemeAnonymous()
+    {
+        // Anonymous access mode must derive the anonymous scheme (and no GitHub token) when no
+        // explicit Authentication is configured.
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile { Mode = DataAccessMode.DevTunnelWeb },
+            DevTunnel = new DevTunnelConfiguration
+            {
+                TunnelName = "phantom-tunnel",
+                AccessMode = DevTunnelAccessMode.Anonymous,
+            },
+        };
+
+        var source = Assert.IsType<global::Phantom.Workspaces.DevTunnelNameRepositorySource>(
+            configuration.ToRepositorySource());
+
+        Assert.NotNull(source.Authentication);
+        Assert.Equal(RemoteAuthentication.AnonymousScheme, source.Authentication!.Scheme);
+    }
+
+    [AvaloniaFact]
+    public void Configuration_ExplicitAuthentication_OverridesDerivedDefault()
+    {
+        // An explicit Authentication on the data-access profile must win over the access-mode default.
+        var configuration = new WorkspacesConfiguration
+        {
+            DataAccess = new DataAccessConnectionProfile
+            {
+                Mode = DataAccessMode.DevTunnelWeb,
+                Authentication = new RemoteAuthentication(RemoteAuthentication.EntraScheme),
+            },
+            DevTunnel = new DevTunnelConfiguration
+            {
+                TunnelName = "phantom-tunnel",
+                AccessMode = DevTunnelAccessMode.Anonymous,
+            },
+        };
+
+        var source = Assert.IsType<global::Phantom.Workspaces.DevTunnelNameRepositorySource>(
+            configuration.ToRepositorySource());
+
+        Assert.Equal(RemoteAuthentication.EntraScheme, source.Authentication!.Scheme);
+    }
+
     private static string CreateTempConfigPath()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"phantom-config-{Guid.NewGuid():N}");

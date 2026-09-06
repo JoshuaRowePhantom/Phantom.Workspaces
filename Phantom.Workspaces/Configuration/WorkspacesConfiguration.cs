@@ -78,6 +78,13 @@ public sealed record DataAccessConnectionProfile
 
     /// <summary>Absolute web endpoint URL for web / dev tunnel modes.</summary>
     public string? WebEndpoint { get; init; }
+
+    /// <summary>
+    /// Optional pluggable authentication for web / dev-tunnel data-access modes (issue #1455). When
+    /// absent, the dev-tunnel path derives a legacy-migration default (github, or anonymous when the
+    /// tunnel access mode is anonymous). Any secret material is only ever a placeholder, never raw.
+    /// </summary>
+    public RemoteAuthentication? Authentication { get; init; }
 }
 
 /// <summary>
@@ -137,6 +144,12 @@ public sealed record DevTunnelConfiguration
 
     /// <summary>Tunnel access mode; private by default.</summary>
     public DevTunnelAccessMode AccessMode { get; init; } = DevTunnelAccessMode.Private;
+
+    /// <summary>
+    /// Optional pluggable authentication for the dev tunnel (issue #1455). Overrides the access-mode
+    /// derived default when set. Any secret material is only ever a placeholder, never raw.
+    /// </summary>
+    public RemoteAuthentication? Authentication { get; init; }
 }
 
 /// <summary>How the application applies updates discovered from the GitHub Releases feed.</summary>
@@ -244,19 +257,57 @@ public sealed record WorkspacesConfiguration
             DataAccessMode.Web => new WebRepositorySource(
                 this.DataAccess.WebEndpoint
                     ?? throw new InvalidOperationException(
-                        "Web data-access mode requires a web endpoint URL.")),
-            DataAccessMode.DevTunnelWeb => this.DataAccess.WebEndpoint is { Length: > 0 } devTunnelEndpoint
-                ? new WebRepositorySource(devTunnelEndpoint, UseGitHubAuthToken: true)
-                : this.DevTunnel.TunnelName is { Length: > 0 } devTunnelName
-                    ? new DevTunnelNameRepositorySource(
-                        devTunnelName,
-                        this.DevTunnel.AccessMode)
-                    : throw new InvalidOperationException(
-                        "Dev tunnel web data-access mode requires either a web endpoint URL or a dev tunnel name."),
+                        "Web data-access mode requires a web endpoint URL."),
+                UseGitHubAuthToken: false,
+                Authentication: this.DataAccess.Authentication),
+            DataAccessMode.DevTunnelWeb => this.ToDevTunnelRepositorySource(),
             DataAccessMode.RemoteMongo => throw new InvalidOperationException(
                 "Remote MongoDB connection is not yet supported by RepositorySource."),
             _ => throw new InvalidOperationException(
                 $"Unsupported data-access mode: {this.DataAccess.Mode}."),
         };
     }
+
+    /// <summary>
+    /// Projects the dev-tunnel data-access mode into a <see cref="RepositorySource"/>, threading the
+    /// resolved <see cref="RemoteAuthentication"/> (issue #1455) into both the endpoint-based and
+    /// tunnel-name-based sources.
+    /// </summary>
+    private RepositorySource ToDevTunnelRepositorySource()
+    {
+        var authentication = this.ResolveDevTunnelAuthentication();
+
+        if (this.DataAccess.WebEndpoint is { Length: > 0 } devTunnelEndpoint)
+        {
+            return new WebRepositorySource(
+                devTunnelEndpoint,
+                UseGitHubAuthToken: authentication.Scheme == RemoteAuthentication.GithubScheme,
+                Authentication: authentication);
+        }
+
+        if (this.DevTunnel.TunnelName is { Length: > 0 } devTunnelName)
+        {
+            return new DevTunnelNameRepositorySource(
+                devTunnelName,
+                this.DevTunnel.AccessMode,
+                authentication);
+        }
+
+        throw new InvalidOperationException(
+            "Dev tunnel web data-access mode requires either a web endpoint URL or a dev tunnel name.");
+    }
+
+    /// <summary>
+    /// Resolves the dev-tunnel authentication (issue #1455). An explicit configured value (on the
+    /// data-access profile, else the tunnel config) wins; otherwise a legacy-migration default is
+    /// derived: <c>anonymous</c> when the tunnel access mode is <see cref="DevTunnelAccessMode.Anonymous"/>,
+    /// otherwise <c>github</c> (mirroring the retired <c>useGitHubAuthToken</c> default; the obsolete
+    /// <see cref="DevTunnelAccessMode.Token"/> is treated like Private).
+    /// </summary>
+    private RemoteAuthentication ResolveDevTunnelAuthentication()
+        => this.DataAccess.Authentication
+            ?? this.DevTunnel.Authentication
+            ?? (this.DevTunnel.AccessMode == DevTunnelAccessMode.Anonymous
+                ? new RemoteAuthentication(RemoteAuthentication.AnonymousScheme)
+                : new RemoteAuthentication(RemoteAuthentication.GithubScheme));
 }
