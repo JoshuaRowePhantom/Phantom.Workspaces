@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
-using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Auth;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 

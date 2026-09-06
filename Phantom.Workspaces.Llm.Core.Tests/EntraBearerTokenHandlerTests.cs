@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using Azure.Core;
-using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Auth;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
 

@@ -2,6 +2,7 @@ using AgentSchema;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
+using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Llm.Mcp;
@@ -16,7 +17,7 @@ namespace Phantom.Workspaces.Llm.Mcp;
 /// The OAuth arm activates the MCP SDK's built-in OAuth client by populating
 /// <see cref="HttpClientTransportOptions.OAuth"/> (RFC 9728/8414 discovery, RFC 7591 dynamic
 /// registration, authorization-code + PKCE, silent refresh, 401 retry). The host-supplied pieces
-/// (interactive redirect delegate, token cache) are injected through <see cref="McpOAuthOptions"/>.
+/// (interactive redirect delegate, token cache) are injected through <see cref="InteractiveOAuthOptions"/>.
 /// </remarks>
 internal static class McpTransportFactory
 {
@@ -337,7 +338,7 @@ internal static class McpTransportFactory
         // collide ("conflicts with an existing registration on the machine"). Passing RedirectUri: null
         // lets MSAL bind its own ephemeral localhost loopback port, which Entra matches port-agnostically.
         var credential = oauthOptions.ResolveEntraCredential(
-            new McpEntraPinnedTokenRequest(authority, clientId, RedirectUri: null, displayName));
+            new EntraPinnedTokenRequest(authority, clientId, RedirectUri: null, displayName));
 
         var tokenProvider = new EntraPinnedTokenProvider(
             credential, scopes, timeProvider: null, logger: loggerFactory?.CreateLogger<EntraPinnedTokenProvider>());
@@ -368,8 +369,8 @@ internal static class McpTransportFactory
         return new HttpClientTransport(transportOptions, httpClient, loggerFactory, ownsHttpClient: true);
     }
 
-    internal static McpOAuthOptions ResolveOAuthOptions(AgentServices? services)
-        => services?.McpOAuthOptions as McpOAuthOptions ?? McpOAuthOptions.Default;
+    internal static InteractiveOAuthOptions ResolveOAuthOptions(AgentServices? services)
+        => services?.McpOAuthOptions as InteractiveOAuthOptions ?? InteractiveOAuthOptions.Default;
 
     /// <summary>
     /// Connects an MCP client with the #1421 "DCR-first, static-fallback-second" strategy. The

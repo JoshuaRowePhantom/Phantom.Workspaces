@@ -1,7 +1,7 @@
 using System.Security;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Authentication;
-using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Secrets;
 
 namespace Phantom.Workspaces.Llm.Core.Tests;
@@ -10,12 +10,13 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// Covers the persistent MCP OAuth token cache (#1384): the <see cref="ITokenCache"/> implementation
 /// over <see cref="IPlatformSecretStore"/> (round-trip, per-server keying, overwrite, clear, refresh
 /// / expiry preservation) and the DI factory that plugs into the #1382
-/// <see cref="McpOAuthOptions.TokenCacheProvider"/> seam. Tests use an in-memory
+/// <see cref="InteractiveOAuthOptions.TokenCacheProvider"/> seam. Tests use an in-memory
 /// <see cref="IPlatformSecretStore"/> fake and never touch the real Windows Credential Manager.
 /// </summary>
 public sealed class CredentialManagerTokenCacheTests
 {
     private const string ServerName = "github-mcp";
+    private const string KeyPrefix = "mcp-oauth:";
 
     private static TokenContainer SampleTokens() => new()
     {
@@ -31,7 +32,7 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_StoreThenGet_RoundTripsTokenContainer()
     {
         var store = new FakePlatformSecretStore();
-        var cache = new CredentialManagerTokenCache(store, ServerName);
+        var cache = new CredentialManagerTokenCache(store, KeyPrefix, ServerName);
         var tokens = SampleTokens();
 
         await cache.StoreTokensAsync(tokens, CancellationToken.None);
@@ -46,7 +47,7 @@ public sealed class CredentialManagerTokenCacheTests
     [Fact]
     public async Task TokenCache_GetWithNoStoredTokens_ReturnsNull()
     {
-        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), ServerName);
+        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), KeyPrefix, ServerName);
 
         var loaded = await cache.GetTokensAsync(CancellationToken.None);
 
@@ -57,12 +58,12 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_StoresUnderPerServerKey()
     {
         var store = new FakePlatformSecretStore();
-        var cache = new CredentialManagerTokenCache(store, ServerName);
+        var cache = new CredentialManagerTokenCache(store, KeyPrefix, ServerName);
 
         await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
 
         var key = Assert.Single(store.Secrets.Keys);
-        Assert.Equal(CredentialManagerTokenCache.KeyPrefix + ServerName, key);
+        Assert.Equal(KeyPrefix + ServerName, key);
         Assert.Contains(ServerName, key);
     }
 
@@ -70,8 +71,8 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_DifferentServers_DoNotShareTokens()
     {
         var store = new FakePlatformSecretStore();
-        var cacheA = new CredentialManagerTokenCache(store, "server-a");
-        var cacheB = new CredentialManagerTokenCache(store, "server-b");
+        var cacheA = new CredentialManagerTokenCache(store, KeyPrefix, "server-a");
+        var cacheB = new CredentialManagerTokenCache(store, KeyPrefix, "server-b");
 
         await cacheA.StoreTokensAsync(SampleTokens(), CancellationToken.None);
 
@@ -86,7 +87,7 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_OverwriteExistingTokens_ReplacesPreviousValue()
     {
         var store = new FakePlatformSecretStore();
-        var cache = new CredentialManagerTokenCache(store, ServerName);
+        var cache = new CredentialManagerTokenCache(store, KeyPrefix, ServerName);
 
         await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
         await cache.StoreTokensAsync(
@@ -104,7 +105,7 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_ClearTokens_RemovesStoredValue()
     {
         var store = new FakePlatformSecretStore();
-        var cache = new CredentialManagerTokenCache(store, ServerName);
+        var cache = new CredentialManagerTokenCache(store, KeyPrefix, ServerName);
         await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
 
         await cache.ClearAsync(CancellationToken.None);
@@ -117,7 +118,7 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_SerializesRefreshAndExpiryFields()
     {
         var store = new FakePlatformSecretStore();
-        var cache = new CredentialManagerTokenCache(store, ServerName);
+        var cache = new CredentialManagerTokenCache(store, KeyPrefix, ServerName);
         var tokens = SampleTokens();
 
         await cache.StoreTokensAsync(tokens, CancellationToken.None);
@@ -133,7 +134,7 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_LoadMiss_LogsInteractiveLoginRequired()
     {
         var logger = new CapturingLogger<CredentialManagerTokenCache>();
-        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), ServerName, logger);
+        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), KeyPrefix, ServerName, logger);
 
         var loaded = await cache.GetTokensAsync(CancellationToken.None);
 
@@ -148,7 +149,7 @@ public sealed class CredentialManagerTokenCacheTests
     public async Task TokenCache_StoreAndHit_LogAtDebug_WithoutTokenValue()
     {
         var logger = new CapturingLogger<CredentialManagerTokenCache>();
-        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), ServerName, logger);
+        var cache = new CredentialManagerTokenCache(new FakePlatformSecretStore(), KeyPrefix, ServerName, logger);
         var tokens = SampleTokens();
 
         await cache.StoreTokensAsync(tokens, CancellationToken.None);
@@ -173,8 +174,8 @@ public sealed class CredentialManagerTokenCacheTests
     [Fact]
     public void TokenCacheFactory_OnUnsupportedPlatform_ReturnsNull()
     {
-        var nullStoreProvider = CredentialManagerTokenCache.CreateProvider(new NullPlatformSecretStore());
-        var noStoreProvider = CredentialManagerTokenCache.CreateProvider(null);
+        var nullStoreProvider = CredentialManagerTokenCache.CreateProvider(new NullPlatformSecretStore(), KeyPrefix);
+        var noStoreProvider = CredentialManagerTokenCache.CreateProvider(null, KeyPrefix);
 
         Assert.Null(nullStoreProvider(ServerName));
         Assert.Null(noStoreProvider(ServerName));
@@ -184,15 +185,33 @@ public sealed class CredentialManagerTokenCacheTests
     public void TokenCacheFactory_IsRegisteredIntoTransportOAuthSeam()
     {
         var store = new FakePlatformSecretStore();
-        var options = new McpOAuthOptions
+        var options = new InteractiveOAuthOptions
         {
-            TokenCacheProvider = CredentialManagerTokenCache.CreateProvider(store),
+            TokenCacheProvider = CredentialManagerTokenCache.CreateProvider(store, KeyPrefix),
         };
 
         var cache = options.ResolveTokenCache(ServerName);
 
         Assert.NotNull(cache);
         Assert.IsType<CredentialManagerTokenCache>(cache);
+    }
+
+    [Fact]
+    public async Task CredentialManagerTokenCache_UsesCallerSuppliedKeyPrefix_KeysUnderThatNamespace()
+    {
+        // #1454: the Credential Manager key prefix is supplied by the caller (MCP passes "mcp-oauth:",
+        // dev-tunnel passes "devtunnel:"), not hard-coded. Tokens stored under a caller-supplied prefix
+        // must key under exactly that namespace and never under the old "mcp-oauth:" default.
+        const string devTunnelPrefix = "devtunnel:";
+        var store = new FakePlatformSecretStore();
+        var cache = new CredentialManagerTokenCache(store, devTunnelPrefix, ServerName);
+
+        await cache.StoreTokensAsync(SampleTokens(), CancellationToken.None);
+
+        var key = Assert.Single(store.Secrets.Keys);
+        Assert.Equal(devTunnelPrefix + ServerName, key);
+        Assert.StartsWith(devTunnelPrefix, key, StringComparison.Ordinal);
+        Assert.DoesNotContain("mcp-oauth:", key, StringComparison.Ordinal);
     }
 
     private sealed class FakePlatformSecretStore : IPlatformSecretStore

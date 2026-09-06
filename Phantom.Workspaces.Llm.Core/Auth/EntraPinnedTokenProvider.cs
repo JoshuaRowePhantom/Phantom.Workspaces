@@ -4,10 +4,10 @@ using Azure.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Phantom.Workspaces.Llm.Mcp;
+namespace Phantom.Workspaces.Llm.Auth;
 
 /// <summary>
-/// Acquires and caches Microsoft Entra access tokens for host-pinned (<c>entra-pinned</c>) MCP OAuth
+/// Acquires and caches Microsoft Entra access tokens for host-pinned (<c>entra-pinned</c>) OAuth
 /// (issue #1420). It wraps a first-party <see cref="TokenCredential"/> (normally
 /// <c>Azure.Identity.InteractiveBrowserCredential</c>), which authenticates with the v2 <c>scope</c>
 /// parameter — <b>not</b> the RFC 8707 <c>resource</c> indicator — side-stepping the audience-mismatch

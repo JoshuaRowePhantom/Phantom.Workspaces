@@ -1,30 +1,32 @@
 using Azure.Core;
 using ModelContextProtocol.Authentication;
 
-namespace Phantom.Workspaces.Llm.Mcp;
+namespace Phantom.Workspaces.Llm.Auth;
 
 /// <summary>
 /// Describes a single host-pinned Entra credential acquisition (issue #1420). Passed to the
-/// <see cref="McpOAuthOptions.EntraCredentialProvider"/> seam so the host can build a
+/// <see cref="InteractiveOAuthOptions.EntraCredentialProvider"/> seam so the host can build a
 /// <see cref="TokenCredential"/> (normally an <c>InteractiveBrowserCredential</c>) for the statically
 /// configured authority/client, and unit contexts can inject a fake credential without an MSAL
-/// dependency.
+/// dependency. This is a neutral, auth-generic type (issue #1454): the caller (MCP today, dev-tunnel
+/// later) supplies its own <see cref="CallerName"/>.
 /// </summary>
 /// <param name="Authority">The Entra tenant authority (e.g. <c>https://login.microsoftonline.com/&lt;tenant&gt;/v2.0</c>).</param>
 /// <param name="ClientId">The configured OAuth client id, or null for the credential's default.</param>
 /// <param name="RedirectUri">The host loopback redirect URI, or null when none was supplied.</param>
-/// <param name="ServerName">The MCP server display name; used to key the token cache per server.</param>
-public sealed record McpEntraPinnedTokenRequest(
+/// <param name="CallerName">The caller's display name (e.g. the MCP server name); used to key the token cache per caller.</param>
+public sealed record EntraPinnedTokenRequest(
     string Authority,
     string? ClientId,
     Uri? RedirectUri,
-    string ServerName);
+    string CallerName);
 
 
 /// <summary>
-/// Injection seam that supplies the host-provided pieces of the MCP SDK's OAuth client without the
-/// transport factory taking a hard dependency on the interactive redirect handler (sub-item #1385)
-/// or the persistent token cache (sub-item #1384). When no instance is threaded through
+/// Injection seam that supplies the host-provided pieces of an interactive OAuth client (issue #1454)
+/// without the transport factory taking a hard dependency on the interactive redirect handler
+/// (sub-item #1385) or the persistent token cache (sub-item #1384). This is the neutral, auth-generic
+/// surface shared by MCP (today) and dev-tunnel (later). When no instance is threaded through
 /// <see cref="Phantom.Workspaces.Llm.Interfaces.AgentServices.McpOAuthOptions"/>, the factory falls
 /// back to <see cref="Default"/>: a redirect delegate that fails clearly in headless/unit contexts
 /// and a null token cache (so the SDK uses its in-memory cache).
@@ -32,17 +34,17 @@ public sealed record McpEntraPinnedTokenRequest(
 /// <remarks>
 /// <para>
 /// Sub-item #1385 registers a real <see cref="RedirectDelegateProvider"/> (browser/loopback flow),
-/// and sub-item #1384 registers a real <see cref="TokenCacheProvider"/> (persistent per-server
+/// and sub-item #1384 registers a real <see cref="TokenCacheProvider"/> (persistent per-caller
 /// cache). Neither needs to touch the factory internals — they only replace the members here.
 /// </para>
 /// </remarks>
-public sealed class McpOAuthOptions
+public sealed class InteractiveOAuthOptions
 {
     /// <summary>
     /// The safe default used when the host threads no OAuth options through <c>AgentServices</c>:
     /// the failing "interactive OAuth not configured" redirect delegate and a null token cache.
     /// </summary>
-    public static McpOAuthOptions Default { get; } = new();
+    public static InteractiveOAuthOptions Default { get; } = new();
 
     /// <summary>
     /// Seam for sub-item #1385. Given the MCP server name, returns the SDK
@@ -81,25 +83,25 @@ public sealed class McpOAuthOptions
 
     /// <summary>
     /// Seam for the host-pinned Entra mode (issue #1420, integration point D). Given a
-    /// <see cref="McpEntraPinnedTokenRequest"/> (authority/client id/redirect URI/server name), returns
+    /// <see cref="EntraPinnedTokenRequest"/> (authority/client id/redirect URI/caller name), returns
     /// the <see cref="TokenCredential"/> used to acquire access tokens for the statically configured
     /// authority — normally an <c>InteractiveBrowserCredential</c>. When null, the factory throws a
     /// clear "not configured" error for any <c>entra-pinned</c> connection (headless/unit contexts that
     /// do not inject a credential). This mirrors <see cref="RedirectDelegateProvider"/> /
     /// <see cref="TokenCacheProvider"/>, keeping the transport factory free of a hard MSAL dependency.
     /// </summary>
-    public Func<McpEntraPinnedTokenRequest, TokenCredential>? EntraCredentialProvider { get; init; }
+    public Func<EntraPinnedTokenRequest, TokenCredential>? EntraCredentialProvider { get; init; }
 
     /// <summary>
     /// Resolves the host-pinned Entra <see cref="TokenCredential"/> for <paramref name="request"/>, or
     /// throws a clear, actionable error when no provider is registered.
     /// </summary>
-    public TokenCredential ResolveEntraCredential(McpEntraPinnedTokenRequest request)
+    public TokenCredential ResolveEntraCredential(EntraPinnedTokenRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         return this.EntraCredentialProvider?.Invoke(request)
             ?? throw new InvalidOperationException(
-                $"Host-pinned Entra authentication is not configured for MCP server '{request.ServerName}'.");
+                $"Host-pinned Entra authentication is not configured for '{request.CallerName}'.");
     }
 
     /// <summary>

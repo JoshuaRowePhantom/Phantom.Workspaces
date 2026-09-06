@@ -2,10 +2,10 @@ using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Phantom.Workspaces.Llm.Mcp;
+namespace Phantom.Workspaces.Llm.Auth;
 
 /// <summary>
-/// A <see cref="DelegatingHandler"/> that attaches a Microsoft Entra bearer token to outbound MCP
+/// A <see cref="DelegatingHandler"/> that attaches a Microsoft Entra bearer token to outbound
 /// requests, pinned to a single configured HTTPS origin (issue #1420). Before adding the
 /// <c>Authorization: Bearer</c> header it requires the request URI to match the configured origin
 /// (scheme + host + port) exactly; on any mismatch it attaches nothing, so a token is never leaked to

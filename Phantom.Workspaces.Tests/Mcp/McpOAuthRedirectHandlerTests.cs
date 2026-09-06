@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Security;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services.Mcp;
@@ -634,7 +635,7 @@ public sealed class McpOAuthRedirectHandlerTests
 
         // Part B: the Entra-pinned MSAL page uses the same builder for its SuccessMessage.
         var partBSuccess = EntraInteractiveCredentialFactory.BuildOptions(
-                new McpEntraPinnedTokenRequest(
+                new EntraPinnedTokenRequest(
                     "https://login.microsoftonline.com/tenant/v2.0", ClientId: null, RedirectUri: null, serverName))
             .BrowserCustomization!.SuccessMessage;
 
@@ -894,7 +895,7 @@ public sealed class McpOAuthRedirectHandlerTests
         Assert.NotNull(options.RedirectUri);
 
         var entraOptions = EntraInteractiveCredentialFactory.BuildOptions(
-            new McpEntraPinnedTokenRequest(
+            new EntraPinnedTokenRequest(
                 "https://login.microsoftonline.com/contoso/v2.0",
                 ClientId: null,
                 RedirectUri: null,

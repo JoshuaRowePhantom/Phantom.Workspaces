@@ -10,6 +10,7 @@ using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Mcp;
 using Phantom.Workspaces.Llm.Secrets;
 
@@ -177,6 +178,33 @@ public sealed class McpTransportFactoryTests
     }
 
     [Fact]
+    public async Task McpOAuthPath_AfterSeamGeneralization_ResolvesUnchanged()
+    {
+        // #1454 regression guard: after generalizing the MCP OAuth seam into the neutral
+        // InteractiveOAuthOptions, the transport factory must still resolve the host-provided options
+        // unchanged — the shared Default when the seam is null, and the same instance when supplied.
+        Assert.Same(InteractiveOAuthOptions.Default, McpTransportFactory.ResolveOAuthOptions(null));
+
+        var supplied = new InteractiveOAuthOptions
+        {
+            RedirectDelegateProvider = _ => (_, _, _) => Task.FromResult<string?>("auth-code"),
+        };
+        var services = new AgentServices { McpOAuthOptions = supplied };
+        Assert.Same(supplied, McpTransportFactory.ResolveOAuthOptions(services));
+
+        // And the resolved options still drive the SDK OAuth transport: the injected redirect delegate
+        // is used verbatim rather than the failing "not configured" default.
+        AuthorizationRedirectDelegate injected = (_, _, _) => Task.FromResult<string?>("resolved-code");
+        var injectedServices = new AgentServices
+        {
+            McpOAuthOptions = new InteractiveOAuthOptions { RedirectDelegateProvider = _ => injected },
+        };
+        var transport = await CreateAsync(OAuthTool(serverName: "seam-generalized"), injectedServices);
+        var options = GetHttpOptions(transport);
+        Assert.Same(injected, options.OAuth!.AuthorizationRedirectDelegate);
+    }
+
+    [Fact]
     public async Task CreateMcpTransport_OAuthWithoutTokenCache_LeavesTokenCacheNull()
     {
         var transport = await CreateAsync(OAuthTool());
@@ -192,7 +220,7 @@ public sealed class McpTransportFactoryTests
         AuthorizationRedirectDelegate injected = (_, _, _) => Task.FromResult<string?>("auth-code");
         var services = new AgentServices
         {
-            McpOAuthOptions = new McpOAuthOptions
+            McpOAuthOptions = new InteractiveOAuthOptions
             {
                 RedirectDelegateProvider = _ => injected,
             },
@@ -213,7 +241,7 @@ public sealed class McpTransportFactoryTests
         AuthorizationRedirectDelegate injected = (_, _, _) => Task.FromResult<string?>("auth-code");
         var services = new AgentServices
         {
-            McpOAuthOptions = new McpOAuthOptions
+            McpOAuthOptions = new InteractiveOAuthOptions
             {
                 RedirectDelegateProvider = _ => injected,
             },
@@ -645,10 +673,10 @@ public sealed class McpTransportFactoryTests
     {
         // #1427: the entra-pinned credential request must carry a null RedirectUri so MSAL binds its own
         // ephemeral loopback listener instead of colliding with the #1425 shared DCR listener's port.
-        McpEntraPinnedTokenRequest? captured = null;
+        EntraPinnedTokenRequest? captured = null;
         var services = new AgentServices
         {
-            McpOAuthOptions = new McpOAuthOptions
+            McpOAuthOptions = new InteractiveOAuthOptions
             {
                 RedirectUri = new Uri("http://localhost:59201/"),
                 EntraCredentialProvider = request =>
@@ -671,10 +699,10 @@ public sealed class McpTransportFactoryTests
         // #1427: even when McpOAuthOptions.RedirectUri points at a bound loopback listener, that URI is
         // never threaded into the entra-pinned request — the two subsystems must own separate ports.
         var sharedListenerUri = new Uri("http://localhost:59201/");
-        McpEntraPinnedTokenRequest? captured = null;
+        EntraPinnedTokenRequest? captured = null;
         var services = new AgentServices
         {
-            McpOAuthOptions = new McpOAuthOptions
+            McpOAuthOptions = new InteractiveOAuthOptions
             {
                 RedirectUri = sharedListenerUri,
                 EntraCredentialProvider = request =>
@@ -711,7 +739,7 @@ public sealed class McpTransportFactoryTests
     private static AgentServices EntraServices()
         => new()
         {
-            McpOAuthOptions = new McpOAuthOptions
+            McpOAuthOptions = new InteractiveOAuthOptions
             {
                 EntraCredentialProvider = _ =>
                     new StubTokenCredential("access-token", DateTimeOffset.UtcNow.AddHours(1)),

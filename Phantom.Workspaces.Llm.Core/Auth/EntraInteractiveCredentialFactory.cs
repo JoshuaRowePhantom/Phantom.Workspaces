@@ -1,20 +1,21 @@
 using Azure.Core;
 using Azure.Identity;
 using Microsoft.Extensions.Logging;
+using Phantom.Workspaces.Llm.Mcp;
 
-namespace Phantom.Workspaces.Llm.Mcp;
+namespace Phantom.Workspaces.Llm.Auth;
 
 /// <summary>
 /// Builds the default host-pinned Entra <see cref="TokenCredential"/> — an
-/// <see cref="InteractiveBrowserCredential"/> — for the <c>entra-pinned</c> MCP OAuth mode (issue
+/// <see cref="InteractiveBrowserCredential"/> — for the <c>entra-pinned</c> OAuth mode (issue
 /// #1420, integration points D and E). The GUI/desktop host wires this factory into
-/// <see cref="McpOAuthOptions.EntraCredentialProvider"/>; headless/unit contexts inject a fake
+/// <see cref="InteractiveOAuthOptions.EntraCredentialProvider"/>; headless/unit contexts inject a fake
 /// credential instead, so the transport factory never takes a hard MSAL dependency.
 /// </summary>
 /// <remarks>
 /// Tokens are persisted through MSAL's OS-backed cache (<see cref="TokenCachePersistenceOptions"/>)
-/// keyed per MCP server, so a restart can silently refresh without a fresh interactive sign-in and
-/// servers never share tokens. Tokens are never written to entity data or ordinary files.
+/// keyed per caller, so a restart can silently refresh without a fresh interactive sign-in and
+/// callers never share tokens. Tokens are never written to entity data or ordinary files.
 /// </remarks>
 public static class EntraInteractiveCredentialFactory
 {
@@ -23,30 +24,30 @@ public static class EntraInteractiveCredentialFactory
     /// authority is split into its authority host and tenant id; the configured client id and host
     /// loopback redirect URI are applied when present.
     /// </summary>
-    public static TokenCredential Create(McpEntraPinnedTokenRequest request)
+    public static TokenCredential Create(EntraPinnedTokenRequest request)
         => Create(request, loggerFactory: null);
 
     /// <summary>
     /// Creates an <see cref="InteractiveBrowserCredential"/> for <paramref name="request"/>, logging the
-    /// credential creation through <paramref name="loggerFactory"/> when supplied. Only the server name
+    /// credential creation through <paramref name="loggerFactory"/> when supplied. Only the caller name
     /// and (safe) authority host are logged — never a client secret or token (#1446/#1408 redaction).
     /// </summary>
-    public static TokenCredential Create(McpEntraPinnedTokenRequest request, ILoggerFactory? loggerFactory)
+    public static TokenCredential Create(EntraPinnedTokenRequest request, ILoggerFactory? loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Mcp.EntraInteractiveCredentialFactory");
+        var logger = loggerFactory?.CreateLogger("Phantom.Workspaces.Llm.Auth.EntraInteractiveCredentialFactory");
         if (TryParseAuthority(request.Authority, out var authorityHost, out _))
         {
             logger?.LogInformation(
-                "Creating host-pinned Entra credential for MCP server '{ServerName}' against authority host {AuthorityHost}.",
-                request.ServerName,
+                "Creating host-pinned Entra credential for '{CallerName}' against authority host {AuthorityHost}.",
+                request.CallerName,
                 authorityHost.GetLeftPart(UriPartial.Authority));
         }
         else
         {
             logger?.LogInformation(
-                "Creating host-pinned Entra credential for MCP server '{ServerName}'.", request.ServerName);
+                "Creating host-pinned Entra credential for '{CallerName}'.", request.CallerName);
         }
 
         return new InteractiveBrowserCredential(BuildOptions(request));
@@ -55,10 +56,10 @@ public static class EntraInteractiveCredentialFactory
     /// <summary>
     /// Builds the <see cref="InteractiveBrowserCredentialOptions"/> for <paramref name="request"/>. The
     /// authority is split into its authority host and tenant id; the configured client id and (only when
-    /// present) redirect URI are applied. When <see cref="McpEntraPinnedTokenRequest.RedirectUri"/> is
+    /// present) redirect URI are applied. When <see cref="EntraPinnedTokenRequest.RedirectUri"/> is
     /// null the redirect URI is left unset so MSAL binds its own ephemeral loopback listener (#1427).
     /// </summary>
-    internal static InteractiveBrowserCredentialOptions BuildOptions(McpEntraPinnedTokenRequest request)
+    internal static InteractiveBrowserCredentialOptions BuildOptions(EntraPinnedTokenRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -66,15 +67,15 @@ public static class EntraInteractiveCredentialFactory
         {
             TokenCachePersistenceOptions = new TokenCachePersistenceOptions
             {
-                Name = "phantom-mcp-oauth:" + request.ServerName,
+                Name = "phantom-mcp-oauth:" + request.CallerName,
             },
 
             // #1445 Part B: name the authorized server on MSAL's loopback success/error page (rendered as
             // raw HTML) using the same shared, HTML-encoded builder as the Phantom-owned DCR page.
             BrowserCustomization = new BrowserCustomizationOptions
             {
-                SuccessMessage = McpOAuthClosePage.Success(request.ServerName),
-                ErrorMessage = McpOAuthClosePage.Error(request.ServerName),
+                SuccessMessage = McpOAuthClosePage.Success(request.CallerName),
+                ErrorMessage = McpOAuthClosePage.Error(request.CallerName),
             },
         };
 
