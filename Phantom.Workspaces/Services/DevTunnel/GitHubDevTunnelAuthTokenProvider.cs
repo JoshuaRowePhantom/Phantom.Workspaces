@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.DevTunnels.Contracts;
 using Phantom.Workspaces.Llm;
 
 namespace Phantom.Workspaces.Services.DevTunnel;
@@ -27,6 +28,9 @@ public sealed class GitHubDevTunnelAuthTokenProvider : IDevTunnelAuthTokenProvid
     {
         this.accountUpsertService = accountUpsertService;
     }
+
+    /// <summary>The GitHub Management-API authentication scheme.</summary>
+    public string? AuthenticationScheme => TunnelAuthenticationSchemes.GitHub;
 
     public async Task<string> GetAccessTokenAsync(CancellationToken cancellationToken = default)
     {
