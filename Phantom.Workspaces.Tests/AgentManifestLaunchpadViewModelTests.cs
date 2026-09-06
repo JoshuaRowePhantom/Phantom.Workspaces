@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text.Json;
@@ -346,6 +347,152 @@ public sealed class AgentManifestLaunchpadViewModelTests
         await viewModel.OpenTabAsync(launchpad);
         await launchpad.ExecutorOptionsLoaded;
         return (viewModel, launchpad);
+    }
+
+    // ---- Issue #1463: launchpad hosts the shared ManifestParametersViewModel component ----
+
+    private const string Issue1463RequiredManifestEntityId = "d1463101-0000-4000-8000-000000000101";
+    private const string Issue1463ExecutorManifestEntityId = "d1463102-0000-4000-8000-000000000102";
+
+    private const string Issue1463RequiredManifestEntityJson =
+        """
+        {
+          "entity-id": "d1463101-0000-4000-8000-000000000101",
+          "entity-types": ["entity", "agent-manifest"],
+          "names": [["tests", "agent-manifests", "issue-1463-required"]],
+          "display-name": { "default": "Issue 1463 Required" },
+          "manifest": {
+            "name": "issue-1463-required",
+            "displayName": "Issue 1463 Required",
+            "parameters": {
+              "properties": [
+                { "name": "alpha", "required": true }
+              ]
+            },
+            "template": {
+              "kind": "prompt",
+              "name": "issue-1463-required",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+            }
+          }
+        }
+        """;
+
+    private const string Issue1463ExecutorManifestEntityJson =
+        """
+        {
+          "entity-id": "d1463102-0000-4000-8000-000000000102",
+          "entity-types": ["entity", "agent-manifest"],
+          "names": [["tests", "agent-manifests", "issue-1463-executor"]],
+          "display-name": { "default": "Issue 1463 Executor" },
+          "manifest": {
+            "name": "issue-1463-executor",
+            "displayName": "Issue 1463 Executor",
+            "parameters": {
+              "properties": [
+                { "name": "topic", "required": false },
+                { "name": "worker-executor", "kind": "executor", "required": true }
+              ]
+            },
+            "template": {
+              "kind": "prompt",
+              "name": "issue-1463-executor",
+              "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
+            }
+          }
+        }
+        """;
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Launchpad_HostsParametersComponent_CanStartTracksIsValid()
+    {
+        var (viewModel, launchpad, _) = await OpenLaunchpadForAsync(
+            new EntityId(Issue1463RequiredManifestEntityId),
+            Issue1463RequiredManifestEntityJson);
+
+        await using (viewModel)
+        {
+            var row = Assert.Single(launchpad.ManifestParameters.Parameters);
+
+            // Required row empty → component invalid and launchpad mirrors it.
+            Assert.False(launchpad.ManifestParameters.IsValid);
+            Assert.Equal(launchpad.ManifestParameters.IsValid, launchpad.CanStart);
+            Assert.False(launchpad.StartSessionCommand.CanExecute(null));
+
+            row.Value = "provided";
+
+            Assert.True(launchpad.ManifestParameters.IsValid);
+            Assert.Equal(launchpad.ManifestParameters.IsValid, launchpad.CanStart);
+            Assert.True(launchpad.StartSessionCommand.CanExecute(null));
+        }
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Launchpad_StartSession_UsesComponentValuesAndSelections()
+    {
+        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(UserComputerProfileEntityId), UserComputerProfileEntityJson);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(TrustProfileEntityId), TrustProfileEntityJson);
+        var manifestEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(Issue1463ExecutorManifestEntityId), Issue1463ExecutorManifestEntityJson);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var spy = new SpyRunningAgentChatTable(inner);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            spy);
+
+        var launchpad = new AgentManifestLaunchpadViewModel(
+            manifestEntity,
+            agentSessionShortcutContext,
+            openAgentSessionShortcutHandler,
+            viewModel,
+            new Dictionary<string, string> { ["topic"] = "weather" })
+        {
+            Id = $"launchpad-{manifestEntity.EntityId}",
+            Title = manifestEntity.DisplayName,
+            DockRegion = "full",
+            Entity = manifestEntity,
+        };
+
+        await viewModel.OpenTabAsync(launchpad);
+        await launchpad.ExecutorOptionsLoaded;
+
+        await using (viewModel)
+        {
+            var executorRow = Assert.Single(launchpad.ManifestParameters.Parameters, p => p.IsExecutorPicker);
+            var trustOption = Assert.Single(
+                executorRow.ExecutorOptions,
+                option => option.Kind == ExecutorParameterSelection.TrustProfileKind
+                    && SelectionValue(option.Selection, ExecutorParameterSelection.TrustProfileKind) == "issue-1440-remote");
+            executorRow.SelectedExecutorOption = trustOption;
+
+            launchpad.StartSessionCommand.Execute(null);
+
+            var sessionTab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
+                viewModel.SelectedWorkspacePane);
+
+            Assert.NotNull(sessionTab.Entity);
+            Assert.True(sessionTab.Entity!.Data is JsonElement);
+            var data = (JsonElement)sessionTab.Entity!.Data!;
+
+            // Text value collected via component.GetValues().
+            Assert.True(data.TryGetProperty("parameter-values", out var parameterValues));
+            Assert.Equal("weather", parameterValues.GetProperty("topic").GetString());
+
+            // Executor selection collected via component.GetSelections().
+            Assert.True(data.TryGetProperty("parameter-selections", out var parameterSelections));
+            Assert.True(parameterSelections.TryGetProperty("worker-executor", out var workerSelection));
+            Assert.True(ExecutorParameterSelection.TryGetTrustProfile(workerSelection, out var nameOrId));
+            Assert.Equal("issue-1440-remote", nameOrId);
+        }
     }
 
     private sealed class SpyRunningAgentChatTable : IRunningAgentChatTable

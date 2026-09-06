@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -11,7 +9,6 @@ using AgentSchema;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
-using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
@@ -23,13 +20,19 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
     private readonly AgentSessionShortcutContext agentSessionShortcutContext;
     private readonly OpenAgentSessionShortcutHandler openAgentSessionShortcutHandler;
     private readonly MainWindowViewModel mainWindowViewModel;
-    private readonly IReadOnlyDictionary<string, string>? initialParameterValues;
     private readonly Task executorOptionsLoadTask;
     private bool canStart;
 
     public SubscribedEntityViewModel ManifestEntity { get; }
 
-    public ObservableCollection<AgentManifestParameterRowViewModel> Parameters { get; } = [];
+    /// <summary>
+    /// The hosted, reusable manifest-parameter component (issue #1463). Owns the parameter rows,
+    /// their validation aggregate, value collection, and persist-by-name behavior.
+    /// </summary>
+    public ManifestParametersViewModel ManifestParameters { get; }
+
+    /// <summary>Passthrough to the hosted component's parameter rows for view binding and tests.</summary>
+    public ObservableCollection<AgentManifestParameterRowViewModel> Parameters => this.ManifestParameters.Parameters;
 
     public bool CanStart
     {
@@ -51,7 +54,9 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         this.agentSessionShortcutContext = agentSessionShortcutContext;
         this.openAgentSessionShortcutHandler = openAgentSessionShortcutHandler;
         this.mainWindowViewModel = mainWindowViewModel;
-        this.initialParameterValues = initialParameterValues;
+
+        this.ManifestParameters = new ManifestParametersViewModel(mainWindowViewModel, initialParameterValues);
+        this.ManifestParameters.PropertyChanged += this.OnManifestParametersPropertyChanged;
 
         this.StartSessionCommand = new RelayCommand(
             async _ => await this.StartSessionAsync(),
@@ -59,14 +64,10 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
         this.EditManifestCommand = new RelayCommand(
             async _ => await this.EditManifestAsync());
 
-        this.LoadParameters();
+        this.ManifestParameters.SetManifest(this.ManifestEntity);
         this.UpdateCanStart();
 
-        this.Parameters.CollectionChanged += this.OnParametersCollectionChanged;
-
-        this.executorOptionsLoadTask = this.Parameters.Any(p => p.IsExecutorPicker)
-            ? this.LoadExecutorOptionsAsync(this.Lifetime.Token)
-            : Task.CompletedTask;
+        this.executorOptionsLoadTask = this.ManifestParameters.ExecutorOptionsLoaded;
 
         if (this.Parameters.Count == 0)
         {
@@ -80,79 +81,17 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
     /// </summary>
     internal Task ExecutorOptionsLoaded => this.executorOptionsLoadTask;
 
-    private void LoadParameters()
+    private void OnManifestParametersPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (this.ManifestEntity.Data is not JsonElement data
-            || !data.TryGetProperty("manifest", out var manifestElement))
-        {
-            return;
-        }
-
-        AgentManifest manifest;
-        try
-        {
-            manifest = AgentManifestLoader.LoadManifestFromJson(manifestElement.GetRawText());
-        }
-        catch
-        {
-            return;
-        }
-
-        var parameters = manifest.Parameters?.Properties;
-        if (parameters is null || parameters.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var param in parameters)
-        {
-            var paramName = param.Name ?? string.Empty;
-            var row = new AgentManifestParameterRowViewModel
-            {
-                Name = paramName,
-                DisplayName = paramName,
-                Description = param.Description ?? string.Empty,
-                IsRequired = param.Required == true,
-                ParameterKind = DetermineParameterKind(param.Kind, paramName),
-            };
-
-            if (this.initialParameterValues is not null
-                && this.initialParameterValues.TryGetValue(paramName, out var initialValue))
-            {
-                row.Value = initialValue;
-            }
-            else if (param.Default is string defaultStr)
-            {
-                row.Value = defaultStr;
-            }
-            else if (param.Default is not null)
-            {
-                row.Value = param.Default.ToString() ?? string.Empty;
-            }
-
-            row.PropertyChanged += this.OnParameterPropertyChanged;
-            this.Parameters.Add(row);
-        }
-    }
-
-    private void OnParameterPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName is nameof(AgentManifestParameterRowViewModel.Value)
-            or nameof(AgentManifestParameterRowViewModel.IsValid))
+        if (e.PropertyName == nameof(ManifestParametersViewModel.IsValid))
         {
             this.UpdateCanStart();
         }
     }
 
-    private void OnParametersCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        this.UpdateCanStart();
-    }
-
     private void UpdateCanStart()
     {
-        this.CanStart = this.Parameters.Count == 0
-            || this.Parameters.All(p => p.IsValid);
+        this.CanStart = this.ManifestParameters.IsValid;
         this.StartSessionCommand.RaiseCanExecuteChanged();
     }
 
@@ -165,26 +104,12 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
 
         var agentSessionId = Guid.NewGuid().ToString("n");
 
-        // Collect parameter values
-        var parameterValues = new Dictionary<string, string>(StringComparer.Ordinal);
-        var parameterSelections = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
-        foreach (var row in this.Parameters)
-        {
-            if (row.IsExecutorPicker)
-            {
-                if (row.Selection is { } selection)
-                {
-                    parameterSelections[row.Name] = selection;
-                }
+        // Collect parameter values through the hosted component, then commit the launch so retained
+        // by-name values for parameters absent from this manifest are pruned (issue #1463).
+        var parameterValues = this.ManifestParameters.GetValues();
+        var parameterSelections = this.ManifestParameters.GetSelections();
+        this.ManifestParameters.CommitLaunch();
 
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(row.Value))
-            {
-                parameterValues[row.Name] = row.Value;
-            }
-        }
         IReadOnlyDictionary<string, string>? parametersDict = parameterValues.Count > 0 ? parameterValues : null;
         IReadOnlyDictionary<string, JsonElement>? parameterSelectionsDict =
             parameterSelections.Count > 0 ? parameterSelections : null;
@@ -316,146 +241,4 @@ public sealed class AgentManifestLaunchpadViewModel : WorkspaceTabViewModel
             this.ManifestEntity);
     }
 
-    internal static AgentManifestParameterKind DetermineParameterKind(string parameterName)
-    {
-        return parameterName == "working-directory"
-            ? AgentManifestParameterKind.Directory
-            : AgentManifestParameterKind.Text;
-    }
-
-    /// <summary>
-    /// Determines the launchpad row kind, honouring the manifest parameter's explicit <c>kind</c> field
-    /// first (issue #1440, per-component-executor-binding) and falling back to name-based inference when
-    /// no kind is declared. Replaces the earlier name-only heuristic that could never surface the
-    /// <c>executor</c> picker.
-    /// </summary>
-    internal static AgentManifestParameterKind DetermineParameterKind(string? kind, string parameterName)
-    {
-        if (!string.IsNullOrWhiteSpace(kind))
-        {
-            if (string.Equals(kind, AgentManifestParameterKinds.Executor, StringComparison.Ordinal))
-            {
-                return AgentManifestParameterKind.Executor;
-            }
-
-            if (string.Equals(kind, "directory", StringComparison.Ordinal))
-            {
-                return AgentManifestParameterKind.Directory;
-            }
-        }
-
-        return DetermineParameterKind(parameterName);
-    }
-
-    private async Task LoadExecutorOptionsAsync(CancellationToken ct = default)
-    {
-        var executorRows = this.Parameters.Where(p => p.IsExecutorPicker).ToList();
-        if (executorRows.Count == 0)
-        {
-            return;
-        }
-
-        try
-        {
-            var dataAccessLayer = this.mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer;
-
-            var queryRequest = new QueryRequest
-            {
-                Clauses =
-                [
-                    new TopLevelQueryClause
-                    {
-                        ClauseIdentifier = new QueryClauseIdentifier { Value = "trust-profiles" },
-                        Clause = new EntityTypeQueryClause
-                        {
-                            EntityTypeNames = new EntityTypeNameSet { Values = ["llm-trust-profile"] },
-                        },
-                    },
-                    new TopLevelQueryClause
-                    {
-                        ClauseIdentifier = new QueryClauseIdentifier { Value = "user-computer-profiles" },
-                        Clause = new EntityTypeQueryClause
-                        {
-                            EntityTypeNames = new EntityTypeNameSet { Values = ["user-computer-profile"] },
-                        },
-                    },
-                ],
-            };
-
-            var queryResult = await dataAccessLayer.QueryAsync(queryRequest);
-            var snapshotIds = queryResult.Batches
-                .SelectMany(batch => batch.Entities)
-                .Select(snapshot => snapshot.EntityId)
-                .Distinct()
-                .ToArray();
-
-            var entities = await this.mainWindowViewModel.EntityBroker.GetEntitiesAsync(snapshotIds);
-
-            var options = new List<ExecutorOptionViewModel>();
-            foreach (var entity in entities)
-            {
-                if (entity.IsEntityType("user-computer-profile"))
-                {
-                    options.Add(new ExecutorOptionViewModel
-                    {
-                        Kind = ExecutorParameterSelection.UserComputerProfileKind,
-                        DisplayName = $"{entity.DisplayName} (computer)",
-                        Selection = ExecutorParameterSelection.ForUserComputerProfile(entity.EntityId.ToString()),
-                    });
-                }
-                else if (entity.IsEntityType("llm-trust-profile"))
-                {
-                    options.Add(new ExecutorOptionViewModel
-                    {
-                        Kind = ExecutorParameterSelection.TrustProfileKind,
-                        DisplayName = $"{entity.DisplayName} (trust policy)",
-                        Selection = ExecutorParameterSelection.ForTrustProfile(GetTrustProfileNameOrId(entity)),
-                    });
-                }
-            }
-
-            foreach (var row in executorRows)
-            {
-                foreach (var option in options)
-                {
-                    row.ExecutorOptions.Add(option);
-                }
-            }
-        }
-        catch (Exception)
-        {
-            // Best-effort population; leave the picker empty on failure (required rows stay invalid).
-        }
-    }
-
-    private static string GetTrustProfileNameOrId(SubscribedEntityViewModel entity)
-    {
-        if (entity.Data is JsonElement data
-            && data.TryGetProperty("names", out var names)
-            && names.ValueKind == JsonValueKind.Array
-            && names.GetArrayLength() > 0)
-        {
-            var first = names[0];
-            if (first.ValueKind == JsonValueKind.String
-                && !string.IsNullOrWhiteSpace(first.GetString()))
-            {
-                return first.GetString()!;
-            }
-
-            if (first.ValueKind == JsonValueKind.Array)
-            {
-                var parts = first.EnumerateArray()
-                    .Where(static item => item.ValueKind == JsonValueKind.String)
-                    .Select(static item => item.GetString())
-                    .Where(static value => !string.IsNullOrWhiteSpace(value))
-                    .ToArray();
-                if (parts.Length > 0)
-                {
-                    return parts[^1]!;
-                }
-            }
-        }
-
-        return entity.EntityId.ToString();
-    }
 }

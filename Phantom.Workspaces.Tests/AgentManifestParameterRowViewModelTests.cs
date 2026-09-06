@@ -7,7 +7,7 @@ public sealed class AgentManifestParameterRowViewModelTests
     [Fact]
     public void DetermineParameterKind_NameIsWorkingDirectory_ReturnsDirectory()
     {
-        var kind = AgentManifestLaunchpadViewModel.DetermineParameterKind("working-directory");
+        var kind = ManifestParametersViewModel.DetermineParameterKind("working-directory");
 
         Assert.Equal(AgentManifestParameterKind.Directory, kind);
     }
@@ -15,7 +15,7 @@ public sealed class AgentManifestParameterRowViewModelTests
     [Fact]
     public void DetermineParameterKind_NameIsOther_ReturnsText()
     {
-        var kind = AgentManifestLaunchpadViewModel.DetermineParameterKind("trust-profile");
+        var kind = ManifestParametersViewModel.DetermineParameterKind("trust-profile");
 
         Assert.Equal(AgentManifestParameterKind.Text, kind);
     }
@@ -23,7 +23,7 @@ public sealed class AgentManifestParameterRowViewModelTests
     [Fact]
     public void DetermineParameterKind_EmptyName_ReturnsText()
     {
-        var kind = AgentManifestLaunchpadViewModel.DetermineParameterKind(string.Empty);
+        var kind = ManifestParametersViewModel.DetermineParameterKind(string.Empty);
 
         Assert.Equal(AgentManifestParameterKind.Text, kind);
     }
