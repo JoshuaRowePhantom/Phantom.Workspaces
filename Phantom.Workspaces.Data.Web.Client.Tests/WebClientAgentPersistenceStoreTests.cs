@@ -170,6 +170,38 @@ public sealed class WebClientAgentPersistenceStoreTests
         Assert.Equal("child-3", result[2].Value);
     }
 
+    [Fact]
+    public async Task WebClientAgentPersistenceStore_UsesSharedAuthenticatedClient_NoOwnHeaderOrRetry()
+    {
+        // Issue #1456: the store consumes an already-authenticated HttpClient. It must not add an
+        // X-Tunnel-Authorization header itself, and it must not retry on 401 — the shared
+        // DevTunnelAuthenticationHandler owns both.
+        var callCount = 0;
+        var sawTunnelHeader = false;
+        var handler = new RecordingHttpMessageHandler(request =>
+        {
+            callCount++;
+            if (request.Headers.Contains("X-Tunnel-Authorization"))
+            {
+                sawTunnelHeader = true;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+        });
+        using var httpClient = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://example.test"),
+        };
+        using var store = new WebClientAgentPersistenceStore("https://example.test", httpClient);
+
+        var exception = await Assert.ThrowsAsync<WebDataAccessRequestException>(
+            () => store.ReadMessagesAsync(new ReadMessagesRequest { AgentSessionId = "session-id" }).AsTask());
+
+        Assert.Equal(HttpStatusCode.Unauthorized, exception.StatusCode);
+        Assert.False(sawTunnelHeader); // store attaches no auth header of its own
+        Assert.Equal(1, callCount);    // no internal retry — a single request is made
+    }
+
     private static HttpResponseMessage JsonResponse<T>(T value)
     {
         return new HttpResponseMessage(HttpStatusCode.OK)

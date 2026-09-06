@@ -7,17 +7,20 @@ using Phantom.Workspaces.Llm.Interfaces;
 
 namespace Phantom.Workspaces.Data.Web.Client;
 
+/// <summary>
+/// An <see cref="IAgentPersistenceStore"/> over the remote web persistence endpoint. It consumes an
+/// already-authenticated <see cref="HttpClient"/> and knows nothing about dev tunnels or tokens:
+/// attaching the <c>X-Tunnel-Authorization</c> header and retrying on a relay <c>401</c> are owned by the
+/// shared <c>DevTunnelAuthenticationHandler</c> in the client's pipeline (issue #1456).
+/// </summary>
 public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDisposable
 {
     private readonly HttpClient httpClient;
     private readonly bool ownsHttpClient;
-    private readonly Func<string?>? devTunnelAccessTokenResolver;
     private static readonly JsonSerializerOptions JsonSerializerOptions = AIJsonUtilities.DefaultOptions;
 
     public WebClientAgentPersistenceStore(
         string endpoint,
-        string? devTunnelAccessToken = null,
-        Func<string?>? devTunnelAccessTokenResolver = null,
         HttpClient? httpClient = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(endpoint);
@@ -31,17 +34,10 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
             BaseAddress = endpointUri,
         };
         this.ownsHttpClient = httpClient is null;
-        this.devTunnelAccessTokenResolver = devTunnelAccessTokenResolver;
 
         if (this.httpClient.BaseAddress is null)
         {
             this.httpClient.BaseAddress = endpointUri;
-        }
-
-        if (!string.IsNullOrWhiteSpace(devTunnelAccessToken)
-            && !this.httpClient.DefaultRequestHeaders.Contains("X-Tunnel-Authorization"))
-        {
-            this.httpClient.DefaultRequestHeaders.Add("X-Tunnel-Authorization", $"tunnel {devTunnelAccessToken}");
         }
     }
 
@@ -85,40 +81,6 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
                 "Web agent persistence call to '/agent/persistence/restore' timed out.",
                 statusCode: null,
                 exception);
-        }
-
-        if (response.StatusCode == HttpStatusCode.Unauthorized && this.devTunnelAccessTokenResolver is not null)
-        {
-            response.Dispose();
-            var freshToken = this.devTunnelAccessTokenResolver();
-            if (!string.IsNullOrWhiteSpace(freshToken))
-            {
-                this.httpClient.DefaultRequestHeaders.Remove("X-Tunnel-Authorization");
-                this.httpClient.DefaultRequestHeaders.Add("X-Tunnel-Authorization", $"tunnel {freshToken}");
-            }
-
-            try
-            {
-                response = await this.httpClient.PostAsJsonAsync(
-                    "/agent/persistence/restore",
-                    new { AgentSessionId = request.AgentSessionId },
-                    JsonSerializerOptions,
-                    cancellationToken).ConfigureAwait(false);
-            }
-            catch (HttpRequestException exception)
-            {
-                throw new WebDataAccessRequestException(
-                    $"Web agent persistence call to '/agent/persistence/restore' could not reach the server: {exception.Message}",
-                    exception.StatusCode,
-                    exception);
-            }
-            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new WebDataAccessRequestException(
-                    "Web agent persistence call to '/agent/persistence/restore' timed out.",
-                    statusCode: null,
-                    exception);
-            }
         }
 
         using (response)
@@ -220,36 +182,6 @@ public sealed class WebClientAgentPersistenceStore : IAgentPersistenceStore, IDi
                 $"Web agent persistence call to '{relativeUri}' timed out.",
                 statusCode: null,
                 exception);
-        }
-
-        if (response.StatusCode == HttpStatusCode.Unauthorized && this.devTunnelAccessTokenResolver is not null)
-        {
-            response.Dispose();
-            var freshToken = this.devTunnelAccessTokenResolver();
-            if (!string.IsNullOrWhiteSpace(freshToken))
-            {
-                this.httpClient.DefaultRequestHeaders.Remove("X-Tunnel-Authorization");
-                this.httpClient.DefaultRequestHeaders.Add("X-Tunnel-Authorization", $"tunnel {freshToken}");
-            }
-
-            try
-            {
-                response = await this.httpClient.PostAsJsonAsync(relativeUri, request, JsonSerializerOptions, cancellationToken).ConfigureAwait(false);
-            }
-            catch (HttpRequestException exception)
-            {
-                throw new WebDataAccessRequestException(
-                    $"Web agent persistence call to '{relativeUri}' could not reach the server: {exception.Message}",
-                    exception.StatusCode,
-                    exception);
-            }
-            catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new WebDataAccessRequestException(
-                    $"Web agent persistence call to '{relativeUri}' timed out.",
-                    statusCode: null,
-                    exception);
-            }
         }
 
         using (response)

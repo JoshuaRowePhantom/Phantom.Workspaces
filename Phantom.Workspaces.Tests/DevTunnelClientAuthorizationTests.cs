@@ -25,7 +25,6 @@ public sealed class DevTunnelClientAuthorizationTests
         var authorization = DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Private);
 
         Assert.Equal("api-connect-token", authorization.Token);
-        Assert.Null(authorization.RefreshResolver);
     }
 
     [Fact]
@@ -36,7 +35,6 @@ public sealed class DevTunnelClientAuthorizationTests
         var authorization = DevTunnelClientAuthorization.Resolve(resolution, DevTunnelAccessMode.Anonymous);
 
         Assert.Null(authorization.Token);
-        Assert.Null(authorization.RefreshResolver);
     }
 
     [Fact]

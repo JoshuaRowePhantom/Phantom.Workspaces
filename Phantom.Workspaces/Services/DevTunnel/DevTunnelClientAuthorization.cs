@@ -23,13 +23,13 @@ public static class DevTunnelClientAuthorization
         // An explicit Connect/Token-scope token (if the Management API minted one) is used verbatim.
         if (!string.IsNullOrEmpty(resolution.TunnelAuthToken))
         {
-            return new DevTunnelClientAuthorizationResult(resolution.TunnelAuthToken, null);
+            return new DevTunnelClientAuthorizationResult(resolution.TunnelAuthToken);
         }
 
         // Anonymous access requires no tunnel-authorization header.
         if (accessMode == DevTunnelAccessMode.Anonymous)
         {
-            return new DevTunnelClientAuthorizationResult(null, null);
+            return new DevTunnelClientAuthorizationResult(null);
         }
 
         // Private connect with no Connect token: the dev-tunnels relay rejects any GitHub identity
@@ -46,6 +46,8 @@ public static class DevTunnelClientAuthorization
 }
 
 /// <summary>
-/// The tunnel-authorization token and optional 401-refresh resolver a dev-tunnel client should send.
+/// The tunnel-authorization token a dev-tunnel client should send. Refreshing on a relay <c>401</c> is
+/// owned by <see cref="DevTunnelAuthenticationHandler"/> via its token-provider seam (issue #1456), so
+/// this result no longer carries a refresh resolver.
 /// </summary>
-public sealed record DevTunnelClientAuthorizationResult(string? Token, Func<string?>? RefreshResolver);
+public sealed record DevTunnelClientAuthorizationResult(string? Token);

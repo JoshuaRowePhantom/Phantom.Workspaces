@@ -98,33 +98,42 @@ public sealed class EntityRepository
         }
 
         // Dev tunnel access authorizes with the GitHub auth token (GITHUB_TOKEN env var, else
-        // `gh auth token`); plain web access uses no tunnel-authorization header.
-        string? devTunnelAccessToken = null;
-        Func<string?>? devTunnelAccessTokenResolver = null;
-        if (repositorySource.UseGitHubAuthToken)
+        // `gh auth token`); plain web access uses no tunnel-authorization header. The shared
+        // DevTunnelAuthenticationHandler (issue #1456) attaches/refreshes the token per request; this
+        // client no longer knows about tunnels or tokens.
+        if (!repositorySource.UseGitHubAuthToken)
         {
-            devTunnelAccessToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
-            if (string.IsNullOrWhiteSpace(devTunnelAccessToken))
-            {
-                throw new InvalidOperationException(
-                    "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
-            }
-
-            devTunnelAccessTokenResolver = () => Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+            return new WebClientDataAccessLayer(repositorySource.Endpoint);
         }
 
-        return new WebClientDataAccessLayer(repositorySource.Endpoint, devTunnelAccessToken, devTunnelAccessTokenResolver);
+        var initialToken = Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve();
+        if (string.IsNullOrWhiteSpace(initialToken))
+        {
+            throw new InvalidOperationException(
+                "A GitHub authentication token is required to connect to the dev tunnel endpoint. Set the GITHUB_TOKEN environment variable or sign in with 'gh auth login'.");
+        }
+
+        var tokenProvider = new Services.DevTunnel.DelegateDevTunnelConnectTokenProvider(
+            acquire: _ => new ValueTask<string?>(Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()),
+            refresh: _ => new ValueTask<string?>(Phantom.Workspaces.Llm.GitHubAuthTokenResolver.Resolve()));
+        var httpClient = new Services.DevTunnel.AuthenticatedHttpClientFactory()
+            .CreateClient(new Uri(repositorySource.Endpoint), tokenProvider);
+        return new WebClientDataAccessLayer(repositorySource.Endpoint, httpClient);
     }
 
     private static async Task<IDataAccessLayer> CreateDevTunnelNameDataAccessLayerAsync(
         DevTunnelNameRepositorySource repositorySource)
     {
         // Discover the relay endpoint (and forwarded port) from the tunnel name, and keep it fresh:
-        // on a connection drop the reconnecting layer re-resolves the tunnel (picking up a changed
-        // port) and reconnects with bounded backoff, without restarting the workspace. The connect
-        // token is fetched automatically by the Management API (Private mode) or absent (Anonymous).
+        // on a connection DROP the reconnecting layer re-resolves the tunnel (picking up a changed
+        // port) and reconnects with bounded backoff, without restarting the workspace. AUTH (a relay
+        // 401) is a separate concern owned by the shared DevTunnelAuthenticationHandler (issue #1456)
+        // inside each built client's HTTP pipeline: it attaches the Connect token per request and
+        // re-mints/retries once on 401. The connect token is fetched automatically by the Management
+        // API (Private mode) or absent (Anonymous).
         var resolver = new Services.DevTunnel.DevTunnelServiceFactory()
             .CreateEndpointResolver();
+        var authenticatedHttpClientFactory = new Services.DevTunnel.AuthenticatedHttpClientFactory();
 
         var reconnectingDataAccessLayer = new Services.DevTunnel.ReconnectingWebDataAccessLayer(
             resolveEndpointAsync: cancellationToken => resolver.ResolveAsync(
@@ -142,10 +151,12 @@ public sealed class EntityRepository
                     resolution,
                     repositorySource.AccessMode);
 
-                return new WebClientDataAccessLayer(
-                    resolution.BaseUri.ToString(),
-                    authorization.Token,
-                    authorization.RefreshResolver);
+                // Wave 2 (#1456): the token-provider seam wraps the resolution's Connect token; the
+                // concrete Management-API minting/refresh provider lands in Wave 3 (#1458).
+                var tokenProvider = new Services.DevTunnel.DelegateDevTunnelConnectTokenProvider(
+                    acquire: _ => new ValueTask<string?>(authorization.Token));
+                var httpClient = authenticatedHttpClientFactory.CreateClient(resolution.BaseUri, tokenProvider);
+                return new WebClientDataAccessLayer(resolution.BaseUri.ToString(), httpClient);
             },
             delayScheduler: Services.DevTunnel.RealDelayScheduler.Instance);
 
