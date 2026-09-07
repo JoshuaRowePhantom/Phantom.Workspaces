@@ -16,6 +16,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Echo;
 using Phantom.Workspaces.Llm.Shell;
+using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -621,29 +622,20 @@ public sealed class WorkspaceGuiContextProviderTests
         }
 
         var namesArray = profileData.GetProperty("names");
-        var primaryName = namesArray[0];
-        var nameParts = primaryName.EnumerateArray()
+        var profileName = new EntityName(namesArray[0].EnumerateArray()
             .Where(e => e.ValueKind == JsonValueKind.String)
             .Select(e => e.GetString()!)
-            .ToArray();
-
-        string? userSegment = null;
-        for (int i = 0; i < nameParts.Length - 1; i++)
-        {
-            if (nameParts[i] == "username")
-            {
-                userSegment = nameParts[i + 1];
-                break;
-            }
-        }
-        Assert.NotNull(userSegment);
+            .ToArray());
+        var tunnelName = VsCodeTunnelEntityNaming.BuildTunnelName(profileName);
 
         var tunnelId = new EntityId(Guid.NewGuid());
         var tunnelData = new JsonObject
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new JsonArray(new JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new JsonArray(new JsonArray(tunnelName.Components
+                .Select(static component => JsonValue.Create(component))
+                .ToArray())),
             ["display-name"] = new JsonObject { ["default"] = "invoke-shortcut-tunnel" },
             ["tunnel-name"] = "invoke-shortcut-tunnel",
             ["tunnel-url"] = "https://vscode.dev/tunnel/invoke-shortcut-tunnel",
