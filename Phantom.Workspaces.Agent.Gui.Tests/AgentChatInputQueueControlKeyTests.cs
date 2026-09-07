@@ -142,6 +142,82 @@ public sealed class AgentChatInputQueueControlKeyTests
     }
 
     [Fact]
+    public async Task HandleEditKey_Enter_SavesEditAndExitsEditMode()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited";
+
+        var handled = AgentChatInputQueueControl.HandleEditKey(entry, Key.Enter, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.False(entry.IsEditing);
+        Assert.Equal("edited", Assert.Single(queue.Items).Text);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
+    public async Task HandleEditKey_ShiftEnter_IsNotHandledSoNewlineInserts()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited";
+
+        var handled = AgentChatInputQueueControl.HandleEditKey(entry, Key.Enter, KeyModifiers.Shift);
+
+        Assert.False(handled);
+        Assert.True(entry.IsEditing);
+        Assert.Equal("original", Assert.Single(queue.Items).Text);
+    }
+
+    [Fact]
+    public async Task HandleEditKey_CtrlEnter_RemovesFromQueueAndPostsToDefaultQueue()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "send now";
+
+        var handled = AgentChatInputQueueControl.HandleEditKey(entry, Key.Enter, KeyModifiers.Control);
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "edited queue item submission to complete");
+
+        Assert.True(handled);
+        Assert.False(entry.IsEditing);
+        Assert.Empty(queue.Items);
+        Assert.Equal("send now", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+    }
+
+    [Fact]
+    public async Task HandleEditKey_Escape_CancelsEditWithoutSaving()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "discarded";
+
+        var handled = AgentChatInputQueueControl.HandleEditKey(entry, Key.Escape, KeyModifiers.None);
+
+        Assert.True(handled);
+        Assert.False(entry.IsEditing);
+        Assert.Equal("original", entry.EditText);
+        Assert.Equal("original", Assert.Single(queue.Items).Text);
+    }
+
+    [Fact]
     public async Task HandleInputKey_CtrlQ_WithEmptyComposer_ReturnsFalse()
     {
         await using var chat = await CreateChatAsync();

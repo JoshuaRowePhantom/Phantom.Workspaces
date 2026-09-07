@@ -266,6 +266,17 @@ public sealed class InputQueueViewModel : ViewModelBase
         this.RefreshQueue(queue);
     }
 
+    public void SendQueueItemImmediately(AgentChatQueue queue, AgentInputItem item, string text)
+    {
+        IReadOnlyList<AIContent> contents =
+        [
+            new TextContent(text),
+            .. item.Contents.Where(static content => content is not TextContent),
+        ];
+        this.RemoveQueueItem(queue, item);
+        this.AppendToQueue(this.DefaultInputQueue, contents);
+    }
+
     public void RemoveQueueItemContent(AgentChatQueue queue, int index, int contentIndex)
         => this.RemoveQueueItemContent(queue, queue.Items[index], contentIndex);
 

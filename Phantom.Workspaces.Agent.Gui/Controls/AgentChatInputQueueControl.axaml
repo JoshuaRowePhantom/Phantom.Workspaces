@@ -52,21 +52,25 @@
                                                     <StackPanel IsVisible="{Binding IsEditing}"
                                                                Spacing="6">
                                                         <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
-                                                                 x:Name="EditBox"
-                                                                 AcceptsReturn="True"
-                                                                 MinHeight="32"
-                                                                 Classes="terminal-mono terminal-editor queue-entry-editor queue-text-editor"/>
-                                                    <StackPanel Orientation="Horizontal"
-                                                               HorizontalAlignment="Right"
-                                                               Spacing="6">
-                                                        <Button Command="{Binding SaveEditCommand}"
-                                                                Content="Save"
-                                                                Classes="queue-action-button"/>
+                                                                  x:Name="EditBox"
+                                                                  AcceptsReturn="True"
+                                                                  KeyDown="EditBox_KeyDown"
+                                                                  MinHeight="32"
+                                                                  Classes="terminal-mono terminal-editor queue-entry-editor queue-text-editor"/>
+                                                        <TextBlock Text="{Binding EditShortcutHint}"
+                                                                   IsVisible="{Binding ShowEditHint}"
+                                                                   Classes="caption muted"/>
+                                                        <StackPanel Orientation="Horizontal"
+                                                                    HorizontalAlignment="Right"
+                                                                    Spacing="6">
+                                                            <Button Command="{Binding SaveEditCommand}"
+                                                                    Content="Save"
+                                                                    Classes="queue-action-button"/>
                                                             <Button Command="{Binding CancelEditCommand}"
                                                                     Content="Cancel"
-                                                                Classes="queue-action-button"/>
+                                                                    Classes="queue-action-button"/>
+                                                        </StackPanel>
                                                     </StackPanel>
-                                                </StackPanel>
 
                                                 <Button Command="{Binding EditCommand}"
                                                         Classes="queue-item-trigger"

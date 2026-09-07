@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Linq;
 using Avalonia.Controls;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -105,6 +106,42 @@ public partial class AgentChatInputQueueControl : UserControl
 
         editBox.Focus();
         editBox.SelectAll();
+    }
+
+    private void EditBox_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (sender is TextBox { DataContext: InputQueueEntryViewModel entry })
+        {
+            e.Handled = HandleEditKey(entry, e.Key, e.KeyModifiers);
+        }
+    }
+
+    internal static bool HandleEditKey(InputQueueEntryViewModel entry, Key key, KeyModifiers modifiers)
+    {
+        if (key == Key.Escape)
+        {
+            entry.CancelEdit();
+            return true;
+        }
+
+        if (key != Key.Enter)
+        {
+            return false;
+        }
+
+        if (modifiers == KeyModifiers.Control)
+        {
+            entry.SaveAndSendImmediately();
+            return true;
+        }
+
+        if (modifiers == KeyModifiers.None)
+        {
+            entry.SaveEdit();
+            return true;
+        }
+
+        return false;
     }
 
     private async void OnQueueAttachmentImageClicked(object? sender, RoutedEventArgs e)

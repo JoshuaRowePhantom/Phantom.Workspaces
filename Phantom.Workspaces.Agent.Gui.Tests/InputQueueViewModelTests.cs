@@ -322,6 +322,83 @@ public sealed class InputQueueViewModelTests
     }
 
     [Fact]
+    public async Task SaveAndSendImmediately_MovesEditedMessageToDefaultQueue()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited";
+
+        entry.SaveAndSendImmediately();
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "edited queue item submission to complete");
+
+        Assert.Empty(queue.Items);
+        Assert.False(entry.IsEditing);
+        Assert.Equal("edited", string.Concat(chat.History[0].Contents.OfType<TextContent>().Select(static content => content.Text)));
+    }
+
+    [Fact]
+    public async Task SaveAndSendImmediately_PreservesNonTextAttachments()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, [new TextContent("original"), new DataContent(TinyPng, "image/png")]);
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited with image";
+
+        entry.SaveAndSendImmediately();
+        await WaitForConditionAsync(chat.History, () => chat.History.Count >= 2, "edited attachment submission to complete");
+
+        Assert.Empty(queue.Items);
+        Assert.Equal("edited with image", Assert.IsType<TextContent>(chat.History[0].Contents[0]).Text);
+        Assert.Equal("image/png", Assert.IsType<DataContent>(chat.History[0].Contents[1]).MediaType);
+    }
+
+    [Fact]
+    public async Task EditEntry_WhenEditing_ExposesShortcutHintAndVisibility()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+
+        Assert.False(entry.ShowEditHint);
+        entry.EditCommand.Execute(null);
+
+        Assert.True(entry.ShowEditHint);
+        Assert.Contains("Enter", entry.EditShortcutHint);
+        Assert.Contains("Shift+Enter", entry.EditShortcutHint);
+        Assert.Contains("Ctrl+Enter", entry.EditShortcutHint);
+
+        entry.CancelEdit();
+        Assert.False(entry.ShowEditHint);
+    }
+
+    [Fact]
+    public async Task SaveEdit_Enter_DoesNotSendToAgent()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "saved only";
+
+        entry.SaveEdit();
+
+        Assert.Equal("saved only", Assert.Single(queue.Items).Text);
+        Assert.False(entry.IsEditing);
+        Assert.Empty(chat.History);
+    }
+
+    [Fact]
     public async Task QueueItem_CanRemoveImageAttachment()
     {
         await using var chat = await CreateChatAsync();

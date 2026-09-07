@@ -48,11 +48,16 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
             if (this.SetProperty(ref this.isEditing, value))
             {
                 this.RaisePropertyChanged(nameof(this.IsNotEditing));
+                this.RaisePropertyChanged(nameof(this.ShowEditHint));
             }
         }
     }
 
     public bool IsNotEditing => !this.IsEditing;
+
+    public bool ShowEditHint => this.IsEditing;
+
+    public string EditShortcutHint => "Enter · save   ·   Shift+Enter · newline   ·   Ctrl+Enter · send";
 
     public string EditText
     {
@@ -89,13 +94,19 @@ public sealed class InputQueueEntryViewModel : ViewModelBase
         this.EditStarted?.Invoke(this, EventArgs.Empty);
     }
 
-    private void SaveEdit()
+    public void SaveEdit()
     {
         this.parent.UpdateQueueItem(this.queue, this.item, this.EditText);
         this.IsEditing = false;
     }
 
-    private void CancelEdit()
+    public void SaveAndSendImmediately()
+    {
+        this.parent.SendQueueItemImmediately(this.queue, this.item, this.EditText);
+        this.IsEditing = false;
+    }
+
+    public void CancelEdit()
     {
         this.EditText = this.Text;
         this.IsEditing = false;
