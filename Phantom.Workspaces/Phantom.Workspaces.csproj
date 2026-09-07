@@ -7,7 +7,7 @@
     <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
     <ActiveDebugProfile>Phantom.Workspaces.MongoDb</ActiveDebugProfile>
     <!-- Per-RID self-contained single-file publish targets (no AnyCPU single file). -->
-    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
   </PropertyGroup>
   <!-- Publish-only settings: active only when a RuntimeIdentifier is specified (i.e. during
        `dotnet publish -r <rid>`), so normal `dotnet build`/F5 debugging is unaffected. -->
@@ -66,6 +66,31 @@
           SkipUnchangedFiles="true" />
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe')"
            Text="Copilot CLI (runtimes\$(RuntimeIdentifier)\native\copilot.exe) was not published as a loose file (issue #1376)." />
+  </Target>
+  <Target Name="PublishMxcRuntimeLoose"
+          AfterTargets="Publish"
+          Condition="'$(RuntimeIdentifier)' != ''">
+    <PropertyGroup>
+      <_MxcNativeDirectory>$(PublishDir)runtimes\$(RuntimeIdentifier)\native</_MxcNativeDirectory>
+    </PropertyGroup>
+    <ItemGroup>
+      <_MxcRuntimeToPublish Include="$(OutDir)mxc_ffi.dll" />
+      <_MxcRuntimeToPublish Include="$(OutDir)plm.exe" />
+    </ItemGroup>
+    <Error Condition="'$(RuntimeIdentifier)' != 'win-x64'"
+           Text="Microsoft MXC release payloads currently support only win-x64." />
+    <Error Condition="!Exists('$(OutDir)mxc_ffi.dll')"
+           Text="MXC native library not found at '$(OutDir)mxc_ffi.dll'." />
+    <Error Condition="!Exists('$(OutDir)plm.exe')"
+           Text="MXC policy launcher not found at '$(OutDir)plm.exe'; the native unit must remain complete." />
+    <Copy SourceFiles="@(_MxcRuntimeToPublish)"
+          DestinationFolder="$(_MxcNativeDirectory)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\..\microsoft\mxc\LICENSE.md"
+          DestinationFiles="$(_MxcNativeDirectory)\MXC-LICENSE.md"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(_MxcNativeDirectory)\mxc_ffi.dll') Or !Exists('$(_MxcNativeDirectory)\plm.exe') Or !Exists('$(_MxcNativeDirectory)\MXC-LICENSE.md')"
+           Text="The complete MXC native unit and MIT license were not published to '$(_MxcNativeDirectory)'." />
   </Target>
   <ItemGroup>
     <PackageReference Include="Avalonia" />

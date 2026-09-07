@@ -33,12 +33,25 @@ $ProgressPreference = 'SilentlyContinue'
 
 function Resolve-RuntimeIdentifier
 {
-    if ($RuntimeIdentifier) { return $RuntimeIdentifier }
-    switch ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)
+    $resolved = if ($RuntimeIdentifier)
     {
-        'Arm64' { 'win-arm64' }
-        default { 'win-x64' }
+        $RuntimeIdentifier
     }
+    else
+    {
+        switch ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)
+        {
+            'Arm64' { 'win-arm64' }
+            default { 'win-x64' }
+        }
+    }
+
+    if ($resolved -eq 'win-arm64')
+    {
+        throw 'Microsoft MXC-backed Phantom.Workspaces releases currently support only win-x64; ARM64 installation is unavailable.'
+    }
+
+    return $resolved
 }
 
 function Get-Sha256DigestFromChecksumContent

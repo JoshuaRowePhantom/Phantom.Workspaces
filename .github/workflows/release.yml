@@ -61,6 +61,10 @@ jobs:
         shell: pwsh
         run: .\packaging\validate\Assert-CopilotSdkVersion.ps1
 
+      - name: Test MXC native unit
+        shell: pwsh
+        run: cargo test --manifest-path microsoft/mxc/src/Cargo.toml -p mxc_ffi --features dotnetsdk
+
       - name: Run test suite (release gate)
         shell: pwsh
         run: .\scripts\run-tests.ps1 -Mode fast
@@ -73,14 +77,14 @@ jobs:
           path: scripts/test-results.log
           if-no-files-found: warn
 
-      - name: Publish and package per architecture
+      - name: Publish and package win-x64
         id: package
         shell: pwsh
         run: |
           $version = "${{ steps.version.outputs.version }}"
           $output = Join-Path $env:RUNNER_TEMP 'release-assets'
           New-Item -ItemType Directory -Force -Path $output | Out-Null
-          foreach ($rid in @('win-x64', 'win-arm64')) {
+          foreach ($rid in @('win-x64')) {
             $publishDir = Join-Path $env:RUNNER_TEMP "publish/$rid"
             dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj `
               -c Release -r $rid `
@@ -92,6 +96,8 @@ jobs:
             $skipSmoke = $rid -ne 'win-x64'
             .\packaging\validate\Assert-CopilotRuntimePayload.ps1 `
               -PayloadDirectory $publishDir -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
+            .\packaging\validate\Assert-MxcRuntimePayload.ps1 `
+              -PayloadDirectory $publishDir -RuntimeIdentifier $rid
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
@@ -101,6 +107,8 @@ jobs:
             $zipPath = Join-Path $output "Phantom.Workspaces-$version-$rid.zip"
             .\packaging\validate\Assert-CopilotRuntimeZip.ps1 `
               -ZipPath $zipPath -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
+            .\packaging\validate\Assert-MxcRuntimeZip.ps1 `
+              -ZipPath $zipPath -RuntimeIdentifier $rid
           }
           "assets=$output" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 

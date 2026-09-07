@@ -1,3 +1,6 @@
 [submodule "Phantom.Dock.Avalonia.TabSwitching"]
 	path = Phantom.Dock.Avalonia.TabSwitching
 	url = https://github.com/JoshuaRowePhantom/Phantom.Dock.Avalonia.TabSwitching
+[submodule "microsoft/mxc"]
+	path = microsoft/mxc
+	url = https://github.com/microsoft/mxc.git

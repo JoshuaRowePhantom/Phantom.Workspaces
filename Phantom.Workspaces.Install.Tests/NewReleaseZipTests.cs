@@ -9,10 +9,13 @@ namespace Phantom.Workspaces.Install.Tests;
 /// #1376). The script is invoked over a synthetic publish directory and the produced ZIP is
 /// inspected directly, so the structure-preserving behaviour is asserted on the real shipped seam.
 /// </summary>
-public sealed class NewReleaseZipTests
+public sealed class MxcRuntimeZipTests
 {
     private const string Rid = "win-x64";
     private static readonly string NestedRuntimeEntry = $"runtimes/{Rid}/native/copilot.exe";
+    private static readonly string MxcLibraryEntry = $"runtimes/{Rid}/native/mxc_ffi.dll";
+    private static readonly string MxcPlmEntry = $"runtimes/{Rid}/native/plm.exe";
+    private static readonly string MxcLicenseEntry = $"runtimes/{Rid}/native/MXC-LICENSE.md";
 
     [Fact]
     public void NewReleaseZip_PreservesRuntimesNativeSubpath()
@@ -48,6 +51,24 @@ public sealed class NewReleaseZipTests
         Assert.Contains($"runtimes/{Rid}/native/LICENSE.md", entries);
     }
 
+    [Fact]
+    public void MxcRuntimeZip_NativeUnit_PreservesRelativePaths()
+    {
+        using var sandbox = new TempDirectory();
+        var publishDirectory = SeedPublishDirectory(sandbox.Path);
+        var outputDirectory = Path.Combine(sandbox.Path, "packages");
+
+        var zipPath = InvokePackaging(publishDirectory, outputDirectory);
+
+        using var archive = ZipFile.OpenRead(zipPath);
+        var entries = archive.Entries.Select(entry => entry.FullName).ToArray();
+        Assert.Contains(MxcLibraryEntry, entries);
+        Assert.Contains(MxcPlmEntry, entries);
+        Assert.Contains(MxcLicenseEntry, entries);
+        Assert.DoesNotContain("mxc_ffi.dll", entries);
+        Assert.DoesNotContain("plm.exe", entries);
+    }
+
     private static string SeedPublishDirectory(string root)
     {
         var publishDirectory = Path.Combine(root, "publish");
@@ -58,6 +79,9 @@ public sealed class NewReleaseZipTests
         File.WriteAllText(Path.Combine(publishDirectory, "Phantom.Workspaces.pdb"), "pdb-bytes");
         File.WriteAllText(Path.Combine(nativeDirectory, "copilot.exe"), "copilot-bytes");
         File.WriteAllText(Path.Combine(nativeDirectory, "LICENSE.md"), "GitHub Copilot CLI License");
+        File.WriteAllText(Path.Combine(nativeDirectory, "mxc_ffi.dll"), "mxc-bytes");
+        File.WriteAllText(Path.Combine(nativeDirectory, "plm.exe"), "plm-bytes");
+        File.WriteAllText(Path.Combine(nativeDirectory, "MXC-LICENSE.md"), "MIT License");
         return publishDirectory;
     }
 

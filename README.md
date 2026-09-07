@@ -6,11 +6,13 @@ WPF application for running LLM agents and accessing user data.
 
 ### Download the latest release (recommended)
 
-Download the newest release for your architecture from the
+Download the newest x64 release from the
 [Releases page](https://github.com/JoshuaRowePhantom/Phantom.Workspaces/releases/latest):
 
 - `Phantom.Workspaces-<version>-win-x64.zip` (Intel/AMD 64-bit)
-- `Phantom.Workspaces-<version>-win-arm64.zip` (ARM64)
+
+ARM64 is temporarily unsupported while the MXC native unit is independently validated for that
+architecture. The installer and updater reject ARM64 rather than selecting an incompatible asset.
 
 Each asset has a matching `.sha256` checksum file. Unzip and run
 `Phantom.Workspaces.exe`; the first launch bootstraps a managed, auto-updatable install under
@@ -32,7 +34,10 @@ per-user managed-layout install.
 dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj -c Release -r win-x64
 ```
 
-Use `-r win-arm64` for ARM64. The publish output is a self-contained, single-file executable.
+Install the public Rust 1.93 toolchain before building. The pinned `microsoft/mxc` source dependency
+builds `Microsoft.Mxc.Sdk`, `mxc_ffi.dll`, and `plm.exe` through the normal solution build. Published
+payloads keep the MXC native unit and its MIT license loose under `runtimes\win-x64\native`. MXC may
+temporarily change filesystem DACLs while applying policy and is expected to restore them.
 
 ## Running tests
 

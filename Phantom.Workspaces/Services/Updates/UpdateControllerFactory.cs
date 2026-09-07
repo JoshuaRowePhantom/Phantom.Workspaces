@@ -55,7 +55,7 @@ public static class UpdateControllerFactory
             fileSystem,
             layout,
             runningVersion,
-            ResolveAssetMoniker());
+            ResolveAssetMoniker(RuntimeInformation.ProcessArchitecture));
 #pragma warning disable CA1416 // RealScheduledTasks/RegistryStartupRegistration are Windows-only; this path is only reached on Windows
         var startupTaskService = new StartupTaskService(
             new RegistryStartupRegistration(),
@@ -87,12 +87,11 @@ public static class UpdateControllerFactory
         }
     }
 
-    private static string ResolveAssetMoniker()
-        => RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.Arm64 => "win-arm64",
-            _ => "win-x64",
-        };
+    internal static string ResolveAssetMoniker(Architecture architecture)
+        => architecture == Architecture.Arm64
+            ? throw new PlatformNotSupportedException(
+                "Microsoft MXC-backed Phantom.Workspaces releases currently support only win-x64; ARM64 updates are unavailable.")
+            : "win-x64";
 
     private static string ResolveVersion()
     {

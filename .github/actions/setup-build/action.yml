@@ -1,6 +1,6 @@
 name: setup-build
 description: >-
-  Shared build setup: .NET 10 SDK, NuGet package cache, and solution restore.
+  Shared build setup: .NET 10 SDK, Rust 1.93, dependency caches, and solution restore.
   Used by ci.yml and release.yml to avoid drift between the CI and release
   pipelines. The Avalonia license key is injected by the caller via the
   AVALONIA_UI_LICENSE_KEY environment variable.
@@ -18,6 +18,24 @@ runs:
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ inputs.dotnet-version }}
+
+    - name: Set up Rust
+      shell: pwsh
+      run: |
+        rustup toolchain install 1.93.0 --profile minimal
+        rustup default 1.93.0
+        rustc --version
+
+    - name: Cache Cargo
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          microsoft/mxc/src/target
+        key: ${{ runner.os }}-mxc-29702c3a408462a4e6be0f265328693a0d2169eb-rust-1.93.0-${{ hashFiles('microsoft/mxc/src/Cargo.lock', 'microsoft/mxc/src/rust-toolchain.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-mxc-rust-1.93.0-
 
     - name: Cache NuGet packages
       uses: actions/cache@v4

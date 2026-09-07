@@ -174,7 +174,7 @@ Produce a self-contained, single-file app so users need no preinstalled .NET:
 ```
 dotnet publish Phantom.Workspaces\Phantom.Workspaces.csproj `
   -c Release `
-  -r win-x64 `            # and a second pass for win-arm64
+  -r win-x64 `
   --self-contained true `
   -p:PublishSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true `
@@ -237,14 +237,31 @@ what `current` points at.
   as a **separate CI artifact** (and a future symbol server) for crash diagnostics.
 - **Not shipped for now:** `Phantom.Workspaces.Agent.Cli.exe` and the web server — GUI only.
 
+#### Microsoft MXC source and runtime payload
+
+The `microsoft/mxc` submodule is pinned to commit
+`29702c3a408462a4e6be0f265328693a0d2169eb`. `Phantom.Workspaces.slnx` includes
+`Microsoft.Mxc.Sdk`, and `Phantom.Workspaces.Llm.Core` references that source project, preserving
+`dotnet build Phantom.Workspaces.slnx` as the build entry point. The build requires public Rust
+1.93; CI installs it with rustup and caches Cargo registry, Git, and target data.
+
+`mxc_ffi.dll` and `plm.exe` are one native unit because the engine resolves `plm.exe` beside its
+loaded module. Both files remain loose and adjacent under `runtimes\win-x64\native`, together with
+the upstream MIT license as `MXC-LICENSE.md`; no `mxc.lic` is created. Publish and final-ZIP gates
+verify this layout and managed/native source-version agreement.
+
+MXC may temporarily mutate filesystem DACLs while establishing policy and is expected to restore
+them. Runtime failures should surface that restoration expectation; the build does not prohibit
+the required transient DACL changes.
+
 #### Caveats this design accounts for
 
 - **Trimming is off** (`PublishTrimmed=false`) initially: Avalonia XAML, reflection-heavy
   schema/DI paths, and the `x-field-editor` `Type.GetType` activation can break under the
   trimmer. Size is controlled via compression instead; a trim/`TrimmerRootDescriptor` model is
   a later optimization.
-- **Per-RID publish**: single-file bundles are RID-specific, so we run publish once per
-  `win-x64` and `win-arm64` (no "AnyCPU" single file). `RuntimeIdentifiers` lists both.
+- **Per-RID publish**: MXC-backed single-file bundles currently target only `win-x64` (no
+  "AnyCPU" single file). ARM64 remains disabled until its native unit is independently validated.
 - **Native self-extract dir**: the first-run extraction location is a per-user cache; it must
   be writable without elevation (it is, under the user profile) — consistent with the per-user
   install model.
@@ -255,7 +272,7 @@ what `current` points at.
 Notes / proposed project settings (added to `Phantom.Workspaces.csproj` or a
 `Directory.Build.props` publish section):
 
-- `RuntimeIdentifiers` = `win-x64;win-arm64`.
+- `RuntimeIdentifiers` = `win-x64`.
 - `PublishTrimmed=false` initially (see caveat above; revisit with a trim model later).
 - `PublishReadyToRun=true` for faster cold start.
 - `PublishSingleFile=true`, `IncludeNativeLibrariesForSelfExtract=true`,
@@ -292,7 +309,7 @@ committed.
   (`AVALONIA_UI_LICENSE_KEY`) and inject it into the build step's `env:` so
   `Avalonia.Licensing.props` picks it up — exactly mirroring the local env-var path, so no
   build-script divergence between dev machines and CI.
-- The same Windows runner runs `dotnet publish` (win-x64 / win-arm64), code-signing, zip/
+- The same Windows runner runs `dotnet publish` (win-x64), code-signing, zip/
   installer packaging, and GitHub Release creation. (A deferred winget submission step is
   documented in `docs/design/winget.md`.)
 - Other secrets (signing cert + password) are likewise Actions secrets, never in source. If
@@ -541,7 +558,7 @@ environments, and release outputs) the build/installation design requires. Items
   - Uses the `release` GitHub Environment (holds signing + release secrets, optional manual
     approval gate).
 - **`publish-validation.yml`** (optional) — periodic/`workflow_dispatch` job that runs a full
-  `dotnet publish` for `win-x64`/`win-arm64` and the publish smoke test without releasing, to
+  `dotnet publish` for `win-x64` and the publish smoke test without releasing, to
   catch packaging regressions between releases.
 - **`codeql.yml`** (optional) — CodeQL security scanning on a schedule + PRs.
 - **`dependency-review.yml`** (optional) — dependency-review action on PRs.
@@ -602,7 +619,7 @@ environments, and release outputs) the build/installation design requires. Items
 ### Release outputs (per `vX.Y.Z` GitHub Release)
 
 - `Phantom.Workspaces-<version>-win-x64.zip` + `.sha256`
-- `Phantom.Workspaces-<version>-win-arm64.zip` + `.sha256`
+- ARM64 assets are intentionally not produced while the MXC integration is x64-only.
 - **(later)** `Phantom.Workspaces-<version>-win-x64-setup.exe` + `.sha256` (Option C installer)
 - Auto-generated release notes (from `.github/release.yml` categories).
 - These stable-named, hashed assets are what the in-app updater, the tray notifier, the
@@ -690,13 +707,13 @@ uploaded as a workflow artifact for inspection.
 The **`release.yml`** workflow, triggered on a `v*` tag (or `workflow_dispatch`), running on
 `windows-latest` under the `release` environment:
 
-1. **Setup** — `setup-build` composite action (checkout, .NET 10, cache, license-key env).
+1. **Setup** — `setup-build` composite action (checkout, .NET 10, public Rust 1.93, NuGet/Cargo
+   caches, license-key env).
 2. **Build/test** — restore, build `-c Release`, run `.\scripts\run-tests.ps1`; fail on
    non-zero / failing log (upload the log artifact on failure).
 3. **Derive version** — read the single version source (tag → `Version`/`InformationalVersion`)
    so every artifact and asset name is consistent.
-4. **Publish** — `dotnet publish` the GUI for `win-x64` and `win-arm64` (self-contained
-   single-file, ReadyToRun) into per-arch folders.
+4. **Publish** — `dotnet publish` the GUI for `win-x64` (self-contained single-file, ReadyToRun).
 5. **Package** — assemble the portable zip per arch (lead); later build Inno/WiX (or MSIX);
    **sign** the binaries/installer with the signing cert; compute each asset's `.sha256`.
 6. **Release** — create the GitHub Release for the tag, attach the assets + checksum files,
@@ -933,8 +950,8 @@ We want a one-click "get it installed" path straight from GitHub (and, later, wi
 - **Stable latest link.** `https://github.com/<org>/Phantom.Workspaces/releases/latest`
   always resolves to the newest release; link it prominently from the README and project
   homepage.
-- **Predictable asset names.** Name release assets deterministically per architecture, e.g.
-  `Phantom.Workspaces-<version>-win-x64.zip` / `-win-arm64.zip` (and the installer
+- **Predictable asset names.** Name release assets deterministically, currently
+  `Phantom.Workspaces-<version>-win-x64.zip` (and the installer
   `Phantom.Workspaces-<version>-win-x64-setup.exe` once Option C lands), plus a
   `*.sha256` checksum file per asset. Stable names let users (and scripts) predict the
   download URL.
@@ -1063,7 +1080,7 @@ touch the developer's actual install or processes (respecting "don't kill my pro
 ## Test tasks
 
 1. **Publish smoke test** — a CI step asserts `dotnet publish` of the GUI for
-   `win-x64`/`win-arm64` produces a single-file exe and reads its version from `FileVersionInfo`
+   `win-x64` produces a single-file exe and reads its version from `FileVersionInfo`
    (no process launch, no console output needed).
 2. **Version consistency test** — assert the assembly `InformationalVersion`, `app.manifest`
    identity version, and the release tag all derive from the single version source.

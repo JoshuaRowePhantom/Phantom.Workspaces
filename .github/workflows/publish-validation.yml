@@ -1,6 +1,6 @@
 name: Publish validation
 
-# Runs a full dotnet publish for win-x64/win-arm64 and packages the portable zip
+# Runs a full dotnet publish for win-x64 and packages the portable zip
 # without releasing, to catch packaging regressions between releases. Scheduled
 # weekly and on demand.
 
@@ -32,13 +32,13 @@ jobs:
         shell: pwsh
         run: .\packaging\validate\Assert-CopilotSdkVersion.ps1
 
-      - name: Publish and package each architecture
+      - name: Publish and package win-x64
         shell: pwsh
         run: |
           $version = "0.0.0-validation"
           $output = Join-Path $env:RUNNER_TEMP 'validation-assets'
           New-Item -ItemType Directory -Force -Path $output | Out-Null
-          foreach ($rid in @('win-x64', 'win-arm64')) {
+          foreach ($rid in @('win-x64')) {
             $publishDir = Join-Path $env:RUNNER_TEMP "publish/$rid"
             dotnet publish Phantom.Workspaces/Phantom.Workspaces.csproj `
               -c Release -r $rid -p:Version=$version -o $publishDir
@@ -48,9 +48,14 @@ jobs:
             $skipSmoke = $rid -ne 'win-x64'
             .\packaging\validate\Assert-CopilotRuntimePayload.ps1 `
               -PayloadDirectory $publishDir -RuntimeIdentifier $rid -SkipStartupSmoke:$skipSmoke
+            .\packaging\validate\Assert-MxcRuntimePayload.ps1 `
+              -PayloadDirectory $publishDir -RuntimeIdentifier $rid
             .\packaging\zip\New-ReleaseZip.ps1 `
               -PublishDirectory $publishDir -Version $version `
               -RuntimeIdentifier $rid -OutputDirectory $output
+            $zipPath = Join-Path $output "Phantom.Workspaces-$version-$rid.zip"
+            .\packaging\validate\Assert-MxcRuntimeZip.ps1 `
+              -ZipPath $zipPath -RuntimeIdentifier $rid
           }
 
       - name: Upload validation assets

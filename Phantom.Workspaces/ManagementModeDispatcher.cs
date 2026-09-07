@@ -71,7 +71,7 @@ internal static class ManagementModeDispatcher
             fileSystem,
             layout,
             ResolveVersion(),
-            ResolveAssetMoniker());
+            ResolveAssetMoniker(RuntimeInformation.ProcessArchitecture));
 
         var runner = new ManagementModeRunner(
             layout,
@@ -94,12 +94,11 @@ internal static class ManagementModeDispatcher
         return (int)exitCode;
     }
 
-    private static string ResolveAssetMoniker()
-        => RuntimeInformation.ProcessArchitecture switch
-        {
-            Architecture.Arm64 => "win-arm64",
-            _ => "win-x64",
-        };
+    internal static string ResolveAssetMoniker(Architecture architecture)
+        => architecture == Architecture.Arm64
+            ? throw new PlatformNotSupportedException(
+                "Microsoft MXC-backed Phantom.Workspaces releases currently support only win-x64; ARM64 management operations are unavailable.")
+            : "win-x64";
 
     private static string ResolveVersion()
     {

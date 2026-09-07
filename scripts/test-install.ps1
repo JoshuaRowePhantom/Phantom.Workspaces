@@ -44,12 +44,25 @@ $packagingScript = Join-Path $repoRoot 'packaging\zip\New-ReleaseZip.ps1'
 
 function Resolve-Rid
 {
-    if ($RuntimeIdentifier) { return $RuntimeIdentifier }
-    switch ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)
+    $rid = if ($RuntimeIdentifier)
     {
-        'Arm64' { 'win-arm64' }
-        default { 'win-x64' }
+        $RuntimeIdentifier
     }
+    else
+    {
+        switch ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)
+        {
+            'Arm64' { 'win-arm64' }
+            default { 'win-x64' }
+        }
+    }
+
+    if ($rid -eq 'win-arm64')
+    {
+        throw 'Microsoft MXC-backed Phantom.Workspaces releases currently support only win-x64.'
+    }
+
+    return $rid
 }
 
 $failures = 0
