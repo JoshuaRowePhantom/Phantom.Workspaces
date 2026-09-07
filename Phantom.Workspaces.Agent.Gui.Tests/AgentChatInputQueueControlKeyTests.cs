@@ -179,6 +179,25 @@ public sealed class AgentChatInputQueueControlKeyTests
     }
 
     [Fact]
+    public async Task HandleEditKey_OrdinaryKey_IsNotHandled()
+    {
+        await using var chat = await CreateChatAsync();
+        var viewModel = new InputQueueViewModel(chat, chat.DefaultInputQueue, chat.InputQueueManager);
+        var queue = chat.QueueManager.CreateInputQueue(immediacy: AgentInputQueueImmediacy.Held);
+        viewModel.AppendToQueue(queue, "original");
+        var entry = Assert.Single(viewModel.Queues[1].Items);
+        entry.EditCommand.Execute(null);
+        entry.EditText = "edited";
+
+        var handled = AgentChatInputQueueControl.HandleEditKey(entry, Key.A, KeyModifiers.None);
+
+        Assert.False(handled);
+        Assert.True(entry.IsEditing);
+        Assert.Equal("edited", entry.EditText);
+        Assert.Equal("original", Assert.Single(queue.Items).Text);
+    }
+
+    [Fact]
     public async Task HandleEditKey_CtrlEnter_RemovesFromQueueAndPostsToDefaultQueue()
     {
         await using var chat = await CreateChatAsync();
