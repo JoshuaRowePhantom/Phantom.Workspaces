@@ -1,10 +1,12 @@
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using System.Reflection;
 using AgentSchema;
 using Microsoft.Extensions.AI;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Agent.Gui.ViewModels;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.SlashCommands;
 
 using Phantom.Workspaces.Testing.Gui;
 
@@ -63,6 +65,55 @@ public sealed class AgentChatStatusLineViewModelTests
         Assert.Contains(nameof(AgentViewModel.ModelProvider), changedProperties);
         Assert.Contains(nameof(AgentChatDetailsViewModel.ModelId), changedDetailProperties);
         Assert.Contains(nameof(AgentChatDetailsViewModel.ModelProvider), changedDetailProperties);
+    }
+
+    [AvaloniaFact]
+    public async Task ExecuteModelCommand_WhenModelChanges_UpdatesStatusLineModelDisplay()
+    {
+        var modelClient = new ModelTestChatClient("gpt-4o");
+        await using var chat = await CreateModelChatAsync(modelClient);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+        var handler = new CopilotSdkModelSlashCommandHandler(modelClient);
+
+        await handler.ExecuteAsync(
+            new SlashCommandContext { AgentChat = chat },
+            "gpt-5.6-sol",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("gpt-5.6-sol", chat.CurrentModelId);
+        Assert.Equal("gpt-5.6-sol", statusLine.ModelDisplay);
+    }
+
+    [AvaloniaFact]
+    public async Task ModelChanged_RaisedOnBackgroundThread_MarshalsModelNotificationToUiThread()
+    {
+        var modelClient = new ModelTestChatClient("gpt-4o");
+        await using var chat = await CreateModelChatAsync(modelClient);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        var notification = new TaskCompletionSource<(bool OnUiThread, string ModelId)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        agentViewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(AgentViewModel.ModelId))
+            {
+                notification.TrySetResult((Dispatcher.UIThread.CheckAccess(), agentViewModel.ModelId));
+            }
+        };
+
+        var raisedFromUiThread = await Task.Run(async () =>
+        {
+            var onUiThread = Dispatcher.UIThread.CheckAccess();
+            await modelClient.SetModelIdAsync("gpt-5.6-sol", TestContext.Current.CancellationToken);
+            return onUiThread;
+        }, TestContext.Current.CancellationToken);
+        var result = await notification.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(raisedFromUiThread);
+        Assert.True(result.OnUiThread);
+        Assert.Equal("gpt-5.6-sol", result.ModelId);
     }
 
     [AvaloniaFact]
