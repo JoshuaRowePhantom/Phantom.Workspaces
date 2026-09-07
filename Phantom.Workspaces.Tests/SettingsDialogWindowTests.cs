@@ -87,6 +87,16 @@ public sealed class SettingsDialogWindowTests
     }
 
     [Fact]
+    public void RemoteAccessSettingsView_ExposesDevTunnelHostingToggle()
+    {
+        var text = ReadAxaml(Path.Combine("Views", "Configuration", "RemoteAccessSettingsView.axaml"));
+
+        Assert.Contains("Host a dev tunnel from this instance", text, StringComparison.Ordinal);
+        Assert.Contains("IsChecked=\"{Binding HostDevTunnelEnabled}\"", text, StringComparison.Ordinal);
+        Assert.Contains("IsEnabled=\"{Binding HostDevTunnelEnabled}\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InstallationWizardWindow_SizesToContentInBothDimensions()
     {
         var text = ReadAxaml("InstallationWizardWindow.axaml");

@@ -12,6 +12,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     private bool hostingEnabled;
     private string listenUrl;
     private bool acceptReverseExecution;
+    private bool hostDevTunnelEnabled;
     private DevTunnelAccessMode devTunnelAccessMode;
     private string? tunnelName;
     private string? userComputerProfileOverride;
@@ -33,6 +34,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
         this.hostingEnabled = remoteHosting.Enabled;
         this.listenUrl = string.Join("; ", remoteHosting.ListenUrls);
         this.acceptReverseExecution = remoteHosting.AcceptReverseExecution;
+        this.hostDevTunnelEnabled = devTunnel.HostingEnabled;
         // Persist legacy Token configs as Private — Token is retired; connect tokens are automatic.
 #pragma warning disable CS0618 // Token is obsolete
         this.devTunnelAccessMode = devTunnel.AccessMode == DevTunnelAccessMode.Token
@@ -92,6 +94,13 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     {
         get => this.acceptReverseExecution;
         set => this.SetValidatedProperty(ref this.acceptReverseExecution, value);
+    }
+
+    /// <summary>Whether this instance hosts the configured dev tunnel.</summary>
+    public bool HostDevTunnelEnabled
+    {
+        get => this.hostDevTunnelEnabled;
+        set => this.SetValidatedProperty(ref this.hostDevTunnelEnabled, value);
     }
 
     /// <summary>The dev tunnel access mode.</summary>
@@ -216,6 +225,7 @@ public sealed class RemoteAccessSettingsViewModel : ViewModelBase
     /// <summary>Projects the current settings into a <see cref="DevTunnelConfiguration"/>.</summary>
     public DevTunnelConfiguration ToDevTunnelConfiguration(DevTunnelConfiguration existing) => existing with
     {
+        HostingEnabled = this.HostDevTunnelEnabled,
         TunnelName = this.TunnelName,
         AccessMode = this.DevTunnelAccessMode,
         Authentication = this.AuthScheme.ToRemoteAuthentication(),

@@ -94,6 +94,56 @@ public sealed class ConfigurationPersistenceServiceTests
     }
 
     [AvaloniaFact]
+    public async Task LoadAsync_LegacyDevTunnelWithoutHostingEnabled_PreservesHostingBehavior()
+    {
+        var path = CreateTempConfigPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, """{"devTunnel":{"tunnelName":"legacy-tunnel"}}""");
+        var service = new ConfigurationPersistenceService(path);
+
+        try
+        {
+            var configuration = await service.LoadAsync();
+
+            Assert.True(configuration.DevTunnel.HostingEnabled);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
+    public async Task SaveThenLoad_ExplicitlyDisabledDevTunnel_RemainsDisabledAndWritesFlag()
+    {
+        var path = CreateTempConfigPath();
+        var service = new ConfigurationPersistenceService(path);
+        var configuration = new WorkspacesConfiguration
+        {
+            DevTunnel = new DevTunnelConfiguration
+            {
+                HostingEnabled = false,
+                TunnelName = "retained-name",
+            },
+        };
+
+        try
+        {
+            await service.SaveAsync(configuration);
+            var json = await File.ReadAllTextAsync(path);
+            var reloaded = await service.LoadAsync();
+
+            Assert.Contains("\"hostingEnabled\": false", json, StringComparison.Ordinal);
+            Assert.False(reloaded.DevTunnel.HostingEnabled);
+            Assert.Equal("retained-name", reloaded.DevTunnel.TunnelName);
+        }
+        finally
+        {
+            DeleteTempConfig(path);
+        }
+    }
+
+    [AvaloniaFact]
     public async Task SaveAsync_DoesNotPersistRawSecrets()
     {
         var path = CreateTempConfigPath();

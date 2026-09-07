@@ -13,6 +13,7 @@ public sealed class RemoteAccessSettingsViewModelTests
     {
         var existing = new DevTunnelConfiguration
         {
+            HostingEnabled = false,
             TunnelId = "tunnel-123",
             TunnelName = "old-name",
             HostedPorts = [5280, 5281],
@@ -21,6 +22,7 @@ public sealed class RemoteAccessSettingsViewModelTests
 
         var viewModel = new RemoteAccessSettingsViewModel(new RemoteHostingSettings(), existing)
         {
+            HostDevTunnelEnabled = true,
             TunnelName = "new-name",
             DevTunnelAccessMode = DevTunnelAccessMode.Anonymous,
         };
@@ -34,6 +36,42 @@ public sealed class RemoteAccessSettingsViewModelTests
         // Updated from the editable view-model state.
         Assert.Equal("new-name", projected.TunnelName);
         Assert.Equal(DevTunnelAccessMode.Anonymous, projected.AccessMode);
+        Assert.True(projected.HostingEnabled);
+    }
+
+    [AvaloniaFact]
+    public void Constructor_SeedsHostDevTunnelEnabled_FromConfiguration()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel(
+            new RemoteHostingSettings(),
+            new DevTunnelConfiguration { HostingEnabled = true });
+
+        Assert.True(viewModel.HostDevTunnelEnabled);
+    }
+
+    [AvaloniaFact]
+    public void ToDevTunnelConfiguration_ProjectsHostingEnabledFlag()
+    {
+        var existing = new DevTunnelConfiguration { HostingEnabled = true, TunnelName = "saved-name" };
+        var viewModel = new RemoteAccessSettingsViewModel(new RemoteHostingSettings(), existing)
+        {
+            HostDevTunnelEnabled = false,
+        };
+
+        var projected = viewModel.ToDevTunnelConfiguration(existing);
+
+        Assert.False(projected.HostingEnabled);
+        Assert.Equal("saved-name", projected.TunnelName);
+    }
+
+    [AvaloniaFact]
+    public void LegacyConfigWithTunnelName_MigratesToHostingEnabledTrue()
+    {
+        var viewModel = new RemoteAccessSettingsViewModel(
+            new RemoteHostingSettings(),
+            new DevTunnelConfiguration { TunnelName = "legacy-name" });
+
+        Assert.True(viewModel.HostDevTunnelEnabled);
     }
 
     [AvaloniaFact]

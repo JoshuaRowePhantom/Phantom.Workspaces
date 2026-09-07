@@ -197,6 +197,12 @@ public partial class App : Application
         var settingsViewModel = await viewModel.CreateSettingsDialogViewModelAsync();
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
         await settingsWindow.ShowDialog(mainWindow);
+        if (settingsWindow.Result is { } configuration)
+        {
+            await viewModel.ApplyRemoteAccessChangeAsync(
+                configuration.RemoteHosting,
+                configuration.DevTunnel);
+        }
     }
 
     public override async void OnFrameworkInitializationCompleted()

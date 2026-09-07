@@ -4,12 +4,60 @@ using System.Threading;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Configuration;
 using Phantom.Workspaces.Services.DevTunnel;
+using Phantom.Workspaces.ViewModels;
 using Xunit;
 
 namespace Phantom.Workspaces.Tests;
 
 public sealed class DevTunnelHostServiceTests
 {
+    [Fact]
+    public void HostDevTunnelDisabled_DoesNotStartHost_EvenWithTunnelName()
+    {
+        var configuration = new DevTunnelConfiguration
+        {
+            HostingEnabled = false,
+            TunnelName = "retained-name",
+        };
+
+        Assert.False(MainWindowViewModel.ShouldStartDevTunnelHost(configuration, "http://localhost:5280"));
+    }
+
+    [Fact]
+    public void HostDevTunnelEnabled_WithTunnelNameAndListenUrl_StartsHost()
+    {
+        var configuration = new DevTunnelConfiguration
+        {
+            HostingEnabled = true,
+            TunnelName = "hosted-name",
+        };
+
+        Assert.True(MainWindowViewModel.ShouldStartDevTunnelHost(configuration, "http://localhost:5280"));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-url")]
+    public void HostDevTunnelEnabled_WithoutValidListenUrl_DoesNotStartHost(string? listenUrl)
+    {
+        var configuration = new DevTunnelConfiguration
+        {
+            HostingEnabled = true,
+            TunnelName = "hosted-name",
+        };
+
+        Assert.False(MainWindowViewModel.ShouldStartDevTunnelHost(configuration, listenUrl));
+    }
+
+    [Fact]
+    public void HostDevTunnelEnabled_WithoutTunnelIdentity_DoesNotStartHost()
+    {
+        var configuration = new DevTunnelConfiguration { HostingEnabled = true };
+
+        Assert.False(MainWindowViewModel.ShouldStartDevTunnelHost(configuration, "http://localhost:5280"));
+    }
+
     [Fact]
     public async Task StartAsync_EnsuresTunnel_ForwardsSinglePort_AndPublishesHostingStatus()
     {

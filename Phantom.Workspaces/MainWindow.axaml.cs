@@ -174,6 +174,12 @@ public partial class MainWindow : Window
         var settingsWindow = new SettingsDialogWindow(settingsViewModel);
 
         await settingsWindow.ShowDialog(this);
+        if (settingsWindow.Result is { } configuration)
+        {
+            await viewModel.ApplyRemoteAccessChangeAsync(
+                configuration.RemoteHosting,
+                configuration.DevTunnel);
+        }
     }
 
     private void OnOpenConnectionStatusClicked(

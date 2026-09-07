@@ -24,7 +24,10 @@
                        TextWrapping="Wrap" />
         </StackPanel>
 
-        <StackPanel Spacing="4">
+        <CheckBox Content="Host a dev tunnel from this instance"
+                  IsChecked="{Binding HostDevTunnelEnabled}" />
+
+        <StackPanel Spacing="4" IsEnabled="{Binding HostDevTunnelEnabled}">
             <TextBlock Text="Dev tunnel name" />
             <TextBox PlaceholderText="my-workspace-tunnel or auto" Text="{Binding TunnelName}" />
             <TextBlock x:Name="SettingsTunnelNameHelperText"
@@ -33,7 +36,7 @@
                        TextWrapping="Wrap" />
         </StackPanel>
 
-        <StackPanel Spacing="4">
+        <StackPanel Spacing="4" IsEnabled="{Binding HostDevTunnelEnabled}">
             <TextBlock Text="Dev tunnel access mode" />
             <ComboBox HorizontalAlignment="Stretch"
                       ItemsSource="{Binding AvailableAccessModes}"
@@ -46,7 +49,7 @@
                        TextWrapping="Wrap" />
         </StackPanel>
 
-        <StackPanel Spacing="4">
+        <StackPanel Spacing="4" IsEnabled="{Binding HostDevTunnelEnabled}">
             <TextBlock Text="Authorization" FontWeight="Bold" />
             <views:AuthSchemeSelectorView DataContext="{Binding AuthScheme}" />
         </StackPanel>

@@ -928,8 +928,17 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     }
 
     public async Task<bool> ApplyRemoteHostingChangeAsync(RemoteHostingSettings newSettings)
+        => await this.ApplyRemoteAccessChangeAsync(
+            newSettings,
+            this.configuration?.DevTunnel ?? new DevTunnelConfiguration()).ConfigureAwait(false);
+
+    /// <summary>Applies remote endpoint and dev-tunnel hosting changes to the running instance.</summary>
+    public async Task<bool> ApplyRemoteAccessChangeAsync(
+        RemoteHostingSettings newSettings,
+        DevTunnelConfiguration newDevTunnelConfiguration)
     {
         ArgumentNullException.ThrowIfNull(newSettings);
+        ArgumentNullException.ThrowIfNull(newDevTunnelConfiguration);
 
         if (this.webHost is null)
         {
@@ -938,6 +947,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         await this.StopDevTunnelHostAsync().ConfigureAwait(false);
         await this.webHost.StopAsync().ConfigureAwait(false);
+
+        this.configuration = (this.configuration ?? new WorkspacesConfiguration()) with
+        {
+            RemoteHosting = newSettings,
+            DevTunnel = newDevTunnelConfiguration,
+        };
 
         if (newSettings.Enabled && this.entityBroker is not null)
         {
@@ -952,11 +967,6 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         {
             this.ConnectionStatus?.SetLocalAccessPoint(null);
         }
-
-        this.configuration = (this.configuration ?? new WorkspacesConfiguration()) with
-        {
-            RemoteHosting = newSettings,
-        };
 
         return true;
     }
@@ -974,19 +984,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private void StartDevTunnelHostIfConfigured(string? listenUrl)
     {
         var devTunnelConfiguration = this.configuration?.DevTunnel;
-        if (devTunnelConfiguration is null
-            || (string.IsNullOrWhiteSpace(devTunnelConfiguration.TunnelName)
-                && string.IsNullOrWhiteSpace(devTunnelConfiguration.TunnelId)))
+        if (!ShouldStartDevTunnelHost(devTunnelConfiguration, listenUrl))
         {
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(listenUrl) || !Uri.TryCreate(listenUrl, UriKind.Absolute, out var listenUri))
-        {
-            return;
-        }
-
-        this.ConnectionStatus?.SetTunnelName(devTunnelConfiguration.TunnelName);
+        // ShouldStartDevTunnelHost guarantees both values are present and valid.
+        var configuredTunnel = devTunnelConfiguration!;
+        var listenUri = new Uri(listenUrl!, UriKind.Absolute);
+        this.ConnectionStatus?.SetTunnelName(configuredTunnel.TunnelName);
 
         var localPort = listenUri.Port;
         var protocol = listenUri.Scheme;
@@ -999,7 +1005,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         // sign-in or relay failure never blocks GUI startup. The task is observed to avoid an
         // unobserved-exception escalation; the Error status already carries the failure detail.
         this.devTunnelHostStartTask = ObserveAsync(
-            hostService.StartAsync(localPort, protocol, devTunnelConfiguration));
+            hostService.StartAsync(localPort, protocol, configuredTunnel));
 
         static async Task ObserveAsync(Task task)
         {
@@ -1013,6 +1019,15 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             }
         }
     }
+
+    internal static bool ShouldStartDevTunnelHost(
+        DevTunnelConfiguration? configuration,
+        string? listenUrl)
+        => configuration?.HostingEnabled == true
+            && (!string.IsNullOrWhiteSpace(configuration.TunnelName)
+                || !string.IsNullOrWhiteSpace(configuration.TunnelId))
+            && !string.IsNullOrWhiteSpace(listenUrl)
+            && Uri.TryCreate(listenUrl, UriKind.Absolute, out _);
 
     private void InitializeDockLayout()
     {

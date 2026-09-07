@@ -133,6 +133,19 @@ public sealed record RemoteHostingSettings
 /// </summary>
 public sealed record DevTunnelConfiguration
 {
+    private bool? hostingEnabled;
+
+    /// <summary>
+    /// Whether this instance hosts the configured tunnel. Configurations written before this setting
+    /// existed retain their previous behavior by inferring enabled from a configured tunnel identity.
+    /// </summary>
+    public bool HostingEnabled
+    {
+        get => this.hostingEnabled
+            ?? (!string.IsNullOrWhiteSpace(this.TunnelName) || !string.IsNullOrWhiteSpace(this.TunnelId));
+        init => this.hostingEnabled = value;
+    }
+
     /// <summary>Persistent tunnel id, when one is allocated.</summary>
     public string? TunnelId { get; init; }
 
