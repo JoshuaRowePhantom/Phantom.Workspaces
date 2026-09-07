@@ -44,7 +44,7 @@ public sealed class AgentChatOutputControlTests
     }
 
     [Fact]
-    public void ChatOutputShellHtml_CopyAndInspectGutters_AreRetained()
+    public void ChatOutputShellHtml_CopyAndInspectAffordances_AreRetainedInFlow()
     {
         // #1038 regression guard: removing "..." must not remove the copy or inspect gutters.
         var html = ReadShellHtml();
@@ -54,29 +54,31 @@ public sealed class AgentChatOutputControlTests
         Assert.Contains("UsageInspectGutter.init(document);", html, StringComparison.Ordinal);
         Assert.Contains("inspect-gutter-btn", html, StringComparison.Ordinal);
         Assert.Contains("usage-gutter-btn", html, StringComparison.Ordinal);
-        // The inspect gutter still relies on the co-located data-details-target attribute.
+        Assert.Contains("chat-affordance-btn", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("right: -3.6em", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("left: -2.2em", html, StringComparison.Ordinal);
         Assert.Contains("data-details-target", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ChatOutputShellHtml_UsageInspectGutter_AlwaysAttachesHashToUsageRow()
+    public void ChatOutputShellHtml_UsageInspectAffordance_AttachesHashToHeaderMeta()
     {
         var html = ReadShellHtml();
 
-        Assert.Contains("marker.appendChild(makeButton(marker));", html, StringComparison.Ordinal);
-        Assert.Contains("marker.classList.add(\"chat-content-row\");", html, StringComparison.Ordinal);
+        Assert.Contains("meta.appendChild(makeButton(message));", html, StringComparison.Ordinal);
+        Assert.Contains("querySelector(\":scope > .chat-header\")", html, StringComparison.Ordinal);
+        Assert.Contains("header.querySelector(\":scope > .chat-meta\")", html, StringComparison.Ordinal);
         Assert.Contains(".chat-content.chat-usage", html, StringComparison.Ordinal);
         Assert.DoesNotContain(".chat-usage-marker { display: none; }", html, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ChatOutputShellHtml_UsageInspectGutter_DoesNotQueryDescendantInspectButtons()
+    public void ChatOutputShellHtml_UsageInspectAffordance_DeduplicatesPerMessage()
     {
         var html = ReadShellHtml();
 
-        Assert.DoesNotContain("prev.querySelector(\".inspect-gutter-btn\")", html, StringComparison.Ordinal);
-        Assert.Contains("prev.hasAttribute(\"data-inspect-target\")", html, StringComparison.Ordinal);
-        Assert.Contains("prev.children[i].classList.contains(\"inspect-gutter-btn\")", html, StringComparison.Ordinal);
+        Assert.Contains("meta.querySelector(\".usage-gutter-btn\")", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("previousElementSibling", html, StringComparison.Ordinal);
     }
 
     [Fact]

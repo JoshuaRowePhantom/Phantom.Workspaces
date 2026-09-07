@@ -234,7 +234,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"4\">call  ").Append(callSummary).Append("</summary>");
         if (!string.IsNullOrEmpty(callJson))
         {
-            builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(RenderToolPayload(callJson)).Append("</pre>");
+            builder.Append("<pre class=\"chat-collapsible-body tool-json-value chat-scroll-x\">").Append(RenderToolPayload(callJson)).Append("</pre>");
         }
 
         builder.Append("</details>");
@@ -260,7 +260,7 @@ internal static class ChatOutputHtmlRenderer
             if (!string.IsNullOrEmpty(resultJson))
             {
                 var (bodyHtml, _) = RenderToolResultBody(resultJson);
-                builder.Append("<pre class=\"chat-collapsible-body tool-json-value\">").Append(bodyHtml).Append("</pre>");
+                builder.Append("<pre class=\"chat-collapsible-body tool-json-value chat-scroll-x\">").Append(bodyHtml).Append("</pre>");
             }
 
             builder.Append("</details>");
@@ -340,8 +340,19 @@ internal static class ChatOutputHtmlRenderer
     {
         var builder = new StringBuilder();
         var stickyBaseLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+        var inspectTargetId = FindTargetId(contents, "data-inspect-target");
+        var usageTargetId = FindTargetId(contents, "data-usage-inspect-target");
         builder.Append("<div class=\"chat-message ").Append(RoleClass(roleLabel)).Append("\" id=\"")
-            .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\">");
+            .Append(messageId).Append("\" data-sticky-base-level=\"").Append(stickyBaseLevel).Append("\"");
+        if (!string.IsNullOrEmpty(inspectTargetId))
+        {
+            builder.Append(" data-message-inspect-target=\"").Append(inspectTargetId).Append("\"");
+        }
+        if (!string.IsNullOrEmpty(usageTargetId))
+        {
+            builder.Append(" data-message-usage-target=\"").Append(usageTargetId).Append("\"");
+        }
+        builder.Append(">");
         builder.Append(RenderHeader(messageId, roleLabel, timestamp, suppressRoleHeader));
         builder.Append("<div class=\"chat-contents\" id=\"").Append(ContentsContainerId(messageId)).Append("\">");
         foreach (var content in contents)
@@ -357,6 +368,42 @@ internal static class ChatOutputHtmlRenderer
 
         builder.Append("</div>");
         return builder.ToString();
+    }
+
+    private static string? FindTargetId(
+        IReadOnlyList<(string ElementId, string Html)> contents,
+        string markerAttribute)
+    {
+        foreach (var content in contents)
+        {
+            var markerIndex = content.Html.IndexOf(markerAttribute, StringComparison.Ordinal);
+            if (markerIndex < 0)
+            {
+                continue;
+            }
+
+            var tagStart = content.Html.LastIndexOf('<', markerIndex);
+            var tagEnd = content.Html.IndexOf('>', markerIndex);
+            if (tagStart < 0 || tagEnd < 0)
+            {
+                return HtmlEscape(content.ElementId);
+            }
+
+            var idIndex = content.Html.IndexOf(" id=\"", tagStart, StringComparison.Ordinal);
+            if (idIndex > tagStart && idIndex < tagEnd)
+            {
+                var valueStart = idIndex + 5;
+                var valueEnd = content.Html.IndexOf('"', valueStart);
+                if (valueEnd > valueStart && valueEnd < tagEnd)
+                {
+                    return content.Html[valueStart..valueEnd];
+                }
+            }
+
+            return HtmlEscape(content.ElementId);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -430,13 +477,14 @@ internal static class ChatOutputHtmlRenderer
 
         if (suppressed)
         {
-            return $"<div class=\"chat-header chat-header-suppressed\" id=\"{HeaderId(messageId)}\" hidden></div>";
+            return $"<div class=\"chat-header chat-header-suppressed\" id=\"{HeaderId(messageId)}\" hidden><span class=\"chat-sender\"></span><span class=\"chat-meta\"></span></div>";
         }
 
         var builder = new StringBuilder();
         var stickyLevel = string.Equals(roleLabel, "user", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
         builder.Append("<div class=\"chat-header\" id=\"").Append(HeaderId(messageId)).Append("\" data-sticky-level=\"").Append(stickyLevel).Append("\">");
-        builder.Append("<span>").Append(HtmlEscape(roleLabel)).Append("</span>");
+        builder.Append("<span class=\"chat-sender\">").Append(HtmlEscape(roleLabel)).Append("</span>");
+        builder.Append("<span class=\"chat-meta\">");
         if (timestamp.HasValue)
         {
             builder.Append("<span class=\"chat-timestamp\" data-utc=\"")
@@ -444,7 +492,7 @@ internal static class ChatOutputHtmlRenderer
                 .Append("\"></span>");
         }
 
-        builder.Append("</div>");
+        builder.Append("</span></div>");
         return builder.ToString();
     }
 
@@ -779,7 +827,10 @@ internal static class ChatOutputHtmlRenderer
         var document = Markdown.Parse(text, MarkdownPipeline);
         renderer.Render(document);
         writer.Flush();
-        return writer.ToString().TrimEnd('\n', '\r');
+        return writer.ToString()
+            .Replace("<pre>", "<pre class=\"chat-scroll-x\">", StringComparison.Ordinal)
+            .Replace("<table>", "<table class=\"chat-scroll-x\">", StringComparison.Ordinal)
+            .TrimEnd('\n', '\r');
     }
 
     private static string RenderCollapsible(string contentId, string cssClass, string header, string body, string detailsJson, bool bodyIsHtml = false)
@@ -789,7 +840,7 @@ internal static class ChatOutputHtmlRenderer
         builder.Append("<summary class=\"chat-collapsible-summary\" data-sticky-level=\"0\">").Append(HtmlEscape(header)).Append("</summary>");
         if (!string.IsNullOrEmpty(body))
         {
-            builder.Append("<pre class=\"chat-collapsible-body");
+            builder.Append("<pre class=\"chat-collapsible-body chat-scroll-x");
             if (bodyIsHtml)
             {
                 builder.Append(" tool-json-value");

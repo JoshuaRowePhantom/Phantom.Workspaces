@@ -325,7 +325,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("<h1>Title</h1>", html);
         Assert.Contains("<ul>", html);
         Assert.Contains("<li>one</li>", html);
-        Assert.Contains("<pre><code>", html);
+        Assert.Contains("<pre class=\"chat-scroll-x\"><code>", html);
         Assert.Contains("let x = 1;", html);
     }
 
@@ -374,7 +374,7 @@ public sealed class ChatOutputHtmlModelTests
             isDiagnostic: false);
 
         Assert.NotNull(html);
-        Assert.Contains("<table>", html);
+        Assert.Contains("<table class=\"chat-scroll-x\">", html);
         Assert.Contains("<th>", html);
         Assert.Contains("<td>", html);
         // The raw markdown source is stored in data-details-target; verify the rendered body
@@ -3507,8 +3507,8 @@ public sealed class ChatOutputHtmlModelTests
         var html = ChatOutputHtmlModel.GenerateHistoryChunk(plan, 0, snapshot.Count);
 
         // One user header + one assistant header + one suppressed assistant header (for "summary").
-        var userHeader = System.Text.RegularExpressions.Regex.Matches(html, "<span>user</span>").Count;
-        var assistantHeader = System.Text.RegularExpressions.Regex.Matches(html, "<span>assistant</span>").Count;
+        var userHeader = System.Text.RegularExpressions.Regex.Matches(html, "<span class=\"chat-sender\">user</span>").Count;
+        var assistantHeader = System.Text.RegularExpressions.Regex.Matches(html, "<span class=\"chat-sender\">assistant</span>").Count;
         Assert.Equal(1, userHeader);
         Assert.Equal(1, assistantHeader);
         Assert.Contains("chat-header-suppressed", html);
@@ -3562,7 +3562,7 @@ public sealed class ChatOutputHtmlModelTests
         Assert.Contains("id=\"msg-1-header\"", html);
         Assert.Contains("chat-header-suppressed", html);
         Assert.Contains("hidden", html);
-        Assert.DoesNotContain("<span>assistant</span>", html);
+        Assert.DoesNotContain("<span class=\"chat-sender\">assistant</span>", html);
     }
 
     [Fact]
@@ -3570,7 +3570,7 @@ public sealed class ChatOutputHtmlModelTests
     {
         var html = ChatOutputHtmlRenderer.RenderHeader("msg-1", "assistant");
 
-        Assert.Contains("<span>assistant</span>", html);
+        Assert.Contains("<span class=\"chat-sender\">assistant</span>", html);
         Assert.DoesNotContain("chat-header-suppressed", html);
     }
 

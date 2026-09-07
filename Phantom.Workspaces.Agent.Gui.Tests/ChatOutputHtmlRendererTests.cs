@@ -57,6 +57,34 @@ public sealed class ChatOutputHtmlRendererTests
     }
 
     [Fact]
+    public void RenderMessage_InspectableContents_EmitsMessageLevelPrimaryTargets()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "assistant",
+            [
+                ("msg-0-c0", "<div data-inspect-target id=\"msg-0-c0\"></div>"),
+                ("msg-0-c1", "<div data-inspect-target id=\"msg-0-c1\"></div>"),
+                ("msg-0-usage", "<div data-usage-inspect-target id=\"msg-0-usage\"></div>"),
+            ]);
+
+        Assert.Contains("data-message-inspect-target=\"msg-0-c0\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-message-usage-target=\"msg-0-usage\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-message-inspect-target=\"msg-0-c1\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RenderMessage_NestedInspectableContent_UsesActualTargetId()
+    {
+        var html = ChatOutputHtmlRenderer.RenderMessage(
+            "msg-0",
+            "assistant",
+            [("msg-0-group", "<details id=\"msg-0-group\"><div data-inspect-target id=\"msg-0-call\"></div></details>")]);
+
+        Assert.Contains("data-message-inspect-target=\"msg-0-call\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TextBlock_ViaRenderContent_HasDataCopyTargetAttribute()
     {
         var html = ChatOutputHtmlRenderer.RenderContent("c0", new TextContent("hello"), includeReasoning: false, isDiagnostic: false);
@@ -1007,7 +1035,7 @@ public sealed class ChatOutputHtmlRendererTests
             "help",
             [("msg-0-c0", "<div>help content</div>")]);
 
-        Assert.Contains("<span>help</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"chat-sender\">help</span>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("[diagnostic]", html, StringComparison.Ordinal);
     }
 
@@ -1209,7 +1237,7 @@ public sealed class ChatOutputHtmlRendererTests
         var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "user");
 
         Assert.DoesNotContain("[user]", html, StringComparison.Ordinal);
-        Assert.Contains("<span>user</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"chat-sender\">user</span>", html, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1218,7 +1246,7 @@ public sealed class ChatOutputHtmlRendererTests
         var html = ChatOutputHtmlRenderer.RenderHeader("msg-0", "assistant");
 
         Assert.DoesNotContain("[assistant]", html, StringComparison.Ordinal);
-        Assert.Contains("<span>assistant</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span class=\"chat-sender\">assistant</span>", html, StringComparison.Ordinal);
     }
 
     [Fact]

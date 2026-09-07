@@ -340,7 +340,7 @@ public sealed class ChatOutputBrowserIntegrationTests
         });
 
     [Fact]
-    public Task InspectGutter_BlockWithDataDetailsTarget_StillInjectsInfoButton()
+    public Task InspectGutter_BlockWithDataDetailsTarget_InjectsInfoButtonInHeader()
         => this.fixture.InvokeAsync(async () =>
         {
             var (web, window) = await ShowReadyBrowserAsync();
@@ -353,7 +353,7 @@ public sealed class ChatOutputBrowserIntegrationTests
 
                 var present = await EvalAsync(
                     web,
-                    "document.querySelector('#dg-2-c0 .inspect-gutter-btn') !== null");
+                    "document.querySelector('#dg-2-header .inspect-gutter-btn') !== null");
                 Assert.Contains("true", present, StringComparison.Ordinal);
             }
             finally
@@ -376,7 +376,9 @@ public sealed class ChatOutputBrowserIntegrationTests
                 web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
                     "chat-history-container",
                     "append",
-                    "<div class=\"chat-message\" id=\"tgm-0\"><div class=\"chat-contents\" id=\"tgm-0-contents\">"
+                    "<div class=\"chat-message\" id=\"tgm-0\"><div class=\"chat-header\" id=\"tgm-0-header\">"
+                        + "<span class=\"chat-sender\">assistant</span><span class=\"chat-meta\"></span></div>"
+                        + "<div class=\"chat-contents\" id=\"tgm-0-contents\">"
                         + group + "</div></div>"));
 
                 var copyPresent = await EvalAsync(
@@ -384,13 +386,342 @@ public sealed class ChatOutputBrowserIntegrationTests
                     "document.querySelector('.chat-tool-call .copy-gutter-btn') !== null");
                 var inspectPresent = await EvalAsync(
                     web,
-                    "document.querySelector('.chat-tool-call .inspect-gutter-btn') !== null");
+                    "document.querySelector('#tgm-0 .chat-header .inspect-gutter-btn') !== null");
                 var dotsPresent = await EvalAsync(
                     web,
                     "document.querySelector('.details-gutter-btn') !== null");
                 Assert.Contains("true", copyPresent, StringComparison.Ordinal);
                 Assert.Contains("true", inspectPresent, StringComparison.Ordinal);
                 Assert.Contains("false", dotsPresent, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task HorizontalOverflow_HeaderAffordancesRendered_BodyHasNoHorizontalScroll()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("layout-0")));
+
+                var noOverflow = await EvalAsync(web, "document.body.scrollWidth <= document.body.clientWidth");
+                Assert.Contains("true", noOverflow, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatHeader_InspectAndUsage_RenderedInsideHeader()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("layout-1")));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var h=document.getElementById('layout-1-header');"
+                    + "return h.contains(h.querySelector('.inspect-gutter-btn'))"
+                    + "&&h.contains(h.querySelector('.usage-gutter-btn'));})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatHeader_MetaGroup_RightAlignedAndSenderCentered()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("layout-2")));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var h=document.getElementById('layout-2-header');"
+                    + "var s=h.querySelector('.chat-sender').getBoundingClientRect();"
+                    + "var m=h.querySelector('.chat-meta').getBoundingClientRect();"
+                    + "var r=h.getBoundingClientRect();"
+                    + "return Math.abs((s.left+s.right)/2-(r.left+r.right)/2)<1"
+                    + "&&m.right<=r.right+0.5;})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task ChatHeader_Order_TimestampThenInspectThenUsage()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("layout-3")));
+
+                var order = await EvalAsync(
+                    web,
+                    "Array.from(document.querySelector('#layout-3-header .chat-meta').children)"
+                    + ".map(function(e){return e.classList.contains('chat-timestamp')?'timestamp':"
+                    + "e.classList.contains('inspect-gutter-btn')?'inspect':'usage';}).join(',')");
+                Assert.Contains("timestamp,inspect,usage", order, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task Timestamp_Hover_TitleShowsFullDateTimeToSeconds()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithTimestamp("ts-title", "2000-06-15T10:30:45.000Z")));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var t=document.getElementById('ts-title-ts').title;"
+                    + "return t.length>0&&/\\d{1,2}:\\d{2}:\\d{2}/.test(t);})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task WideContent_ScrollClassApplied_ScrollsBlockNotBody()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var wideText = new string('x', 4000);
+                var content = ChatOutputHtmlRenderer.RenderContent(
+                    "wide-0-c0",
+                    new TextContent($"```\n{wideText}\n```"),
+                    includeReasoning: true,
+                    isDiagnostic: false)!;
+                var message = ChatOutputHtmlRenderer.RenderMessage(
+                    "wide-0",
+                    "assistant",
+                    [("wide-0-c0", content)]);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    message));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var b=document.querySelector('#wide-0 .chat-scroll-x');"
+                    + "return !!b&&b.scrollWidth>b.clientWidth"
+                    + "&&document.body.scrollWidth<=document.body.clientWidth;})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task CopyAffordance_RenderedInFlowWithinBlock_DoesNotOverflow()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithCopyTarget("copy-layout", "copy me")));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var b=document.querySelector('#copy-layout [data-copy-target]').getBoundingClientRect();"
+                    + "var c=document.querySelector('#copy-layout .copy-gutter-btn').getBoundingClientRect();"
+                    + "return c.left>=b.left-1&&c.right<=b.right+1"
+                    + "&&getComputedStyle(document.querySelector('#copy-layout .copy-gutter-btn')).position!=='absolute'"
+                    + "&&document.body.scrollWidth<=document.body.clientWidth;})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task CopyAffordance_Click_StillCopiesBlock()
+        => CopyGutter_ClickButton_CopiesBlockTextToClipboard();
+
+    [Fact]
+    public Task UsageAffordance_Click_StillInvokesInspect()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"contentId\":\"usage-click-usage\"", StringComparison.Ordinal))
+                {
+                    received.TrySetResult(body);
+                }
+            };
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("usage-click")));
+                await EvalAsync(web, "document.querySelector('#usage-click-header .usage-gutter-btn').click();'clicked'");
+
+                var body = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Contains("\"type\":\"inspect\"", body, StringComparison.Ordinal);
+                Assert.Contains("usage payload", body, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task InspectAffordance_Click_InvokesMessageLevelInspect()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            var received = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+            web.JavaScriptMessageReceived += (_, body) =>
+            {
+                if (body.Contains("\"contentId\":\"inspect-click-c0\"", StringComparison.Ordinal))
+                {
+                    received.TrySetResult(body);
+                }
+            };
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("inspect-click")));
+                await EvalAsync(web, "document.querySelector('#inspect-click-header .inspect-gutter-btn').click();'clicked'");
+
+                var body = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Contains("\"type\":\"inspect\"", body, StringComparison.Ordinal);
+                Assert.Contains("inspect payload", body, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task HeaderAffordances_HeaderAndTargetsReplaced_RebindToCurrentDom()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    MessageWithHeaderAffordances("replace-actions")));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "replace-actions-header",
+                    "replace",
+                    "<div class=\"chat-header\" id=\"replace-actions-header\">"
+                    + "<span class=\"chat-sender\">assistant</span><span class=\"chat-meta\"></span></div>"));
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "replace-actions-c0",
+                    "replace",
+                    "<div data-inspect-target data-details-target=\"replacement\" id=\"replace-actions-c0\"></div>"));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var h=document.getElementById('replace-actions-header');"
+                    + "return !!h.querySelector('.inspect-gutter-btn')&&!!h.querySelector('.usage-gutter-btn')"
+                    + "&&document.getElementById('replace-actions').getAttribute('data-message-inspect-target')"
+                    + "==='replace-actions-c0';})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
+
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "replace-actions-c0",
+                    "replace",
+                    "<div id=\"replace-actions-c0\"></div>"));
+                var fallbackTarget = await EvalAsync(
+                    web,
+                    "document.getElementById('replace-actions').getAttribute('data-message-inspect-target')");
+                Assert.Contains("replace-actions-c1", fallbackTarget, StringComparison.Ordinal);
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+
+    [Fact]
+    public Task HeaderAffordances_SuppressedHeaderWithInspectableContent_ShowsActions()
+        => this.fixture.InvokeAsync(async () =>
+        {
+            var (web, window) = await ShowReadyBrowserAsync();
+            try
+            {
+                var content = ChatOutputHtmlRenderer.RenderContent(
+                    "suppressed-c0",
+                    new TextContent("inspect me"),
+                    includeReasoning: true,
+                    isDiagnostic: false)!;
+                var message = ChatOutputHtmlRenderer.RenderMessage(
+                    "suppressed",
+                    "assistant",
+                    [("suppressed-c0", content)],
+                    suppressRoleHeader: true);
+                web.PostMessageToJavaScript(ChatOutputBrowserCommands.Update(
+                    "chat-history-container",
+                    "append",
+                    message));
+
+                var result = await EvalAsync(
+                    web,
+                    "(function(){var h=document.getElementById('suppressed-header');"
+                    + "return !h.hidden&&!!h.querySelector('.inspect-gutter-btn');})()");
+                Assert.Contains("true", result, StringComparison.Ordinal);
             }
             finally
             {
@@ -432,21 +763,21 @@ public sealed class ChatOutputBrowserIntegrationTests
 
     private static string Message(string id, string text)
         => $"<div class=\"chat-message\" id=\"{id}\">"
-            + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
+            + $"<div class=\"chat-header\" id=\"{id}-header\"><span class=\"chat-sender\">assistant</span><span class=\"chat-meta\"></span></div>"
             + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
             + $"<div class=\"chat-content chat-text\" id=\"{id}-c0\">{text}</div>"
             + "</div></div>";
 
     private static string MessageWithCopyTarget(string id, string text)
         => $"<div class=\"chat-message\" id=\"{id}\">"
-            + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
+            + $"<div class=\"chat-header\" id=\"{id}-header\"><span class=\"chat-sender\">assistant</span><span class=\"chat-meta\"></span></div>"
             + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
             + $"<div class=\"chat-content chat-text\" data-copy-target id=\"{id}-c0\">{text}</div>"
             + "</div></div>";
 
     private static string MessageWithDetailsTarget(string id, string json)
         => $"<div class=\"chat-message\" id=\"{id}\">"
-            + $"<div class=\"chat-header\" id=\"{id}-header\">[assistant]</div>"
+            + $"<div class=\"chat-header\" id=\"{id}-header\"><span class=\"chat-sender\">assistant</span><span class=\"chat-meta\"></span></div>"
             + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
             + $"<div class=\"chat-content chat-text\" data-copy-target data-details-target=\"{json}\" data-inspect-target id=\"{id}-c0\">{json}</div>"
             + "</div></div>";
@@ -454,10 +785,22 @@ public sealed class ChatOutputBrowserIntegrationTests
     private static string MessageWithTimestamp(string id, string utcIso)
         => $"<div class=\"chat-message\" id=\"{id}\">"
             + $"<div class=\"chat-header\" id=\"{id}-header\">"
-            + $"<span data-utc=\"{utcIso}\" id=\"{id}-ts\"></span>"
+            + "<span class=\"chat-sender\">assistant</span><span class=\"chat-meta\">"
+            + $"<span class=\"chat-timestamp\" data-utc=\"{utcIso}\" id=\"{id}-ts\"></span></span>"
             + "</div>"
             + $"<div class=\"chat-contents\" id=\"{id}-contents\"></div>"
             + "</div>";
+
+    private static string MessageWithHeaderAffordances(string id)
+        => $"<div class=\"chat-message chat-assistant-message\" id=\"{id}\">"
+            + $"<div class=\"chat-header\" id=\"{id}-header\">"
+            + "<span class=\"chat-sender\">assistant</span><span class=\"chat-meta\">"
+            + "<span class=\"chat-timestamp\" data-utc=\"2000-06-15T10:30:45.000Z\"></span></span></div>"
+            + $"<div class=\"chat-contents\" id=\"{id}-contents\">"
+            + $"<div class=\"chat-content chat-text\" data-copy-target data-inspect-target data-details-target=\"inspect payload\" id=\"{id}-c0\">text</div>"
+            + $"<div class=\"chat-content chat-text\" data-inspect-target data-details-target=\"secondary payload\" id=\"{id}-c1\">more</div>"
+            + $"<div class=\"chat-content chat-usage\" data-usage-inspect-target data-details-target=\"usage payload\" id=\"{id}-usage\"></div>"
+            + "</div></div>";
 
     [Fact]
     public Task TimestampFormatter_InitOrder_NoTypeError()

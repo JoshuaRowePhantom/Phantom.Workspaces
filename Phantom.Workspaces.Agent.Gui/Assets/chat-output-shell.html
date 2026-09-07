@@ -83,9 +83,23 @@
       color: var(--chat-role);
       font-weight: bold;
       margin-bottom: 2px;
-      display: flex;
-      justify-content: space-between;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
       align-items: baseline;
+    }
+
+    .chat-sender {
+      grid-column: 2;
+      justify-self: center;
+    }
+
+    .chat-header > .chat-meta {
+      grid-column: 3;
+      justify-self: end;
+      display: inline-flex;
+      gap: 0.4em;
+      align-items: baseline;
+      min-width: 0;
     }
 
     .chat-user-message .chat-header {
@@ -96,18 +110,17 @@
       color: #9cdcfe;
     }
 
-    .chat-user-message > .chat-header::before {
+    .chat-user-message > .chat-header .chat-sender::before {
       content: "▶ ";
       font-weight: bold;
     }
 
-    .chat-assistant-message > .chat-header::before {
+    .chat-assistant-message > .chat-header .chat-sender::before {
       content: "◉ ";
     }
 
-    .chat-user-message .chat-header {
-      padding-left: 1.5em;
-      text-indent: -1.5em;
+    .chat-header-suppressed .chat-sender::before {
+      content: none;
     }
 
     .chat-user-message .chat-contents {
@@ -132,7 +145,6 @@
       color: var(--chat-meta);
       font-size: 0.85em;
       white-space: nowrap;
-      margin-left: 8px;
     }
 
     .chat-content {
@@ -341,33 +353,53 @@
       border-left: 2px solid var(--chat-tool-summary);
     }
 
-    /* copy-gutter component ------------------------------------------------- */
-
-    .copy-gutter-host {
-      position: relative;
+    .chat-scroll-x {
+      display: block;
+      box-sizing: border-box;
+      max-width: 100%;
+      overflow-x: auto;
     }
 
-    .copy-gutter-btn {
-      position: absolute;
-      left: -2.2em;
-      top: 0.1em;
-      width: 1.6em;
-      height: 1.6em;
+    /* in-flow affordance components ---------------------------------------- */
+
+    .chat-affordance-btn {
+      flex: 0 0 auto;
       padding: 0;
       border: none;
       background: transparent;
+      color: inherit;
       cursor: pointer;
-      opacity: 0;
+      font: inherit;
+      border-radius: 3px;
+      opacity: 0.3;
       transition: opacity 120ms ease;
+    }
+
+    .chat-affordance-btn:hover,
+    .chat-affordance-btn:focus-visible {
+      opacity: 1;
+    }
+
+    .copy-affordance-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      min-height: 1.6em;
+      max-width: 100%;
+    }
+
+    .copy-gutter-btn {
+      width: 1.6em;
+      height: 1.6em;
+      opacity: 0;
       font-size: 1.5em;
       color: var(--copy-btn-color);
       display: flex;
       align-items: center;
       justify-content: center;
-      border-radius: 3px;
     }
 
-    .copy-gutter-host:hover .copy-gutter-btn,
+    [data-copy-target]:hover .copy-gutter-btn,
     .copy-gutter-btn:focus-visible {
       opacity: 1;
     }
@@ -391,52 +423,8 @@
       box-shadow: 0 2px 4px rgba(0,0,0,0.15);
     }
 
-    /* chat-content-row — shared positioning context for gutter buttons ------ */
-
-    .chat-content-row {
-      position: relative;
-    }
-
-    /* inspect-gutter component ---------------------------------------------- */
-
-    .inspect-gutter-btn {
-      position: absolute;
-      right: -2.2em;
-      top: 1.7em;
-      opacity: 0.3;
-      cursor: pointer;
-      transition: opacity 0.15s;
-      background: transparent;
-      border: none;
-      color: inherit;
-      font-size: inherit;
-      font-family: inherit;
-      padding: 0;
-    }
-
-    .chat-content-row:hover .inspect-gutter-btn { opacity: 0.6; }
-    .inspect-gutter-btn:hover { opacity: 1; }
-
-    .usage-gutter-btn {
-      position: absolute;
-      right: -3.6em;
-      top: 1.7em;
-      opacity: 0.3;
-      cursor: pointer;
-      transition: opacity 0.15s;
-      background: transparent;
-      border: none;
-      color: inherit;
-      font-size: inherit;
-      font-family: inherit;
-      padding: 0;
-    }
-
-    .chat-content-row:hover .usage-gutter-btn { opacity: 0.6; }
-    .usage-gutter-btn:hover { opacity: 1; }
     .chat-content.chat-usage {
-      position: relative;
-      min-height: 1.6em;
+      min-height: 0;
     }
 
     /* Running sub-agents panel styles (#1274): compact divider from content above; participate
@@ -512,7 +500,7 @@
     <div id="subagent-panel-inner"></div>
   </div>
   <script>
-    /* copy-gutter.js — reusable copy-to-clipboard component.
+    /* copy-gutter.js — reusable in-flow copy-to-clipboard component.
      * Call CopyGutter.init(root) to wire up all [data-copy-target] elements inside root.
      * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
      */
@@ -538,10 +526,10 @@
       function attach(el) {
         if (el._copyGutterAttached) { return; }
         el._copyGutterAttached = true;
-        el.classList.add("copy-gutter-host");
-
+        var toolbar = document.createElement("div");
+        toolbar.className = "copy-affordance-toolbar";
         var btn = document.createElement("button");
-        btn.className = "copy-gutter-btn";
+        btn.className = "chat-affordance-btn copy-gutter-btn";
         btn.setAttribute("aria-label", "Copy to clipboard");
         btn.setAttribute("aria-hidden", "true");
         btn.textContent = "\u2398"; /* ⎘ copy symbol */
@@ -568,7 +556,12 @@
           }
         });
 
-        el.insertBefore(btn, el.firstChild);
+        toolbar.appendChild(btn);
+        if (el.matches("details") && el.firstElementChild) {
+          el.insertBefore(toolbar, el.firstElementChild.nextSibling);
+        } else {
+          el.insertBefore(toolbar, el.firstChild);
+        }
       }
 
       function fallbackCopy(text, onSuccess) {
@@ -600,7 +593,7 @@
     })();
   </script>
   <script>
-    /* inspect-gutter.js — right-gutter inspect button component.
+     /* inspect-gutter.js — message-header inspect button component.
      * Call InspectGutter.init(root) to wire up all [data-inspect-target] elements inside root.
      * A MutationObserver keeps watching for elements added later (streaming / incremental updates).
      * Clicking the button posts an "inspect" message to the C# bridge with the element id and
@@ -616,47 +609,71 @@
       }
 
       function init(root) {
-        root.querySelectorAll("[data-inspect-target]").forEach(attach);
+        root.querySelectorAll(".chat-message").forEach(reconcile);
         var observer = new MutationObserver(function (mutations) {
           mutations.forEach(function (mutation) {
+            var mutationMessage = mutation.target.nodeType === 1
+              ? mutation.target.closest(".chat-message")
+              : null;
+            if (mutationMessage) { reconcile(mutationMessage); }
             mutation.addedNodes.forEach(function (node) {
               if (node.nodeType !== 1) { return; }
-              if (node.hasAttribute("data-inspect-target")) { attach(node); }
-              node.querySelectorAll("[data-inspect-target]").forEach(attach);
+              if (node.matches(".chat-message")) { reconcile(node); }
+              var message = node.closest(".chat-message");
+              if (message) { reconcile(message); }
+              node.querySelectorAll(".chat-message").forEach(reconcile);
             });
           });
         });
         observer.observe(root, { childList: true, subtree: true });
       }
 
-      function attach(el) {
-        if (el._inspectGutterAttached) { return; }
-        el._inspectGutterAttached = true;
-        el.classList.add("chat-content-row");
+      function reconcile(message) {
+        var targetId = message.getAttribute("data-message-inspect-target");
+        var target = targetId ? document.getElementById(targetId) : null;
+        if (!target || !message.contains(target) || !target.hasAttribute("data-inspect-target")) {
+          target = message.querySelector("[data-inspect-target]");
+          if (target && target.id) {
+            message.setAttribute("data-message-inspect-target", target.id);
+          } else {
+            message.removeAttribute("data-message-inspect-target");
+          }
+        }
 
+        var header = message.querySelector(":scope > .chat-header");
+        var meta = header && header.querySelector(":scope > .chat-meta");
+        if (!meta) { return; }
+        if (header.hidden) { header.hidden = false; }
+        var existing = meta.querySelector(".inspect-gutter-btn");
+        if (!target) {
+          if (existing) { existing.remove(); }
+          return;
+        }
+        if (existing) { return; }
         var btn = document.createElement("button");
-        btn.className = "inspect-gutter-btn";
+        btn.className = "chat-affordance-btn inspect-gutter-btn";
         btn.setAttribute("aria-label", "Open in inspector");
-        btn.setAttribute("aria-hidden", "true");
         btn.textContent = "\u24d8"; /* ⓘ */
 
         btn.addEventListener("click", function (e) {
           e.stopPropagation();
+          var current = document.getElementById(message.getAttribute("data-message-inspect-target"));
+          if (!current || !message.contains(current)) { return; }
           postToHost({
             type: "inspect",
-            contentId: el.id,
-            contentJson: el.getAttribute("data-details-target") || ""
+            contentId: current.id,
+            contentJson: current.getAttribute("data-details-target") || ""
           });
         });
 
-        el.insertBefore(btn, el.firstChild);
+        meta.insertBefore(btn, meta.querySelector(".usage-gutter-btn"));
       }
 
       return { init: init };
     })();
   </script>
   <script>
-    /* usage-inspect-gutter.js — attaches UsageContent payload markers to inspect gutters. */
+    /* usage-inspect-gutter.js — attaches UsageContent actions to message headers. */
     var UsageInspectGutter = (function () {
       "use strict";
 
@@ -667,52 +684,59 @@
       }
 
       function init(root) {
-        root.querySelectorAll("[data-usage-inspect-target]").forEach(attach);
+        root.querySelectorAll(".chat-message").forEach(reconcile);
         var observer = new MutationObserver(function (mutations) {
           mutations.forEach(function (mutation) {
+            var mutationMessage = mutation.target.nodeType === 1
+              ? mutation.target.closest(".chat-message")
+              : null;
+            if (mutationMessage) { reconcile(mutationMessage); }
             mutation.addedNodes.forEach(function (node) {
               if (node.nodeType !== 1) { return; }
-              if (node.hasAttribute("data-usage-inspect-target")) { attach(node); }
-              node.querySelectorAll("[data-usage-inspect-target]").forEach(attach);
+              if (node.matches(".chat-message")) { reconcile(node); }
+              var message = node.closest(".chat-message");
+              if (message) { reconcile(message); }
+              node.querySelectorAll(".chat-message").forEach(reconcile);
             });
           });
         });
         observer.observe(root, { childList: true, subtree: true });
       }
 
-      function attach(marker) {
-        if (marker._usageGutterAttached) { return; }
-        marker._usageGutterAttached = true;
-        marker.classList.add("chat-content-row");
-
-        marker.appendChild(makeButton(marker));
-
-        var prev = marker.previousElementSibling;
-        if (!prev || !prev.hasAttribute || !prev.hasAttribute("data-inspect-target")) {
-          return;
-        }
-
-        var host = null;
-        for (var i = 0; i < prev.children.length; i++) {
-          if (prev.children[i].classList && prev.children[i].classList.contains("inspect-gutter-btn")) {
-            host = prev.children[i];
-            break;
+      function reconcile(message) {
+        var targetId = message.getAttribute("data-message-usage-target");
+        var marker = targetId ? document.getElementById(targetId) : null;
+        if (!marker || !message.contains(marker) || !marker.hasAttribute("data-usage-inspect-target")) {
+          marker = message.querySelector("[data-usage-inspect-target]");
+          if (marker && marker.id) {
+            message.setAttribute("data-message-usage-target", marker.id);
+          } else {
+            message.removeAttribute("data-message-usage-target");
           }
         }
 
-        if (host && host.parentNode) {
-          host.parentNode.insertBefore(makeButton(marker), host.nextSibling);
+        var header = message.querySelector(":scope > .chat-header");
+        var meta = header && header.querySelector(":scope > .chat-meta");
+        if (!meta) { return; }
+        if (header.hidden) { header.hidden = false; }
+        var existing = meta.querySelector(".usage-gutter-btn");
+        if (!marker) {
+          if (existing) { existing.remove(); }
+          return;
         }
+        if (!existing) { meta.appendChild(makeButton(message)); }
       }
 
-      function makeButton(marker) {
+      function makeButton(message) {
         var btn = document.createElement("button");
-        btn.className = "usage-gutter-btn";
+        btn.className = "chat-affordance-btn usage-gutter-btn";
         btn.setAttribute("aria-label", "Open token usage details");
         btn.textContent = "#";
 
         btn.addEventListener("click", function (e) {
           e.stopPropagation();
+          var marker = document.getElementById(message.getAttribute("data-message-usage-target"));
+          if (!marker || !message.contains(marker)) { return; }
           postToHost({
             type: "inspect",
             contentId: marker.id,
@@ -801,6 +825,15 @@
           ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
           : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
             d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        el.setAttribute("title", d.toLocaleString([], {
+          weekday: "short",
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit"
+        }));
       }
 
       function init(root) {
