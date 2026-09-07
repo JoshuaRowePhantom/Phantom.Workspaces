@@ -118,11 +118,10 @@ public sealed class AgentChatForegroundContextTests
     }
 
     [Fact]
-    public async Task RunningItems_AreNeverMutatedOffForegroundScheduler_DuringInit()
+    public async Task RunningItems_QueuedTurnWaitsForInitAndMutatesOnForegroundScheduler()
     {
-        // With overlapping processing-loop and tool-init activity, every mutation of RunningItems
-        // must occur on the foreground scheduler (issue #1068): a gated toolset load overlaps the
-        // loop processing a message enqueued before initialization finished.
+        // A message queued during tool initialization must wait for discovery (issue #1482), and
+        // every RunningItems mutation must still occur on the foreground scheduler (issue #1068).
         using var pump = new SingleThreadPump(installSynchronizationContext: true);
         var scheduler = new SynchronizationContextTaskScheduler(pump.Context);
 
@@ -147,14 +146,20 @@ public sealed class AgentChatForegroundContextTests
         await invoked.Task;
         var chat = captured!;
         pump.Context.Post(_ => chat.EnqueueUserMessage("ping"), null);
-        await WaitForConditionAsync(
-            chat.History,
-            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
-            "queued message to be answered while tool init is gated",
+        await Task.Factory.StartNew(
+            static () => { },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
             scheduler);
+        Assert.DoesNotContain(chat.History, item => item.Role == ChatRole.Assistant);
 
         release.TrySetResult();
         await createTask;
+        await WaitForConditionAsync(
+            chat.History,
+            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
+            "queued message to be answered after tool init",
+            scheduler);
         await WaitForConditionAsync(
             chat.RunningItems,
             () => chat.RunningItems.Count == 0,
