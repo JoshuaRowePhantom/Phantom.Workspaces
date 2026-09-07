@@ -99,6 +99,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged += this.OnToolsChanged;
         this.agentChat.UsageChanged += this.OnUsageChanged;
+        this.agentChat.ModelChanged += this.OnModelChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
@@ -231,7 +232,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public string ModelProvider => this.ResolveAgentModel()?.Provider ?? string.Empty;
 
-    public string ModelId => this.ResolveAgentModel()?.Id ?? string.Empty;
+    public string ModelId => this.agentChat.CurrentModelId ?? string.Empty;
 
     public long? TotalInputTokenCount => this.agentChat.TotalInputTokenCount;
 
@@ -645,6 +646,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;
+        this.agentChat.ModelChanged -= this.OnModelChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
             runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
@@ -975,6 +977,23 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
 
         Dispatcher.UIThread.Post(this.RaiseUsagePropertiesChanged);
+    }
+
+    private void OnModelChanged(object? sender, EventArgs eventArgs)
+    {
+        if (Dispatcher.UIThread.CheckAccess())
+        {
+            this.RaiseModelPropertiesChanged();
+            return;
+        }
+
+        Dispatcher.UIThread.Post(this.RaiseModelPropertiesChanged);
+    }
+
+    private void RaiseModelPropertiesChanged()
+    {
+        this.RaisePropertyChanged(nameof(this.ModelId));
+        this.RaisePropertyChanged(nameof(this.ModelProvider));
     }
 
     private void RaiseUsagePropertiesChanged()

@@ -37,6 +37,8 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
 
         public string ModelId { get; private set; }
 
+        public event EventHandler? ModelChanged;
+
         /// <summary>The number of times <see cref="SetModelIdAsync"/> has been invoked.</summary>
         public int SetModelIdCallCount { get; private set; }
 
@@ -44,6 +46,7 @@ public sealed class CopilotSdkModelSlashCommandHandlerTests
         {
             this.ModelId = modelId;
             this.SetModelIdCallCount++;
+            this.ModelChanged?.Invoke(this, EventArgs.Empty);
             return Task.CompletedTask;
         }
 

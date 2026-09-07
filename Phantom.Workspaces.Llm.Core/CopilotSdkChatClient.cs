@@ -72,6 +72,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     /// </summary>
     public string ModelId => this.modelId;
 
+    /// <summary>Raised after the active model changes successfully.</summary>
+    public event EventHandler? ModelChanged;
+
     private readonly SemaphoreSlim sessionInitializationLock = new(1, 1);
     private readonly SemaphoreSlim turnLock = new(1, 1);
 
@@ -490,6 +493,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             await session.SetModelAsync(modelId, cancellationToken).ConfigureAwait(false);
         }
+
+        this.ModelChanged?.Invoke(this, EventArgs.Empty);
 
         // No live session yet: BuildSessionConfig/BuildResumeSessionConfig already read this.modelId
         // when the next session is created or resumed.

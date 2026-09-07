@@ -92,6 +92,28 @@ public sealed class AgentChatTests
         }).GetAwaiter().GetResult();
     }
 
+    [Fact]
+    public async Task CurrentModelId_WhenModelClientChanges_UpdatesAndRaisesModelChanged()
+    {
+        var modelClient = new ModelTestChatClient("echo");
+        await using var chat = CreateChat(modelClient);
+        var modelChangedCount = 0;
+        chat.ModelChanged += (_, _) => modelChangedCount++;
+
+        await modelClient.SetModelIdAsync("gpt-5.6-sol", CancellationToken.None);
+
+        Assert.Equal("gpt-5.6-sol", chat.CurrentModelId);
+        Assert.Equal(1, modelChangedCount);
+    }
+
+    [Fact]
+    public async Task CurrentModelId_WithoutModelClient_ReturnsAgentDefinitionModel()
+    {
+        await using var chat = CreateChat();
+
+        Assert.Equal("echo", chat.CurrentModelId);
+    }
+
     private static async Task WaitForConditionAsync(
         System.Collections.Specialized.INotifyCollectionChanged collection,
         Func<bool> condition,
@@ -2473,6 +2495,44 @@ public sealed class AgentChatTests
             public object? GetService(Type serviceType, object? serviceKey = null) => null;
             public void Dispose() { }
         }
+    }
+
+    private sealed class ModelTestChatClient(string modelId) : IChatClient, Llm.SlashCommands.IModelSlashCommandClient
+    {
+        private readonly DeterministicTestChatClient inner = new();
+
+        public event EventHandler? ModelChanged;
+
+        public string ModelId { get; private set; } = modelId;
+
+        public Task SetModelIdAsync(string newModelId, CancellationToken cancellationToken)
+        {
+            this.ModelId = newModelId;
+            this.ModelChanged?.Invoke(this, EventArgs.Empty);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<GitHub.Copilot.ModelInfo>>([]);
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetResponseAsync(messages, options, cancellationToken);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetStreamingResponseAsync(messages, options, cancellationToken);
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(Llm.SlashCommands.IModelSlashCommandClient)
+                ? this
+                : this.inner.GetService(serviceType, serviceKey);
+
+        public void Dispose() => this.inner.Dispose();
     }
 
     [Fact]

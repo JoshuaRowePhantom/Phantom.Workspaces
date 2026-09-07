@@ -1267,10 +1267,13 @@ public sealed class CopilotSdkChatClientTests
     public async Task SetModelIdAsync_ChangesModelId()
     {
         using var client = new CopilotSdkChatClient("gpt-5", "GitHub Copilot (gpt-5)", gitHubToken: null, loggerFactory: null);
+        var modelChangedCount = 0;
+        client.ModelChanged += (_, _) => modelChangedCount++;
 
         await client.SetModelIdAsync("claude-4", CancellationToken.None);
 
         Assert.Equal("claude-4", client.ModelId);
+        Assert.Equal(1, modelChangedCount);
     }
 
     [Fact]

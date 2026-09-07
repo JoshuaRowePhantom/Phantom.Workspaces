@@ -13,6 +13,9 @@ namespace Phantom.Workspaces.Llm.SlashCommands;
 /// </summary>
 internal interface IModelSlashCommandClient
 {
+    /// <summary>Raised after the active model changes successfully.</summary>
+    event EventHandler? ModelChanged;
+
     /// <summary>The currently active model identifier.</summary>
     string ModelId { get; }
 

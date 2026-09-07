@@ -44,6 +44,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private AgentChatSession? session;
     private AgentDefinition? agentDefinition;
     private IChatClient? client;
+    private IModelSlashCommandClient? modelClient;
     private AgentFrameworkChatHistoryProvider? chatHistoryProvider;
     private IncrementalPersistenceChatHistoryProvider? persistenceProvider;
     private ChatClientAgent? chatClientAgent;
@@ -264,7 +265,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                    cancellationToken: this.request.CancellationToken).ConfigureAwait(false);
        this.replaceableCommands.Current = innerRegistry;
        var resolvedClient = clientInfo.ChatClient;
-       this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
+        this.modelClient = resolvedClient.GetService(typeof(IModelSlashCommandClient)) as IModelSlashCommandClient;
+        this.acceptsUserInput = resolvedClient is not IHostedAgentChatClient;
        if (resolvedClient is SubAgentChatClient sac)
        {
            this.subAgentChatClientSource = sac;
@@ -486,6 +488,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // Start only after `initialization` references the real task. The processing loop awaits it
        // before the first model request so an immediately queued message cannot race MCP discovery.
        this.StartProcessingLoop();
+       if (this.modelClient is not null)
+       {
+           this.modelClient.ModelChanged += this.OnModelChanged;
+       }
     }
 
     // Binds the continuation chain of the supplied action to the foreground scheduler, mirroring
@@ -511,6 +517,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
+
+    public event EventHandler? ModelChanged;
 
     /// <summary>
     /// Fired when the completion state of this agent changes.
@@ -608,6 +616,13 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     public string AgentSessionId => this.agentSessionId;
 
     public AgentDefinition? AgentDefinition => this.agentDefinition;
+
+    public string? CurrentModelId =>
+        !string.IsNullOrWhiteSpace(this.modelClient?.ModelId)
+            ? this.modelClient.ModelId
+            : this.agentDefinition is null
+                ? null
+                : AgentFactory.GetModel(this.agentDefinition)?.Id;
 
     /// <summary>
     /// The slash commands available for this chat session.
@@ -1498,6 +1513,11 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             return;
         }
 
+        if (this.modelClient is not null)
+        {
+            this.modelClient.ModelChanged -= this.OnModelChanged;
+        }
+
         await this.cts.CancelAsync();
         try
         {
@@ -1532,6 +1552,9 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             await childChat.DisposeAsync();
         }
     }
+
+    private void OnModelChanged(object? sender, EventArgs eventArgs)
+        => this.ModelChanged?.Invoke(this, EventArgs.Empty);
 
     // Drains a conflator while suppressing coalesce faults so a secondary failure during teardown
     // cannot mask the cancellation or provider error already being handled.

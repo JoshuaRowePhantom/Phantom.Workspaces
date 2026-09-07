@@ -42,6 +42,30 @@ public sealed class AgentChatStatusLineViewModelTests
     }
 
     [AvaloniaFact]
+    public async Task ModelDisplay_AfterModelChange_ShowsEffectiveModel()
+    {
+        var modelClient = new ModelTestChatClient("gpt-4o");
+        await using var chat = await CreateModelChatAsync(modelClient);
+        using var loggerFactory = new ObservableLoggerFactory();
+        await using var agentViewModel = new AgentViewModel(chat, "test-agent", "", loggerFactory, TaskScheduler.Default);
+        using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
+        var details = new AgentChatDetailsViewModel(agentViewModel);
+        var changedProperties = new List<string?>();
+        var changedDetailProperties = new List<string?>();
+        agentViewModel.PropertyChanged += (_, e) => changedProperties.Add(e.PropertyName);
+        details.PropertyChanged += (_, e) => changedDetailProperties.Add(e.PropertyName);
+
+        await modelClient.SetModelIdAsync("gpt-5.6-sol", CancellationToken.None);
+
+        Assert.Equal("gpt-5.6-sol", agentViewModel.ModelId);
+        Assert.Equal("gpt-5.6-sol", statusLine.ModelDisplay);
+        Assert.Contains(nameof(AgentViewModel.ModelId), changedProperties);
+        Assert.Contains(nameof(AgentViewModel.ModelProvider), changedProperties);
+        Assert.Contains(nameof(AgentChatDetailsViewModel.ModelId), changedDetailProperties);
+        Assert.Contains(nameof(AgentChatDetailsViewModel.ModelProvider), changedDetailProperties);
+    }
+
+    [AvaloniaFact]
     public async Task IsThinking_FollowsRunningItems()
     {
         using var loggerFactory = new ObservableLoggerFactory();
@@ -253,6 +277,15 @@ public sealed class AgentChatStatusLineViewModelTests
         return agentChat;
     }
 
+    private static Task<AgentChat> CreateModelChatAsync(ModelTestChatClient client)
+        => AgentChat.CreateAsync(new InternalCreateAgentChatRequest
+        {
+            AgentDefinition = CreateAgentDefinition(),
+            ConfiguredStore = new InMemoryAgentPersistenceStore(),
+            ClientOverride = client,
+            DisplayNameOverride = "test-agent",
+        });
+
     private static AgentDefinition CreateAgentDefinition()
         => AgentDefinitionLoader.LoadAgentFromJson(
             """
@@ -313,5 +346,43 @@ public sealed class AgentChatStatusLineViewModelTests
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException($"{propertyName} backing field was not found.");
         field.SetValue(agentChat, value);
+    }
+
+    private sealed class ModelTestChatClient(string modelId) : IChatClient, Phantom.Workspaces.Llm.SlashCommands.IModelSlashCommandClient
+    {
+        private readonly DeterministicTestChatClient inner = new();
+
+        public event EventHandler? ModelChanged;
+
+        public string ModelId { get; private set; } = modelId;
+
+        public Task SetModelIdAsync(string newModelId, CancellationToken cancellationToken)
+        {
+            this.ModelId = newModelId;
+            this.ModelChanged?.Invoke(this, EventArgs.Empty);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<GitHub.Copilot.ModelInfo>> ListModelsAsync(CancellationToken cancellationToken)
+            => Task.FromResult<IReadOnlyList<GitHub.Copilot.ModelInfo>>([]);
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetResponseAsync(messages, options, cancellationToken);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+            => this.inner.GetStreamingResponseAsync(messages, options, cancellationToken);
+
+        public object? GetService(Type serviceType, object? serviceKey = null)
+            => serviceType == typeof(Phantom.Workspaces.Llm.SlashCommands.IModelSlashCommandClient)
+                ? this
+                : this.inner.GetService(serviceType, serviceKey);
+
+        public void Dispose() => this.inner.Dispose();
     }
 }

@@ -53,5 +53,13 @@ public sealed class AgentChatDetailsViewModel : ViewModelBase
         {
             this.RaisePropertyChanged(nameof(this.IsReasoningVisible));
         }
+        else if (string.Equals(e.PropertyName, nameof(AgentViewModel.ModelId), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ModelId));
+        }
+        else if (string.Equals(e.PropertyName, nameof(AgentViewModel.ModelProvider), StringComparison.Ordinal))
+        {
+            this.RaisePropertyChanged(nameof(this.ModelProvider));
+        }
     }
 }
