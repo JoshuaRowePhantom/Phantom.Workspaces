@@ -52,6 +52,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private readonly Trust.DeferredTrustedExecutorSelector trustedExecutorSelector;
     private Services.DevTunnel.IDevTunnelHostService? devTunnelHostService;
     private Task? devTunnelHostStartTask;
+    internal Func<Services.DevTunnel.IDevTunnelHostService> DevTunnelHostServiceFactory { get; set; } =
+        static () => new Services.DevTunnel.DevTunnelServiceFactory().CreateHostService();
     private EntityBroker? entityBroker;
     private InterestCatalog? interestCatalog;
     private EntityTypeCatalog? entityTypeCatalog;
@@ -996,7 +998,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
         var localPort = listenUri.Port;
         var protocol = listenUri.Scheme;
-        var hostService = new Services.DevTunnel.DevTunnelServiceFactory().CreateHostService();
+        var hostService = this.DevTunnelHostServiceFactory();
         this.devTunnelHostService = hostService;
         hostService.StatusChanged += (_, status) => Dispatcher.UIThread.Post(
             () => this.ConnectionStatus?.SetDevTunnelStatus(status.State, status.AccessPointUrl, status.LastError));
