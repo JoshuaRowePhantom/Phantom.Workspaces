@@ -1915,27 +1915,33 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task InitializeAsync_WithQueuedInputBeforeReady_LeavesNoOrphanRunningItem()
+    public async Task InitializeAsync_WithQueuedInputBeforeReady_WaitsForToolsBeforeFirstTurn()
     {
         var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = CreateEchoClient();
         var provider = new ScriptedToolsetContextProvider(
             tools: [new WebSearchTool()],
             invoked: invoked,
             release: release.Task);
-        var (createTask, chat) = StartChatWithScriptedToolset(provider, CreateEchoClient());
+        var (createTask, chat) = StartChatWithScriptedToolset(provider, client);
         await using var _ = chat;
 
-        // Enqueue user input while tool initialization is still gated (i.e. before "ready").
+        // Enqueue user input while tool initialization is still gated. The message remains queued,
+        // and no model request starts with an incomplete tool list.
         await invoked.Task;
         chat.EnqueueUserMessage("early");
-        await WaitForConditionAsync(
-            chat.History,
-            () => chat.History.Any(item => item.Role == ChatRole.Assistant),
-            "queued message to be answered before tool init completes");
+        await Task.Factory.StartNew(
+            static () => { },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            chat.ForegroundSchedulerForTesting);
+        Assert.False(client.WaitForRequestAsync().IsCompleted);
 
         release.TrySetResult();
         await createTask;
+        using var requestTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await client.WaitForRequestAsync(requestTimeout.Token);
         await WaitForConditionAsync(
             chat.RunningItems,
             () => chat.RunningItems.Count == 0,
@@ -1946,7 +1952,7 @@ public sealed class AgentChatTests
     }
 
     [Fact]
-    public async Task InitializeMcpTools_WhileProcessingQueuedInput_DoesNotRaceRunningItems()
+    public async Task InitializeMcpTools_QueuedInputRunsAfterInitializationWithoutRacingRunningItems()
     {
         var invoked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1959,16 +1965,16 @@ public sealed class AgentChatTests
 
         await invoked.Task;
         chat.EnqueueUserMessage("ping");
+        release.TrySetResult();
+
+        // Initialization and the queued turn complete in order without a concurrent-mutation
+        // exception or leftover running item.
+        await createTask;
+        await chat.Initialization;
         await WaitForConditionAsync(
             chat.History,
             () => chat.History.Any(item => item.Role == ChatRole.Assistant),
-            "queued run to complete during gated tool init");
-
-        release.TrySetResult();
-
-        // Completes without a concurrent-mutation exception and leaves no leftover running item.
-        await createTask;
-        await chat.Initialization;
+            "queued run to complete after tool init");
         await WaitForConditionAsync(
             chat.RunningItems,
             () => chat.RunningItems.Count == 0,
