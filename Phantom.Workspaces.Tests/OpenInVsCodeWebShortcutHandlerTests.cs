@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Tools;
 using Phantom.Workspaces.ViewModels;
 
 using Phantom.Workspaces.Testing.Gui;
@@ -29,7 +30,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task VsCodeWebShortcut_WhenTunnelResolvable_IsApplicable()
+    public async Task ShouldApplyTo_LocalFolderWithProfileScopedTunnel_ReturnsTrue()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
@@ -68,8 +69,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "resolvable-tunnel" },
             ["tunnel-name"] = "resolvable-tunnel",
             ["tunnel-url"] = "https://vscode.dev/tunnel/resolvable-tunnel",
@@ -91,7 +91,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task TryFindVsCodeTunnel_LocalProfileWithComputerUserProfilesName_ResolvesTunnel()
+    public async Task DiscoveryToolWrite_ThenHandlerLookup_RoundTripsSameEntity()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
@@ -114,7 +114,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
             .Select(e => e.GetString()!)
             .ToArray();
 
-        // Find the userSegment that follows the "username" key — verifies the key-scan logic
+        // Retain the user assertion to establish that this is the standard profile shape.
         string? userSegment = null;
         for (int i = 0; i < nameParts.Length - 1; i++)
         {
@@ -126,14 +126,13 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         }
         Assert.NotNull(userSegment);
 
-        // Seed a tunnel named [userSegment, "vscode-tunnel"] as the handler expects
+        // Seed the canonical name produced by the discovery write path.
         var tunnelId = new EntityId(Guid.NewGuid());
         var tunnelData = new System.Text.Json.Nodes.JsonObject
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "profile-name-tunnel" },
             ["tunnel-name"] = "profile-name-tunnel",
             ["tunnel-url"] = "https://vscode.dev/tunnel/profile-name-tunnel",
@@ -153,6 +152,73 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
 
         Assert.True(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ShouldApplyTo_TunnelSeededUnderLegacyTwoPartName_ReturnsFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(
+                new System.Text.Json.Nodes.JsonArray(Environment.UserName, "vscode-tunnel")),
+            ["tunnel-url"] = "https://vscode.dev/tunnel/legacy",
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Insert legacy test tunnel." } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        var entityViewModel = new SubscribedEntityViewModel(
+            MakeSnapshot("""{"entity-types":["entity","filesystem-path"],"path":"/repo"}"""));
+        var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
+
+        Assert.False(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task ShouldApplyTo_TunnelWithoutUrl_ReturnsFalse()
+    {
+        await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
+        await viewModel.InitializeAsync();
+
+        var entityBroker = GetEntityBroker(viewModel);
+        var localProfileId = viewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
+        var profile = (await entityBroker.GetEntitiesAsync(
+            [localProfileId],
+            TestContext.Current.CancellationToken)).Single();
+        var profileName = profile.Data!.Value.GetProperty("names")[0]
+            .EnumerateArray()
+            .Select(static part => part.GetString()!)
+            .ToArray();
+        var tunnelId = new EntityId(Guid.NewGuid());
+        var tunnelData = new System.Text.Json.Nodes.JsonObject
+        {
+            ["entity-id"] = tunnelId.Value.ToString(),
+            ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(profileName)),
+            ["tunnel-name"] = "missing-url",
+        };
+        using var tunnelDoc = JsonDocument.Parse(tunnelData.ToJsonString());
+        await entityBroker.UpdateAsync(new UpdateRequest
+        {
+            UpdateMetadata = new UpdateMetadata { Comment = new Markdown { Text = "Insert tunnel without URL." } },
+            Changes = [new EntityChange { Data = tunnelDoc.RootElement.Clone(), EntityChangeMode = EntityChangeMode.Replace }],
+        }, TestContext.Current.CancellationToken);
+
+        var entityViewModel = new SubscribedEntityViewModel(
+            MakeSnapshot("""{"entity-types":["entity","filesystem-path"],"path":"/repo"}"""));
+        var handler = new OpenInVsCodeWebShortcutHandler(tabOpener: null);
+
+        Assert.False(await handler.ShouldApplyTo(viewModel, Shortcut.VsCodeWeb, entityViewModel));
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -190,7 +256,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
     // ---- Handle ------------------------------------------------------------------------------
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task OpenInVsCodeWeb_LocalMachineWithTunnel_OpensWebViewTab()
+    public async Task Handle_LocalFolderWithProfileScopedTunnel_OpensVsCodeWebTabWithFolderQuery()
     {
         await using var viewModel = new MainWindowViewModel(new UnknownRepositorySource());
         await viewModel.InitializeAsync();
@@ -233,8 +299,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "local-host tunnel" },
             ["tunnel-name"] = "local-host",
             ["tunnel-url"] = "https://vscode.dev/tunnel/local-host",
@@ -319,8 +384,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "local-host tunnel" },
             ["tunnel-name"] = "local-host",
             ["tunnel-url"] = "https://vscode.dev/tunnel/local-host",
@@ -450,8 +514,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["tunnel-name"] = "test-tunnel",
             ["tunnel-url"] = "https://vscode.dev/tunnel/test-tunnel",
         };
@@ -521,8 +584,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["tunnel-name"] = "test-tunnel",
             ["tunnel-url"] = "https://vscode.dev/tunnel/test-tunnel",
         };
@@ -592,8 +654,7 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
         {
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
-            ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray(userSegment, "vscode-tunnel")),
+            ["names"] = new System.Text.Json.Nodes.JsonArray(CreateTunnelName(nameParts)),
             ["tunnel-name"] = "test-tunnel",
             ["tunnel-url"] = "https://vscode.dev/tunnel/test-tunnel",
         };
@@ -624,6 +685,12 @@ public sealed class OpenInVsCodeWebShortcutHandlerTests
     }
 
     // ---- Helpers -----------------------------------------------------------------------------
+
+    private static System.Text.Json.Nodes.JsonArray CreateTunnelName(string[] profileName) =>
+        new(profileName
+            .Append(VsCodeTunnelEntityNaming.TunnelSegment)
+            .Select(static component => System.Text.Json.Nodes.JsonValue.Create(component))
+            .ToArray());
 
     private static EntitySnapshot MakeSnapshot(string json) =>
         new()

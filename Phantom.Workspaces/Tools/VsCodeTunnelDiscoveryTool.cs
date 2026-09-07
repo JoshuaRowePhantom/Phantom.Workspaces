@@ -123,15 +123,15 @@ public sealed class VsCodeTunnelDiscoveryTool : IWorkspaceTool
 
     private EntityName BuildEntityName()
     {
-        return new EntityName(
+        var profileName = new EntityName(
             "computer-user-profiles",
             "users",
             "username",
             this.currentExecutionContextProvider.UserName,
             "computers",
             "hostname",
-            this.currentExecutionContextProvider.EffectiveComputerName,
-            "vscode-tunnel");
+            this.currentExecutionContextProvider.EffectiveComputerName);
+        return VsCodeTunnelEntityNaming.BuildTunnelName(profileName);
     }
 
     private string ResolveCliPath(JsonElement? toolData)

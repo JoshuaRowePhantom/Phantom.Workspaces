@@ -135,6 +135,29 @@ public sealed class VsCodeTunnelDiscoveryToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Execute_TunnelRunning_WritesEntityUnderProfileNamePlusVsCodeTunnel()
+    {
+        var resolver = new FakeStatusResolver(new VsCodeTunnelStatus(
+            TunnelName: "profile-scoped",
+            TunnelUrl: "https://vscode.dev/tunnel/profile-scoped",
+            IsConnected: true));
+        var dataAccessLayer = new InMemoryDataAccessLayer();
+        var tool = new VsCodeTunnelDiscoveryTool(
+            new FakeExecutionContextProvider(),
+            tunnelStatusResolver: resolver);
+
+        await tool.ExecuteAsync(this.Context(dataAccessLayer));
+
+        var profileName = new EntityName(
+            "computer-user-profiles", "users", "username", "test-user",
+            "computers", "hostname", "test-machine");
+        var entity = await GetEntityByNameAsync(
+            dataAccessLayer,
+            VsCodeTunnelEntityNaming.BuildTunnelName(profileName));
+        Assert.NotNull(entity);
+    }
+
+    [Fact]
     public async Task Discovery_NoRunningTunnel_DoesNotUpsertEntity()
     {
         var resolver = new FakeStatusResolver((VsCodeTunnelStatus?)null);

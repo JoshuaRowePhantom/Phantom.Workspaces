@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Tools;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -230,26 +231,12 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
             .Select(static e => e.GetString()!)
             .ToArray();
 
-        // Extract the user segment. Local profiles use
-        // ["computer-user-profiles", "users", "username", <user>, ...] so scan for
-        // "username" first. Accept "user-computer-profile" as a secondary marker for
-        // profiles that use the singular naming style. See #1194.
-        string? userSegment = null;
-        for (int i = 0; i < nameParts.Length - 1; i++)
-        {
-            if (nameParts[i] is "username" or "user-computer-profile")
-            {
-                userSegment = nameParts[i + 1];
-                break;
-            }
-        }
-
-        if (userSegment is null)
+        if (nameParts.Length == 0)
         {
             return null;
         }
 
-        var tunnelName = new EntityName([userSegment, "vscode-tunnel"]);
+        var tunnelName = VsCodeTunnelEntityNaming.BuildTunnelName(new EntityName(nameParts));
         var request = new GetEntityRequest { EntityName = tunnelName };
 
         var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([request]);

@@ -64,7 +64,9 @@ public sealed class OpenInVsCodeShortcutHandlerTests
             ["entity-id"] = tunnelId.Value.ToString(),
             ["entity-types"] = new System.Text.Json.Nodes.JsonArray("entity", "vscode-tunnel"),
             ["names"] = new System.Text.Json.Nodes.JsonArray(
-                new System.Text.Json.Nodes.JsonArray("computer-user-profiles", "users", "username", "remote-user", "vscode-tunnel")),
+                new System.Text.Json.Nodes.JsonArray(
+                    "computer-user-profiles", "users", "username", "remote-user",
+                    "computers", "hostname", "remote-host", "vscode-tunnel")),
             ["display-name"] = new System.Text.Json.Nodes.JsonObject { ["default"] = "remote-host tunnel" },
             ["tunnel-name"] = "remote-host",
             ["tunnel-url"] = "https://vscode.dev/tunnel/remote-host",

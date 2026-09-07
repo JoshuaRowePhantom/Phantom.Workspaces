@@ -337,22 +337,12 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
             .Select(static e => e.GetString()!)
             .ToArray();
 
-        string? userSegment = null;
-        for (int i = 0; i < nameParts.Length - 1; i++)
-        {
-            if (nameParts[i] is "username" or "user-computer-profile")
-            {
-                userSegment = nameParts[i + 1];
-                break;
-            }
-        }
-
-        if (userSegment is null)
+        if (nameParts.Length == 0)
         {
             return null;
         }
 
-        var tunnelName = new EntityName([userSegment, "vscode-tunnel"]);
+        var tunnelName = VsCodeTunnelEntityNaming.BuildTunnelName(new EntityName(nameParts));
         var request = new GetEntityRequest { EntityName = tunnelName };
 
         var entities = await mainWindowViewModel.EntityBroker.GetEntitiesAsync([request]);
