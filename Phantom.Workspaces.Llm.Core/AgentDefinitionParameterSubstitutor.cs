@@ -35,15 +35,19 @@ public static class AgentDefinitionParameterSubstitutor
                     continue;
                 }
 
-                if (resolvedValues.Count > 0)
-                {
-                    strValue = SubstitutePlaceholders(strValue, resolvedValues);
-                    additionalProps[key] = strValue;
-                }
+                var originalValue = strValue;
 
-                // Remove keys whose entire value is an unresolved placeholder for a declared
-                // optional parameter (one that has no resolved value).
-                if (IsUnresolvedDeclaredPlaceholder(strValue, declaredParameterNames, resolvedValues))
+                // Always run substitution so that unresolved ${name} placeholders collapse to
+                // empty rather than leaking the literal placeholder text (issue #1462), even when
+                // no parameter values were resolved for this manifest.
+                strValue = SubstitutePlaceholders(strValue, resolvedValues);
+                additionalProps[key] = strValue;
+
+                // Remove keys whose entire pre-substitution value is an unresolved placeholder for a
+                // declared optional parameter (one that has no resolved value). We inspect the
+                // original template value here because unresolved placeholders now collapse to an
+                // empty string during substitution (issue #1462).
+                if (IsUnresolvedDeclaredPlaceholder(originalValue, declaredParameterNames, resolvedValues))
                 {
                     additionalProps.Remove(key);
                 }
@@ -145,9 +149,11 @@ public static class AgentDefinitionParameterSubstitutor
         return Regex.Replace(value, @"\$\{([^}]+)\}", match =>
         {
             var paramName = match.Groups[1].Value;
+            // Issue #1462: when a ${name} placeholder cannot be resolved, collapse it to an empty
+            // string rather than leaking the literal placeholder text into the resolved output.
             return resolvedValues.TryGetValue(paramName, out var replacement)
                 ? replacement
-                : match.Value;
+                : string.Empty;
         });
     }
 }

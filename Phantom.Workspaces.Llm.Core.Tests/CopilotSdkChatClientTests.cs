@@ -725,7 +725,8 @@ public sealed class CopilotSdkChatClientTests
     public void BuildSessionConfig_DoesNotReadWorkingDirectoryFromModelOptions()
     {
         // The chat client must not honour model parameters for the working directory (issue #896);
-        // only the ChatOptions runtime override path remains.
+        // only the ChatOptions runtime override path remains. When no ChatOptions override is
+        // supplied, the working directory defaults to the user's home directory (issue #1462).
         var modelOptions = new AgentSchema.ModelOptions
         {
             AdditionalProperties = new Dictionary<string, object> { ["working-directory"] = "/from/model" },
@@ -733,7 +734,10 @@ public sealed class CopilotSdkChatClientTests
 
         var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options: null, modelOptions);
 
-        Assert.Null(config.WorkingDirectory);
+        Assert.NotEqual("/from/model", config.WorkingDirectory);
+        Assert.Equal(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            config.WorkingDirectory);
     }
 
     [Fact]
@@ -801,9 +805,14 @@ public sealed class CopilotSdkChatClientTests
     [Fact]
     public void BuildSessionConfig_DoesNotSetWorkingDirectory_WhenAbsentFromAdditionalProperties()
     {
+        // Issue #1462: when no ChatOptions working-directory override is supplied, the chat client
+        // defaults the session's working directory to the user's home directory rather than leaving
+        // it null.
         var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options: null);
 
-        Assert.Null(config.WorkingDirectory);
+        Assert.Equal(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            config.WorkingDirectory);
     }
 
     [Fact]
@@ -823,7 +832,8 @@ public sealed class CopilotSdkChatClientTests
     public void BuildResumeSessionConfig_DoesNotReadWorkingDirectoryFromModelOptions()
     {
         // The chat client must not honour model parameters for the working directory (issue #896);
-        // only the ChatOptions runtime override path remains.
+        // only the ChatOptions runtime override path remains. When no ChatOptions override is
+        // supplied, the working directory defaults to the user's home directory (issue #1462).
         var modelOptions = new AgentSchema.ModelOptions
         {
             AdditionalProperties = new Dictionary<string, object> { ["working-directory"] = "/from/model" },
@@ -831,15 +841,51 @@ public sealed class CopilotSdkChatClientTests
 
         var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options: null, modelOptions);
 
-        Assert.Null(config.WorkingDirectory);
+        Assert.NotEqual("/from/model", config.WorkingDirectory);
+        Assert.Equal(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            config.WorkingDirectory);
     }
 
     [Fact]
     public void BuildResumeSessionConfig_DoesNotSetWorkingDirectory_WhenAbsentFromAdditionalProperties()
     {
+        // Issue #1462: default to the user's home directory when no override is supplied.
         var config = CopilotSdkChatClient.BuildResumeSessionConfig("gpt-test", byokOptions: null, options: null);
 
-        Assert.Null(config.WorkingDirectory);
+        Assert.Equal(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            config.WorkingDirectory);
+    }
+
+    [Fact]
+    public void CopilotSdkChatClient_NoWorkingDirectory_DefaultsToUserHomeDirectory()
+    {
+        // Issue #1462: with no working-directory supplied on ChatOptions, BuildSessionConfig must
+        // resolve the working directory to the user's home directory rather than leaving it empty.
+        var config = CopilotSdkChatClient.BuildSessionConfig(
+            "gpt-test",
+            byokOptions: null,
+            options: new ChatOptions());
+
+        Assert.Equal(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            config.WorkingDirectory);
+    }
+
+    [Fact]
+    public void CopilotSdkChatClient_ExplicitWorkingDirectory_OverridesHomeDefault()
+    {
+        // Issue #1462: an explicit working-directory in ChatOptions must take precedence over the
+        // home-directory default.
+        var options = new ChatOptions
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary { ["working-directory"] = "/explicit/repo" },
+        };
+
+        var config = CopilotSdkChatClient.BuildSessionConfig("gpt-test", byokOptions: null, options);
+
+        Assert.Equal("/explicit/repo", config.WorkingDirectory);
     }
 
     [Fact]

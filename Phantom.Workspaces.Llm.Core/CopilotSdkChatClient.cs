@@ -1518,7 +1518,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // from model options by AgentFactory.ConfigureChatOptions). Model options are intentionally not
     // read here: the chat client does not honour model parameters for the working directory (issue
     // #896). The value maps to CopilotClientOptions.Cwd (process level) and
-    // SessionConfig.WorkingDirectory / ResumeSessionConfig.WorkingDirectory (session level).
+    // SessionConfig.WorkingDirectory / ResumeSessionConfig.WorkingDirectory (session level). When
+    // no override is present, the value defaults to the user's home directory rather than null so
+    // that the CLI session always starts in a valid directory (issue #1462).
     private static string? GetWorkingDirectory(ChatOptions? options)
     {
         if (options?.AdditionalProperties?.TryGetValue("working-directory", out var chatValue) == true
@@ -1528,7 +1530,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             return chatDir;
         }
 
-        return null;
+        return Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
     }
 
     /// <summary>Gets the human-readable display name for this client.</summary>
