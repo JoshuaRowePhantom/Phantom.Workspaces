@@ -2,27 +2,42 @@ using System.Diagnostics;
 
 namespace Phantom.Workspaces.Install.Tests;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class MxcIntegrationCollection
+{
+    public const string Name = "MXC integration";
+}
+
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class BuildIntegrationTests
 {
     [Fact]
-    public void BuildSolution_MxcSourceDependency_BuildsThroughStandardEntryPoint()
+    public async Task BuildSolution_MxcSourceDependency_BuildsThroughStandardEntryPoint()
     {
-        var gitModules = MxcRepositoryTestSupport.Read(".gitmodules");
-        var solution = MxcRepositoryTestSupport.Read("Phantom.Workspaces.slnx");
-        var coreProject = MxcRepositoryTestSupport.Read(
-            "Phantom.Workspaces.Llm.Core", "Phantom.Workspaces.Llm.Core.csproj");
+        using var output = new MxcRepositoryTestSupport.TestDirectory();
+        var baseOutputPath = Path.Combine(
+            output.Path, "$(MSBuildProjectName)", "bin") + Path.DirectorySeparatorChar;
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            "build",
+            "Phantom.Workspaces.slnx",
+            "--no-restore",
+            "--nologo",
+            "/nodeReuse:false",
+            $"-p:BaseOutputPath={baseOutputPath}");
 
-        Assert.Contains("https://github.com/microsoft/mxc", gitModules, StringComparison.Ordinal);
-        Assert.Contains("microsoft/mxc/sdk/dotnet/Microsoft.Mxc.Sdk/Microsoft.Mxc.Sdk.csproj", solution, StringComparison.Ordinal);
-        Assert.Contains(@"..\microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\Microsoft.Mxc.Sdk.csproj", coreProject, StringComparison.Ordinal);
-        Assert.Equal(
-            "29702c3a408462a4e6be0f265328693a0d2169eb",
-            MxcRepositoryTestSupport.InvokeGit(
-                "-C", Path.Combine(MxcRepositoryTestSupport.Root.FullName, "microsoft", "mxc"),
-                "rev-parse", "HEAD"));
+        Assert.True(
+            result.ExitCode == 0,
+            $"Solution build failed.\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
+        Assert.Contains("Microsoft.Mxc.Sdk", result.StandardOutput, StringComparison.Ordinal);
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            output.Path, "mxc_ffi.dll", SearchOption.AllDirectories));
+        Assert.NotEmpty(Directory.EnumerateFiles(
+            output.Path, "plm.exe", SearchOption.AllDirectories));
     }
 }
 
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class ReleasePackagingTests
 {
     [Fact]
@@ -38,62 +53,86 @@ public sealed class ReleasePackagingTests
     }
 }
 
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class MxcNativeUnitTests
 {
     [Fact]
-    public void MxcNativeUnit_WinX64Build_UpstreamTestsPass()
+    public async Task MxcNativeUnit_WinX64Build_UpstreamTestsPass()
     {
-        var setup = MxcRepositoryTestSupport.Read(".github", "actions", "setup-build", "action.yml");
-        var release = MxcRepositoryTestSupport.Read(".github", "workflows", "release.yml");
-
-        Assert.Contains("rustup toolchain install 1.93.0", setup, StringComparison.Ordinal);
-        Assert.Contains(".cargo", setup, StringComparison.Ordinal);
-        Assert.Contains("microsoft/mxc/src/Cargo.lock", setup, StringComparison.Ordinal);
-        Assert.Contains("29702c3a408462a4e6be0f265328693a0d2169eb", setup, StringComparison.Ordinal);
+        var publishValidation = MxcRepositoryTestSupport.Read(
+            ".github", "workflows", "publish-validation.yml");
         Assert.Contains(
             "cargo test --manifest-path microsoft/mxc/src/Cargo.toml -p mxc_ffi --features dotnetsdk",
-            release,
+            publishValidation,
             StringComparison.Ordinal);
+
+        var result = await MxcRepositoryTestSupport.InvokeAsync(
+            "cargo",
+            "test",
+            "--manifest-path",
+            "microsoft/mxc/src/Cargo.toml",
+            "-p",
+            "mxc_ffi",
+            "--features",
+            "dotnetsdk");
+
+        Assert.True(
+            result.ExitCode == 0,
+            $"MXC upstream tests failed.\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
     }
 }
 
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class MxcSdkVersionTests
 {
     [Fact]
     public void MxcSdkVersion_ManagedAndNativeUnits_Match()
     {
-        var script = MxcRepositoryTestSupport.Read("packaging", "validate", "Assert-MxcSdkVersion.ps1");
-        Assert.Contains("$managedVersion -ne $nativeSourceVersion", script, StringComparison.Ordinal);
-        Assert.Contains("ProductVersion", script, StringComparison.Ordinal);
+        var nativeLibrary = MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll");
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", nativeLibrary);
+
+        Assert.True(result.ExitCode == 0, result.StandardError);
+        Assert.Contains("native runtime version validated", result.StandardOutput, StringComparison.Ordinal);
     }
 }
 
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class MxcRuntimePayloadTests
 {
     [Fact]
     public void MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
-        var project = MxcRepositoryTestSupport.Read("Phantom.Workspaces", "Phantom.Workspaces.csproj");
-        var validator = MxcRepositoryTestSupport.Read("packaging", "validate", "Assert-MxcRuntimePayload.ps1");
+        using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64");
 
-        Assert.Contains(@"runtimes\$(RuntimeIdentifier)\native", project, StringComparison.Ordinal);
-        Assert.Contains("mxc_ffi.dll", project, StringComparison.Ordinal);
-        Assert.Contains("plm.exe", project, StringComparison.Ordinal);
-        Assert.Contains("@('mxc_ffi.dll', 'plm.exe', 'MXC-LICENSE.md')", validator, StringComparison.Ordinal);
+        Assert.True(result.ExitCode == 0, result.StandardError);
+        Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
     }
 
     [Fact]
     public void MxcRuntimePayload_RequiredLicenseNotice_IsPresent()
     {
-        var project = MxcRepositoryTestSupport.Read("Phantom.Workspaces", "Phantom.Workspaces.csproj");
-        var validator = MxcRepositoryTestSupport.Read("packaging", "validate", "Assert-MxcRuntimePayload.ps1");
+        using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
+        File.WriteAllText(
+            Path.Combine(payload.Path, "runtimes", "win-x64", "native", "mxc.lic"),
+            "not a valid MXC redistribution artifact");
 
-        Assert.Contains(@"microsoft\mxc\LICENSE.md", project, StringComparison.Ordinal);
-        Assert.Contains("MXC-LICENSE.md", validator, StringComparison.Ordinal);
-        Assert.Contains("Unexpected mxc.lic", validator, StringComparison.Ordinal);
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Unexpected mxc.lic", result.StandardError, StringComparison.Ordinal);
     }
 }
 
+[Collection(MxcIntegrationCollection.Name)]
 public sealed class InstallScriptTests
 {
     [Fact]
@@ -129,23 +168,86 @@ internal static class MxcRepositoryTestSupport
 
     internal static ProcessResult Invoke(string fileName, params string[] arguments)
     {
-        var startInfo = new ProcessStartInfo(fileName)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (var argument in arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
+        var startInfo = CreateStartInfo(fileName, arguments);
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException($"Failed to start {fileName}.");
         var standardOutput = process.StandardOutput.ReadToEnd();
         var standardError = process.StandardError.ReadToEnd();
         process.WaitForExit();
         return new ProcessResult(process.ExitCode, standardOutput, standardError);
+    }
+
+    internal static async Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments)
+    {
+        var startInfo = CreateStartInfo(fileName, arguments);
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException($"Failed to start {fileName}.");
+        var standardOutput = process.StandardOutput.ReadToEndAsync();
+        var standardError = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        return new ProcessResult(
+            process.ExitCode,
+            await standardOutput,
+            await standardError);
+    }
+
+    private static ProcessStartInfo CreateStartInfo(string fileName, IEnumerable<string> arguments)
+    {
+        var startInfo = new ProcessStartInfo(fileName)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = Root.FullName,
+        };
+        foreach (var argument in arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+        var cargoBin = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cargo", "bin");
+        if (Directory.Exists(cargoBin))
+        {
+            startInfo.Environment["PATH"] = $"{cargoBin};{startInfo.Environment["PATH"]}";
+        }
+        return startInfo;
+    }
+
+    internal static ProcessResult InvokePowerShell(params string[] arguments)
+    {
+        var scriptPath = Path.Combine([Root.FullName, .. arguments.TakeWhile(argument => !argument.StartsWith('-'))]);
+        var scriptParts = arguments.TakeWhile(argument => !argument.StartsWith('-')).Count();
+        return Invoke(
+            "pwsh",
+            [
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+                scriptPath,
+                .. arguments.Skip(scriptParts),
+            ]);
+    }
+
+    internal static string FindBuiltMxcFile(string fileName)
+    {
+        var outputDirectory = Path.Combine(
+            Root.FullName, "microsoft", "mxc", "sdk", "dotnet", "Microsoft.Mxc.Sdk", "bin", "Debug", "net8.0");
+        var path = Path.Combine(outputDirectory, fileName);
+        Assert.True(File.Exists(path), $"Expected the solution build to produce '{path}'.");
+        return path;
+    }
+
+    internal static TestDirectory CreateMxcPayload()
+    {
+        var directory = new TestDirectory();
+        var nativeDirectory = Path.Combine(directory.Path, "runtimes", "win-x64", "native");
+        Directory.CreateDirectory(nativeDirectory);
+        File.Copy(FindBuiltMxcFile("mxc_ffi.dll"), Path.Combine(nativeDirectory, "mxc_ffi.dll"));
+        File.Copy(FindBuiltMxcFile("plm.exe"), Path.Combine(nativeDirectory, "plm.exe"));
+        File.Copy(
+            Path.Combine(Root.FullName, "microsoft", "mxc", "LICENSE.md"),
+            Path.Combine(nativeDirectory, "MXC-LICENSE.md"));
+        return directory;
     }
 
     private static DirectoryInfo FindRepositoryRoot()
@@ -165,4 +267,18 @@ internal static class MxcRepositoryTestSupport
     }
 
     internal sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+
+    internal sealed class TestDirectory : IDisposable
+    {
+        internal TestDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                Root.FullName, "TestResults", $"mxc-integration-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path);
+        }
+
+        internal string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
 }

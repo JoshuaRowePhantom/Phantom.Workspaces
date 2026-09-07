@@ -32,6 +32,10 @@ jobs:
         shell: pwsh
         run: .\packaging\validate\Assert-CopilotSdkVersion.ps1
 
+      - name: Test MXC native unit
+        shell: pwsh
+        run: cargo test --manifest-path microsoft/mxc/src/Cargo.toml -p mxc_ffi --features dotnetsdk
+
       - name: Publish and package win-x64
         shell: pwsh
         run: |
