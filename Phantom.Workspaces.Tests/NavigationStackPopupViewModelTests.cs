@@ -8,7 +8,7 @@ namespace Phantom.Workspaces.Tests;
 
 public sealed class NavigationStackPopupViewModelTests
 {
-    private static NavigationEntry Entry(string tabId) => new NavigationEntry(tabId, null);
+    private static NavigationEntry Entry(string tabId) => new NavigationEntry(UiPath.ForTab(null, tabId));
 
     private static NavigationTabInfo? DefaultInfoProvider(string tabId)
         => new NavigationTabInfo(tabId + "-title", tabId + "-workspace", false, false);

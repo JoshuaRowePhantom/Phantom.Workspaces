@@ -63,6 +63,8 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
 
     public string Id { get; }
 
+    public UiPath Path => new(this.Id, null);
+
     public string Title
     {
         get => this.title;
@@ -172,9 +174,9 @@ public sealed class WorkspacePaneViewModel : ViewModelBase
         {
             foreach (var newItem in e.NewItems)
             {
-                if (newItem is AgentSessionWorkspaceTabViewModel agentTab)
+                if (newItem is WorkspaceTabViewModel tab)
                 {
-                    agentTab.WorkspacePaneId = this.Id;
+                    tab.WorkspacePaneId = this.Id;
                 }
             }
         }

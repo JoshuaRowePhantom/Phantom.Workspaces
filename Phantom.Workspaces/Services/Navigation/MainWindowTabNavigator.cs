@@ -31,29 +31,31 @@ internal sealed class MainWindowTabNavigator : ITabNavigator
         ArgumentNullException.ThrowIfNull(target);
         options ??= new NavigationOptions();
 
-        if (options.FocusWindow)
+        if (target.Path is { HasTab: true } path)
         {
-            this.host.FocusMainWindow();
-        }
+            var activated = await this.host.ActivateTabByRequestAsync(new NavigationRequest(path));
+            if (!activated)
+            {
+                return false;
+            }
 
-        if (target.DocumentTabId is { } tabId)
-        {
-            // Reuses the existing #1157 open-but-unselected pane logic.
-            await this.host.ActivateTabByRequestAsync(
-                new NavigationRequest(target.WorkspaceTabId ?? string.Empty, tabId));
+            var resolvedPath = this.host.SelectedWorkspacePaneId is { } selectedPaneId
+                    ? new UiPath(selectedPaneId, path.TabId)
+                    : path;
+
+            if (options.FocusWindow)
+            {
+                this.host.FocusWindow(resolvedPath);
+            }
 
             if (options.MarkNotificationRead)
             {
-                this.notifications.MarkRead(tabId);
+                this.notifications.MarkRead(path.TabId!);
             }
 
             if (options.PushHistory && !this.host.NavigatingViaHistory)
             {
-                var paneId = target.WorkspaceTabId ?? this.host.SelectedWorkspacePaneId;
-                if (paneId is not null)
-                {
-                    this.history.Push(new NavigationEntry(tabId, paneId));
-                }
+                this.history.Push(new NavigationEntry(resolvedPath));
             }
 
             return true;

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Text.Json.Serialization;
 using Dock.Model.Mvvm.Controls;
+using Phantom.Workspaces.Services.Navigation;
 
 namespace Phantom.Workspaces.ViewModels;
 
@@ -25,6 +26,9 @@ public class WorkspaceDocument : Document, IAsyncDisposable, IJsonOnDeserialized
         this.cachedTabHeader = new TabHeaderViewModel { Title = string.Empty };
         this.cachedTabHeader.Items.Add(this.statusIndicator);
     }
+
+    [JsonIgnore]
+    public UiPath Path => this.TabViewModel?.Path ?? UiPath.ForTab(null, this.Id ?? string.Empty);
 
     public WorkspaceDocument(WorkspaceTabViewModel tabViewModel)
     {

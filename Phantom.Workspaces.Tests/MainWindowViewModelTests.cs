@@ -19,6 +19,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Data.Web.Client;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 
@@ -394,7 +395,7 @@ public sealed class MainWindowViewModelTests
         var targetIndex = -1;
         for (var i = 0; i < history.Entries.Count; i++)
         {
-            if (history.Entries[i].DocumentTabId == "hist-a")
+            if (history.Entries[i].Path.TabId == "hist-a")
             {
                 targetIndex = i;
                 break;
@@ -446,7 +447,7 @@ public sealed class MainWindowViewModelTests
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
         // Navigate to tab in pane A using the request API.
-        var request = new Phantom.Workspaces.Services.Navigation.NavigationRequest(workspaceIdA.ToString(), "nav-tab-in-a");
+        var request = new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(workspaceIdA.ToString(), "nav-tab-in-a"));
         var result = await viewModel.ActivateTabByRequestAsync(request);
 
         Assert.True(result);
@@ -476,13 +477,31 @@ public sealed class MainWindowViewModelTests
         await MainWindowIntegrationTests.WaitForWorkspaceTabAsync(contentDock!, "fallback-tab");
 
         // Navigate with an EMPTY WorkspaceTabId so the fallback path is exercised.
-        var request = new Phantom.Workspaces.Services.Navigation.NavigationRequest(string.Empty, "fallback-tab");
+        var request = new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(string.Empty, "fallback-tab"));
         var result = await viewModel.ActivateTabByRequestAsync(request);
 
         Assert.True(result);
         var activeDoc = contentDock!.ActiveDockable as WorkspaceDocument;
         Assert.NotNull(activeDoc);
         Assert.Equal("fallback-tab", activeDoc!.Id);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigateToNotificationTab_WhenWorkspaceIdNonGuid_MaterializesOwningPane()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var pane = viewModel.SelectedWorkspacePane;
+        var tab = new WebViewModel("https://non-guid.example.com") { Id = "non-guid-tab", Title = "Non GUID" };
+        pane.Tabs.Add(tab);
+        pane.ContentLayout = null;
+
+        var result = await viewModel.ActivateTabByRequestAsync(
+            new NavigationRequest(new UiPath(pane.Id, tab.Id)));
+
+        Assert.True(result);
+        Assert.NotNull(pane.ContentLayout);
+        Assert.Same(pane, viewModel.SelectedWorkspacePane);
     }
 
     [AvaloniaFact]

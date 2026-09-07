@@ -83,8 +83,6 @@ public sealed class AgentSessionWorkspaceTabViewModel : WorkspaceTabViewModel
     /// when the tab is added to a pane so <see cref="CreateTabDescriptor"/> reflects the actual
     /// owning pane, not the pane that happened to be active at creation time (#1135).
     /// </summary>
-    public string? WorkspacePaneId { get; internal set; }
-
     public RunningAgentChatLease? Lease => this.lease;
 
     public void SetLease(RunningAgentChatLease value)

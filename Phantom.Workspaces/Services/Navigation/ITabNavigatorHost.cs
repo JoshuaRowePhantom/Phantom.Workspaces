@@ -10,9 +10,9 @@ namespace Phantom.Workspaces.Services.Navigation;
 internal interface ITabNavigatorHost
 {
     /// <summary>
-    /// Resolves the pane named by <see cref="NavigationRequest.WorkspaceTabId"/> (opening it first if
+    /// Resolves the pane named by <see cref="NavigationRequest.Path"/> (opening it first if
     /// it is registered but not yet loaded, per #1157), selects it, then activates + focuses the
-    /// document named by <see cref="NavigationRequest.DocumentTabId"/>. Returns true when the document
+    /// document named by the path. Returns true when the document
     /// tab was activated.
     /// </summary>
     Task<bool> ActivateTabByRequestAsync(NavigationRequest request);
@@ -29,6 +29,6 @@ internal interface ITabNavigatorHost
     /// <summary>True while replaying a history entry, so navigation must not re-push history.</summary>
     bool NavigatingViaHistory { get; }
 
-    /// <summary>Brings the main window to the foreground (notifications path).</summary>
-    void FocusMainWindow();
+    /// <summary>Brings the window containing the resolved path to the foreground.</summary>
+    void FocusWindow(UiPath path);
 }

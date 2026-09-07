@@ -7,7 +7,7 @@ namespace Phantom.Workspaces.Tests;
 public sealed class NavigationStackTests
 {
     private static NavigationEntry Entry(string tabId, string? paneId = null) =>
-        new NavigationEntry(tabId, paneId);
+        new NavigationEntry(UiPath.ForTab(paneId, tabId));
 
     [Fact]
     public void NavigationStack_AtStart_CannotGoBack()
@@ -99,7 +99,7 @@ public sealed class NavigationStackTests
         service.Push(Entry("tab-b")); // closed
         service.Push(Entry("tab-c")); // current
 
-        var result = service.GoBackSkipping(e => e.DocumentTabId != "tab-b", out var entry);
+        var result = service.GoBackSkipping(e => e.Path.TabId != "tab-b", out var entry);
 
         Assert.True(result);
         Assert.Equal(Entry("tab-a"), entry);
@@ -114,7 +114,7 @@ public sealed class NavigationStackTests
         service.Push(Entry("tab-c")); // closed
         service.Push(Entry("tab-d")); // current
 
-        var result = service.GoBackSkipping(e => e.DocumentTabId == "tab-a", out var entry);
+        var result = service.GoBackSkipping(e => e.Path.TabId == "tab-a", out var entry);
 
         Assert.True(result);
         Assert.Equal(Entry("tab-a"), entry);
@@ -159,7 +159,7 @@ public sealed class NavigationStackTests
         service.GoBack(out _);
         service.GoBack(out _); // currentIndex = 0 (tab-a)
 
-        var result = service.GoForwardSkipping(e => e.DocumentTabId != "tab-b", out var entry);
+        var result = service.GoForwardSkipping(e => e.Path.TabId != "tab-b", out var entry);
 
         Assert.True(result);
         Assert.Equal(Entry("tab-c"), entry);

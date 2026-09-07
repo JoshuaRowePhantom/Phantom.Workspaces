@@ -31,6 +31,7 @@ using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Services.Notifications;
+using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Services.Secrets;
 using Phantom.Workspaces.Trust;
 using Phantom.Workspaces.ViewModels;
@@ -8822,7 +8823,7 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_CreatesTwoTabsWithSameAgentChat()
+    public async Task OpenAgentSessionShortcutHandler_OpenSameSession_AcrossTwoWorkspacePanes_NavigatesToExistingTab()
     {
         var table = CreateTestRunningAgentChatTable();
         var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
@@ -8896,16 +8897,17 @@ public sealed class MainWindowIntegrationTests
         var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
         ActivateWorkspacePaneAtIndex(viewModel, paneBIndex.ToString());
         await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
-        var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
+        var selectedTab = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
             viewModel.SelectedWorkspacePane.SelectedTab);
 
         await WaitForAgentReadyAsync(tabA);
-        await WaitForAgentReadyAsync(tabB);
 
-        Assert.NotEqual(tabA.Id, tabB.Id);
+        Assert.Same(tabA, selectedTab);
+        Assert.Equal(workspaceIdA.ToString(), viewModel.SelectedWorkspacePane.Id);
         Assert.NotNull(tabA.Lease);
-        Assert.NotNull(tabB.Lease);
-        Assert.Same(tabA.Lease!.AgentChat, tabB.Lease!.AgentChat);
+        Assert.DoesNotContain(
+            viewModel.WorkspacePanes.Single(p => p.Id == workspaceIdB.ToString()).Tabs,
+            tab => tab.Entity?.EntityId == agentSessionEntity!.EntityId);
     }
 
     [AvaloniaFact(Timeout = 15_000)]
@@ -8982,9 +8984,12 @@ public sealed class MainWindowIntegrationTests
         // Open in pane B
         var paneBIndex = viewModel.WorkspacePanes.ToList().FindIndex(p => p.Id == workspaceIdB.ToString());
         ActivateWorkspacePaneAtIndex(viewModel, paneBIndex.ToString());
-        await handler.Handle(viewModel, Shortcut.Open, agentSessionEntity!);
         var tabB = Assert.IsType<AgentSessionWorkspaceTabViewModel>(
-            viewModel.SelectedWorkspacePane.SelectedTab);
+            await handler.TryCreateAgentSessionTabForRestoreAsync(
+                viewModel,
+                agentSessionEntity!,
+                $"{workspaceIdB}-{agentSessionEntity!.EntityId}"));
+        await viewModel.OpenTabAsync(tabB);
 
         await WaitForAgentReadyAsync(tabA);
         await WaitForAgentReadyAsync(tabB);
@@ -9719,7 +9724,7 @@ public sealed class MainWindowIntegrationTests
         ActivateWorkspacePaneAtIndex(viewModel, paneAIndex.ToString());
 
         // Focus the other tab first so a click on the notification must change the active tab.
-        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(workspaceIdA.ToString(), "1135-notif-current-tab-other"));
+        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(workspaceIdA.ToString(), "1135-notif-current-tab-other")));
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
         viewModel.NotificationService.Notify(new Notification(
@@ -9833,7 +9838,7 @@ public sealed class MainWindowIntegrationTests
             p => string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
 
         // Now activate the tab by ID — workspace B is not open
-        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(workspaceBId.ToString(), "closed-ws-tab"));
+        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(workspaceBId.ToString(), "closed-ws-tab")));
 
         // Workspace B should have been re-opened and selected
         Assert.Equal(workspaceBId.ToString(), viewModel.SelectedWorkspacePane.Id);
@@ -9891,7 +9896,7 @@ public sealed class MainWindowIntegrationTests
         var paneA = viewModel.WorkspacePanes.Single(p => string.Equals(p.Id, workspaceAId.ToString(), StringComparison.Ordinal));
         viewModel.SelectedWorkspacePane = paneA;
 
-        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(workspaceBId.ToString(), "1157-tab-in-b"));
+        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(workspaceBId.ToString(), "1157-tab-in-b")));
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
@@ -9926,7 +9931,7 @@ public sealed class MainWindowIntegrationTests
         await viewModel.OpenTabAsync(tabA1);
         await viewModel.OpenTabAsync(tabA2);
         // tabA2 is active. Activate tabA1 via ActivateTabByIdAsync in the same (currently-selected) pane.
-        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(workspaceAId.ToString(), "1157-current-tab-1"));
+        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab(workspaceAId.ToString(), "1157-current-tab-1")));
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
         Assert.Same(paneA, viewModel.SelectedWorkspacePane);
@@ -10072,7 +10077,7 @@ public sealed class MainWindowIntegrationTests
 
         // Stale (non-GUID) workspacePaneId that matches no open pane — must fall through
         // to the all-panes search rather than silently no-op.
-        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest("not-a-guid-stale-id", "1157-stale-tab-in-b"));
+        await viewModel.ActivateTabByRequestAsync(new Phantom.Workspaces.Services.Navigation.NavigationRequest(UiPath.ForTab("not-a-guid-stale-id", "1157-stale-tab-in-b")));
         await Dispatcher.UIThread.InvokeAsync(() => { });
 
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);

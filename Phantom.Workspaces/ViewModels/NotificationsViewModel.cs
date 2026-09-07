@@ -157,9 +157,10 @@ public sealed class NotificationsViewModel : TransientPopupViewModel, IDisposabl
             await this.navigator.NavigateAsync(
                 new NavigationTarget
                 {
-                    DocumentTabId = tabKey,
-                    WorkspaceTabId = this.notificationService.Notifications
-                        .FirstOrDefault(e => e.TabKey == tabKey)?.TabDescriptor.WorkspaceId,
+                    Path = UiPath.ForTab(
+                        this.notificationService.Notifications
+                            .FirstOrDefault(e => e.TabKey == tabKey)?.TabDescriptor.WorkspaceId,
+                        tabKey),
                 },
                 new NavigationOptions { PushHistory = true, FocusWindow = true });
         });

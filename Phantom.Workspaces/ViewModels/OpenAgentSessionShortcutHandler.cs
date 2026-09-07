@@ -18,6 +18,7 @@ using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.SlashCommands;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Services.Navigation;
 using Phantom.Workspaces.Utilities;
 
 namespace Phantom.Workspaces.ViewModels;
@@ -64,6 +65,16 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         Shortcut shortcut,
         SubscribedEntityViewModel entityViewModel)
     {
+        var existingTab = mainWindowViewModel.WorkspacePanes
+            .SelectMany(pane => pane.Tabs.Select(tab => (Pane: pane, Tab: tab)))
+            .FirstOrDefault(item => item.Tab.Entity?.EntityId == entityViewModel.EntityId);
+        if (existingTab.Tab is not null)
+        {
+            return await mainWindowViewModel.NavigateToTabAsync(
+                new UiPath(existingTab.Pane.Id, existingTab.Tab.Id),
+                openEntityIfNoTab: true);
+        }
+
         // Open a loading tab immediately so the user sees feedback right away.
         // Use a pane-scoped ID so OpenTabAsync deduplicates within the same workspace pane
         // while still allowing the same session to be open in multiple panes simultaneously,

@@ -238,11 +238,10 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             await this.navigator.NavigateAsync(
                 new NavigationTarget
                 {
-                    DocumentTabId = capturedTabId,
-                    WorkspaceTabId = capturedPaneId,
+                    Path = new UiPath(capturedPaneId, capturedTabId),
                     AgentSessionKey = sessionKey,
                 },
-                new NavigationOptions { OpenEntityIfNoTab = true });
+                new NavigationOptions { OpenEntityIfNoTab = true, FocusWindow = true });
         });
 
         return new RunningAgentRowViewModel(
@@ -263,7 +262,7 @@ internal sealed class RunningAgentBrainViewModel : ViewModelBase, IDisposable
             this.IsOpen = false;
             await this.navigator.NavigateAsync(
                 new NavigationTarget { AgentSessionKey = capturedSessionKey },
-                new NavigationOptions { OpenEntityIfNoTab = true });
+                new NavigationOptions { OpenEntityIfNoTab = true, FocusWindow = true });
         });
 
         return new RunningAgentRowViewModel(

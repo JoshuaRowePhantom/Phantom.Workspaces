@@ -1,3 +1,5 @@
+using Phantom.Workspaces.Services.Navigation;
+
 namespace Phantom.Workspaces.ViewModels;
 
 public abstract class WorkspaceTabViewModel : ViewModelBase
@@ -13,6 +15,10 @@ public abstract class WorkspaceTabViewModel : ViewModelBase
     private bool isTitleExplicit;
 
     public required string Id { get; init; }
+
+    public string? WorkspacePaneId { get; internal set; }
+
+    public UiPath Path => UiPath.ForTab(this.WorkspacePaneId, this.Id);
 
     public required string Title
     {
