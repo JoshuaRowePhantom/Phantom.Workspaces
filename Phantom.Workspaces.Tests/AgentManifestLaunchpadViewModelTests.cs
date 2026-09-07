@@ -228,8 +228,8 @@ public sealed class AgentManifestLaunchpadViewModelTests
           "names": [["tests", "trust-profiles", "issue-1440-remote"]],
           "display-name": { "default": "Issue 1440 Remote" },
           "hosting-workspaces-client-instances": ["*"],
-          "mount-points": [],
-          "network-access-policy": "no-network",
+          "filesystem-paths": [],
+          "network-capabilities": [],
           "https-proxy-policy": { "mode": "disabled" },
           "allowed-mcp-tool-call-schemas": [ {} ]
         }

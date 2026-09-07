@@ -40,7 +40,7 @@ public sealed class AgentTrustProfileResolverTests
             """
             "trust-profile": {
               "hosting-workspaces-client-instances": ["."],
-              "network-access-policy": "local-network",
+              "network-capabilities": ["privateNetworkClientServer"],
               "default-execution-target": { "type": "user-computer-profile", "entity-id": "11111111-1111-1111-1111-111111111111" }
             }
             """);
@@ -50,7 +50,7 @@ public sealed class AgentTrustProfileResolverTests
 
         Assert.NotNull(resolved);
         Assert.True(resolved!.AllowsLocalExecution());
-        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, resolved.NetworkAccessPolicy);
+        Assert.Equal(["privateNetworkClientServer"], resolved.NetworkCapabilities);
         Assert.Equal("user-computer-profile", resolved.DefaultExecutionTarget?.GetProperty("type").GetString());
         Assert.Empty(provider.RequestedProfileNames);
     }

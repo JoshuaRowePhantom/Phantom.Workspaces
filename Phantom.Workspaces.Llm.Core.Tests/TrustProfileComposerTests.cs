@@ -18,22 +18,22 @@ public sealed class TrustProfileComposerTests
         var definition = new TrustProfileDefinition
         {
             HostingWorkspacesClientInstances = [".", "remote-a"],
-            NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork,
-            MountPoints =
+            NetworkCapabilities = ["privateNetworkClientServer"],
+            FilesystemPaths =
             [
-                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadWrite, TrustMountType.Bind),
+                new TrustFilesystemPath("/host", "/workspace", TrustFilesystemAccessMode.ReadWrite),
             ],
         };
 
         var composed = TrustProfileComposer.Compose([definition]);
 
         Assert.Equal([".", "remote-a"], composed.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, composed.NetworkAccessPolicy);
+        Assert.Equal(["privateNetworkClientServer"], composed.NetworkCapabilities);
         Assert.True(composed.AllowsLocalExecution());
         Assert.True(composed.AllowsClientInstance("remote-a"));
         Assert.False(composed.AllowsClientInstance("remote-b"));
-        Assert.Single(composed.MountPoints);
-        Assert.Equal(TrustMountAccessMode.ReadWrite, composed.MountPoints[0].AccessMode);
+        Assert.Single(composed.FilesystemPaths);
+        Assert.Equal(TrustFilesystemAccessMode.ReadWrite, composed.FilesystemPaths[0].AccessMode);
     }
 
     [Fact]
@@ -88,12 +88,12 @@ public sealed class TrustProfileComposerTests
     [Fact]
     public void Compose_NetworkAccess_MostRestrictiveWins()
     {
-        var first = new TrustProfileDefinition { NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork };
-        var second = new TrustProfileDefinition { NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork };
+        var first = new TrustProfileDefinition { NetworkCapabilities = ["internetClient", "privateNetworkClientServer"] };
+        var second = new TrustProfileDefinition { NetworkCapabilities = ["privateNetworkClientServer"] };
 
         var composed = TrustProfileComposer.Compose([first, second]);
 
-        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, composed.NetworkAccessPolicy);
+        Assert.Equal(["privateNetworkClientServer"], composed.NetworkCapabilities);
     }
 
     [Fact]
@@ -101,25 +101,25 @@ public sealed class TrustProfileComposerTests
     {
         var first = new TrustProfileDefinition
         {
-            MountPoints =
+            FilesystemPaths =
             [
-                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadWrite, TrustMountType.Bind),
-                new TrustMountPoint("/extra", "/extra", TrustMountAccessMode.ReadWrite, TrustMountType.Bind),
+                new TrustFilesystemPath("/host", "/workspace", TrustFilesystemAccessMode.ReadWrite),
+                new TrustFilesystemPath("/extra", "/extra", TrustFilesystemAccessMode.ReadWrite),
             ],
         };
         var second = new TrustProfileDefinition
         {
-            MountPoints =
+            FilesystemPaths =
             [
-                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadOnly, TrustMountType.Bind),
+                new TrustFilesystemPath("/host", "/workspace", TrustFilesystemAccessMode.ReadOnly),
             ],
         };
 
         var composed = TrustProfileComposer.Compose([first, second]);
 
-        Assert.Single(composed.MountPoints);
-        Assert.Equal("/workspace", composed.MountPoints[0].TargetPath);
-        Assert.Equal(TrustMountAccessMode.ReadOnly, composed.MountPoints[0].AccessMode);
+        Assert.Single(composed.FilesystemPaths);
+        Assert.Equal("/workspace", composed.FilesystemPaths[0].TargetPath);
+        Assert.Equal(TrustFilesystemAccessMode.ReadOnly, composed.FilesystemPaths[0].AccessMode);
     }
 
     [Fact]
@@ -149,8 +149,8 @@ public sealed class TrustProfileComposerTests
             """
             {
               "hosting-workspaces-client-instances": ["."],
-              "mount-points": [],
-              "network-access-policy": "no-network",
+              "filesystem-paths": [],
+              "network-capabilities": [],
               "https-proxy-policy": { "mode": "disabled" },
               "allowed-mcp-tool-call-schemas": [
                 { "properties": { "toolName": { "const": "workspaces_entity_get" } } },
@@ -266,12 +266,12 @@ public sealed class TrustProfileComposerTests
     [Fact]
     public void MergePermissive_NetworkAccess_MostPermissiveWins()
     {
-        var primary = new TrustProfileDefinition { NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork };
-        var other = new TrustProfileDefinition { NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork };
+        var primary = new TrustProfileDefinition { NetworkCapabilities = ["privateNetworkClientServer"] };
+        var other = new TrustProfileDefinition { NetworkCapabilities = ["internetClient", "privateNetworkClientServer"] };
 
         var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Permissive);
 
-        Assert.Equal(TrustNetworkAccessPolicy.HostNetwork, merged.NetworkAccessPolicy);
+        Assert.Equal(["internetClient", "privateNetworkClientServer"], merged.NetworkCapabilities);
     }
 
     [Fact]
@@ -279,26 +279,26 @@ public sealed class TrustProfileComposerTests
     {
         var primary = new TrustProfileDefinition
         {
-            MountPoints =
+            FilesystemPaths =
             [
-                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadOnly, TrustMountType.Bind),
+                new TrustFilesystemPath("/host", "/workspace", TrustFilesystemAccessMode.ReadOnly),
             ],
         };
         var other = new TrustProfileDefinition
         {
-            MountPoints =
+            FilesystemPaths =
             [
-                new TrustMountPoint("/host", "/workspace", TrustMountAccessMode.ReadWrite, TrustMountType.Bind),
-                new TrustMountPoint("/extra", "/extra", TrustMountAccessMode.ReadOnly, TrustMountType.Bind),
+                new TrustFilesystemPath("/host", "/workspace", TrustFilesystemAccessMode.ReadWrite),
+                new TrustFilesystemPath("/extra", "/extra", TrustFilesystemAccessMode.ReadOnly),
             ],
         };
 
         var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Permissive);
 
-        Assert.Equal(2, merged.MountPoints.Count);
-        var workspace = merged.MountPoints.Single(static mount => mount.TargetPath == "/workspace");
-        Assert.Equal(TrustMountAccessMode.ReadWrite, workspace.AccessMode);
-        Assert.Contains(merged.MountPoints, static mount => mount.TargetPath == "/extra");
+        Assert.Equal(2, merged.FilesystemPaths.Count);
+        var workspace = merged.FilesystemPaths.Single(static mount => mount.TargetPath == "/workspace");
+        Assert.Equal(TrustFilesystemAccessMode.ReadWrite, workspace.AccessMode);
+        Assert.Contains(merged.FilesystemPaths, static mount => mount.TargetPath == "/extra");
     }
 
     [Fact]
@@ -324,17 +324,96 @@ public sealed class TrustProfileComposerTests
         var primary = new TrustProfileDefinition
         {
             HostingWorkspacesClientInstances = [".", "remote-a"],
-            NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+            NetworkCapabilities = ["internetClient", "privateNetworkClientServer"],
         };
         var other = new TrustProfileDefinition
         {
             HostingWorkspacesClientInstances = ["remote-a"],
-            NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork,
+            NetworkCapabilities = ["privateNetworkClientServer"],
         };
 
         var merged = TrustProfileComposer.Merge(primary, other, TrustInheritanceMode.Restrictive);
 
         Assert.Equal(["remote-a"], merged.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, merged.NetworkAccessPolicy);
+        Assert.Equal(["privateNetworkClientServer"], merged.NetworkCapabilities);
+    }
+
+    [Fact]
+    public void Compose_EquivalentImplicitAndExplicitTargets_MatchesFilesystemPath()
+    {
+        var first = new TrustProfileDefinition
+        {
+            FilesystemPaths = [new TrustFilesystemPath("/host", null, TrustFilesystemAccessMode.ReadWrite)],
+        };
+        var second = new TrustProfileDefinition
+        {
+            FilesystemPaths = [new TrustFilesystemPath("/host", "/host", TrustFilesystemAccessMode.ReadOnly)],
+        };
+
+        var composed = TrustProfileComposer.Compose([first, second]);
+
+        var path = Assert.Single(composed.FilesystemPaths);
+        Assert.Equal("/host", path.EffectiveTargetPath);
+        Assert.Equal(TrustFilesystemAccessMode.ReadOnly, path.AccessMode);
+    }
+
+    [Fact]
+    public void MergeRestrictive_NetworkCapabilities_Intersects()
+    {
+        var unconstrained = new TrustProfileDefinition();
+        var first = new TrustProfileDefinition { NetworkCapabilities = ["internetClient", "privateNetworkClientServer"] };
+        var second = new TrustProfileDefinition { NetworkCapabilities = ["internetClient", "enterpriseAuthentication"] };
+
+        Assert.Equal(first.NetworkCapabilities, TrustProfileComposer.Merge(unconstrained, first, TrustInheritanceMode.Restrictive).NetworkCapabilities);
+        Assert.Equal(first.NetworkCapabilities, TrustProfileComposer.Merge(first, unconstrained, TrustInheritanceMode.Restrictive).NetworkCapabilities);
+        Assert.Equal(["internetClient"], TrustProfileComposer.Merge(first, second, TrustInheritanceMode.Restrictive).NetworkCapabilities);
+    }
+
+    [Fact]
+    public void MergePermissive_NetworkCapabilities_Unions()
+    {
+        var unconstrained = new TrustProfileDefinition();
+        var first = new TrustProfileDefinition { NetworkCapabilities = ["internetClient"] };
+        var second = new TrustProfileDefinition { NetworkCapabilities = ["privateNetworkClientServer"] };
+
+        Assert.Null(TrustProfileComposer.Merge(unconstrained, first, TrustInheritanceMode.Permissive).NetworkCapabilities);
+        Assert.Null(TrustProfileComposer.Merge(first, unconstrained, TrustInheritanceMode.Permissive).NetworkCapabilities);
+        Assert.Equal(
+            ["internetClient", "privateNetworkClientServer"],
+            TrustProfileComposer.Merge(first, second, TrustInheritanceMode.Permissive).NetworkCapabilities);
+    }
+
+    [Fact]
+    public void MergeRestrictive_DataSharing_UsesMoreRestricted()
+    {
+        var merged = TrustProfileComposer.Merge(
+            new TrustProfileDefinition { DataSharing = TrustDataSharing.Full },
+            new TrustProfileDefinition { DataSharing = TrustDataSharing.None },
+            TrustInheritanceMode.Restrictive);
+
+        Assert.Equal(TrustDataSharing.None, merged.DataSharing);
+        Assert.Equal(
+            TrustDataSharing.Regime("sandbox"),
+            TrustProfileComposer.Merge(
+                new TrustProfileDefinition { DataSharing = TrustDataSharing.Full },
+                new TrustProfileDefinition { DataSharing = TrustDataSharing.Regime("sandbox") },
+                TrustInheritanceMode.Restrictive).DataSharing);
+    }
+
+    [Fact]
+    public void MergePermissive_DataSharing_UsesLessRestricted()
+    {
+        var merged = TrustProfileComposer.Merge(
+            new TrustProfileDefinition { DataSharing = TrustDataSharing.None },
+            new TrustProfileDefinition { DataSharing = TrustDataSharing.Full },
+            TrustInheritanceMode.Permissive);
+
+        Assert.Equal(TrustDataSharing.Full, merged.DataSharing);
+        Assert.Equal(
+            TrustDataSharing.Regime("sandbox"),
+            TrustProfileComposer.Merge(
+                new TrustProfileDefinition { DataSharing = TrustDataSharing.None },
+                new TrustProfileDefinition { DataSharing = TrustDataSharing.Regime("sandbox") },
+                TrustInheritanceMode.Permissive).DataSharing);
     }
 }

@@ -32,6 +32,9 @@ public static class TrustProfileEntityReader
             throw new InvalidOperationException("A trust profile entity must be a JSON object.");
         }
 
+        RejectRemovedProperty(entity, "mount-points");
+        RejectRemovedProperty(entity, "network-access-policy");
+
         return new TrustProfileEntity
         {
             Name = ReadName(entity),
@@ -39,8 +42,9 @@ public static class TrustProfileEntityReader
             Definition = new TrustProfileDefinition
             {
                 HostingWorkspacesClientInstances = ReadStringArray(entity, "hosting-workspaces-client-instances"),
-                NetworkAccessPolicy = ReadNetworkAccessPolicy(entity),
-                MountPoints = ReadMountPoints(entity),
+                NetworkCapabilities = ReadNetworkCapabilities(entity),
+                FilesystemPaths = ReadFilesystemPaths(entity),
+                DataSharing = ReadDataSharing(entity),
                 DefaultExecutionTarget = ReadOptionalObject(entity, "default-execution-target"),
                 HttpsProxyPolicy = ReadHttpsProxyPolicy(entity),
                 AllowedMcpToolCallSchemas = ReadSchemas(entity, "allowed-mcp-tool-call-schemas"),
@@ -144,41 +148,74 @@ public static class TrustProfileEntityReader
         return values;
     }
 
-    private static TrustNetworkAccessPolicy ReadNetworkAccessPolicy(JsonElement entity)
+    private static IReadOnlyList<string>? ReadNetworkCapabilities(JsonElement entity)
     {
-        if (!entity.TryGetProperty("network-access-policy", out var policy) || policy.ValueKind != JsonValueKind.String)
+        if (!entity.TryGetProperty("network-capabilities", out var capabilities))
         {
-            return TrustNetworkAccessPolicy.NoNetwork;
+            return null;
         }
 
-        return policy.GetString() switch
+        if (capabilities.ValueKind != JsonValueKind.Array)
         {
-            "no-network" => TrustNetworkAccessPolicy.NoNetwork,
-            "local-network" => TrustNetworkAccessPolicy.LocalNetwork,
-            "natted-network" => TrustNetworkAccessPolicy.NattedNetwork,
-            "host-network" => TrustNetworkAccessPolicy.HostNetwork,
-            var other => throw new InvalidOperationException($"Unknown network access policy: '{other}'."),
-        };
+            throw new InvalidOperationException("Trust profile property 'network-capabilities' must be an array.");
+        }
+
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var capability in capabilities.EnumerateArray())
+        {
+            if (capability.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(capability.GetString()))
+            {
+                throw new InvalidOperationException("Network capabilities must be non-blank strings.");
+            }
+
+            var value = capability.GetString()!;
+            if (!seen.Add(value))
+            {
+                throw new InvalidOperationException($"Duplicate network capability: '{value}'.");
+            }
+
+            result.Add(value);
+        }
+
+        return result;
     }
 
-    private static IReadOnlyList<TrustMountPoint> ReadMountPoints(JsonElement entity)
+    private static IReadOnlyList<TrustFilesystemPath> ReadFilesystemPaths(JsonElement entity)
     {
-        if (!entity.TryGetProperty("mount-points", out var mounts) || mounts.ValueKind != JsonValueKind.Array)
+        if (!entity.TryGetProperty("filesystem-paths", out var paths))
         {
             return [];
         }
 
-        var mountPoints = new List<TrustMountPoint>();
-        foreach (var mount in mounts.EnumerateArray())
+        if (paths.ValueKind != JsonValueKind.Array)
         {
-            mountPoints.Add(new TrustMountPoint(
-                ReadRequiredString(mount, "source-path"),
-                ReadRequiredString(mount, "target-path"),
-                ReadAccessMode(mount),
-                ReadMountType(mount)));
+            throw new InvalidOperationException("Trust profile property 'filesystem-paths' must be an array.");
         }
 
-        return mountPoints;
+        var result = new List<TrustFilesystemPath>();
+        foreach (var path in paths.EnumerateArray())
+        {
+            if (path.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException("Each filesystem path must be an object.");
+            }
+
+            foreach (var property in path.EnumerateObject())
+            {
+                if (property.Name is not ("source-path" or "target-path" or "access-mode"))
+                {
+                    throw new InvalidOperationException($"Unknown filesystem path property: '{property.Name}'.");
+                }
+            }
+
+            result.Add(new TrustFilesystemPath(
+                ReadRequiredString(path, "source-path"),
+                ReadOptionalString(path, "target-path"),
+                ReadAccessMode(path)));
+        }
+
+        return result;
     }
 
     private static JsonElement? ReadOptionalObject(JsonElement entity, string propertyName)
@@ -196,25 +233,45 @@ public static class TrustProfileEntityReader
         return value.Clone();
     }
 
-    private static TrustMountAccessMode ReadAccessMode(JsonElement mount)
+    private static TrustFilesystemAccessMode ReadAccessMode(JsonElement path)
     {
-        return ReadRequiredString(mount, "access-mode") switch
+        return ReadRequiredString(path, "access-mode") switch
         {
-            "read-only" => TrustMountAccessMode.ReadOnly,
-            "read-write" => TrustMountAccessMode.ReadWrite,
-            var other => throw new InvalidOperationException($"Unknown mount access mode: '{other}'."),
+            "read-only" => TrustFilesystemAccessMode.ReadOnly,
+            "read-write" => TrustFilesystemAccessMode.ReadWrite,
+            var other => throw new InvalidOperationException($"Unknown filesystem access mode: '{other}'."),
         };
     }
 
-    private static TrustMountType ReadMountType(JsonElement mount)
+    private static TrustDataSharing ReadDataSharing(JsonElement entity)
     {
-        return ReadRequiredString(mount, "type") switch
+        if (!entity.TryGetProperty("data-sharing", out var sharing))
         {
-            "bind" => TrustMountType.Bind,
-            "volume" => TrustMountType.Volume,
-            "tmpfs" => TrustMountType.Tmpfs,
-            var other => throw new InvalidOperationException($"Unknown mount type: '{other}'."),
-        };
+            return TrustDataSharing.Full;
+        }
+
+        if (sharing.ValueKind == JsonValueKind.String)
+        {
+            return sharing.GetString() switch
+            {
+                "full" => TrustDataSharing.Full,
+                "none" => TrustDataSharing.None,
+                var other => throw new InvalidOperationException($"Unknown data-sharing mode: '{other}'."),
+            };
+        }
+
+        if (sharing.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidOperationException("Data-sharing must be 'full', 'none', or a regime object.");
+        }
+
+        var properties = sharing.EnumerateObject().ToList();
+        if (properties.Count != 1 || properties[0].Name != "regime")
+        {
+            throw new InvalidOperationException("A data-sharing regime object must contain only 'regime'.");
+        }
+
+        return TrustDataSharing.Regime(ReadRequiredString(sharing, "regime"));
     }
 
     private static TrustHttpsProxyPolicy ReadHttpsProxyPolicy(JsonElement entity)
@@ -271,6 +328,35 @@ public static class TrustProfileEntityReader
             throw new InvalidOperationException($"Trust profile property '{propertyName}' must be a string.");
         }
 
-        return value.GetString()!;
+        var result = value.GetString();
+        if (string.IsNullOrWhiteSpace(result))
+        {
+            throw new InvalidOperationException($"Trust profile property '{propertyName}' must not be blank.");
+        }
+
+        return result;
+    }
+
+    private static string? ReadOptionalString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(value.GetString()))
+        {
+            throw new InvalidOperationException($"Trust profile property '{propertyName}' must be a non-blank string.");
+        }
+
+        return value.GetString();
+    }
+
+    private static void RejectRemovedProperty(JsonElement entity, string propertyName)
+    {
+        if (entity.TryGetProperty(propertyName, out _))
+        {
+            throw new InvalidOperationException($"Trust profile property '{propertyName}' has been removed.");
+        }
     }
 }

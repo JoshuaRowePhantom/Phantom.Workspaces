@@ -16,8 +16,9 @@
   "hosting-workspaces-client-instances": [
     "*"
   ],
-  "mount-points": [],
-  "network-access-policy": "no-network",
+  "filesystem-paths": [],
+  "network-capabilities": [],
+  "data-sharing": "full",
   "https-proxy-policy": {
     "mode": "disabled"
   },

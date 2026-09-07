@@ -11,13 +11,14 @@ namespace Phantom.Workspaces.Llm.Trust;
 /// <see cref="TrustInheritanceMode"/>:
 /// <list type="bullet">
 /// <item><b>Restrictive</b> narrows: client instances intersect, network access takes the most
-/// restrictive policy, mount points intersect (read-only narrowing), and HTTPS proxy takes the
+/// restrictive capability set, filesystem paths intersect (read-only narrowing), and HTTPS proxy takes the
 /// strongest requirement.</item>
 /// <item><b>Permissive</b> widens: client instances union, network access takes the most permissive
-/// policy, mount points union (read-write widening), and HTTPS proxy takes the weakest requirement.</item>
+/// policy, filesystem paths union (read-write widening), and HTTPS proxy takes the weakest requirement.</item>
 /// </list>
 /// MCP tool-call schemas are always composed additively (their <c>anyOf</c> union) in both modes.
-/// All merge operations are commutative, so ordering does not affect the result.
+/// Set-based merge operations are commutative. Equally restrictive data-sharing regimes use the
+/// later definition, allowing a derived containment context to select its regime.
 /// </remarks>
 public static class TrustProfileComposer
 {
@@ -56,12 +57,13 @@ public static class TrustProfileComposer
             HostingWorkspacesClientInstances = mode == TrustInheritanceMode.Restrictive
                 ? IntersectInstances(primary.HostingWorkspacesClientInstances, other.HostingWorkspacesClientInstances)
                 : UnionInstances(primary.HostingWorkspacesClientInstances, other.HostingWorkspacesClientInstances),
-            NetworkAccessPolicy = mode == TrustInheritanceMode.Restrictive
-                ? (TrustNetworkAccessPolicy)Math.Min((int)primary.NetworkAccessPolicy, (int)other.NetworkAccessPolicy)
-                : (TrustNetworkAccessPolicy)Math.Max((int)primary.NetworkAccessPolicy, (int)other.NetworkAccessPolicy),
-            MountPoints = mode == TrustInheritanceMode.Restrictive
-                ? IntersectMounts(primary.MountPoints, other.MountPoints)
-                : UnionMounts(primary.MountPoints, other.MountPoints),
+            NetworkCapabilities = mode == TrustInheritanceMode.Restrictive
+                ? IntersectCapabilities(primary.NetworkCapabilities, other.NetworkCapabilities)
+                : UnionCapabilities(primary.NetworkCapabilities, other.NetworkCapabilities),
+            FilesystemPaths = mode == TrustInheritanceMode.Restrictive
+                ? IntersectFilesystemPaths(primary.FilesystemPaths, other.FilesystemPaths)
+                : UnionFilesystemPaths(primary.FilesystemPaths, other.FilesystemPaths),
+            DataSharing = ComposeDataSharing(primary.DataSharing, other.DataSharing, mode),
             DefaultExecutionTarget = primary.DefaultExecutionTarget?.Clone() ?? other.DefaultExecutionTarget?.Clone(),
             HttpsProxyPolicy = mode == TrustInheritanceMode.Restrictive
                 ? StrongerProxy(primary.HttpsProxyPolicy, other.HttpsProxyPolicy)
@@ -79,8 +81,9 @@ public static class TrustProfileComposer
         return new TrustProfile
         {
             HostingWorkspacesClientInstances = definition.HostingWorkspacesClientInstances,
-            NetworkAccessPolicy = definition.NetworkAccessPolicy,
-            MountPoints = definition.MountPoints,
+            NetworkCapabilities = definition.NetworkCapabilities,
+            FilesystemPaths = definition.FilesystemPaths,
+            DataSharing = definition.DataSharing,
             DefaultExecutionTarget = definition.DefaultExecutionTarget?.Clone(),
             HttpsProxyPolicy = definition.HttpsProxyPolicy,
             AllowedMcpToolCallSchema = BuildMcpToolCallSchema(
@@ -127,47 +130,80 @@ public static class TrustProfileComposer
         return result;
     }
 
-    private static IReadOnlyList<TrustMountPoint> IntersectMounts(
-        IReadOnlyList<TrustMountPoint> primary,
-        IReadOnlyList<TrustMountPoint> other)
+    private static IReadOnlyList<string>? IntersectCapabilities(
+        IReadOnlyList<string>? primary,
+        IReadOnlyList<string>? other)
     {
-        var result = new List<TrustMountPoint>();
+        if (primary is null)
+        {
+            return NormalizeCapabilities(other);
+        }
+
+        if (other is null)
+        {
+            return NormalizeCapabilities(primary);
+        }
+
+        var allowed = new HashSet<string>(other, StringComparer.Ordinal);
+        return NormalizeCapabilities(primary.Where(allowed.Contains));
+    }
+
+    private static IReadOnlyList<string>? UnionCapabilities(
+        IReadOnlyList<string>? primary,
+        IReadOnlyList<string>? other)
+    {
+        if (primary is null || other is null)
+        {
+            return null;
+        }
+
+        return NormalizeCapabilities(primary.Concat(other));
+    }
+
+    private static IReadOnlyList<string>? NormalizeCapabilities(IEnumerable<string>? capabilities)
+        => capabilities?.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
+    private static IReadOnlyList<TrustFilesystemPath> IntersectFilesystemPaths(
+        IReadOnlyList<TrustFilesystemPath> primary,
+        IReadOnlyList<TrustFilesystemPath> other)
+    {
+        var result = new List<TrustFilesystemPath>();
         foreach (var candidate in primary)
         {
-            var match = FindMount(other, candidate);
+            var match = FindFilesystemPath(other, candidate);
             if (match is null)
             {
                 continue;
             }
 
             // Restrictive: read-only wins.
-            var access = candidate.AccessMode == TrustMountAccessMode.ReadOnly || match.AccessMode == TrustMountAccessMode.ReadOnly
-                ? TrustMountAccessMode.ReadOnly
-                : TrustMountAccessMode.ReadWrite;
+            var access = candidate.AccessMode == TrustFilesystemAccessMode.ReadOnly || match.AccessMode == TrustFilesystemAccessMode.ReadOnly
+                ? TrustFilesystemAccessMode.ReadOnly
+                : TrustFilesystemAccessMode.ReadWrite;
             result.Add(candidate with { AccessMode = access });
         }
 
         return result;
     }
 
-    private static IReadOnlyList<TrustMountPoint> UnionMounts(
-        IReadOnlyList<TrustMountPoint> primary,
-        IReadOnlyList<TrustMountPoint> other)
+    private static IReadOnlyList<TrustFilesystemPath> UnionFilesystemPaths(
+        IReadOnlyList<TrustFilesystemPath> primary,
+        IReadOnlyList<TrustFilesystemPath> other)
     {
-        var result = new List<TrustMountPoint>();
+        var result = new List<TrustFilesystemPath>();
         foreach (var mount in primary)
         {
-            var match = FindMount(other, mount);
+            var match = FindFilesystemPath(other, mount);
             // Permissive: read-write wins.
-            var access = mount.AccessMode == TrustMountAccessMode.ReadWrite || match?.AccessMode == TrustMountAccessMode.ReadWrite
-                ? TrustMountAccessMode.ReadWrite
-                : TrustMountAccessMode.ReadOnly;
+            var access = mount.AccessMode == TrustFilesystemAccessMode.ReadWrite || match?.AccessMode == TrustFilesystemAccessMode.ReadWrite
+                ? TrustFilesystemAccessMode.ReadWrite
+                : TrustFilesystemAccessMode.ReadOnly;
             result.Add(mount with { AccessMode = access });
         }
 
         foreach (var mount in other)
         {
-            if (FindMount(primary, mount) is null)
+            if (FindFilesystemPath(primary, mount) is null)
             {
                 result.Add(mount);
             }
@@ -176,20 +212,41 @@ public static class TrustProfileComposer
         return result;
     }
 
-    private static TrustMountPoint? FindMount(IReadOnlyList<TrustMountPoint> mounts, TrustMountPoint key)
+    private static TrustFilesystemPath? FindFilesystemPath(
+        IReadOnlyList<TrustFilesystemPath> paths,
+        TrustFilesystemPath key)
     {
-        foreach (var mount in mounts)
+        foreach (var path in paths)
         {
-            if (string.Equals(mount.SourcePath, key.SourcePath, StringComparison.Ordinal)
-                && string.Equals(mount.TargetPath, key.TargetPath, StringComparison.Ordinal)
-                && mount.Type == key.Type)
+            if (string.Equals(path.SourcePath, key.SourcePath, StringComparison.Ordinal)
+                && string.Equals(path.EffectiveTargetPath, key.EffectiveTargetPath, StringComparison.Ordinal))
             {
-                return mount;
+                return path;
             }
         }
 
         return null;
     }
+
+    private static TrustDataSharing ComposeDataSharing(
+        TrustDataSharing primary,
+        TrustDataSharing other,
+        TrustInheritanceMode mode)
+    {
+        var primaryRank = DataSharingRank(primary);
+        var otherRank = DataSharingRank(other);
+        return mode == TrustInheritanceMode.Restrictive
+            ? otherRank >= primaryRank ? other : primary
+            : otherRank <= primaryRank ? other : primary;
+    }
+
+    private static int DataSharingRank(TrustDataSharing sharing) => sharing switch
+    {
+        TrustDataSharing.FullSharing => 0,
+        TrustDataSharing.RegimeScoped => 1,
+        TrustDataSharing.NoSharing => 2,
+        _ => throw new InvalidOperationException($"Unknown data-sharing type: {sharing.GetType().Name}."),
+    };
 
     private static TrustHttpsProxyPolicy StrongerProxy(TrustHttpsProxyPolicy a, TrustHttpsProxyPolicy b)
         => b.Mode > a.Mode ? b : a;

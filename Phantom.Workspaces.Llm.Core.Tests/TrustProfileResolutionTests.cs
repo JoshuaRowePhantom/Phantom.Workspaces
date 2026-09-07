@@ -15,13 +15,12 @@ public sealed class TrustProfileResolutionTests
               "names": [["trust-profiles", "default"]],
               "base-trust-profiles": ["base-a"],
               "hosting-workspaces-client-instances": [".", "remote-a"],
-              "network-access-policy": "local-network",
-              "mount-points": [
+              "network-capabilities": ["privateNetworkClientServer"],
+              "filesystem-paths": [
                 {
                   "source-path": "/host",
                   "target-path": "/workspace",
-                  "access-mode": "read-write",
-                  "type": "bind"
+                  "access-mode": "read-write"
                 }
               ],
               "https-proxy-policy": { "mode": "required", "proxy-url": "https://proxy:8443" },
@@ -39,20 +38,20 @@ public sealed class TrustProfileResolutionTests
         Assert.Equal("base-a", parsed.Bases[0].ProfileName);
         Assert.Equal(TrustInheritanceMode.Restrictive, parsed.Bases[0].Mode);
         Assert.Equal([".", "remote-a"], parsed.Definition.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, parsed.Definition.NetworkAccessPolicy);
-        Assert.Single(parsed.Definition.MountPoints);
-        Assert.Equal(TrustMountAccessMode.ReadWrite, parsed.Definition.MountPoints[0].AccessMode);
+        Assert.Equal(["privateNetworkClientServer"], parsed.Definition.NetworkCapabilities);
+        Assert.Single(parsed.Definition.FilesystemPaths);
+        Assert.Equal(TrustFilesystemAccessMode.ReadWrite, parsed.Definition.FilesystemPaths[0].AccessMode);
         Assert.Equal(TrustHttpsProxyMode.Required, parsed.Definition.HttpsProxyPolicy.Mode);
         Assert.Equal("user-computer-profile", parsed.Definition.DefaultExecutionTarget?.GetProperty("type").GetString());
         Assert.Single(parsed.Definition.AllowedMcpToolCallSchemas);
     }
 
     [Fact]
-    public void Read_UnknownNetworkPolicy_Throws()
+    public void Read_LegacyNetworkAccessPolicy_RejectsRemovedProperty()
     {
         var entity = JsonDocument.Parse(
             """
-            { "network-access-policy": "teleport-network" }
+            { "network-access-policy": "no-network" }
             """).RootElement;
 
         Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
@@ -68,11 +67,94 @@ public sealed class TrustProfileResolutionTests
         Assert.Null(parsed.Name);
         Assert.Empty(parsed.Bases);
         Assert.Empty(parsed.Definition.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.NoNetwork, parsed.Definition.NetworkAccessPolicy);
+        Assert.Null(parsed.Definition.NetworkCapabilities);
+        Assert.Equal(TrustDataSharing.Full, parsed.Definition.DataSharing);
         Assert.Equal(TrustHttpsProxyMode.Disabled, parsed.Definition.HttpsProxyPolicy.Mode);
         Assert.Null(parsed.Definition.DefaultExecutionTarget);
-        Assert.Empty(parsed.Definition.MountPoints);
+        Assert.Empty(parsed.Definition.FilesystemPaths);
         Assert.Empty(parsed.Definition.AllowedMcpToolCallSchemas);
+    }
+
+    [Fact]
+    public void Read_FilesystemTargetPathOmitted_UsesSourcePath()
+    {
+        var entity = JsonDocument.Parse(
+            """{ "filesystem-paths": [{ "source-path": "/host", "access-mode": "read-only" }] }""").RootElement;
+
+        var path = Assert.Single(TrustProfileEntityReader.Read(entity).Definition.FilesystemPaths);
+
+        Assert.Null(path.TargetPath);
+        Assert.Equal("/host", path.EffectiveTargetPath);
+    }
+
+    [Fact]
+    public void Read_FilesystemTypePresent_RejectsRemovedProperty()
+    {
+        var entity = JsonDocument.Parse(
+            """{ "filesystem-paths": [{ "source-path": "/host", "access-mode": "read-only", "type": "bind" }] }""").RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
+    [Fact]
+    public void Read_NetworkCapabilitiesAbsent_PreservesUnconstrainedState()
+    {
+        var parsed = TrustProfileEntityReader.Read(JsonDocument.Parse("{}").RootElement);
+
+        Assert.Null(parsed.Definition.NetworkCapabilities);
+    }
+
+    [Fact]
+    public void Read_EmptyNetworkCapabilities_PreservesExplicitNoNetwork()
+    {
+        var parsed = TrustProfileEntityReader.Read(JsonDocument.Parse("""{ "network-capabilities": [] }""").RootElement);
+
+        Assert.NotNull(parsed.Definition.NetworkCapabilities);
+        Assert.Empty(parsed.Definition.NetworkCapabilities);
+    }
+
+    [Fact]
+    public void Read_DuplicateNetworkCapability_RejectsProfile()
+    {
+        var entity = JsonDocument.Parse(
+            """{ "network-capabilities": ["internetClient", "internetClient"] }""").RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
+    [Theory]
+    [InlineData("""{ "network-capabilities": [""] }""")]
+    [InlineData("""{ "network-capabilities": [null] }""")]
+    public void Read_InvalidNetworkCapability_RejectsProfile(string json)
+    {
+        var entity = JsonDocument.Parse(json).RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
+    [Fact]
+    public void Read_DataSharingAbsent_DefaultsToFull()
+    {
+        var parsed = TrustProfileEntityReader.Read(JsonDocument.Parse("{}").RootElement);
+
+        Assert.Equal(TrustDataSharing.Full, parsed.Definition.DataSharing);
+    }
+
+    [Fact]
+    public void Read_DataSharingRegime_ParsesRegimeName()
+    {
+        var parsed = TrustProfileEntityReader.Read(
+            JsonDocument.Parse("""{ "data-sharing": { "regime": "sandbox" } }""").RootElement);
+
+        Assert.Equal(TrustDataSharing.Regime("sandbox"), parsed.Definition.DataSharing);
+    }
+
+    [Fact]
+    public void Read_DataSharingNone_PreservesEphemeralMode()
+    {
+        var parsed = TrustProfileEntityReader.Read(JsonDocument.Parse("""{ "data-sharing": "none" }""").RootElement);
+
+        Assert.Equal(TrustDataSharing.None, parsed.Definition.DataSharing);
     }
 
     [Fact]
@@ -86,7 +168,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = [".", "remote-a", "remote-b"],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                    NetworkCapabilities = ["internetClient", "privateNetworkClientServer"],
                 },
             },
             ["derived"] = new TrustProfileEntity
@@ -96,7 +178,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = [".", "remote-a"],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork,
+                    NetworkCapabilities = ["privateNetworkClientServer"],
                 },
             },
         };
@@ -105,7 +187,7 @@ public sealed class TrustProfileResolutionTests
         var composed = await provider.ResolveAsync("derived");
 
         Assert.Equal([".", "remote-a"], composed.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.LocalNetwork, composed.NetworkAccessPolicy);
+        Assert.Equal(["privateNetworkClientServer"], composed.NetworkCapabilities);
     }
 
     [Fact]
@@ -119,7 +201,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = ["remote-b"],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                    NetworkCapabilities = ["internetClient", "privateNetworkClientServer"],
                 },
             },
             ["agent"] = new TrustProfileEntity
@@ -129,7 +211,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = [".", "remote-a"],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.LocalNetwork,
+                    NetworkCapabilities = ["privateNetworkClientServer"],
                 },
             },
         };
@@ -138,7 +220,7 @@ public sealed class TrustProfileResolutionTests
         var composed = await provider.ResolveAsync("agent");
 
         Assert.Equal([".", "remote-a", "remote-b"], composed.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.HostNetwork, composed.NetworkAccessPolicy);
+        Assert.Equal(["internetClient", "privateNetworkClientServer"], composed.NetworkCapabilities);
     }
 
     [Fact]
@@ -152,7 +234,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = ["."],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                    NetworkCapabilities = ["internetClient", "privateNetworkClientServer"],
                 },
             },
             ["network-grant"] = new TrustProfileEntity
@@ -161,7 +243,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = ["."],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.HostNetwork,
+                    NetworkCapabilities = ["internetClient", "privateNetworkClientServer"],
                 },
             },
             ["agent"] = new TrustProfileEntity
@@ -175,7 +257,7 @@ public sealed class TrustProfileResolutionTests
                 Definition = new TrustProfileDefinition
                 {
                     HostingWorkspacesClientInstances = [".", "remote-a"],
-                    NetworkAccessPolicy = TrustNetworkAccessPolicy.NoNetwork,
+                    NetworkCapabilities = [],
                 },
             },
         };
@@ -185,7 +267,7 @@ public sealed class TrustProfileResolutionTests
 
         // Restrictive base narrows the computer set to "."; permissive base widens the network.
         Assert.Equal(["."], composed.HostingWorkspacesClientInstances);
-        Assert.Equal(TrustNetworkAccessPolicy.HostNetwork, composed.NetworkAccessPolicy);
+        Assert.Equal(["internetClient", "privateNetworkClientServer"], composed.NetworkCapabilities);
     }
 
     [Fact]

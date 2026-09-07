@@ -44,21 +44,46 @@
       },
       "uniqueItems": true
     },
-    "mount-points": {
-      "$comment": "Container mount points granted by this profile.",
+    "filesystem-paths": {
+      "$comment": "Host filesystem paths granted by this profile.",
       "type": "array",
       "items": {
-        "$ref": "#/$defs/trust-mount-point"
+        "$ref": "#/$defs/trust-filesystem-path"
       }
     },
-    "network-access-policy": {
-      "$comment": "Container network mode policy.",
-      "type": "string",
-      "enum": [
-        "no-network",
-        "local-network",
-        "natted-network",
-        "host-network"
+    "network-capabilities": {
+      "$comment": "AppContainer capabilities. Absence is unconstrained; an empty array explicitly denies networking.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "uniqueItems": true
+    },
+    "data-sharing": {
+      "$comment": "Copilot persistent configuration and session-state sharing.",
+      "oneOf": [
+        {
+          "enum": [
+            "full",
+            "none"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "regime": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "required": [
+            "regime"
+          ],
+          "unevaluatedProperties": false
+        }
       ]
     },
     "https-proxy-policy": {
@@ -85,8 +110,7 @@
   "required": [
     "entity-types",
     "hosting-workspaces-client-instances",
-    "mount-points",
-    "network-access-policy",
+    "filesystem-paths",
     "https-proxy-policy",
     "allowed-mcp-tool-call-schemas"
   ],
@@ -122,17 +146,21 @@
         }
       ]
     },
-    "trust-mount-point": {
-      "$comment": "A single mount declaration for the container runtime.",
+    "trust-filesystem-path": {
+      "$comment": "A host filesystem path grant.",
       "type": "object",
       "properties": {
         "source-path": {
-          "$comment": "Host source path (or source identifier for volume-like mounts).",
-          "type": "string"
+          "$comment": "Host source path.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
         },
         "target-path": {
-          "$comment": "Container target path where the mount is attached.",
-          "type": "string"
+          "$comment": "Optional target path; defaults to source-path.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
         },
         "access-mode": {
           "$comment": "Read-only or read-write access mode.",
@@ -141,22 +169,11 @@
             "read-only",
             "read-write"
           ]
-        },
-        "type": {
-          "$comment": "Docker mount type.",
-          "type": "string",
-          "enum": [
-            "bind",
-            "volume",
-            "tmpfs"
-          ]
         }
       },
       "required": [
         "source-path",
-        "target-path",
-        "access-mode",
-        "type"
+        "access-mode"
       ],
       "unevaluatedProperties": false
     },

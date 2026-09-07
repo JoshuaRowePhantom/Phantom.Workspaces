@@ -195,8 +195,8 @@ public sealed class ManifestParametersViewModelTests
           "names": [["tests", "trust-profiles", "mp-remote"]],
           "display-name": { "default": "MP Remote" },
           "hosting-workspaces-client-instances": ["*"],
-          "mount-points": [],
-          "network-access-policy": "no-network",
+          "filesystem-paths": [],
+          "network-capabilities": [],
           "https-proxy-policy": { "mode": "disabled" },
           "allowed-mcp-tool-call-schemas": [ {} ]
         }
