@@ -69,6 +69,36 @@ public sealed class MxcRuntimeZipTests
         Assert.DoesNotContain("plm.exe", entries);
     }
 
+    [Fact]
+    public void MxcRuntimeZip_MissingZip_Fails()
+    {
+        using var sandbox = new TempDirectory();
+        var script = Path.Combine(
+            FindRepositoryRoot().FullName, "packaging", "validate", "Assert-MxcRuntimeZip.ps1");
+        var startInfo = new ProcessStartInfo("pwsh")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("-NoProfile");
+        startInfo.ArgumentList.Add("-NonInteractive");
+        startInfo.ArgumentList.Add("-File");
+        startInfo.ArgumentList.Add(script);
+        startInfo.ArgumentList.Add("-ZipPath");
+        startInfo.ArgumentList.Add(Path.Combine(sandbox.Path, "missing.zip"));
+        startInfo.ArgumentList.Add("-RuntimeIdentifier");
+        startInfo.ArgumentList.Add(Rid);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Failed to start MXC zip validator.");
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+
+        Assert.NotEqual(0, process.ExitCode);
+        Assert.Contains("Release zip not found", stderr, StringComparison.Ordinal);
+    }
+
     private static string SeedPublishDirectory(string root)
     {
         var publishDirectory = Path.Combine(root, "publish");

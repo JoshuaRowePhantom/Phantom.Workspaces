@@ -24,8 +24,11 @@ foreach ($fileName in $requiredFiles)
     }
 }
 
-$license = Get-Content -LiteralPath (Join-Path $nativeDirectory 'MXC-LICENSE.md') -Raw
-if ($license -notmatch 'MIT License' -or $license -notmatch 'Microsoft Corporation')
+$licensePath = Join-Path $nativeDirectory 'MXC-LICENSE.md'
+$upstreamLicensePath = Join-Path $PSScriptRoot '..\..\microsoft\mxc\LICENSE.md'
+$licenseHash = (Get-FileHash -LiteralPath $licensePath -Algorithm SHA256).Hash
+$upstreamLicenseHash = (Get-FileHash -LiteralPath $upstreamLicensePath -Algorithm SHA256).Hash
+if ($licenseHash -ne $upstreamLicenseHash)
 {
     throw 'MXC-LICENSE.md does not contain the unmodified upstream MIT license.'
 }

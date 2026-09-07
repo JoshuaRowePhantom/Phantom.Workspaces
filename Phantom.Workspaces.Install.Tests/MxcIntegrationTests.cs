@@ -96,15 +96,86 @@ public sealed class MxcSdkVersionTests
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("native runtime version validated", result.StandardOutput, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void MxcSdkVersion_MissingManagedAssembly_Fails()
+    {
+        using var output = new MxcRepositoryTestSupport.TestDirectory();
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll"),
+            "-ManagedOutputPath", output.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("Built Microsoft.Mxc.Sdk.dll not found", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MxcSdkVersion_MissingNativeLibrary_Fails()
+    {
+        using var output = new MxcRepositoryTestSupport.TestDirectory();
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", Path.Combine(output.Path, "missing.dll"));
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("MXC native library not found", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MxcSdkVersion_ManagedAssemblyVersionMismatch_Fails()
+    {
+        using var output = new MxcRepositoryTestSupport.TestDirectory();
+        File.Copy(
+            typeof(MxcSdkVersionTests).Assembly.Location,
+            Path.Combine(output.Path, "Microsoft.Mxc.Sdk.dll"));
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", MxcRepositoryTestSupport.FindBuiltMxcFile("mxc_ffi.dll"),
+            "-ManagedOutputPath", output.Path);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("does not match project version", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("", "reported an empty version")]
+    [InlineData("99.0.0", "does not match managed SDK version")]
+    public void MxcSdkVersion_InvalidNativeVersion_Fails(string nativeVersion, string expectedError)
+    {
+        using var output = new MxcRepositoryTestSupport.TestDirectory();
+        var nativeLibrary = MxcRepositoryTestSupport.BuildNativeVersionLibrary(output.Path, nativeVersion);
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcSdkVersion.ps1",
+            "-NativeLibraryPath", nativeLibrary);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(expectedError, result.StandardError, StringComparison.Ordinal);
+    }
 }
 
 [Collection(MxcIntegrationCollection.Name)]
 public sealed class MxcRuntimePayloadTests
 {
     [Fact]
-    public void MxcRuntimePayload_RequiredNativeUnit_IsPresent()
+    public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
-        using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
+        using var payload = new MxcRepositoryTestSupport.TestDirectory();
+        var publish = await MxcRepositoryTestSupport.InvokeAsync(
+            "dotnet",
+            "publish",
+            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+            "--nologo",
+            "/nodeReuse:false",
+            "-r",
+            "win-x64",
+            "-p:PublishReadyToRun=false",
+            "-o",
+            payload.Path);
+        Assert.True(
+            publish.ExitCode == 0,
+            $"Application publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
+
         var result = MxcRepositoryTestSupport.InvokePowerShell(
             "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
             "-PayloadDirectory", payload.Path,
@@ -112,6 +183,55 @@ public sealed class MxcRuntimePayloadTests
 
         Assert.True(result.ExitCode == 0, result.StandardError);
         Assert.Contains("runtime payload validation passed", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MxcRuntimePayload_UnsupportedRid_Fails()
+    {
+        using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-arm64");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("supports only win-x64", result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("mxc_ffi.dll")]
+    [InlineData("plm.exe")]
+    [InlineData("MXC-LICENSE.md")]
+    public void MxcRuntimePayload_MissingRequiredFile_Fails(string fileName)
+    {
+        using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
+        File.Delete(Path.Combine(payload.Path, "runtimes", "win-x64", "native", fileName));
+
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains($"expected '", result.StandardError, StringComparison.Ordinal);
+        Assert.Contains(fileName, result.StandardError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MxcRuntimePayload_AlteredLicense_Fails()
+    {
+        using var payload = MxcRepositoryTestSupport.CreateMxcPayload();
+        File.AppendAllText(
+            Path.Combine(payload.Path, "runtimes", "win-x64", "native", "MXC-LICENSE.md"),
+            $"{Environment.NewLine}altered");
+
+        var result = MxcRepositoryTestSupport.InvokePowerShell(
+            "packaging", "validate", "Assert-MxcRuntimePayload.ps1",
+            "-PayloadDirectory", payload.Path,
+            "-RuntimeIdentifier", "win-x64");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("unmodified upstream MIT license", result.StandardError, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -248,6 +368,37 @@ internal static class MxcRepositoryTestSupport
             Path.Combine(Root.FullName, "microsoft", "mxc", "LICENSE.md"),
             Path.Combine(nativeDirectory, "MXC-LICENSE.md"));
         return directory;
+    }
+
+    internal static string BuildNativeVersionLibrary(string outputDirectory, string version)
+    {
+        var sourcePath = Path.Combine(outputDirectory, "version.rs");
+        var libraryPath = Path.Combine(outputDirectory, "mxc_version_fixture.dll");
+        File.WriteAllText(
+            sourcePath,
+            $$"""
+            use std::ffi::c_char;
+
+            static VERSION: &[u8] = b"{{version}}\0";
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn mxc_version() -> *const c_char {
+                VERSION.as_ptr().cast()
+            }
+            """);
+        var result = Invoke(
+            "rustc",
+            "--crate-type",
+            "cdylib",
+            "--edition",
+            "2024",
+            sourcePath,
+            "-o",
+            libraryPath);
+        Assert.True(
+            result.ExitCode == 0,
+            $"Failed to build native-version fixture.\nSTDOUT:\n{result.StandardOutput}\nSTDERR:\n{result.StandardError}");
+        return libraryPath;
     }
 
     private static DirectoryInfo FindRepositoryRoot()

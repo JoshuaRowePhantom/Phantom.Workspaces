@@ -1,13 +1,21 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string] $NativeLibraryPath
+    [string] $NativeLibraryPath,
+    [string] $ManagedOutputPath
 )
 
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).ProviderPath
 $managedProject = Join-Path $repositoryRoot 'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\Microsoft.Mxc.Sdk.csproj'
-$managedOutput = Join-Path $repositoryRoot 'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\bin'
+$managedOutput = if ($ManagedOutputPath)
+{
+    $ManagedOutputPath
+}
+else
+{
+    Join-Path $repositoryRoot 'microsoft\mxc\sdk\dotnet\Microsoft.Mxc.Sdk\bin'
+}
 
 [xml] $project = Get-Content -LiteralPath $managedProject -Raw
 $managedVersion = ([string] $project.Project.PropertyGroup.Version).Trim()
