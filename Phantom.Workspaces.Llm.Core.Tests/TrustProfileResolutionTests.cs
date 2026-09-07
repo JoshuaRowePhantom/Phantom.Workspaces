@@ -58,6 +58,15 @@ public sealed class TrustProfileResolutionTests
     }
 
     [Fact]
+    public void Read_LegacyMountPoints_RejectsRemovedProperty()
+    {
+        var entity = JsonDocument.Parse(
+            """{ "mount-points": [] }""").RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
+    [Fact]
     public void Read_MissingOptionalFields_UsesRestrictiveDefaults()
     {
         var entity = JsonDocument.Parse("{ }").RootElement;
@@ -96,6 +105,25 @@ public sealed class TrustProfileResolutionTests
         Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
     }
 
+    [Theory]
+    [InlineData("""{ "filesystem-paths": {} }""")]
+    [InlineData("""{ "filesystem-paths": [null] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "access-mode": "read-only" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "", "access-mode": "read-only" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": 1, "access-mode": "read-only" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "/host", "target-path": "", "access-mode": "read-only" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "/host", "target-path": 1, "access-mode": "read-only" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "/host" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "/host", "access-mode": "" }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "/host", "access-mode": 1 }] }""")]
+    [InlineData("""{ "filesystem-paths": [{ "source-path": "/host", "access-mode": "execute" }] }""")]
+    public void Read_MalformedFilesystemPaths_RejectsProfile(string json)
+    {
+        var entity = JsonDocument.Parse(json).RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
     [Fact]
     public void Read_NetworkCapabilitiesAbsent_PreservesUnconstrainedState()
     {
@@ -122,6 +150,15 @@ public sealed class TrustProfileResolutionTests
         Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
     }
 
+    [Fact]
+    public void Read_NetworkCapabilitiesNotArray_RejectsProfile()
+    {
+        var entity = JsonDocument.Parse(
+            """{ "network-capabilities": "internetClient" }""").RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
+    }
+
     [Theory]
     [InlineData("""{ "network-capabilities": [""] }""")]
     [InlineData("""{ "network-capabilities": [null] }""")]
@@ -141,6 +178,14 @@ public sealed class TrustProfileResolutionTests
     }
 
     [Fact]
+    public void Read_DataSharingFull_PreservesSharedMode()
+    {
+        var parsed = TrustProfileEntityReader.Read(JsonDocument.Parse("""{ "data-sharing": "full" }""").RootElement);
+
+        Assert.Equal(TrustDataSharing.Full, parsed.Definition.DataSharing);
+    }
+
+    [Fact]
     public void Read_DataSharingRegime_ParsesRegimeName()
     {
         var parsed = TrustProfileEntityReader.Read(
@@ -155,6 +200,24 @@ public sealed class TrustProfileResolutionTests
         var parsed = TrustProfileEntityReader.Read(JsonDocument.Parse("""{ "data-sharing": "none" }""").RootElement);
 
         Assert.Equal(TrustDataSharing.None, parsed.Definition.DataSharing);
+    }
+
+    [Theory]
+    [InlineData("""{ "data-sharing": "invalid" }""")]
+    [InlineData("""{ "data-sharing": null }""")]
+    [InlineData("""{ "data-sharing": [] }""")]
+    [InlineData("""{ "data-sharing": 1 }""")]
+    [InlineData("""{ "data-sharing": true }""")]
+    [InlineData("""{ "data-sharing": {} }""")]
+    [InlineData("""{ "data-sharing": { "other": "sandbox" } }""")]
+    [InlineData("""{ "data-sharing": { "regime": "sandbox", "extra": true } }""")]
+    [InlineData("""{ "data-sharing": { "regime": null } }""")]
+    [InlineData("""{ "data-sharing": { "regime": "" } }""")]
+    public void Read_InvalidDataSharing_RejectsProfile(string json)
+    {
+        var entity = JsonDocument.Parse(json).RootElement;
+
+        Assert.Throws<InvalidOperationException>(() => TrustProfileEntityReader.Read(entity));
     }
 
     [Fact]

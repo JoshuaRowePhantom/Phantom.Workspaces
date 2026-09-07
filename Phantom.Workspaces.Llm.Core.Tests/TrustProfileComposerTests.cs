@@ -416,4 +416,17 @@ public sealed class TrustProfileComposerTests
                 new TrustProfileDefinition { DataSharing = TrustDataSharing.Regime("sandbox") },
                 TrustInheritanceMode.Permissive).DataSharing);
     }
+
+    [Theory]
+    [InlineData(TrustInheritanceMode.Restrictive)]
+    [InlineData(TrustInheritanceMode.Permissive)]
+    public void Merge_DataSharingEqualRank_UsesLaterRegime(TrustInheritanceMode mode)
+    {
+        var merged = TrustProfileComposer.Merge(
+            new TrustProfileDefinition { DataSharing = TrustDataSharing.Regime("earlier") },
+            new TrustProfileDefinition { DataSharing = TrustDataSharing.Regime("later") },
+            mode);
+
+        Assert.Equal(TrustDataSharing.Regime("later"), merged.DataSharing);
+    }
 }
