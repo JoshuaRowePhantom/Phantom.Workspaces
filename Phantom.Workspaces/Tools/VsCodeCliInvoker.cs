@@ -35,15 +35,18 @@ public sealed class VsCodeCliInvoker
     private const int NotificationOutputCap = 4096;
 
     private readonly INotificationService? notificationService;
+    private readonly string? workspaceId;
     private readonly ILogger logger;
     private readonly Func<RunProcessParameters, CancellationToken, Task<ProcessResult>> processRunner;
 
     public VsCodeCliInvoker(
         INotificationService? notificationService = null,
+        string? workspaceId = null,
         ILogger? logger = null,
         Func<RunProcessParameters, CancellationToken, Task<ProcessResult>>? processRunner = null)
     {
         this.notificationService = notificationService;
+        this.workspaceId = workspaceId;
         this.logger = logger ?? NullLogger.Instance;
         this.processRunner = processRunner ?? ((p, ct) => ProcessRunner.RunProcessAsync(p, ct));
     }
@@ -177,6 +180,7 @@ public sealed class VsCodeCliInvoker
             {
                 TabId = $"vscode-cli:{operationDescription}",
                 TabTitle = "VS Code",
+                WorkspaceId = this.workspaceId,
             },
             heading,
             description,

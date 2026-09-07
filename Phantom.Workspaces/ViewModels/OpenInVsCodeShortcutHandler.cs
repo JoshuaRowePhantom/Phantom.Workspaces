@@ -149,6 +149,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
                     {
                         TabId = $"vscode-cli:{path}",
                         TabTitle = "VS Code",
+                        WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
                     },
                     "VS Code CLI not found",
                     "VS Code CLI ('code') was not found on PATH. Install VS Code and ensure 'code' is on your PATH.",
@@ -160,6 +161,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
 
         var invoker = new VsCodeCliInvoker(
             notificationService: mainWindowViewModel.NotificationService,
+            workspaceId: mainWindowViewModel.SelectedWorkspacePane?.Id,
             logger: this.logger,
             processRunner: this.processRunner);
 
@@ -229,6 +231,7 @@ public sealed class OpenInVsCodeShortcutHandler : ShortcutHandler
                     {
                         TabId = $"vscode-cli:remote:{tunnelName}",
                         TabTitle = "VS Code",
+                        WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
                     },
                     "VS Code remote launch failed",
                     $"Could not open '{url}': {ex.Message}",

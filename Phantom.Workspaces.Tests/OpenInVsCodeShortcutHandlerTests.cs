@@ -200,9 +200,10 @@ public sealed class OpenInVsCodeShortcutHandlerTests
         var handled = await handler.Handle(viewModel, Shortcut.VsCode, entityViewModel);
 
         Assert.False(handled);
-        Assert.Contains(viewModel.NotificationService.Notifications, notification =>
+        var notification = Assert.Single(viewModel.NotificationService.Notifications, notification =>
             notification.Heading.Contains("VS Code CLI", StringComparison.Ordinal)
             && notification.Description.Contains("code", StringComparison.Ordinal));
+        Assert.Equal(viewModel.SelectedWorkspacePane.Id, notification.TabDescriptor.WorkspaceId);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

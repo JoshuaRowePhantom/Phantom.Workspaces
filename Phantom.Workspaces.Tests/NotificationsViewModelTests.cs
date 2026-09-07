@@ -561,6 +561,7 @@ public sealed class NotificationsViewModelTests
         var call = Assert.Single(navigator.Calls);
         Assert.Equal("tab-1", call.Target.Path?.TabId);
         Assert.True(call.Options.PushHistory);
+        Assert.True(call.Options.MarkNotificationRead);
         Assert.True(call.Options.FocusWindow);
     }
 

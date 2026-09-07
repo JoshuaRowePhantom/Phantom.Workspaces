@@ -487,7 +487,7 @@ public sealed class MainWindowViewModelTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
-    public async Task NavigateToNotificationTab_WhenWorkspaceIdNonGuid_MaterializesOwningPane()
+    public async Task NavigateNextNotificationCommand_WhenWorkspaceIdNonGuid_MaterializesOwningPaneAndActivatesTab()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
         await viewModel.InitializeAsync();
@@ -495,13 +495,23 @@ public sealed class MainWindowViewModelTests
         var tab = new WebViewModel("https://non-guid.example.com") { Id = "non-guid-tab", Title = "Non GUID" };
         pane.Tabs.Add(tab);
         pane.ContentLayout = null;
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = tab.Id, WorkspaceId = pane.Id },
+            "Non-GUID tab",
+            "test notification",
+            DateTime.UtcNow,
+            RunningState.Idle,
+            NotificationState.Interesting));
 
-        var result = await viewModel.ActivateTabByRequestAsync(
-            new NavigationRequest(new UiPath(pane.Id, tab.Id)));
+        viewModel.NavigateNextNotificationCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
 
-        Assert.True(result);
         Assert.NotNull(pane.ContentLayout);
         Assert.Same(pane, viewModel.SelectedWorkspacePane);
+        Assert.Equal(tab.Id, (MainWindowIntegrationTests.FindDocumentDockIn(pane.ContentLayout!)!.ActiveDockable as WorkspaceDocument)?.Id);
+        Assert.True(Assert.Single(
+            viewModel.NotificationService.Notifications,
+            entry => entry.TabKey == tab.Id).IsRead);
     }
 
     [AvaloniaFact]

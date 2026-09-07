@@ -82,6 +82,7 @@ public sealed class VsCodeCliInvokerTests
         var notifier = new RecordingNotificationService();
         var invoker = new VsCodeCliInvoker(
             notificationService: notifier,
+            workspaceId: "workspace-1460",
             logger: logger,
             processRunner: (_, _) => Task.FromResult(new ProcessResult(3, "captured-stdout", "captured-stderr", "captured-stdout\ncaptured-stderr")));
 
@@ -95,6 +96,7 @@ public sealed class VsCodeCliInvokerTests
         Assert.Contains("captured-stdout", notifier.Calls[0].Description);
         Assert.Contains("captured-stderr", notifier.Calls[0].Description);
         Assert.Contains("3", notifier.Calls[0].Heading);
+        Assert.Equal("workspace-1460", notifier.Calls[0].TabDescriptor.WorkspaceId);
     }
 
     [Fact]

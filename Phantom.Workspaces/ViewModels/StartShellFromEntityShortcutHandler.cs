@@ -94,6 +94,7 @@ public sealed class StartShellFromEntityShortcutHandler : ShortcutHandler
                 {
                     TabId = $"shell-start:{entityViewModel.EntityId}",
                     TabTitle = "Start Shell",
+                    WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
                 },
                 "Could not start shell",
                 $"Could not start shell on {targetClientInstance}: {exception.Message}",

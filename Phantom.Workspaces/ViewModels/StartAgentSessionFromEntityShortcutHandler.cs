@@ -155,6 +155,7 @@ public sealed class StartAgentSessionFromEntityShortcutHandler : ShortcutHandler
                     {
                         TabId = $"start-agent-session:{entityViewModel.EntityId}",
                         TabTitle = "Start Agent Session",
+                        WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
                     },
                     "Could not resolve default agent manifest",
                     $"Default manifest lookup failed for {entityViewModel.DisplayName}: {ex.Message}",

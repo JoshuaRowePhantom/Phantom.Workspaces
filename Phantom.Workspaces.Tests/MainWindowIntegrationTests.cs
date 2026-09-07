@@ -3758,6 +3758,62 @@ public sealed class MainWindowIntegrationTests
         Assert.Equal(AgentTabState.Ready, agentTab.State);
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task TabNavigator_NavigateAsync_WhenTabInFloatingWindow_RaisesActualHostWindow()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+        var mainWindow = new MainWindow(viewModel);
+        mainWindow.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        try
+        {
+            var pane = viewModel.SelectedWorkspacePane;
+            var tab = new WebViewModel("https://floating-navigation.example.com")
+            {
+                Id = "floating-navigation-tab",
+                Title = "Floating Navigation",
+            };
+            await viewModel.OpenTabAsync(tab);
+
+            var dockFactory = GetDockFactoryAs<WorkspaceDockFactory>(viewModel);
+            var document = pane.GetDocumentForTab(tab.Id);
+            Assert.NotNull(document);
+
+            dockFactory.FloatDockable(document!);
+            Dispatcher.UIThread.RunJobs();
+
+            var floatingWindow = dockFactory.DockControls
+                .OfType<DockControl>()
+                .Select(TopLevel.GetTopLevel)
+                .OfType<Window>()
+                .Single(window => !ReferenceEquals(window, mainWindow));
+            Window? activatedWindow = null;
+            viewModel.WireWindowActivation(window => activatedWindow = window);
+
+            var navigated = await viewModel.NavigateToNotificationTabAsync(tab.Id);
+
+            Assert.True(navigated);
+            Assert.Same(floatingWindow, activatedWindow);
+        }
+        finally
+        {
+            foreach (var floatingWindow in GetDockFactoryAs<WorkspaceDockFactory>(viewModel).DockControls
+                         .OfType<DockControl>()
+                         .Select(TopLevel.GetTopLevel)
+                         .OfType<Window>()
+                         .Where(window => !ReferenceEquals(window, mainWindow))
+                         .Distinct()
+                         .ToArray())
+            {
+                floatingWindow.Close();
+            }
+
+            mainWindow.Close();
+        }
+    }
+
     // ── #1196: Floating-host tab-header indicator tests removed ─────────────
     //
     // The former FloatingHostWindow_* tests + AssertFloatingHostWindowIndicatorAsync
@@ -7722,6 +7778,29 @@ public sealed class MainWindowIntegrationTests
     }
 
     [AvaloniaFact(Timeout = 15_000)]
+    public async Task NavigateNextNotificationCommand_WhenNavigationFails_DoesNotMarkNotificationRead()
+    {
+        await using var viewModel = CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        viewModel.NotificationService.Notify(new Notification(
+            new TabDescriptor { TabId = "missing-notification-tab" },
+            "Missing tab",
+            "test notification",
+            DateTime.UtcNow,
+            RunningState.Idle,
+            NotificationState.Interesting));
+
+        viewModel.NavigateNextNotificationCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
+
+        var notification = Assert.Single(
+            viewModel.NotificationService.Notifications,
+            entry => entry.TabKey == "missing-notification-tab");
+        Assert.False(notification.IsRead);
+    }
+
+    [AvaloniaFact(Timeout = 15_000)]
     public async Task NavigateNextNotificationCommand_WhenTabIsInNonSelectedPane_SwitchesWorkspacePane()
     {
         await using var viewModel = CreateTestMainWindowViewModel();
@@ -7766,6 +7845,8 @@ public sealed class MainWindowIntegrationTests
         viewModel.SelectedWorkspacePane = paneB;
         var tabInPaneB = new AgentSessionWorkspaceTabViewModel { Id = "notif-cross-pane-tab", Title = "Tab in Pane B" };
         await viewModel.OpenTabAsync(tabInPaneB);
+        var otherTabInPaneB = new AgentSessionWorkspaceTabViewModel { Id = "notif-cross-pane-other-tab", Title = "Other Tab in Pane B" };
+        await viewModel.OpenTabAsync(otherTabInPaneB);
 
         // Switch back to pane A so the notification for tabInPaneB will be unread
         var paneA = viewModel.WorkspacePanes.First(p => !string.Equals(p.Id, workspaceBId.ToString(), StringComparison.Ordinal));
@@ -7776,8 +7857,13 @@ public sealed class MainWindowIntegrationTests
             "Tab in Pane B", "test notification", DateTime.UtcNow, RunningState.Idle, NotificationState.Interesting));
 
         viewModel.NavigateNextNotificationCommand.Execute(null);
+        await Dispatcher.UIThread.InvokeAsync(() => { });
 
         Assert.Same(paneB, viewModel.SelectedWorkspacePane);
+        Assert.Equal("notif-cross-pane-tab", (GetDocumentDock(viewModel)!.ActiveDockable as WorkspaceDocument)?.Id);
+        Assert.True(Assert.Single(
+            viewModel.NotificationService.Notifications,
+            entry => entry.TabKey == "notif-cross-pane-tab").IsRead);
     }
 
     [AvaloniaFact(Timeout = 15_000)]

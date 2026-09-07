@@ -101,6 +101,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     private bool navigatingViaHistory;
     private ITabNavigator tabNavigator = null!;
     private Action? focusWindowAction;
+    private Action<Window> activateWindowAction = static window => window.Activate();
     private NavigationStackPopupViewModel? navStackPopup;
     private readonly Dictionary<string, bool> expandedEntityIds = new(StringComparer.Ordinal);
     private readonly List<RunningAgentChatLease> autoResumeLeases = [];
@@ -4412,7 +4413,12 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             ?.Id;
         return await this.tabNavigator.NavigateAsync(
             new NavigationTarget { Path = UiPath.ForTab(workspacePaneId, tabId) },
-            new NavigationOptions { PushHistory = true, FocusWindow = true });
+            new NavigationOptions
+            {
+                PushHistory = true,
+                MarkNotificationRead = true,
+                FocusWindow = true,
+            });
     }
 
     internal Task<bool> NavigateToTabAsync(UiPath path, bool openEntityIfNoTab = false) =>
@@ -4428,6 +4434,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
     public void WireWindowFocus(Action focusWindow)
     {
         this.focusWindowAction = focusWindow;
+    }
+
+    internal void WireWindowActivation(Action<Window> activateWindow)
+    {
+        this.activateWindowAction = activateWindow;
     }
 
     /// <summary>
@@ -4502,7 +4513,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
 
                     if (TopLevel.GetTopLevel(dockControl) is Window window)
                     {
-                        window.Activate();
+                        this.activateWindowAction(window);
                         return;
                     }
                 }

@@ -114,6 +114,7 @@ public sealed class OpenInVsCodeWebShortcutHandler : ShortcutHandler
                 {
                     TabId = $"vscode-web:{entityViewModel.EntityId}",
                     TabTitle = "VS Code Web",
+                    WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
                 },
                 "VS Code Web tunnel not configured",
                 "No vscode-tunnel entity with a tunnel-url was found for this entity's owning profile.",

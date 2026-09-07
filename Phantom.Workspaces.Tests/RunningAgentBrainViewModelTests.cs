@@ -243,6 +243,7 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.Equal("pane-xyz", call.Target.Path?.WorkspaceId);
         Assert.Equal("session-abc", call.Target.AgentSessionKey);
         Assert.True(call.Options.OpenEntityIfNoTab);
+        Assert.True(call.Options.FocusWindow);
     }
 
     [Fact]
@@ -341,6 +342,7 @@ public sealed class RunningAgentBrainViewModelTests
         Assert.Null(call.Target.Path?.TabId);
         Assert.Equal("session-orphan", call.Target.AgentSessionKey);
         Assert.True(call.Options.OpenEntityIfNoTab);
+        Assert.True(call.Options.FocusWindow);
     }
 
     [Fact]
