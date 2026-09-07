@@ -239,6 +239,24 @@ Paths are relative to the Phantom.Workspaces repository. **Existing** means pres
 Public visibility is used only where a type crosses an existing project boundary. Protocol
 implementation records remain internal.
 
+### API shape convention
+
+- Every method and constructor in this design is audited for call-site clarity. A method with four or
+  more independent arguments (including similarly typed identifiers), or any method whose positional
+  arguments are easy to transpose, takes one property-based `*Request` or `*Options` value plus an
+  optional `CancellationToken`. Small cohesive operations remain direct, for example
+  `ConnectAsync(AgentSessionOpenRequest request, CancellationToken ct = default)`.
+- Request/options and data records use object initializers. Semantically required members are
+  `required init`; optional members have explicit defaults. Constructors are reserved for enforcing a
+  scalar value invariant or receiving a small cohesive set of services.
+- Protocol DTOs are property-based records with `required init` payload members. Their fixed `Type`
+  discriminator is initialized by the concrete DTO and is not caller-selectable. This changes only
+  the C# construction shape: version-1 kebab-case JSON names, required/optional wire members,
+  discriminators, strict unknown-member rejection, and semantics remain unchanged.
+- Existing framework/base-class overrides retain their inherited signatures. APIs consumed unchanged
+  from #1474-#1477 retain the signatures owned and tested by those designs. Neither case introduces a
+  new positional API in this design.
+
 ### Classes and interfaces
 
 #### `IAgentChat` - New
@@ -280,33 +298,40 @@ public interface IAgentChat : IAsyncDisposable, IServiceProvider
 ```
 
 The two state values are **New public readonly record structs** in
-`Phantom.Workspaces.Llm.Core/IAgentChat.cs`, with exactly these public names and positional fields:
+`Phantom.Workspaces.Llm.Core/IAgentChat.cs`, with exactly these public names, fields, types, and
+semantics:
 
 ```csharp
-public readonly record struct Usage(
-    long? TotalInputTokenCount,
-    long? TotalOutputTokenCount,
-    long? TotalCacheReadTokenCount,
-    long? TotalCacheWriteTokenCount,
-    long? TotalReasoningTokenCount,
-    double? TotalSessionCostUsd);
+public readonly record struct Usage
+{
+    public Usage() { }
+    public long? TotalInputTokenCount { get; init; } = null;
+    public long? TotalOutputTokenCount { get; init; } = null;
+    public long? TotalCacheReadTokenCount { get; init; } = null;
+    public long? TotalCacheWriteTokenCount { get; init; } = null;
+    public long? TotalReasoningTokenCount { get; init; } = null;
+    public double? TotalSessionCostUsd { get; init; } = null;
+}
 
-public readonly record struct AgentInformation(
-    string AgentSessionId,
-    string AgentId,
-    string Name,
-    string DisplayName,
-    string Description,
-    bool AcceptsUserInput,
-    string? CurrentModelId,
-    AgentDefinition AgentDefinition);
+public readonly record struct AgentInformation
+{
+    public AgentInformation() { }
+    public required string AgentSessionId { get; init; }
+    public required string AgentId { get; init; }
+    public required string Name { get; init; }
+    public required string DisplayName { get; init; }
+    public required string Description { get; init; }
+    public required bool AcceptsUserInput { get; init; }
+    public string? CurrentModelId { get; init; } = null;
+    public required AgentDefinition AgentDefinition { get; init; }
+}
 ```
 
 `Usage` permits null for a metric the provider did not report; counts must otherwise be nonnegative
 and cost remains a nonnegative `double` measured in USD. `AgentInformation` requires non-null,
 nonblank values for its first five strings and a non-null complete `AgentDefinition`;
-`CurrentModelId` is null or nonblank. Because positional record structs cannot enforce this in
-generated setters, local publishers and the protocol codec validate values before accepting,
+`CurrentModelId` is null or nonblank. Required members provide compile-time construction checks;
+local publishers and the protocol codec validate value invariants before accepting,
 serializing, or publishing them. Local implementations build a complete replacement value before
 publishing it. Proxy implementations deserialize and validate a complete replacement value before
 one foreground assignment. `UsageChanged` and `InformationChanged` are raised only after that atomic
@@ -348,26 +373,19 @@ public interface IAgentInputQueues
     event EventHandler? Changed;
 
     Task<AgentInputQueueCommandResult> CreateQueueAsync(
-        AgentInputQueueConfiguration configuration, Guid commandId,
-        long expectedRevision, CancellationToken ct = default);
+        CreateAgentInputQueueRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> DeleteQueueAsync(
-        string queueId, Guid commandId, long expectedRevision,
-        CancellationToken ct = default);
+        DeleteAgentInputQueueRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> EnqueueAsync(
-        string targetQueueId, IReadOnlyList<ChatMessage> messages,
-        Guid commandId, long expectedRevision, CancellationToken ct = default);
+        EnqueueAgentInputRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> EditAsync(
-        string queueId, string itemId, IReadOnlyList<ChatMessage> messages,
-        Guid commandId, long expectedRevision, CancellationToken ct = default);
+        EditAgentInputQueueItemRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> RemoveAsync(
-        string queueId, string itemId, Guid commandId, long expectedRevision,
-        CancellationToken ct = default);
+        RemoveAgentInputQueueItemRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> MoveAsync(
-        string sourceQueueId, string itemId, string targetQueueId, string? beforeItemId,
-        Guid commandId, long expectedRevision, CancellationToken ct = default);
+        MoveAgentInputQueueItemRequest request, CancellationToken ct = default);
     Task<AgentInputQueueCommandResult> ConfigureAsync(
-        string queueId, AgentInputQueueConfiguration configuration,
-        Guid commandId, long expectedRevision, CancellationToken ct = default);
+        ConfigureAgentInputQueueRequest request, CancellationToken ct = default);
 }
 
 public interface IAgentInputQueue
@@ -376,30 +394,40 @@ public interface IAgentInputQueue
     event EventHandler? Changed;
 }
 
-public readonly record struct AgentInputQueuesSnapshot(
-    long Revision,
-    ImmutableArray<AgentInputQueueSnapshot> Queues);
+public readonly record struct AgentInputQueuesSnapshot
+{
+    public required long Revision { get; init; }
+    public required ImmutableArray<AgentInputQueueSnapshot> Queues { get; init; }
+}
 
-public readonly record struct AgentInputQueueSnapshot(
-    string QueueId,
-    string Name,
-    bool IsDefault,
-    bool IsImmediate,
-    AgentInputQueueImmediacy Immediacy,
-    int Priority,
-    string? CoalescingKey,
-    long Revision,
-    ImmutableArray<AgentInputItemSnapshot> Items);
+public readonly record struct AgentInputQueueSnapshot
+{
+    public AgentInputQueueSnapshot() { }
+    public required string QueueId { get; init; }
+    public required string Name { get; init; }
+    public required bool IsDefault { get; init; }
+    public required bool IsImmediate { get; init; }
+    public required AgentInputQueueImmediacy Immediacy { get; init; }
+    public required int Priority { get; init; }
+    public string? CoalescingKey { get; init; } = null;
+    public required long Revision { get; init; }
+    public required ImmutableArray<AgentInputItemSnapshot> Items { get; init; }
+}
 
-public readonly record struct AgentInputItemSnapshot(
-    string ItemId,
-    ImmutableArray<ChatMessage> Messages);
+public readonly record struct AgentInputItemSnapshot
+{
+    public required string ItemId { get; init; }
+    public required ImmutableArray<ChatMessage> Messages { get; init; }
+}
 
-public readonly record struct AgentInputQueueConfiguration(
-    string Name,
-    AgentInputQueueImmediacy Immediacy,
-    int Priority,
-    string? CoalescingKey);
+public readonly record struct AgentInputQueueConfiguration
+{
+    public AgentInputQueueConfiguration() { }
+    public required string Name { get; init; }
+    public required AgentInputQueueImmediacy Immediacy { get; init; }
+    public required int Priority { get; init; }
+    public string? CoalescingKey { get; init; } = null;
+}
 
 public enum AgentInputQueueCommandStatus
 {
@@ -409,14 +437,85 @@ public enum AgentInputQueueCommandStatus
     Rejected,
 }
 
-public readonly record struct AgentInputQueueCommandResult(
-    Guid CommandId,
-    AgentInputQueueCommandStatus Status,
-    string? QueueId,
-    string? ItemId,
-    long Revision,
-    string? ErrorCode,
-    AgentInputQueuesSnapshot? CurrentSnapshot);
+public readonly record struct AgentInputQueueCommandResult
+{
+    public AgentInputQueueCommandResult() { }
+    public required Guid CommandId { get; init; }
+    public required AgentInputQueueCommandStatus Status { get; init; }
+    public string? QueueId { get; init; } = null;
+    public string? ItemId { get; init; } = null;
+    public required long Revision { get; init; }
+    public string? ErrorCode { get; init; } = null;
+    public AgentInputQueuesSnapshot? CurrentSnapshot { get; init; } = null;
+}
+
+public sealed record CreateAgentInputQueueRequest
+{
+    public required AgentInputQueueConfiguration Configuration { get; init; }
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+public sealed record DeleteAgentInputQueueRequest
+{
+    public required string QueueId { get; init; }
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+public sealed record EnqueueAgentInputRequest
+{
+    public required string TargetQueueId { get; init; }
+    public required IReadOnlyList<ChatMessage> Messages { get; init; }
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+public sealed record EditAgentInputQueueItemRequest
+{
+    public required string QueueId { get; init; }
+    public required string ItemId { get; init; }
+    public required IReadOnlyList<ChatMessage> Messages { get; init; }
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+public sealed record RemoveAgentInputQueueItemRequest
+{
+    public required string QueueId { get; init; }
+    public required string ItemId { get; init; }
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+public sealed record MoveAgentInputQueueItemRequest
+{
+    public required string SourceQueueId { get; init; }
+    public required string ItemId { get; init; }
+    public required string TargetQueueId { get; init; }
+    public string? BeforeItemId { get; init; } = null;
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+public sealed record ConfigureAgentInputQueueRequest
+{
+    public required string QueueId { get; init; }
+    public required AgentInputQueueConfiguration Configuration { get; init; }
+    public required Guid CommandId { get; init; }
+    public required long ExpectedRevision { get; init; }
+}
+
+await queues.MoveAsync(
+    new MoveAgentInputQueueItemRequest
+    {
+        SourceQueueId = sourceQueueId,
+        ItemId = itemId,
+        TargetQueueId = targetQueueId,
+        CommandId = commandId,
+        ExpectedRevision = revision,
+    },
+    ct);
 ```
 
 `AgentInputQueue`, `AgentChatQueue`, `AgentInputQueueManager`, `AgentChatQueueManager`, and
@@ -424,7 +523,7 @@ public readonly record struct AgentInputQueueCommandResult(
 returned by the common interface. The implementation adds stable nonblank queue ids when default,
 immediate, or custom queues are created and stable nonblank item ids when items are enqueued. Record
 updates preserve item ids. Indexes may be calculated for display or placement, but commands identify
-items only by id. `beforeItemId == null` means append. `MoveAsync` supports reorder within one queue
+items only by id. `BeforeItemId == null` means append. `MoveAsync` supports reorder within one queue
 and movement between queues atomically.
 
 Snapshots are immutable point-in-time values. Their arrays and messages are deep copied through
@@ -472,21 +571,44 @@ converge without sharing collections or trusting a client mutation.
 namespace/file:
 
 ```csharp
-public sealed record AgentChatModal(
-    string Id, string OwnerAgentId, string Title, string Body,
-    AgentChatModalContent Content);
-public abstract record AgentChatModalContent(string Type);
-public sealed record FreeformModalContent(
-    string? Placeholder, bool IsRequired) : AgentChatModalContent("freeform");
-public sealed record MultipleChoiceModalContent(
-    IReadOnlyList<JsonElement> Options, bool AllowsMultiple)
-    : AgentChatModalContent("multiple-choice");
-public sealed record ApprovalModalContent(
-    string ApproveLabel, string RejectLabel)
-    : AgentChatModalContent("approval");
+public sealed record AgentChatModal
+{
+    public required string Id { get; init; }
+    public required string OwnerAgentId { get; init; }
+    public required string Title { get; init; }
+    public required string Body { get; init; }
+    public required AgentChatModalContent Content { get; init; }
+}
+
+public abstract record AgentChatModalContent
+{
+    public abstract string Type { get; }
+}
+
+public sealed record FreeformModalContent : AgentChatModalContent
+{
+    public override string Type => "freeform";
+    public string? Placeholder { get; init; } = null;
+    public required bool IsRequired { get; init; }
+}
+
+public sealed record MultipleChoiceModalContent : AgentChatModalContent
+{
+    public override string Type => "multiple-choice";
+    public required IReadOnlyList<JsonElement> Options { get; init; }
+    public required bool AllowsMultiple { get; init; }
+}
+
+public sealed record ApprovalModalContent : AgentChatModalContent
+{
+    public override string Type => "approval";
+    public required string ApproveLabel { get; init; }
+    public required string RejectLabel { get; init; }
+}
 ```
 
-Constructors reject blank ids/owner/title/body/type and invalid or duplicate options/labels, and
+Initializer validation rejects blank ids/owner/title/body/type and invalid or duplicate
+options/labels, and
 clone option elements. The strict discriminator permits new modal content records in later protocol
 versions without changing the modal envelope. All getters return the latest
 foreground-applied state and never cross transport. `GetToolSnapshot`
@@ -538,13 +660,17 @@ succeeds and never reports steering as unsupported.
 
 ```csharp
 public static Task<RemoteAgentChat> AttachAsync(
-    RemoteAgentSessionClient client,
-    AgentSessionOpenRequest request,
-    TaskScheduler foregroundScheduler,
-    CancellationToken ct = default);
+    RemoteAgentChatAttachOptions options, CancellationToken ct = default);
 public Task DetachAsync(CancellationToken ct = default);
 public Task TerminateAsync(CancellationToken ct = default);
 // IAgentChat members have the exact signatures above.
+
+public sealed record RemoteAgentChatAttachOptions
+{
+    public required RemoteAgentSessionClient Client { get; init; }
+    public required AgentSessionOpenRequest OpenRequest { get; init; }
+    public required TaskScheduler ForegroundScheduler { get; init; }
+}
 ```
 
 `AttachAsync` validates arguments, waits for the first authoritative snapshot, then publishes the
@@ -569,45 +695,74 @@ public event EventHandler<AgentSessionServerFrame>? FrameReceived;
 public ReplayCursor? LastAppliedCursor { get; }
 public RemoteAgentSessionClient(ITransport transport);
 public static Task<AgentSessionRemoteStatus> GetStatusAsync(
-    ITransport transport, AgentSessionOpenRequest request,
-    CancellationToken ct = default);
+    AgentSessionStatusRequest request, CancellationToken ct = default);
 public Task ConnectAsync(AgentSessionOpenRequest request, CancellationToken ct = default);
 public Task ReconnectAsync(CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> CreateQueueAsync(
-    AgentInputQueueConfiguration configuration, Guid commandId,
-    long expectedRevision, CancellationToken ct = default);
+    CreateAgentInputQueueRequest request, CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> DeleteQueueAsync(
-    string queueId, Guid commandId, long expectedRevision, CancellationToken ct = default);
+    DeleteAgentInputQueueRequest request, CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> EnqueueAsync(
-    string targetQueueId, IReadOnlyList<ChatMessage> messages,
-    Guid commandId, long expectedRevision, CancellationToken ct = default);
+    EnqueueAgentInputRequest request, CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> EditAsync(
-    string queueId, string itemId, IReadOnlyList<ChatMessage> messages,
-    Guid commandId, long expectedRevision, CancellationToken ct = default);
+    EditAgentInputQueueItemRequest request, CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> RemoveAsync(
-    string queueId, string itemId, Guid commandId, long expectedRevision,
-    CancellationToken ct = default);
+    RemoveAgentInputQueueItemRequest request, CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> MoveAsync(
-    string sourceQueueId, string itemId, string targetQueueId, string? beforeItemId,
-    Guid commandId, long expectedRevision, CancellationToken ct = default);
+    MoveAgentInputQueueItemRequest request, CancellationToken ct = default);
 public Task<AgentInputQueueCommandResult> ConfigureAsync(
-    string queueId, AgentInputQueueConfiguration configuration,
-    Guid commandId, long expectedRevision, CancellationToken ct = default);
+    ConfigureAgentInputQueueRequest request, CancellationToken ct = default);
 public Task InterruptAsync(Guid commandId, CancellationToken ct = default);
 public Task TerminateAsync(
-    string reason, Guid commandId, CancellationToken ct = default);
+    TerminateAgentSessionRequest request, CancellationToken ct = default);
 public Task<RemoteSubagentDescriptor> OpenSubagentAsync(
-    string agentId, Guid commandId, CancellationToken ct = default);
+    OpenAgentSubagentRequest request, CancellationToken ct = default);
 public Task RespondToModalAsync(
-    string modalId, JsonElement response, Guid commandId,
-    CancellationToken ct = default);
+    RespondToAgentModalRequest request, CancellationToken ct = default);
 public Task SetToolEnabledAsync(
-    string toolId, bool enabled, Guid commandId,
-    CancellationToken ct = default);
+    SetAgentToolEnabledRequest request, CancellationToken ct = default);
 public Task SetContinueInBackgroundAsync(
-    bool continueInBackground, Guid commandId, CancellationToken ct = default);
+    SetAgentSessionRetentionRequest request, CancellationToken ct = default);
 public Task DetachAsync(CancellationToken ct = default);
 public ValueTask DisposeAsync();
+
+public sealed record AgentSessionStatusRequest
+{
+    public required ITransport Transport { get; init; }
+    public required AgentSessionOpenRequest OpenRequest { get; init; }
+}
+
+public sealed record TerminateAgentSessionRequest
+{
+    public required string Reason { get; init; }
+    public required Guid CommandId { get; init; }
+}
+
+public sealed record OpenAgentSubagentRequest
+{
+    public required string AgentId { get; init; }
+    public required Guid CommandId { get; init; }
+}
+
+public sealed record RespondToAgentModalRequest
+{
+    public required string ModalId { get; init; }
+    public required JsonElement Response { get; init; }
+    public required Guid CommandId { get; init; }
+}
+
+public sealed record SetAgentToolEnabledRequest
+{
+    public required string ToolId { get; init; }
+    public required bool Enabled { get; init; }
+    public required Guid CommandId { get; init; }
+}
+
+public sealed record SetAgentSessionRetentionRequest
+{
+    public required bool ContinueInBackground { get; init; }
+    public required Guid CommandId { get; init; }
+}
 ```
 
 `GetStatusAsync` requires `OpenIntent = Status`, borrows the transport, authorizes before lookup,
@@ -684,11 +839,13 @@ regardless of that policy.
   provider. Anonymous or ambiguous channels have no identity and fail closed.
 
 ```csharp
-public sealed record TransportPeerIdentity(
-    string AuthenticationScheme,
-    string StablePeerId,
-    string? UserEntityId,
-    string? UserComputerProfileEntityId);
+public sealed record TransportPeerIdentity
+{
+    public required string AuthenticationScheme { get; init; }
+    public required string StablePeerId { get; init; }
+    public string? UserEntityId { get; init; } = null;
+    public string? UserComputerProfileEntityId { get; init; } = null;
+}
 
 internal interface ITransportPeerIdentityProvider
 {
@@ -703,14 +860,19 @@ internal interface IAgentSessionAttachAuthorizer
         CancellationToken ct = default);
 }
 
-internal sealed record AgentSessionAuthorizationRequest(
-    string AgentSessionId,
-    string ExpectedOwningProfileEntityId,
-    long ExpectedOwnershipGeneration,
-    AgentSessionAuthorizationOperation Operation,
-    string? ChildAgentId);
+internal sealed record AgentSessionAuthorizationRequest
+{
+    public required string AgentSessionId { get; init; }
+    public required string ExpectedOwningProfileEntityId { get; init; }
+    public required long ExpectedOwnershipGeneration { get; init; }
+    public required AgentSessionAuthorizationOperation Operation { get; init; }
+    public string? ChildAgentId { get; init; } = null;
+}
 
-internal readonly record struct AgentSessionAuthorizationDecision(bool IsAllowed);
+internal readonly record struct AgentSessionAuthorizationDecision
+{
+    public required bool IsAllowed { get; init; }
+}
 internal enum AgentSessionAuthorizationOperation
 {
     Status, Open, Reconnect, Send, SetToolState, SetBackgroundPreference, Interrupt, Terminate, OpenSubagent,
@@ -758,15 +920,19 @@ internal Task<AgentSessionRemoteStatus> GetStatusAsync(
     AgentSessionOpenRequest request,
     CancellationToken ct = default);
 internal Task<RemoteAgentAttachmentLease> OpenAsync(
-    TransportPeerIdentity peer,
-    AgentSessionOpenRequest request,
-    IMessageChannel channel,
-    CancellationToken ct = default);
+    OpenAgentSessionHostRequest request, CancellationToken ct = default);
 internal Task TakeOverAsync(
     TransportPeerIdentity peer,
     AgentSessionTakeoverRequest request,
     CancellationToken ct = default);
 internal ValueTask DisposeAsync();
+
+internal sealed record OpenAgentSessionHostRequest
+{
+    public required TransportPeerIdentity Peer { get; init; }
+    public required AgentSessionOpenRequest OpenRequest { get; init; }
+    public required IMessageChannel Channel { get; init; }
+}
 ```
 
 `GetStatusAsync` accepts only `OpenIntent.Status`, authorizes before lookup, and exposes no other
@@ -811,11 +977,24 @@ internal interface IRemoteAgentSessionRuntimeRegistry
         Func<CancellationToken, Task<RemoteAgentSessionLease>> startAsync,
         CancellationToken ct = default);
     ValueTask<bool> TryTerminateAsync(
-        string sessionId, long ownershipGeneration, RuntimeEpoch epoch,
-        CancellationToken ct = default);
+        TerminateAgentSessionRuntimeRequest request, CancellationToken ct = default);
     ValueTask SetContinueInBackgroundAsync(
-        string sessionId, long ownershipGeneration, RuntimeEpoch epoch,
-        bool continueInBackground, CancellationToken ct = default);
+        UpdateAgentSessionRuntimeRetentionRequest request, CancellationToken ct = default);
+}
+
+internal sealed record TerminateAgentSessionRuntimeRequest
+{
+    public required string SessionId { get; init; }
+    public required long OwnershipGeneration { get; init; }
+    public required RuntimeEpoch Epoch { get; init; }
+}
+
+internal sealed record UpdateAgentSessionRuntimeRetentionRequest
+{
+    public required string SessionId { get; init; }
+    public required long OwnershipGeneration { get; init; }
+    public required RuntimeEpoch Epoch { get; init; }
+    public required bool ContinueInBackground { get; init; }
 }
 
 internal sealed class RemoteAgentSessionRuntimeRegistry
@@ -830,11 +1009,17 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     internal RuntimeEpoch Epoch { get; }
     internal IAgentChat Chat { get; }
     internal AgentSessionReplayBuffer Replay { get; }
-    internal RemoteAgentAttachmentLease Attach(
-        string attachmentToken, IMessageChannel channel, ReplayCursor? cursor);
+    internal RemoteAgentAttachmentLease Attach(AttachRemoteAgentSessionRequest request);
     internal ValueTask SetContinueInBackgroundAsync(
         bool continueInBackground, CancellationToken ct = default);
     public ValueTask DisposeAsync();
+}
+
+internal sealed record AttachRemoteAgentSessionRequest
+{
+    public required string AttachmentToken { get; init; }
+    public required IMessageChannel Channel { get; init; }
+    public ReplayCursor? Cursor { get; init; } = null;
 }
 
 internal sealed class RemoteAgentAttachmentLease : IAsyncDisposable
@@ -853,8 +1038,11 @@ internal sealed class AgentSessionReplayBuffer
     internal ReplayReadResult ReadAfter(ReplayCursor cursor);
 }
 
-internal readonly record struct ReplayReadResult(
-    bool IsCovered, IReadOnlyList<AgentSessionServerFrame> Frames);
+internal readonly record struct ReplayReadResult
+{
+    public required bool IsCovered { get; init; }
+    public required IReadOnlyList<AgentSessionServerFrame> Frames { get; init; }
+}
 ```
 
 `GetOrStartAsync` is single-flight and returns the existing matching lease; a failed/cancelled factory
@@ -894,141 +1082,336 @@ the runtime's serialized scheduler, preventing snapshot/delta gaps.
   `AgentSessionProtocolCodec` are internal.
 
 ```csharp
-public readonly record struct RuntimeEpoch(Guid Value);
-public readonly record struct ReplayCursor(RuntimeEpoch Epoch, long Sequence);
+public readonly record struct RuntimeEpoch
+{
+    public required Guid Value { get; init; }
+}
+
+public readonly record struct ReplayCursor
+{
+    public required RuntimeEpoch Epoch { get; init; }
+    public required long Sequence { get; init; }
+}
+
 public enum AgentSessionOpenIntent { Status, Start, Attach, StartOrAttach, Resume }
 public enum AgentSessionRemoteStatus { Running, NotRunning, Unavailable }
 
-public sealed record AgentSessionOpenRequest(
-    int ProtocolVersion,
-    string AgentSessionId,
-    string ExpectedOwningProfileEntityId,
-    long ExpectedOwnershipGeneration,
-    AgentSessionOpenIntent OpenIntent,
-    string AttachmentToken,
-    ReplayCursor? ReplayCursor,
-    IReadOnlyList<string> Capabilities);
+public sealed record AgentSessionOpenRequest
+{
+    public required int ProtocolVersion { get; init; }
+    public required string AgentSessionId { get; init; }
+    public required string ExpectedOwningProfileEntityId { get; init; }
+    public required long ExpectedOwnershipGeneration { get; init; }
+    public required AgentSessionOpenIntent OpenIntent { get; init; }
+    public required string AttachmentToken { get; init; }
+    public ReplayCursor? ReplayCursor { get; init; } = null;
+    public required IReadOnlyList<string> Capabilities { get; init; }
+}
 
-internal abstract record AgentSessionCommand(
-    string Type, Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch);
+internal abstract record AgentSessionCommand
+{
+    public abstract string Type { get; }
+    public required Guid CommandId { get; init; }
+    public required Guid CorrelationId { get; init; }
+    public required RuntimeEpoch RuntimeEpoch { get; init; }
+}
 
-public sealed record RemoteSubagentDescriptor(
-    string AgentSessionId,
-    string AgentId,
-    string OwningProfileEntityId,
-    long OwnershipGeneration,
-    RuntimeEpoch RuntimeEpoch);
+public sealed record RemoteSubagentDescriptor
+{
+    public required string AgentSessionId { get; init; }
+    public required string AgentId { get; init; }
+    public required string OwningProfileEntityId { get; init; }
+    public required long OwnershipGeneration { get; init; }
+    public required RuntimeEpoch RuntimeEpoch { get; init; }
+}
 
-public sealed record AgentSessionServerFrame(
-    int ProtocolVersion,
-    string Type,
-    Guid CorrelationId,
-    RuntimeEpoch RuntimeEpoch,
-    long Sequence,
-    JsonElement Payload);
+public sealed record AgentSessionServerFrame
+{
+    public required int ProtocolVersion { get; init; }
+    public string Type { get; internal init; } = null!;
+    public required Guid CorrelationId { get; init; }
+    public required RuntimeEpoch RuntimeEpoch { get; init; }
+    public required long Sequence { get; init; }
+    public required JsonElement Payload { get; init; }
+}
 
-internal abstract record AgentSessionServerEvent(string Type, JsonElement Payload);
-internal sealed record SessionStatusEvent(AgentSessionRemoteStatus Status);
-internal sealed record AgentSessionTakeoverRequest(
-    string AgentSessionId,
-    string ExpectedOwningProfileEntityId,
-    long ExpectedOwnershipGeneration,
-    string NewOwningProfileEntityId,
-    Guid CorrelationId);
+internal abstract record AgentSessionServerEvent
+{
+    public abstract string Type { get; }
+}
+
+internal sealed record SessionStatusEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-status";
+    public required AgentSessionRemoteStatus Status { get; init; }
+}
+
+internal sealed record AgentSessionTakeoverRequest
+{
+    public required string AgentSessionId { get; init; }
+    public required string ExpectedOwningProfileEntityId { get; init; }
+    public required long ExpectedOwnershipGeneration { get; init; }
+    public required string NewOwningProfileEntityId { get; init; }
+    public required Guid CorrelationId { get; init; }
+}
+
+var openRequest = new AgentSessionOpenRequest
+{
+    ProtocolVersion = 1,
+    AgentSessionId = agentSessionId,
+    ExpectedOwningProfileEntityId = owningProfileEntityId,
+    ExpectedOwnershipGeneration = ownershipGeneration,
+    OpenIntent = AgentSessionOpenIntent.Attach,
+    AttachmentToken = attachmentToken,
+    Capabilities = capabilities,
+};
 ```
+
+`AgentSessionServerFrame.Type` is a required wire member but deliberately not a public initializer:
+the internal codec derives it from the concrete `AgentSessionServerEvent.Type` on serialization and
+sets it only after recognizing a supported discriminator on deserialization. It is therefore fixed
+like each concrete command/event discriminator rather than caller-selectable. Encoding rejects any
+frame whose internally assigned type is null, blank, or not the recognized event discriminator.
 
 The strict version-1 command records are:
 
 ```csharp
-internal sealed record CreateQueueCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, AgentInputQueueConfiguration Configuration);
-internal sealed record DeleteQueueCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, string QueueId);
-internal sealed record EnqueueInputCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, string TargetQueueId, JsonElement Messages);
-internal sealed record EditQueueItemCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, string QueueId, string ItemId, JsonElement Messages);
-internal sealed record RemoveQueueItemCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, string QueueId, string ItemId);
-internal sealed record MoveQueueItemCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, string SourceQueueId, string ItemId,
-    string TargetQueueId, string? BeforeItemId);
-internal sealed record ConfigureQueueCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    long ExpectedRevision, string QueueId,
-    AgentInputQueueConfiguration Configuration);
-internal sealed record InterruptCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch);
-internal sealed record TerminateSessionCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch, string Reason);
-internal sealed record OpenSubagentCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch, string AgentId);
-internal sealed record ModalResponseCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    string ModalId, JsonElement Response);
-internal sealed record SetToolEnabledCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    string ToolId, bool Enabled);
-internal sealed record SetContinueInBackgroundCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch,
-    bool ContinueInBackground);
-internal sealed record DetachCommand(
-    Guid CommandId, Guid CorrelationId, RuntimeEpoch RuntimeEpoch);
+internal sealed record CreateQueueCommand : AgentSessionCommand
+{
+    public override string Type => "create-queue";
+    public required long ExpectedRevision { get; init; }
+    public required AgentInputQueueConfiguration Configuration { get; init; }
+}
+
+internal sealed record DeleteQueueCommand : AgentSessionCommand
+{
+    public override string Type => "delete-queue";
+    public required long ExpectedRevision { get; init; }
+    public required string QueueId { get; init; }
+}
+
+internal sealed record EnqueueInputCommand : AgentSessionCommand
+{
+    public override string Type => "enqueue-input";
+    public required long ExpectedRevision { get; init; }
+    public required string TargetQueueId { get; init; }
+    public required JsonElement Messages { get; init; }
+}
+
+internal sealed record EditQueueItemCommand : AgentSessionCommand
+{
+    public override string Type => "edit-queue-item";
+    public required long ExpectedRevision { get; init; }
+    public required string QueueId { get; init; }
+    public required string ItemId { get; init; }
+    public required JsonElement Messages { get; init; }
+}
+
+internal sealed record RemoveQueueItemCommand : AgentSessionCommand
+{
+    public override string Type => "remove-queue-item";
+    public required long ExpectedRevision { get; init; }
+    public required string QueueId { get; init; }
+    public required string ItemId { get; init; }
+}
+
+internal sealed record MoveQueueItemCommand : AgentSessionCommand
+{
+    public override string Type => "move-queue-item";
+    public required long ExpectedRevision { get; init; }
+    public required string SourceQueueId { get; init; }
+    public required string ItemId { get; init; }
+    public required string TargetQueueId { get; init; }
+    public string? BeforeItemId { get; init; } = null;
+}
+
+internal sealed record ConfigureQueueCommand : AgentSessionCommand
+{
+    public override string Type => "configure-queue";
+    public required long ExpectedRevision { get; init; }
+    public required string QueueId { get; init; }
+    public required AgentInputQueueConfiguration Configuration { get; init; }
+}
+
+internal sealed record InterruptCommand : AgentSessionCommand
+{
+    public override string Type => "interrupt";
+}
+
+internal sealed record TerminateSessionCommand : AgentSessionCommand
+{
+    public override string Type => "terminate-session";
+    public required string Reason { get; init; }
+}
+
+internal sealed record OpenSubagentCommand : AgentSessionCommand
+{
+    public override string Type => "open-subagent";
+    public required string AgentId { get; init; }
+}
+
+internal sealed record ModalResponseCommand : AgentSessionCommand
+{
+    public override string Type => "modal-response";
+    public required string ModalId { get; init; }
+    public required JsonElement Response { get; init; }
+}
+
+internal sealed record SetToolEnabledCommand : AgentSessionCommand
+{
+    public override string Type => "set-tool-enabled";
+    public required string ToolId { get; init; }
+    public required bool Enabled { get; init; }
+}
+
+internal sealed record SetContinueInBackgroundCommand : AgentSessionCommand
+{
+    public override string Type => "set-continue-in-background";
+    public required bool ContinueInBackground { get; init; }
+}
+
+internal sealed record DetachCommand : AgentSessionCommand
+{
+    public override string Type => "detach";
+}
 ```
 
 The strict version-1 event records all inherit `AgentSessionServerEvent`; the frame supplies
 version/correlation/epoch/sequence exactly once:
 
 ```csharp
-internal sealed record SessionSnapshotEvent(AgentSessionSnapshot Snapshot);
-internal sealed record HistoryAppendedEvent(JsonElement Item);
-internal sealed record UsageChangedEvent(Usage Usage);
-internal sealed record AgentInformationChangedEvent(AgentInformation Information);
-internal sealed record QueueChangedEvent(
-    long Revision,
-    IReadOnlyList<AgentInputQueueSnapshot> Queues,
-    IReadOnlyList<string> RemovedQueueIds);
-internal sealed record StreamingStartedEvent(string RunId, JsonElement Item);
-internal sealed record StreamingUpdatedEvent(string RunId, JsonElement Update);
-internal sealed record StreamingCompletedEvent(string RunId, JsonElement Item);
-internal sealed record BusyChangedEvent(bool IsBusy);
-internal sealed record ToolsSnapshotEvent(IReadOnlyList<JsonElement> Tools);
-internal sealed record ToolsChangedEvent(IReadOnlyList<JsonElement> Tools);
-internal sealed record SubagentsSnapshotEvent(IReadOnlyList<JsonElement> Subagents);
-internal sealed record SubagentsChangedEvent(IReadOnlyList<JsonElement> Subagents);
-internal sealed record ModalRaisedEvent(AgentChatModal Modal);
-internal sealed record ModalUpdatedEvent(AgentChatModal Modal);
-internal sealed record ModalDismissedEvent(string ModalId);
-internal sealed record SessionRetentionChangedEvent(
-    bool ContinueInBackground, int ViewerCount);
-internal sealed record CommandCompletedEvent(Guid CommandId, JsonElement? Result);
-internal sealed record OperationErrorEvent(RemoteAgentOperationError Error);
-internal sealed record SessionTerminalEvent(string Reason, JsonElement CompletionState);
+internal sealed record SessionSnapshotEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-snapshot";
+    public required AgentSessionSnapshot Snapshot { get; init; }
+}
+internal sealed record HistoryAppendedEvent : AgentSessionServerEvent
+{
+    public override string Type => "history-appended";
+    public required JsonElement Item { get; init; }
+}
+internal sealed record UsageChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "usage-changed";
+    public required Usage Usage { get; init; }
+}
+internal sealed record AgentInformationChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "agent-information-changed";
+    public required AgentInformation Information { get; init; }
+}
+internal sealed record QueueChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "queue-changed";
+    public required long Revision { get; init; }
+    public required IReadOnlyList<AgentInputQueueSnapshot> Queues { get; init; }
+    public required IReadOnlyList<string> RemovedQueueIds { get; init; }
+}
+internal sealed record StreamingStartedEvent : AgentSessionServerEvent
+{
+    public override string Type => "streaming-started";
+    public required string RunId { get; init; }
+    public required JsonElement Item { get; init; }
+}
+internal sealed record StreamingUpdatedEvent : AgentSessionServerEvent
+{
+    public override string Type => "streaming-updated";
+    public required string RunId { get; init; }
+    public required JsonElement Update { get; init; }
+}
+internal sealed record StreamingCompletedEvent : AgentSessionServerEvent
+{
+    public override string Type => "streaming-completed";
+    public required string RunId { get; init; }
+    public required JsonElement Item { get; init; }
+}
+internal sealed record BusyChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "busy-changed";
+    public required bool IsBusy { get; init; }
+}
+internal sealed record ToolsSnapshotEvent : AgentSessionServerEvent
+{
+    public override string Type => "tools-snapshot";
+    public required IReadOnlyList<JsonElement> Tools { get; init; }
+}
+internal sealed record ToolsChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "tools-changed";
+    public required IReadOnlyList<JsonElement> Tools { get; init; }
+}
+internal sealed record SubagentsSnapshotEvent : AgentSessionServerEvent
+{
+    public override string Type => "subagents-snapshot";
+    public required IReadOnlyList<JsonElement> Subagents { get; init; }
+}
+internal sealed record SubagentsChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "subagents-changed";
+    public required IReadOnlyList<JsonElement> Subagents { get; init; }
+}
+internal sealed record ModalRaisedEvent : AgentSessionServerEvent
+{
+    public override string Type => "modal-raised";
+    public required AgentChatModal Modal { get; init; }
+}
+internal sealed record ModalUpdatedEvent : AgentSessionServerEvent
+{
+    public override string Type => "modal-updated";
+    public required AgentChatModal Modal { get; init; }
+}
+internal sealed record ModalDismissedEvent : AgentSessionServerEvent
+{
+    public override string Type => "modal-dismissed";
+    public required string ModalId { get; init; }
+}
+internal sealed record SessionRetentionChangedEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-retention-changed";
+    public required bool ContinueInBackground { get; init; }
+    public required int ViewerCount { get; init; }
+}
+internal sealed record CommandCompletedEvent : AgentSessionServerEvent
+{
+    public override string Type => "command-completed";
+    public required Guid CommandId { get; init; }
+    public JsonElement? Result { get; init; } = null;
+}
+internal sealed record OperationErrorEvent : AgentSessionServerEvent
+{
+    public override string Type => "operation-error";
+    public required RemoteAgentOperationError Error { get; init; }
+}
+internal sealed record SessionTerminalEvent : AgentSessionServerEvent
+{
+    public override string Type => "session-terminal";
+    public required string Reason { get; init; }
+    public required JsonElement CompletionState { get; init; }
+}
 
-internal sealed record AgentSessionSnapshot(
-    AgentInformation Information,
-    Usage Usage,
-    AgentInputQueuesSnapshot InputQueues,
-    bool IsBusy,
-    IReadOnlyList<JsonElement> History,
-    IReadOnlyList<JsonElement> RunningItems,
-    IReadOnlyList<JsonElement> Tools,
-    IReadOnlyList<JsonElement> Subagents,
-    IReadOnlyList<AgentChatModal> Modals,
-    bool ContinueInBackground,
-    int ViewerCount,
-    JsonElement? CompletionState);
+internal sealed record AgentSessionSnapshot
+{
+    public required AgentInformation Information { get; init; }
+    public required Usage Usage { get; init; }
+    public required AgentInputQueuesSnapshot InputQueues { get; init; }
+    public required bool IsBusy { get; init; }
+    public required IReadOnlyList<JsonElement> History { get; init; }
+    public required IReadOnlyList<JsonElement> RunningItems { get; init; }
+    public required IReadOnlyList<JsonElement> Tools { get; init; }
+    public required IReadOnlyList<JsonElement> Subagents { get; init; }
+    public required IReadOnlyList<AgentChatModal> Modals { get; init; }
+    public required bool ContinueInBackground { get; init; }
+    public required int ViewerCount { get; init; }
+    public JsonElement? CompletionState { get; init; } = null;
+}
 ```
 
 `JsonElement` is used only for already-versioned domain payloads whose polymorphism is owned by
 `PhantomAgentSchema` or `Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions`; each element is
 cloned before the read buffer advances. It is never used to bypass strict top-level member checking.
+The protocol codec derives `AgentSessionServerFrame.Payload` from the concrete event's named
+properties when encoding and selects the concrete event type from the recognized raw `type`
+discriminator before decoding that payload; generic serializer polymorphism is not used.
 
 `RemoteAgentSessionException` is a **New public sealed exception** in
 `Phantom.Workspaces.Llm.Core/Remote/RemoteAgentSessionException.cs`, with
@@ -1040,7 +1423,7 @@ Version 1 uses kebab-case JSON and rejects unknown members. Queue message arrays
 `Microsoft.Extensions.AI.AIJsonUtilities.DefaultOptions`; agent definitions use
 `AgentDefinition.ToJson()` and `PhantomAgentSchema.AgentDefinitionFromJson(string)` after the
 authorization gate described above. Required fields are non-null and ids are
-nonempty. Value-type constructors reject an empty epoch, negative cursor sequence, unsupported
+nonempty. Initializer/codec validation rejects an empty epoch, negative cursor sequence, unsupported
 protocol version, negative generation, and duplicate/unknown capabilities. `Sequence` is positive
 and increases for every server frame in an epoch. The snapshot
 sequence is its high-water mark; replay starts at cursor+1. `CommandId` is the stable idempotency key
@@ -1091,8 +1474,19 @@ Server frames are:
 | `operation-error` | `RemoteAgentOperationError` |
 | `session-terminal` | safe reason and final completion state |
 
-`RemoteAgentOperationError` is an internal strict record:
-`(string Code, string Operation, bool IsRetryable, string Message, Guid CorrelationId)`.
+`RemoteAgentOperationError` is an internal strict property record:
+
+```csharp
+internal sealed record RemoteAgentOperationError
+{
+    public required string Code { get; init; }
+    public required string Operation { get; init; }
+    public required bool IsRetryable { get; init; }
+    public required string Message { get; init; }
+    public required Guid CorrelationId { get; init; }
+}
+```
+
 Allowed codes are `invalid-request`, `unauthorized`, `not-found`, `owner-mismatch`,
 `generation-mismatch`, `runtime-changed`, `unsupported`, `conflict`, `cancelled`,
 `containment-required`, `launch-failed`, `takeover-blocked`, and `internal-error`. Queue rejection
@@ -1122,26 +1516,32 @@ authorization or mutation.
   `AgentSessionRuntimeContextFactory.cs` (**New**).
 
 ```csharp
-public sealed record AgentSessionRuntimeIntentData(
-    string? OwningProfileEntityId,
-    long OwnershipGeneration,
-    JsonElement? ExecutorBindings,
-    string? TrustProfileReference,
-    long? ExpectedTrustProfileRevision,
-    bool ContinueInBackground = false);
+public sealed record AgentSessionRuntimeIntentData
+{
+    public string? OwningProfileEntityId { get; init; } = null;
+    public long OwnershipGeneration { get; init; } = 0;
+    public JsonElement? ExecutorBindings { get; init; } = null;
+    public string? TrustProfileReference { get; init; } = null;
+    public long? ExpectedTrustProfileRevision { get; init; } = null;
+    public bool ContinueInBackground { get; init; } = false;
+}
 
-public sealed record PersistedAgentSessionRuntimeIntent(
-    string AgentSessionId,
-    string OwningProfileEntityId,
-    long OwnershipGeneration,
-    ExecutorBindings ExecutorBindings,
-    string? TrustProfileReference,
-    long? ExpectedTrustProfileRevision,
-    bool ContinueInBackground);
+public sealed record PersistedAgentSessionRuntimeIntent
+{
+    public required string AgentSessionId { get; init; }
+    public required string OwningProfileEntityId { get; init; }
+    public required long OwnershipGeneration { get; init; }
+    public required ExecutorBindings ExecutorBindings { get; init; }
+    public string? TrustProfileReference { get; init; } = null;
+    public long? ExpectedTrustProfileRevision { get; init; } = null;
+    public bool ContinueInBackground { get; init; } = false;
+}
 
-public sealed record AgentSessionRuntimeContext(
-    PersistedAgentSessionRuntimeIntent Intent,
-    ITransportFactoryRegistry? TransportFactoryRegistry);
+public sealed record AgentSessionRuntimeContext
+{
+    public required PersistedAgentSessionRuntimeIntent Intent { get; init; }
+    public ITransportFactoryRegistry? TransportFactoryRegistry { get; init; } = null;
+}
 
 public interface IAgentSessionRuntimeContextFactory
 {
@@ -1159,22 +1559,39 @@ public sealed class AgentSessionRuntimeContextFactory
 The changed persistence factory signature is:
 
 ```csharp
-public static JsonElement CreateEntityData(
-    EntityId agentDefinitionEntityId,
-    string agentDisplayName,
-    string agentSessionId,
-    IReadOnlyCollection<EntityName> agentSessionNames,
-    DateTimeOffset currentTime,
-    string computerName,
-    EntityId hostProfileEntityId,
-    IReadOnlyDictionary<string, string>? parameterValues = null,
-    JsonElement? sessionExecutor = null,
-    JsonElement? executorComponentBindings = null,
-    IReadOnlyDictionary<string, JsonElement>? parameterSelections = null,
-    long ownershipGeneration = 0,
-    JsonElement? trustProfileReference = null,
-    long? expectedTrustProfileRevision = null,
-    bool continueInBackground = false);
+public sealed record CreateAgentSessionEntityDataRequest
+{
+    public required EntityId AgentDefinitionEntityId { get; init; }
+    public required string AgentDisplayName { get; init; }
+    public required string AgentSessionId { get; init; }
+    public required IReadOnlyCollection<EntityName> AgentSessionNames { get; init; }
+    public required DateTimeOffset CurrentTime { get; init; }
+    public required string ComputerName { get; init; }
+    public required EntityId HostProfileEntityId { get; init; }
+    public IReadOnlyDictionary<string, string>? ParameterValues { get; init; } = null;
+    public JsonElement? SessionExecutor { get; init; } = null;
+    public JsonElement? ExecutorComponentBindings { get; init; } = null;
+    public IReadOnlyDictionary<string, JsonElement>? ParameterSelections { get; init; } = null;
+    public long OwnershipGeneration { get; init; } = 0;
+    public JsonElement? TrustProfileReference { get; init; } = null;
+    public long? ExpectedTrustProfileRevision { get; init; } = null;
+    public bool ContinueInBackground { get; init; } = false;
+}
+
+public static JsonElement CreateEntityData(CreateAgentSessionEntityDataRequest request);
+
+var data = AgentSessionEntityFactory.CreateEntityData(
+    new CreateAgentSessionEntityDataRequest
+    {
+        AgentDefinitionEntityId = agentDefinitionEntityId,
+        AgentDisplayName = agentDisplayName,
+        AgentSessionId = agentSessionId,
+        AgentSessionNames = agentSessionNames,
+        CurrentTime = currentTime,
+        ComputerName = computerName,
+        HostProfileEntityId = currentProfileEntityId,
+        ExecutorComponentBindings = executorComponentBindings,
+    });
 ```
 
 The data DTO is serialization-only: setters are `init`, validate through the reader, and contain no
@@ -1183,10 +1600,9 @@ runtime policy. `JsonSchemas/agent-session.json` retains the existing
 `ownership-generation` (integer, minimum zero, default zero), `trust-profile-reference`,
 `expected-trust-profile-revision` (integer, minimum zero), and
 `continue-in-background` (boolean, default false). Trust reference/revision must be both present or
-both absent. `AgentSessionEntityFactory.CreateEntityData(...)` makes
-`EntityId hostProfileEntityId` required for every new entity and adds
-`long ownershipGeneration = 0`, optional trust-reference/revision parameters, and
-`bool continueInBackground = false`; it always writes owner, generation, executor bindings, and
+both absent. `AgentSessionEntityFactory.CreateEntityData(request)` requires
+`HostProfileEntityId` for every new entity; `OwnershipGeneration`, trust-reference/revision, and
+`ContinueInBackground` retain the defaults shown above. It always writes owner, generation, executor bindings, and
 background preference. All existing creation call sites pass the current profile. Only the reader
 accepts a missing owner for the documented legacy migration. `Create` is the #1481
 lower-level hydration seam called once at first acquisition. It reads owner/generation/trust reference,
@@ -1206,9 +1622,9 @@ closed. It does not resolve GUI routes, fetch a remote runtime, compile MXC, or 
 public enum AgentChatAcquisitionMode { Local, AttachRemote, StartOrAttachRemote }
 
 // Added init-only fields on AcquireAgentChatRequest:
-public AgentChatAcquisitionMode AcquisitionMode { get; init; }
-public ITransport? OwningProfileTransport { get; init; }
-public ReplayCursor? ReplayCursor { get; init; }
+public AgentChatAcquisitionMode AcquisitionMode { get; init; } = AgentChatAcquisitionMode.Local;
+public ITransport? OwningProfileTransport { get; init; } = null;
+public ReplayCursor? ReplayCursor { get; init; } = null;
 
 public interface IRunningAgentChatTable
 {
@@ -1282,8 +1698,8 @@ but final release can invoke the default graceful-stop transition.
 `AgentServices` keeps its existing object-typed layering seams and adds:
 
 ```csharp
-public object? AgentExecutionTrustContext { get; init; } // AgentExecutionTrustContext
-public object? RemoteAgentSessionRuntimeIntent { get; init; } // persisted intent, host only
+public object? AgentExecutionTrustContext { get; init; } = null; // AgentExecutionTrustContext
+public object? RemoteAgentSessionRuntimeIntent { get; init; } = null; // persisted intent, host only
 ```
 
 `CurrentSessionContext` keeps existing properties and adds:
@@ -1291,7 +1707,7 @@ public object? RemoteAgentSessionRuntimeIntent { get; init; } // persisted inten
 ```csharp
 public required string OwningProfileEntityId { get; init; }
 public required long OwnershipGeneration { get; init; }
-public RuntimeEpoch? RuntimeEpoch { get; init; }
+public RuntimeEpoch? RuntimeEpoch { get; init; } = null;
 ```
 
 Init setters reject blank owner, negative generation, and an epoch without owner. The owning host
@@ -1356,10 +1772,11 @@ from diverging and preventing one session's context from leaking into another.
 - `AgentViewModel`:
   `Phantom.Workspaces.Agent.Gui.ViewModels`;
   `Phantom.Workspaces.Agent.Gui/ViewModels/AgentViewModel.cs`; existing `public sealed class`.
-  Its constructor becomes
-  `AgentViewModel(IAgentChat agentChat, string displayName, string description,
-  ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler,
-  AgentViewModel? parentAgentViewModel = null)`. Existing foreground validation remains. It uses the
+   Its constructor becomes `AgentViewModel(AgentViewModelOptions options)`. `AgentViewModelOptions`
+   has required-init `IAgentChat AgentChat`, `string DisplayName`, `string Description`,
+   `ObservableLoggerFactory LoggerFactory`, and `TaskScheduler ForegroundScheduler`, plus
+   `AgentViewModel? ParentAgentViewModel { get; init; } = null`. Existing foreground validation
+   remains. It uses the
    common collections/events, awaits async remote tool toggles, and owns a
   `ReadOnlyObservableCollection<AgentSessionModalViewModel> Modals`. Modal response calls
   `Task RespondToModalAsync(string modalId, JsonElement response, CancellationToken ct = default)`,
@@ -1389,28 +1806,36 @@ from diverging and preventing one session's context from leaking into another.
   `TryCreateAgentSessionTabForRestoreAsync`, `TryCreateTabForRestoreAsync`, and
   `CreateAgentSessionTabAsync` all call one new internal
   `OpenPersistedSessionAsync(JsonElement, AgentSessionOpenIntent, CancellationToken)`.
-  `ConnectOnOwner` builds a remote acquisition request; `ResumeLocally` performs takeover before a
+   `TryCreateAgentSessionTabForRestoreAsync` takes
+   `CreateAgentSessionTabForRestoreRequest` plus `CancellationToken`; `CreateAgentSessionTabAsync`
+   takes `CreateAgentSessionTabRequest` plus `CancellationToken`; and
+   `ComposeSessionAgentViewModel` takes `ComposeSessionAgentViewModelOptions`. The inherited
+   `Handle` and `TryCreateTabForRestoreAsync` overrides retain their framework signatures.
+   `ConnectOnOwner` builds a remote acquisition request; `ResumeLocally` performs takeover before a
    local acquisition. It never parses executor bindings or compiles trust policy.
 - `Notification`, `NotificationEntry`, `INotificationService`, `NotificationService`, and
-  `NotificationsViewModel`: existing notification types in
+   `NotificationsViewModel`: existing notification types in
   `Phantom.Workspaces/Services/Notifications` and `Phantom.Workspaces/ViewModels`. `Notification`
-  adds required `string Kind`; `NotificationEntry` exposes it. `INotificationService` and
+  adds nonblank `string Kind` with the `"legacy"` default; `NotificationEntry` exposes it.
+  `INotificationService` and
   `NotificationService` add
-  `void Remove(string tabId, string kind)` and
-  `void MarkRead(string tabId, string kind)` while retaining the existing tab-wide overloads for
+   `void Remove(NotificationTargetRequest request)` and
+   `void MarkRead(NotificationTargetRequest request)` while retaining the existing tab-wide overloads for
   callers that intentionally affect every kind. `Notify` upserts only the matching `(TabKey, Kind)`.
   `NotificationsViewModel.UnreadCount` and `HasUnread` aggregate all entries and therefore require no
   signature change.
 
   ```csharp
-  public record Notification(
-      TabDescriptor TabDescriptor,
-      string Heading,
-      string Description,
-      DateTime When,
-      RunningState RunningState,
-      NotificationState NotificationState,
-      string Kind = "legacy");
+  public record Notification
+  {
+      public required TabDescriptor TabDescriptor { get; init; }
+      public required string Heading { get; init; }
+      public required string Description { get; init; }
+      public required DateTime When { get; init; }
+      public required RunningState RunningState { get; init; }
+      public required NotificationState NotificationState { get; init; }
+      public string Kind { get; init; } = "legacy";
+  }
 
   public sealed record NotificationEntry
   {
@@ -1420,13 +1845,19 @@ from diverging and preventing one session's context from leaking into another.
       // IsRunning, IsInteresting, IsRead, and IsSnoozed properties remain.
   }
 
+  public sealed record NotificationTargetRequest
+  {
+      public required string TabId { get; init; }
+      public required string Kind { get; init; }
+  }
+
   public interface INotificationService
   {
       void Notify(Notification notification);
       void Remove(string tabId);
-      void Remove(string tabId, string kind);
+      void Remove(NotificationTargetRequest request);
       void MarkRead(string tabId);
-      void MarkRead(string tabId, string kind);
+      void MarkRead(NotificationTargetRequest request);
       // Existing members remain.
   }
   ```
@@ -1437,13 +1868,17 @@ from diverging and preventing one session's context from leaking into another.
 The added/changed public signatures are:
 
 ```csharp
-public AgentViewModel(
-    IAgentChat agentChat,
-    string displayName,
-    string description,
-    ObservableLoggerFactory loggerFactory,
-    TaskScheduler foregroundScheduler,
-    AgentViewModel? parentAgentViewModel = null);
+public sealed record AgentViewModelOptions
+{
+    public required IAgentChat AgentChat { get; init; }
+    public required string DisplayName { get; init; }
+    public required string Description { get; init; }
+    public required ObservableLoggerFactory LoggerFactory { get; init; }
+    public required TaskScheduler ForegroundScheduler { get; init; }
+    public AgentViewModel? ParentAgentViewModel { get; init; } = null;
+}
+
+public AgentViewModel(AgentViewModelOptions options);
 public IAgentChat AgentChat { get; }
 public ReadOnlyObservableCollection<AgentSessionModalViewModel> Modals { get; }
 public Task RespondToModalAsync(
@@ -1459,11 +1894,7 @@ public override Task<bool> Handle(
     Shortcut shortcut,
     SubscribedEntityViewModel entityViewModel);
 public Task<AgentSessionWorkspaceTabViewModel?> TryCreateAgentSessionTabForRestoreAsync(
-    MainWindowViewModel mainWindowViewModel,
-    SubscribedEntityViewModel agentSessionEntity,
-    string? tabId = null,
-    string? title = null,
-    string? dockRegion = null);
+    CreateAgentSessionTabForRestoreRequest request, CancellationToken ct = default);
 public override Task<WorkspaceTabViewModel?> TryCreateTabForRestoreAsync(
     MainWindowViewModel mainWindowViewModel,
     SubscribedEntityViewModel entityViewModel,
@@ -1471,16 +1902,44 @@ public override Task<WorkspaceTabViewModel?> TryCreateTabForRestoreAsync(
     string? title,
     string? dockRegion);
 public Task<AgentSessionWorkspaceTabViewModel> CreateAgentSessionTabAsync(
-    MainWindowViewModel mainWindowViewModel,
-    SubscribedEntityViewModel agentSessionEntity,
-    IAgentChat agentChat);
-public AgentViewModel ComposeSessionAgentViewModel(
-    MainWindowViewModel mainWindowViewModel,
-    ObservableLoggerFactory loggerFactory,
-    IAgentChat agentChat,
-    SubscribedEntityViewModel agentSessionEntity,
-    AgentSessionWorkspaceTabViewModel tab,
-    TaskScheduler foregroundScheduler);
+    CreateAgentSessionTabRequest request, CancellationToken ct = default);
+public AgentViewModel ComposeSessionAgentViewModel(ComposeSessionAgentViewModelOptions options);
+
+public sealed record CreateAgentSessionTabForRestoreRequest
+{
+    public required MainWindowViewModel MainWindowViewModel { get; init; }
+    public required SubscribedEntityViewModel AgentSessionEntity { get; init; }
+    public string? TabId { get; init; } = null;
+    public string? Title { get; init; } = null;
+    public string? DockRegion { get; init; } = null;
+}
+
+public sealed record CreateAgentSessionTabRequest
+{
+    public required MainWindowViewModel MainWindowViewModel { get; init; }
+    public required SubscribedEntityViewModel AgentSessionEntity { get; init; }
+    public required IAgentChat AgentChat { get; init; }
+}
+
+public sealed record ComposeSessionAgentViewModelOptions
+{
+    public required MainWindowViewModel MainWindowViewModel { get; init; }
+    public required ObservableLoggerFactory LoggerFactory { get; init; }
+    public required IAgentChat AgentChat { get; init; }
+    public required SubscribedEntityViewModel AgentSessionEntity { get; init; }
+    public required AgentSessionWorkspaceTabViewModel Tab { get; init; }
+    public required TaskScheduler ForegroundScheduler { get; init; }
+}
+
+var viewModel = new AgentViewModel(
+    new AgentViewModelOptions
+    {
+        AgentChat = agentChat,
+        DisplayName = displayName,
+        Description = description,
+        LoggerFactory = loggerFactory,
+        ForegroundScheduler = foregroundScheduler,
+    });
 ```
 
 All four UI getters are foreground-owned and nonblocking. `SetReady` remains one-shot, rejects null
@@ -1621,7 +2080,8 @@ common handlers use only `IAgentChat`. This prevents a hidden concrete cast in t
   it never receives owner collections or performs an optimistic mutation.
 - Notifications are per-tab and keyed by kind. Activation clears `chat-idle`; only an empty aggregate
   modal set clears `modal-pending`. `Notification`, `NotificationEntry`, and `NotificationService`
-  add a required nonblank `Kind`; replacement/removal/read state uses `(TabKey, Kind)` rather than
+  add a nonblank `Kind` (`Notification.Kind` defaults to `"legacy"`, while stored entries require an
+  explicit value); replacement/removal/read state uses `(TabKey, Kind)` rather than
   only `TabKey`. Existing callers use a stable legacy kind. `NotificationsViewModel.UnreadCount`
   counts all unread entries and `HasUnread` is `UnreadCount > 0`, so it is the app-wide logical OR
   across `chat-idle`, `modal-pending`, and future kinds.
@@ -1635,8 +2095,8 @@ The following matrix is normative. Test names use the repository's
 `Method_Scenario_ExpectedOutcome` / `Subject_Scenario_ExpectedOutcome` convention. Existing public
 members not changed by this design retain their existing tests; every newly introduced or
 behaviorally changed public method, init setter, and event-producing operation is covered below.
-For the state/queue refactor, the reviewed surface contains **10 new public types** (`Usage`,
-`AgentInformation`, and eight queue interfaces/value types), **7 logical public queue operations**
+For the state/queue refactor, the reviewed surface contains **17 new public types** (`Usage`,
+`AgentInformation`, eight queue interfaces/value types, and seven queue request types), **7 logical public queue operations**
 declared on both `IAgentInputQueues` and `RemoteAgentSessionClient` (**14 method declarations**), and
 no public steering method. Lifecycle adds **four public method declarations**:
 `RemoteAgentSessionClient.GetStatusAsync`,
@@ -1647,6 +2107,14 @@ test plus shared validation, cancellation, rejection, conflict, and deduplicatio
 lifecycle declaration has success, invalid-state, cancellation, and race coverage as applicable.
 Remote tool mutation adds one public
 `RemoteAgentSessionClient.SetToolEnabledAsync` declaration with authoritative-apply coverage.
+The complete audited design contains **28 request/options types: 22 public and 6 internal**. This
+count includes the existing modified `AcquireAgentChatRequest`, all command/UI/factory requests, and
+the internal authorization/host/runtime requests; it excludes the unchanged
+`ProcessExecutionRequest` owned by #1474.
+Property-shape tests use reflection to verify `RequiredMemberAttribute` and instantiate every optional
+member at its documented default. Protocol request/DTO tests round-trip exact kebab-case JSON and
+fixed discriminators; non-wire request/options tests verify named initialization and their exact
+mapping into the existing command, persistence, or UI boundary rather than inventing serialization.
 The matrix also covers every
 added or behaviorally changed public method on `RemoteAgentChat`, `RemoteAgentSessionClient`,
 `IRunningAgentChatTable`, `RunningAgentChatLease`, `RunningAgentChatWithEntityInfo`,
@@ -1670,10 +2138,14 @@ complete matrix count is stated after the final scenario list.
 - `Interrupt_ActiveTurn_CancelsTurnWithoutDisposingChat`.
 - `Interrupt_NoActiveTurn_IsIdempotent`.
 - `Usage_EqualValues_CompareEqual`.
+- `Usage_DefaultInitialization_AllOptionalMetricsAreNull`.
+- `Usage_NamedInitializer_PreservesExactMetricTypes`.
 - `Usage_RoundTrip_PreservesNullableCountsAndDoubleUsd`.
 - `UsagePublisher_NegativeMetric_RejectsBeforePublication`.
 - `UsageChanged_CompleteReplacement_StateVisibleBeforeSingleEvent`.
 - `AgentInformation_EqualValues_CompareEqual`.
+- `AgentInformation_RequiredInitProperties_AreMarkedRequired`.
+- `AgentInformation_NamedInitializer_PreservesAllFields`.
 - `AgentInformationPublisher_InvalidRequiredString_RejectsBeforePublication`.
 - `AgentInformationPublisher_InvalidOptionalModel_RejectsBeforePublication`.
 - `AgentInformation_AuthorizedPeer_RoundTripsCompleteDefinition`.
@@ -1693,6 +2165,9 @@ complete matrix count is stated after the final scenario list.
 - `QueueSnapshotPublisher_InvalidItemIdentityOrMessages_RejectsBeforePublication`.
 - `QueueCommandValidator_InvalidNameImmediacyOrPriority_RejectsBeforeMutation`.
 - `AgentInputQueueCommandResult_RoundTrip_PreservesStatusRevisionAndSnapshot`.
+- `QueueRequestTypes_RequiredInitProperties_AreMarkedRequired`.
+- `QueueRequestTypes_OptionalProperties_UseDocumentedDefaults`.
+- `QueueRequestTypes_NamedInitializers_MapToExactCommandSerialization`.
 - `Queues_LocalAndProxy_ExposeEquivalentReadModels`.
 - `DefaultQueue_LocalAndProxy_ReturnSameStableQueueId`.
 - `ImmediateQueue_LocalAndProxy_ReturnSameStableQueueId`.
@@ -1718,12 +2193,13 @@ complete matrix count is stated after the final scenario list.
 
 #### `RemoteAgentChatTests` (`Phantom.Workspaces.Llm.Core.Tests`)
 
-- `AgentChatModal_InvalidIdentityTitleOrBody_RejectsConstruction`.
-- `MultipleChoiceModalContent_Options_AreClonedOnConstruction`.
+- `AgentChatModal_InvalidIdentityTitleOrBody_RejectsInitialization`.
+- `MultipleChoiceModalContent_Options_AreClonedOnInitialization`.
 - `FreeformModalContent_ValidSettings_RoundTrips`.
-- `MultipleChoiceModalContent_DuplicateOrEmptyOptions_RejectsConstruction`.
-- `ApprovalModalContent_BlankLabels_RejectsConstruction`.
+- `MultipleChoiceModalContent_DuplicateOrEmptyOptions_RejectsInitialization`.
+- `ApprovalModalContent_BlankLabels_RejectsInitialization`.
 - `AttachAsync_ValidSnapshot_PublishesInitializedProxy`.
+- `RemoteAgentChatAttachOptions_RequiredInitProperties_AreMarkedRequired`.
 - `AttachAsync_CancelledBeforeSnapshot_DisposesClientAndPublishesNothing`.
 - `AttachAsync_InvalidSnapshot_ThrowsProtocolException`.
 - `Reconnect_UnexpectedLoss_RetriesWithinGraceAndKeepsProxyEpoch`.
@@ -1754,6 +2230,8 @@ complete matrix count is stated after the final scenario list.
 
 - `Constructor_NullTransport_ThrowsArgumentNullException`.
 - `Constructor_ProcessScopedTransport_DoesNotDisposeBorrowedTransport`.
+- `ClientRequestTypes_RequiredInitProperties_AreMarkedRequired`.
+- `ClientRequestTypes_NamedInitializers_PreserveStatusAndCommandPayloads`.
 - `GetStatusAsync_AuthorizedRunningOrStopped_ReturnsAuthoritativeStatusOnly`.
 - `GetStatusAsync_UnauthorizedOrMissing_ReturnsUnavailableWithoutMetadata`.
 - `ConnectAsync_FirstCall_OpensAttachAgentSessionChannel`.
@@ -1802,6 +2280,9 @@ complete matrix count is stated after the final scenario list.
 
 - `Constructor_NullRegistry_AllowsLocalOnlyHydration`.
 - `AgentSessionRuntimeIntentData_InitProperties_PreserveOnlyPersistableIntent`.
+- `CreateAgentSessionEntityDataRequest_RequiredInitProperties_AreMarkedRequired`.
+- `CreateAgentSessionEntityDataRequest_OptionalProperties_UseDocumentedDefaults`.
+- `CreateEntityData_NamedInitializer_PersistsMappedFields`.
 - `PersistedAgentSessionRuntimeIntent_Init_InvalidOwnerOrGeneration_RejectsValue`.
 - `AgentSessionRuntimeContext_Init_StoresIntentAndProcessRegistry`.
 - `Create_PersistedSplitBindings_ReconstructsRuntimeContext`.
@@ -1847,6 +2328,7 @@ complete matrix count is stated after the final scenario list.
 - `AgentServices_RemoteRuntimeIntentSetter_WithExpressionPreservesOtherServices`.
 - `AgentServices_GetService_NewObjectTypedSeams_DoesNotExposeConcreteTypes`.
 - `AcquireAgentChatRequest_RemoteInitProperties_PreserveModeTransportAndCursor`.
+- `AcquireAgentChatRequest_Defaults_SelectLocalModeWithoutTransportOrCursor`.
 - `AcquireAgentChatRequest_InvalidModeCombination_AcquireRejectsRequest`.
 - `AgentViewModel_AgentChatProperty_LocalAndRemote_ReturnsIAgentChat`.
 - `RunningAgentChatLease_AgentChatProperty_LocalAndRemote_ReturnsIAgentChat`.
@@ -1857,6 +2339,7 @@ complete matrix count is stated after the final scenario list.
 `AgentViewModelTests`:
 
 - `Constructor_RemoteChat_UsesCommonSurfaceWithoutConcreteCast`.
+- `AgentViewModelOptions_NamedInitializer_PreservesRequiredValuesAndParentDefault`.
 - `Constructor_WrongForegroundContext_Throws`.
 - `RespondToModalAsync_CurrentModal_SendsResponseAndKeepsInputGatedUntilDismissed`.
 - `RespondToModalAsync_UnknownModal_ThrowsArgumentException`.
@@ -1903,6 +2386,7 @@ complete matrix count is stated after the final scenario list.
 - `Handle_RemoteOwnerPrompt_UnauthorizedOrMissingShowsUnavailable`.
 - `CreateAgentSessionTabAsync_PersistedSession_PassesEntityToAcquisition`.
 - `ComposeSessionAgentViewModel_RemoteChat_ConfiguresCommonSlashCommandSurface`.
+- `SessionUiRequestOptions_NamedInitializers_PreserveRequiredValuesAndOptionalDefaults`.
 - `DisposeAsync_InitializationInFlight_CancelsWithoutPublishingReadyTab`.
 
 `RunningAgentBrainViewModelTests`:
@@ -1926,8 +2410,11 @@ complete matrix count is stated after the final scenario list.
 
 `NotificationServiceTests` and `NotificationsViewModelTests`:
 
+- `Notification_PropertyShape_RequiredMembersAndLegacyKindDefault_ArePreserved`.
+- `Notification_NamedInitializer_PreservesAllValues`.
 - `Notify_SameTabDifferentKinds_PreservesIndependentEntries`.
 - `Notify_BlankKind_ThrowsArgumentException`.
+- `NotificationTargetRequest_NamedInitializer_TargetsOneKind`.
 - `Remove_TabAndKind_RemovesOnlyMatchingKind`.
 - `MarkRead_TabAndKind_MarksOnlyMatchingKind`.
 - `HasUnread_AnyUnreadKind_ReturnsTrueUntilAllKindsRead`.
@@ -1938,12 +2425,17 @@ complete matrix count is stated after the final scenario list.
 
 `AgentSessionProtocolCodecTests`:
 
-- `RuntimeEpoch_EmptyValue_RejectsConstruction`.
-- `ReplayCursor_NegativeSequence_RejectsConstruction`.
-- `AgentSessionOpenRequest_InvalidVersionOrGeneration_RejectsConstruction`.
-- `TransportPeerIdentity_BlankAuthenticatedIdentity_RejectsConstruction`.
+- `RuntimeEpoch_EmptyValue_RejectsInitialization`.
+- `ReplayCursor_NegativeSequence_RejectsInitialization`.
+- `AgentSessionOpenRequest_InvalidVersionOrGeneration_RejectsInitialization`.
+- `TransportPeerIdentity_BlankAuthenticatedIdentity_RejectsInitialization`.
+- `ProtocolDtos_RequiredInitProperties_AreMarkedRequired`.
+- `ProtocolDtos_OptionalProperties_UseDocumentedDefaults`.
+- `ProtocolDtos_NamedInitializers_PreserveFixedDiscriminators`.
+- `AgentSessionServerFrame_Type_IsCodecAssignedFromEventDiscriminator`.
 - `RemoteSubagentDescriptor_ValidValues_RoundTrips`.
 - `Serialize_AllOpenIntents_UsesVersionOneDiscriminators`.
+- `RoundTrip_AgentSessionTakeoverRequest_PreservesProfilesGenerationAndCorrelation`.
 - `RoundTrip_AllCommandDiscriminators_PreservesIdsEpochAndPayload`.
 - `RoundTrip_AllServerEventDiscriminators_PreservesSequenceAndCorrelation`.
 - `RoundTrip_SessionSnapshot_PreservesUsageInformationAndFullQueues`.
@@ -1959,6 +2451,7 @@ complete matrix count is stated after the final scenario list.
 
 `RemoteAgentSessionHostTests`:
 
+- `OpenAgentSessionHostRequest_NamedInitializer_MapsPeerOpenRequestAndChannel`.
 - `OpenAsync_Start_CreatesOneRuntimeAndSnapshot`.
 - `OpenAsync_AttachMissingRuntime_ReturnsIndistinguishableNotFound`.
 - `OpenAsync_StartOrAttachConcurrent_CreatesOneRuntime`.
@@ -1989,6 +2482,7 @@ complete matrix count is stated after the final scenario list.
 
 `RemoteAgentSessionRuntimeRegistryTests`:
 
+- `RuntimeRequestTypes_RequiredMembersDefaultsAndNamedInitializers_MapToLifecycleOperations`.
 - `GetOrStartAsync_ConcurrentCallers_StartsFactoryOnce`.
 - `GetOrStartAsync_CancelledFactory_RemovesFailedEntry`.
 - `TryGetAsync_WrongGeneration_ReturnsNull`.
@@ -2014,6 +2508,7 @@ complete matrix count is stated after the final scenario list.
 
 `AgentSessionAttachAuthorizerTests`:
 
+- `AgentSessionAuthorizationRequest_RequiredMembersDefaultsAndNamedInitializer_MapToAuthorization`.
 - `AuthorizeAsync_OwnerPeerAllowed_ReturnsAllow`.
 - `AuthorizeAsync_UnrelatedPeerDenied_ReturnsIndistinguishableDenial`.
 - `AuthorizeAsync_MutationAfterAclChange_DeniesPreviouslyAttachedPeer`.
@@ -2094,7 +2589,7 @@ Remote integration additionally requires:
 - `Name_ConstructedTransport_ReturnsConfiguredName` in
   `ProcessExecutorBackedClientTransportTests`.
 
-The matrix contains **346 scenario bullets representing 349 named test methods**; three integration
+The matrix contains **373 scenario bullets representing 376 named test methods**; three integration
 bullets each name two methods. Generic
 `CommandMethod_EmptyCommandId_ThrowsArgumentException`,
 `CommandMethod_CancelledAfterWrite_DoesNotRetractCommand`, and
@@ -2111,12 +2606,13 @@ Each step is independently committable and leaves existing local behavior passin
 ### Commit 1 - Persist and hydrate runtime intent
 
 **Files:** `Phantom.Workspaces.Data.Core/JsonSchemas/agent-session.json`,
-`AgentSessionEntityFactory`, `AgentSessionRuntimeIntentData`,
+`AgentSessionEntityFactory`, `CreateAgentSessionEntityDataRequest`, `AgentSessionRuntimeIntentData`,
 `PersistedAgentSessionRuntimeIntent`, `AgentSessionRuntimeContext`,
 `IAgentSessionRuntimeContextFactory`, `AgentSessionRuntimeContextFactory`,
 `JsonEntities/entity-type-views/agent-session-entity-type-view.json`, and acquisition callers.
-**Tests:** factory, default/true background persistence, restart hydration, round-trip, legacy,
-grouping, malformed, no-policy, and fresh/non-GUI acquisition tests above.
+**Tests:** request required-member/default/named-initializer mapping, factory, default/true
+background persistence, restart hydration, round-trip, legacy, grouping, malformed, no-policy, and
+fresh/non-GUI acquisition tests above.
 **Boundary:** follows #1481: entity JSON is interpreted at the shared acquisition layer, never in GUI
 routing. It consumes the already-present `AgentSessionExecutorBindings` and `ExecutorBindings`
 surfaces on `features`; it neither waits for nor recreates the later MXC APIs.
@@ -2124,20 +2620,24 @@ surfaces on `features`; it neither waits for nor recreates the later MXC APIs.
 
 ### Commit 2 - Add the common chat surface
 
-**Files:** `IAgentChat`, `Usage`, `AgentInformation`, `IAgentInputQueues` and snapshot/result types,
-owner queue adapter, stable ids/revisions in the existing queue domain, `AgentChat`,
+**Files:** `IAgentChat`, property-based `Usage` and `AgentInformation`, `IAgentInputQueues`,
+the seven queue request types and property-based snapshot/configuration/result types, owner queue
+adapter, stable ids/revisions in the existing queue domain, `AgentChat`,
 `RunningAgentChat`, `RunningAgentChatLease`, `RunningAgentChatWithEntityInfo`, `AgentViewModel`, and
-`InputQueueViewModel`.
-**Tests:** `AgentChatInterfaceTests`, `AgentInputQueuesTests`, internal Copilot/non-Copilot queue
-consumption tests, constructor/common-surface tests, and unchanged local regression suite. Migrate
+`AgentViewModelOptions`, and `InputQueueViewModel`.
+**Tests:** required-init metadata, optional defaults, named initializers, serialization,
+`AgentChatInterfaceTests`, `AgentInputQueuesTests`, internal Copilot/non-Copilot queue consumption
+tests, options/common-surface tests, and unchanged local regression suite. Migrate
 the UI away from concrete queue collections and index identity. No transport behavior yet.
 **Dependencies:** none.
 
 ### Commit 3 - Add strict protocol and proxy state
 
-**Files:** `Phantom.Workspaces.Llm.Core/Remote/AgentSessionProtocol.cs`, codec,
-`RemoteAgentSessionClient`, and `RemoteAgentChat`.
-**Tests:** codec, all client public methods, atomic usage/information, proxy queue parity,
+**Files:** `Phantom.Workspaces.Llm.Core/Remote/AgentSessionProtocol.cs`, property-based protocol
+DTOs and codec, `RemoteAgentSessionClient`, its public request types, `RemoteAgentChat`, and
+`RemoteAgentChatAttachOptions`.
+**Tests:** required-init metadata, optional defaults, named-initializer construction, exact
+discriminator/serialization round trips, codec, all client public methods, atomic usage/information, proxy queue parity,
 full authorized `AgentDefinition`, no metadata on denial, background command/event/snapshot,
 revisions/conflicts/deduplication, state/events/commands, cancellation, and disposal. The protocol
 contains enqueue/edit/remove/move/configure/create/delete queue commands and no steering command.
@@ -2146,9 +2646,11 @@ Use an in-memory `IMessageChannel`; no server runtime or MXC dependency.
 
 ### Commit 4 - Add authorization, host, and viewer lifecycle
 
-**Files:** peer identity provider, attach authorizer, listener, host, runtime registry, runtime and
-attachment leases, replay buffer, transport composition registration.
-**Tests:** listener, authorizer, host, registry, replay limits, multiple viewers, sanitized errors, and
+**Files:** property-based peer identity/authorization/host/runtime request records, peer identity
+provider, attach authorizer, listener, host, runtime registry, runtime and attachment leases, replay
+buffer, transport composition registration.
+**Tests:** required-member/default/named-initializer mapping for all five non-wire internal request
+types, listener, authorizer, host, registry, replay limits, multiple viewers, sanitized errors, and
 no existence disclosure, including default final-viewer stop, persisted background retention,
 five-second reconnect grace, attach/stop races, explicit-terminate precedence, complete graceful
 cleanup, queue convergence, and reconnect snapshot/replay.
@@ -2157,8 +2659,11 @@ cleanup, queue convergence, and reconnect snapshot/replay.
 ### Commit 5 - Integrate running table and all open paths
 
 **Files:** `AcquireAgentChatRequest`, `IRunningAgentChatTable`, `RunningAgentChatTable`,
-`OpenAgentSessionShortcutHandler`, fresh launcher, auto-resume, non-GUI acquisition path.
-**Tests:** every table method, local/remote single-flight, restore/fresh/auto-resume parity, and no
+`OpenAgentSessionShortcutHandler`, `CreateAgentSessionTabForRestoreRequest`,
+`CreateAgentSessionTabRequest`, `ComposeSessionAgentViewModelOptions`, fresh launcher, auto-resume,
+non-GUI acquisition path.
+**Tests:** request required-member/default/named-initializer tests, every table method,
+local/remote single-flight, restore/fresh/auto-resume parity, and no
 rehydration of an existing runtime. Includes local/remote background preference dispatch and
 authoritative running-row metadata.
 **Dependencies:** Commits 1-4.
@@ -2195,8 +2700,10 @@ fail-closed launch, sanitized projection, and no compiled policy on a machine fr
 `Phantom.Workspaces/ViewModels/RunningAgentBrainViewModel.cs`,
 `Phantom.Workspaces/ViewModels/RunningAgentRowViewModel.cs`,
 `Phantom.Workspaces/Controls/RunningAgentBrainControl.axaml(.cs)`, `Notification`,
-`NotificationEntry`, `INotificationService`, `NotificationService`, and `NotificationsViewModel`.
-**Tests:** UI public API tests above, multiple modal ownership, descendant aggregation, independent
+`NotificationEntry`, `NotificationTargetRequest`, `INotificationService`, `NotificationService`, and
+`NotificationsViewModel`.
+**Tests:** UI request/options required-member/default/named-initializer tests, UI public API tests
+above, multiple modal ownership, descendant aggregation, independent
 notification clearing, remote interrupt versus terminate, and checkbox binding, command,
 enabled/pending state, and accessibility.
 **Dependencies:** Commits 2, 5, and 6.
