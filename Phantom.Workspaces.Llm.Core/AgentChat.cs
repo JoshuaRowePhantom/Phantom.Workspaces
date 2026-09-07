@@ -464,8 +464,6 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
        await this.RunOnForegroundAsync(RunSessionInitAsync);
 
-       this.StartProcessingLoop();
-
        // Tool initialization mutates running items (one per toolset / MCP server) and must be
        // serialized with the processing loop on the foreground scheduler (issue #1068). Only
        // dispatch when there is actual tool work: a tool-less agent performs no running-item
@@ -484,6 +482,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
            ? this.RunOnForegroundAsync(
                () => this.InitializeMcpToolsAsync(this.request.CancellationToken))
            : Task.CompletedTask;
+
+       // Start only after `initialization` references the real task. The processing loop awaits it
+       // before the first model request so an immediately queued message cannot race MCP discovery.
+       this.StartProcessingLoop();
     }
 
     // Binds the continuation chain of the supplied action to the foreground scheduler, mirroring
@@ -743,6 +745,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(messages);
+        await this.initialization.WaitAsync(cancellationToken);
         var session = this.GetSession();
         var runOptions = this.CreateRunOptions();
         await foreach (var update in session
@@ -1846,6 +1849,9 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private async Task RunProcessLoopAsync(
         CancellationToken cancellationToken)
     {
+        // Keep input queueing responsive while MCP authentication/discovery runs in the background,
+        // but never dispatch a model turn until its complete tool set is available.
+        await this.initialization.WaitAsync(cancellationToken);
         var currentSession = this.GetSession();
         using var queueStateSignal = new SemaphoreSlim(0);
         void OnQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
