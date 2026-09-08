@@ -3,6 +3,7 @@ using System.IO;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Shell;
 using Phantom.Workspaces.Llm.Trust;
 
@@ -29,6 +30,24 @@ public sealed class LocalShellStreamHandlerTests
             StreamKind = "shell",
             OpenPayload = JsonDocument.Parse("""{"command":"test"}""").RootElement,
         };
+
+    [Fact]
+    public async Task LocalShellStreamHandler_PipeMode_UsesProcessExecutor()
+    {
+        var processExecutor = new RecordingProcessExecutor();
+        var handler = new LocalShellStreamHandler(processExecutor);
+        var pair = new InMemoryStreamMessageChannelPair();
+        var payload = JsonDocument.Parse(
+            """{"command":"tool","command-arguments":["one"],"mode":"pipe","working-directory":"C:\\work","environment":{"NAME":"value"}}""")
+            .RootElement;
+
+        await handler.HandleAsync(payload, pair.HostEnd, Failsafe);
+
+        Assert.Equal("tool", processExecutor.Request?.Executable);
+        Assert.Equal(["one"], processExecutor.Request?.Arguments);
+        Assert.Equal(@"C:\work", processExecutor.Request?.WorkingDirectory);
+        Assert.Equal("value", processExecutor.Request?.Environment["NAME"]);
+    }
 
     /// <summary>
     /// Bytes written to <see cref="FakePseudoTerminal"/>'s Input echo to Output; the output pump
@@ -147,5 +166,28 @@ public sealed class LocalShellStreamHandlerTests
         int code = await session.WaitForExitAsync();
 
         Assert.Equal(42, code);
+    }
+}
+
+internal sealed class RecordingProcessExecutor : IProcessExecutor
+{
+    public ProcessExecutionRequest? Request { get; private set; }
+
+    public IProcessHandle Start(ProcessExecutionRequest request)
+    {
+        Request = request;
+        return new CompletedProcessHandle();
+    }
+
+    private sealed class CompletedProcessHandle : IProcessHandle
+    {
+        public Stream StandardInput { get; } = new MemoryStream();
+        public Stream StandardOutput { get; } = new MemoryStream();
+        public Stream StandardError { get; } = new MemoryStream();
+        public ProcessLaunchInfo LaunchInfo { get; } = new(1, false, []);
+        public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ProcessExitResult(0, false, null));
+        public void Kill() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

@@ -1,10 +1,10 @@
 using System;
-using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Shell;
 
 namespace Phantom.Workspaces.Llm.Trust;
@@ -24,14 +24,24 @@ internal sealed class LocalShellStreamHandler : ILocalStreamHandler
     };
 
     private readonly Func<ShellOpenPayload, IPseudoTerminal>? _ptyFactory;
+    private readonly IProcessExecutor _processExecutor;
 
     /// <summary>Production constructor: uses <see cref="ConPtyPseudoTerminal"/> on Windows, pipe mode on other platforms.</summary>
-    public LocalShellStreamHandler() { }
+    public LocalShellStreamHandler()
+    {
+        _processExecutor = new ProcessExecutor();
+    }
 
     /// <summary>Test constructor: injects a custom PTY factory.</summary>
     internal LocalShellStreamHandler(Func<ShellOpenPayload, IPseudoTerminal> ptyFactory)
     {
         _ptyFactory = ptyFactory;
+        _processExecutor = new ProcessExecutor();
+    }
+
+    internal LocalShellStreamHandler(IProcessExecutor processExecutor)
+    {
+        _processExecutor = processExecutor;
     }
 
     private IPseudoTerminal CreatePty(ShellOpenPayload payload)
@@ -40,7 +50,7 @@ internal sealed class LocalShellStreamHandler : ILocalStreamHandler
             return _ptyFactory(payload);
 
         if (string.Equals(payload.Mode, "pipe", StringComparison.OrdinalIgnoreCase))
-            return new PipeModeTerminal(payload);
+            return new PipeModeTerminal(payload, _processExecutor);
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             return new ConPtyPseudoTerminal(payload);
@@ -186,35 +196,20 @@ internal sealed class LocalShellStreamHandler : ILocalStreamHandler
     /// </summary>
     private sealed class PipeModeTerminal : IPseudoTerminal
     {
-        private readonly Process _process;
+        private readonly IProcessHandle _process;
 
-        public PipeModeTerminal(ShellOpenPayload payload)
+        public PipeModeTerminal(ShellOpenPayload payload, IProcessExecutor processExecutor)
         {
-            var startInfo = new ProcessStartInfo
+            _process = processExecutor.Start(new ProcessExecutionRequest(
+                payload.Command,
+                payload.CommandArguments)
             {
-                FileName = payload.Command,
-                UseShellExecute = false,
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = false,
-                CreateNoWindow = true,
-                WorkingDirectory = payload.WorkingDirectory ?? string.Empty,
-            };
+                WorkingDirectory = payload.WorkingDirectory,
+                Environment = payload.Environment ?? new Dictionary<string, string>(),
+            });
 
-            foreach (var arg in payload.CommandArguments)
-                startInfo.ArgumentList.Add(arg);
-
-            if (payload.Environment is not null)
-            {
-                foreach (var (key, value) in payload.Environment)
-                    startInfo.Environment[key] = value;
-            }
-
-            _process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-            _process.Start();
-
-            Output = _process.StandardOutput.BaseStream;
-            Input = _process.StandardInput.BaseStream;
+            Output = _process.StandardOutput;
+            Input = _process.StandardInput;
         }
 
         public Stream Output { get; }
@@ -223,22 +218,9 @@ internal sealed class LocalShellStreamHandler : ILocalStreamHandler
         public ValueTask ResizeAsync(int columns, int rows, CancellationToken ct = default)
             => ValueTask.CompletedTask;
 
-        public Task<int> WaitForExitAsync(CancellationToken ct = default)
-            => _process.WaitForExitAsync(ct).ContinueWith(
-                _ => _process.ExitCode, CancellationToken.None,
-                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        public async Task<int> WaitForExitAsync(CancellationToken ct = default)
+            => (await _process.WaitAsync(ct).ConfigureAwait(false)).ExitCode;
 
-        public ValueTask DisposeAsync()
-        {
-            try
-            {
-                if (!_process.HasExited)
-                    _process.Kill(entireProcessTree: true);
-            }
-            catch (InvalidOperationException) { }
-
-            _process.Dispose();
-            return ValueTask.CompletedTask;
-        }
+        public ValueTask DisposeAsync() => _process.DisposeAsync();
     }
 }
