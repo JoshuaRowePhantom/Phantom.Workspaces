@@ -25,8 +25,8 @@ namespace Phantom.Workspaces.Services;
 /// and exposes the resolved registry plus <see cref="Llm.Core.Transport.TransportTrustedExecutor"/>,
 /// <see cref="Services.WorkspacesTransportHost"/> and
 /// <see cref="ReverseConnectionStatusRegistry"/> for later resolution by the production consumers.
-/// Additive: no existing consumer is switched onto these surfaces yet — the old
-/// <c>ReverseExecutionRegistry</c> / <c>CreateSelector</c> stack remains wired.
+/// The resolved registry is published to session runtime hydration so persisted executor bindings
+/// can route models and tools through the same production transport factories.
 /// </summary>
 public sealed class WorkspacesTransportComposition : IAsyncDisposable
 {
@@ -39,7 +39,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         IDataAccessLayer dataAccessLayer,
         WorkspaceEntitySession workspaceEntitySession,
         IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null,
-        AgentServices? agentServices = null)
+        AgentServices? agentServices = null,
+        TransportFactoryRegistryProvider? registryProvider = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
@@ -99,6 +100,7 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         registry.Register(this.httpClientTransportFactory);
         registry.Register(this.reverseHttpForwardingTransportFactory);
         this.TransportFactoryRegistry = registry;
+        registryProvider?.Publish(registry);
 
         this.TrustedExecutor = new TransportTrustedExecutor(registry, new ExecutionTargetResolver());
 

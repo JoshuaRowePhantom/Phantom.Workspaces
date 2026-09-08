@@ -12,6 +12,7 @@ using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 
 namespace Phantom.Workspaces.Tests;
@@ -126,6 +127,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             // Regression pin: any future refactor that silently reverts to the direct
             // AgentFactory.CreateAgentChatAsync path would fail this spy assertion.
             Assert.True(spy.AcquireCallCount >= 1, "IRunningAgentChatTable.AcquireAsync was not invoked.");
+            Assert.NotNull(spy.LastRequest?.AgentSessionEntity);
         }
     }
 
@@ -140,7 +142,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
         var entity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(broker, entityId, entityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var inner = CreateTestRunningAgentChatTable();
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -325,7 +327,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             broker, new EntityId(ExecutorManifestEntityId), ExecutorManifestEntityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var inner = CreateTestRunningAgentChatTable();
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -398,7 +400,15 @@ public sealed class AgentManifestLaunchpadViewModelTests
               "kind": "prompt",
               "name": "issue-1463-executor",
               "model": { "id": "echo", "provider": "echo", "apiType": "Echo" }
-            }
+            },
+            "resources": [
+              {
+                "kind": "executor",
+                "id": "parameter",
+                "name": "worker",
+                "options": { "parameter": "worker-executor" }
+              }
+            ]
           }
         }
         """;
@@ -442,7 +452,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             broker, new EntityId(Issue1463ExecutorManifestEntityId), Issue1463ExecutorManifestEntityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var inner = CreateTestRunningAgentChatTable();
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -468,16 +478,18 @@ public sealed class AgentManifestLaunchpadViewModelTests
         await using (viewModel)
         {
             var executorRow = Assert.Single(launchpad.ManifestParameters.Parameters, p => p.IsExecutorPicker);
-            var trustOption = Assert.Single(
+            var profileOption = Assert.Single(
                 executorRow.ExecutorOptions,
-                option => option.Kind == ExecutorParameterSelection.TrustProfileKind
-                    && SelectionValue(option.Selection, ExecutorParameterSelection.TrustProfileKind) == "issue-1440-remote");
-            executorRow.SelectedExecutorOption = trustOption;
+                option => option.Kind == ExecutorParameterSelection.UserComputerProfileKind
+                    && SelectionValue(option.Selection, ExecutorParameterSelection.UserComputerProfileKind)
+                        == new EntityId(UserComputerProfileEntityId).ToString());
+            executorRow.SelectedExecutorOption = profileOption;
 
             launchpad.StartSessionCommand.Execute(null);
 
             var sessionTab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
                 viewModel.SelectedWorkspacePane);
+            await MainWindowIntegrationTests.WaitForAgentReadyAsync(sessionTab);
 
             Assert.NotNull(sessionTab.Entity);
             Assert.True(sessionTab.Entity!.Data is JsonElement);
@@ -490,15 +502,32 @@ public sealed class AgentManifestLaunchpadViewModelTests
             // Executor selection collected via component.GetSelections().
             Assert.True(data.TryGetProperty("parameter-selections", out var parameterSelections));
             Assert.True(parameterSelections.TryGetProperty("worker-executor", out var workerSelection));
-            Assert.True(ExecutorParameterSelection.TryGetTrustProfile(workerSelection, out var nameOrId));
-            Assert.Equal("issue-1440-remote", nameOrId);
+            Assert.True(ExecutorParameterSelection.TryGetUserComputerProfile(workerSelection, out var profileId));
+            Assert.Equal(new EntityId(UserComputerProfileEntityId).ToString(), profileId);
+
+            var workerBinding = data
+                .GetProperty("executor-bindings")
+                .GetProperty("components")
+                .GetProperty("worker");
+            Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
+            Assert.Equal(new EntityId(UserComputerProfileEntityId).ToString(), workerBinding.GetProperty("entity-id").GetString());
+            Assert.Equal(data.GetRawText(), spy.LastRequest?.AgentSessionEntity?.GetRawText());
         }
+    }
+
+    private static RunningAgentChatTable CreateTestRunningAgentChatTable()
+    {
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(store, new AgentServices(), SynchronizationContextTaskScheduler.FromCurrent());
+        var registryProvider = new TransportFactoryRegistryProvider(new TransportFactoryRegistry());
+        return new RunningAgentChatTable(factory, new AgentSessionRuntimeContextFactory(registryProvider));
     }
 
     private sealed class SpyRunningAgentChatTable : IRunningAgentChatTable
     {
         private readonly IRunningAgentChatTable inner;
         private int acquireCallCount;
+        private AcquireAgentChatRequest? lastRequest;
 
         public SpyRunningAgentChatTable(IRunningAgentChatTable inner)
         {
@@ -506,11 +535,13 @@ public sealed class AgentManifestLaunchpadViewModelTests
         }
 
         public int AcquireCallCount => Volatile.Read(ref this.acquireCallCount);
+        public AcquireAgentChatRequest? LastRequest => this.lastRequest;
 
         public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions => this.inner.RunningSessions;
 
         public Task<RunningAgentChatLease> AcquireAsync(AcquireAgentChatRequest request, CancellationToken ct = default)
         {
+            this.lastRequest = request;
             Interlocked.Increment(ref this.acquireCallCount);
             return this.inner.AcquireAsync(request, ct);
         }

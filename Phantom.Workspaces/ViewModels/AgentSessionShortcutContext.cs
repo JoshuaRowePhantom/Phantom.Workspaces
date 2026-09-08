@@ -57,7 +57,9 @@ public sealed class AgentSessionShortcutContext
         string agentSessionId,
         IReadOnlyDictionary<string, string>? parameterValues = null,
         IReadOnlyDictionary<string, JsonElement>? parameterSelections = null,
-        EntityId? hostProfileEntityId = null)
+        EntityId? hostProfileEntityId = null,
+        JsonElement? sessionExecutor = null,
+        JsonElement? executorComponentBindings = null)
     {
         var workspaceEntitySession = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession;
         var executionContext = new CurrentExecutionContextProvider(this.userComputerProfileOverride);
@@ -81,6 +83,8 @@ public sealed class AgentSessionShortcutContext
             computerName,
             parameterValues,
             hostProfileEntityId,
+            sessionExecutor,
+            executorComponentBindings,
             parameterSelections: parameterSelections);
         var createAgentSessionResult = await mainWindowViewModel.EntityBroker.UpdateAsync(
             new UpdateRequest

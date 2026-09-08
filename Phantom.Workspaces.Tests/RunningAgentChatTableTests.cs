@@ -5,8 +5,10 @@ using System.Text.Json;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
 namespace Phantom.Workspaces.Tests;
@@ -22,6 +24,7 @@ public sealed class RunningAgentChatTableTests
 
         public ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
         public AgentDefinition? LastDefinition { get; private set; }
+        public AgentServices? LastServices { get; private set; }
 
         public FakeRunningAgentChatFactory(TaskScheduler? foregroundScheduler = null)
         {
@@ -77,6 +80,7 @@ public sealed class RunningAgentChatTableTests
             bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
             LastDefinition = definition;
+            LastServices = services;
             return GetAsync(sessionId, ct: ct);
         }
 
@@ -168,6 +172,22 @@ public sealed class RunningAgentChatTableTests
         {
             ResolveCallCount++;
             return Task.FromResult<ResolvedAgentDefinition?>(new ResolvedAgentDefinition(this.definition));
+        }
+    }
+
+    private sealed class FakeRuntimeContextFactory : IAgentSessionRuntimeContextFactory
+    {
+        public int CreateCallCount { get; private set; }
+
+        public AgentSessionRuntimeContext Create(JsonElement agentSessionEntity)
+        {
+            CreateCallCount++;
+            return new AgentSessionRuntimeContext(
+                new ExecutorBindings
+                {
+                    SessionExecutor = JsonDocument.Parse("""{"type":"local"}""").RootElement.Clone(),
+                },
+                null);
         }
     }
 
@@ -414,6 +434,86 @@ public sealed class RunningAgentChatTableTests
 
         Assert.Equal(1, resolver.ResolveCallCount);
         Assert.Same(definition, factory.LastDefinition);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_PersistedSession_HydratesServicesBeforeFactoryAcquisition()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var runtimeFactory = new FakeRuntimeContextFactory();
+        var table = new RunningAgentChatTable(factory, runtimeFactory);
+        var originalServices = new AgentServices();
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("session-runtime-context"),
+                AgentSessionEntity = JsonDocument.Parse("""{"agent-session-id":"session-runtime-context"}""").RootElement.Clone(),
+                AgentDefinition = CreateTestDefinition("runtime-context"),
+                AgentServices = originalServices,
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, runtimeFactory.CreateCallCount);
+        Assert.NotSame(originalServices, factory.LastServices);
+        Assert.IsType<ExecutorBindings>(factory.LastServices!.ExecutorBindings);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_PersistedSplitBindings_ReachesFactoryWithSharedRegistry()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var registry = new TransportFactoryRegistry();
+        var runtimeFactory = new AgentSessionRuntimeContextFactory(
+            new TransportFactoryRegistryProvider(registry));
+        var table = new RunningAgentChatTable(factory, runtimeFactory);
+
+        await using var lease = await table.AcquireAsync(
+            new AcquireAgentChatRequest
+            {
+                AgentSessionId = new AgentSessionId("session-split-runtime"),
+                AgentSessionEntity = JsonDocument.Parse(
+                    """
+                    {
+                      "executor-bindings": {
+                        "session": { "type": "local" },
+                        "components": {
+                          "worker": {
+                            "type": "user-computer-profile",
+                            "entity-id": "44444444-4444-4444-4444-444444444444"
+                          }
+                        }
+                      }
+                    }
+                    """).RootElement.Clone(),
+                AgentDefinition = CreateTestDefinition("split-runtime"),
+            },
+            TestContext.Current.CancellationToken);
+
+        var bindings = Assert.IsType<ExecutorBindings>(factory.LastServices!.ExecutorBindings);
+        Assert.Equal(
+            "44444444-4444-4444-4444-444444444444",
+            bindings.ResolveComponent("worker").GetProperty("entity-id").GetString());
+        Assert.Same(registry, factory.LastServices.ExecutorTransportFactoryRegistry);
+    }
+
+    [Fact]
+    public async Task AcquireAsync_ExistingLease_DoesNotRehydrateRuntimeContext()
+    {
+        var factory = new FakeRunningAgentChatFactory();
+        var runtimeFactory = new FakeRuntimeContextFactory();
+        var table = new RunningAgentChatTable(factory, runtimeFactory);
+        var request = new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("session-existing-runtime"),
+            AgentSessionEntity = JsonDocument.Parse("""{"agent-session-id":"session-existing-runtime"}""").RootElement.Clone(),
+            AgentDefinition = CreateTestDefinition("existing-runtime"),
+        };
+
+        await using var firstLease = await table.AcquireAsync(request, TestContext.Current.CancellationToken);
+        await using var secondLease = await table.AcquireAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, runtimeFactory.CreateCallCount);
     }
 
     [Fact]

@@ -22,6 +22,7 @@ namespace Phantom.Workspaces.Services;
 public sealed class RunningAgentChatTable : IRunningAgentChatTable
 {
     private readonly IRunningAgentChatFactory _factory;
+    private readonly IAgentSessionRuntimeContextFactory runtimeContextFactory;
     private readonly Dictionary<AgentSessionId, (string EntityName, string? EntityId, string? WorkspaceId)> _entityInfo = new();
     private readonly object _entityInfoLock = new();
     private readonly ObservableCollection<RunningAgentChatWithEntityInfo> _runningSessions = new();
@@ -29,9 +30,13 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     /// <inheritdoc/>
     public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions => _runningSessions;
 
-    public RunningAgentChatTable(IRunningAgentChatFactory factory)
+    public RunningAgentChatTable(
+        IRunningAgentChatFactory factory,
+        IAgentSessionRuntimeContextFactory? runtimeContextFactory = null)
     {
         _factory = factory;
+        this.runtimeContextFactory = runtimeContextFactory
+            ?? new AgentSessionRuntimeContextFactory(new TransportFactoryRegistryProvider());
         factory.RunningSessions.CollectionChanged += OnFactorySessionsChanged;
     }
 
@@ -48,11 +53,23 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             _entityInfo.TryAdd(sessionId, (request.EntityName, request.EntityId, request.WorkspaceId));
         }
 
-        var definition = await ResolveDefinitionIfNeededAsync(request, ct).ConfigureAwait(false);
+        var isRunning = IsRunning(sessionId);
+        var definition = await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false);
+        var services = request.AgentServices;
+        if (!isRunning && request.AgentSessionEntity is { } entity)
+        {
+            var runtimeContext = this.runtimeContextFactory.Create(entity);
+            services = (services ?? new AgentServices()) with
+            {
+                ExecutorBindings = runtimeContext.ExecutorBindings,
+                ExecutorTransportFactoryRegistry = runtimeContext.TransportFactoryRegistry,
+            };
+        }
+
         return await _factory.GetOrCreateAsync(
             sessionId,
             definition,
-            request.AgentServices,
+            services,
             request.EntityDisplayName,
             request.EntityDescription,
             ct: ct);
@@ -60,14 +77,12 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
 
     private async Task<AgentDefinition?> ResolveDefinitionIfNeededAsync(
         AcquireAgentChatRequest request,
+        bool isRunning,
         CancellationToken ct)
     {
-        lock (_entityInfoLock)
+        if (isRunning)
         {
-            if (_runningSessions.Any(session => session.SessionId == request.AgentSessionId))
-            {
-                return null;
-            }
+            return null;
         }
 
         if (request.AgentDefinitionResolver is not null)
@@ -103,6 +118,14 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         }
 
         return null;
+    }
+
+    private bool IsRunning(AgentSessionId sessionId)
+    {
+        lock (_entityInfoLock)
+        {
+            return _runningSessions.Any(session => session.SessionId == sessionId);
+        }
     }
 
     private void OnFactorySessionsChanged(object? sender, NotifyCollectionChangedEventArgs e)

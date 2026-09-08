@@ -9,6 +9,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
@@ -76,6 +77,7 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             // Regression pin: any future refactor that reverts to the direct
             // AgentFactory.CreateAgentChatAsync path would fail this spy assertion.
             Assert.True(spy.AcquireCallCount >= 1, "IRunningAgentChatTable.AcquireAsync was not invoked.");
+            Assert.NotNull(spy.LastRequest?.AgentSessionEntity);
             Assert.NotNull(sessionTab.Lease);
 
             // The chat is registered under its session id so GetAsync returns the same live
@@ -109,7 +111,10 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             DefinitionEntityJson);
 
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
-        var inner = MainWindowIntegrationTests.CreateTestRunningAgentChatTable();
+        var store = new InMemoryAgentPersistenceStore();
+        var factory = new AgentChatFactory(store, new AgentServices(), SynchronizationContextTaskScheduler.FromCurrent());
+        var registryProvider = new TransportFactoryRegistryProvider(new TransportFactoryRegistry());
+        var inner = new RunningAgentChatTable(factory, new AgentSessionRuntimeContextFactory(registryProvider));
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,
@@ -165,6 +170,7 @@ public sealed class StartAgentSessionOnProfileViewModelTests
     {
         private readonly IRunningAgentChatTable inner;
         private int acquireCallCount;
+        private AcquireAgentChatRequest? lastRequest;
 
         public SpyRunningAgentChatTable(IRunningAgentChatTable inner)
         {
@@ -172,11 +178,13 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         }
 
         public int AcquireCallCount => Volatile.Read(ref this.acquireCallCount);
+        public AcquireAgentChatRequest? LastRequest => this.lastRequest;
 
         public ObservableCollection<RunningAgentChatWithEntityInfo> RunningSessions => this.inner.RunningSessions;
 
         public Task<RunningAgentChatLease> AcquireAsync(AcquireAgentChatRequest request, CancellationToken ct = default)
         {
+            this.lastRequest = request;
             Interlocked.Increment(ref this.acquireCallCount);
             return this.inner.AcquireAsync(request, ct);
         }

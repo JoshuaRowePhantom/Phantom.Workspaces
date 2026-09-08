@@ -64,6 +64,15 @@ public sealed class WorkspacesTransportCompositionTests
     }
 
     [Fact]
+    public async Task Composition_PublishesTransportFactoryRegistry()
+    {
+        var provider = new TransportFactoryRegistryProvider();
+        await using var composition = CreateComposition(agentServices: null, provider);
+
+        Assert.Same(composition.TransportFactoryRegistry, provider.Registry);
+    }
+
+    [Fact]
     public async Task Composition_LocalListeners_ServesChatClientChannelInProduction()
     {
         // Issue #1314: the production WorkspacesTransportComposition must register a
@@ -213,7 +222,9 @@ public sealed class WorkspacesTransportCompositionTests
     private static WorkspacesTransportComposition CreateComposition()
         => CreateComposition(agentServices: null);
 
-    private static WorkspacesTransportComposition CreateComposition(Phantom.Workspaces.Llm.AgentServices? agentServices)
+    private static WorkspacesTransportComposition CreateComposition(
+        Phantom.Workspaces.Llm.AgentServices? agentServices,
+        TransportFactoryRegistryProvider? registryProvider = null)
     {
         var dataAccessLayer = new EntityLookupDataAccessLayer(
             (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
@@ -223,7 +234,12 @@ public sealed class WorkspacesTransportCompositionTests
             ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
             UserComputerProfileEntityId = LocalProfileId,
         };
-        return new WorkspacesTransportComposition(dataAccessLayer, session, hubFactories: null, agentServices: agentServices);
+        return new WorkspacesTransportComposition(
+            dataAccessLayer,
+            session,
+            hubFactories: null,
+            agentServices: agentServices,
+            registryProvider: registryProvider);
     }
 
     private static CancellationToken Ct() => new CancellationTokenSource(System.TimeSpan.FromSeconds(10)).Token;

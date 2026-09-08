@@ -7,6 +7,7 @@ using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Secrets;
 using Phantom.Workspaces.Services;
@@ -50,13 +51,33 @@ internal static class AgentManifestSessionLauncher
         }
 
         var agentSessionId = Guid.NewGuid().ToString("n");
+        JsonElement? sessionExecutor = null;
+        JsonElement? executorComponentBindings = null;
+        if (data.TryGetProperty("manifest", out var persistedManifest))
+        {
+            var executorResources = ExecutorResource.ParseManifestResources(persistedManifest.GetRawText());
+            if (executorResources.Count > 0)
+            {
+                var trustProfile = await ResolveSelectedTrustProfileAsync(
+                    mainWindowViewModel,
+                    parameterSelections);
+                var bindings = ExecutorBindings.Build(
+                    executorResources,
+                    parameterSelections ?? new Dictionary<string, JsonElement>(StringComparer.Ordinal),
+                    trustProfile);
+                sessionExecutor = bindings.SessionExecutor;
+                executorComponentBindings = bindings.ToPersistableMap();
+            }
+        }
 
         var createdAgentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
             mainWindowViewModel,
             agentSourceEntity,
             agentSessionId,
             parameterValues,
-            parameterSelections);
+            parameterSelections,
+            sessionExecutor: sessionExecutor,
+            executorComponentBindings: executorComponentBindings);
 
         if (createdAgentSessionEntity is null)
         {
@@ -106,6 +127,7 @@ internal static class AgentManifestSessionLauncher
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
+                            AgentSessionEntity = createdAgentSessionEntity.Data as JsonElement?,
                             AgentManifest = agentManifest,
                             Parameters = parameterValues,
                             AgentServices = agentServices,
@@ -135,6 +157,7 @@ internal static class AgentManifestSessionLauncher
                         new AcquireAgentChatRequest
                         {
                             AgentSessionId = new AgentSessionId(agentSessionId),
+                            AgentSessionEntity = createdAgentSessionEntity.Data as JsonElement?,
                             AgentDefinition = agentDefinition,
                             AgentServices = agentServices,
                             ToolResourceFactory = agentServices.ToolResourceFactory,
@@ -149,6 +172,29 @@ internal static class AgentManifestSessionLauncher
         }
 
         return createdAgentSessionEntity;
+    }
+
+    private static async Task<Phantom.Workspaces.Llm.Trust.TrustProfile?> ResolveSelectedTrustProfileAsync(
+        MainWindowViewModel mainWindowViewModel,
+        IReadOnlyDictionary<string, JsonElement>? parameterSelections)
+    {
+        if (parameterSelections is null)
+        {
+            return null;
+        }
+
+        foreach (var selection in parameterSelections.Values)
+        {
+            if (ExecutorParameterSelection.TryGetTrustProfile(selection, out var profileName)
+                && !string.IsNullOrWhiteSpace(profileName))
+            {
+                var resolver = new DataAccessLayerTrustProfileResolver(
+                    mainWindowViewModel.EntityBroker.EntityRepository.DataAccessLayer);
+                return await resolver.ResolveAsync(profileName);
+            }
+        }
+
+        return null;
     }
 
     private static async Task InitializeSessionTabAsync(

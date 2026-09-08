@@ -209,9 +209,11 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var agentPersistenceStoreCache = new AgentPersistenceStoreCache();
         var agentPersistenceStore = AgentPersistenceStoreFactory.CreateInMemory();
         var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), TaskScheduler.Current);
+        var registryProvider = new TransportFactoryRegistryProvider();
         return new ApplicationServices(
-            new RunningAgentChatTable(agentChatFactory),
-            agentPersistenceStoreCache);
+            new RunningAgentChatTable(agentChatFactory, new AgentSessionRuntimeContextFactory(registryProvider)),
+            agentPersistenceStoreCache,
+            transportFactoryRegistryProvider: registryProvider);
     }
 
     public RepositorySource RepositorySource { get; }
@@ -909,7 +911,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var composition = new Services.WorkspacesTransportComposition(
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
-            hubFactories);
+            hubFactories,
+            registryProvider: this.applicationServices.TransportFactoryRegistryProvider);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();

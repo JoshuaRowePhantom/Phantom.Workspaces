@@ -309,8 +309,11 @@ public partial class App : Application
                 agentPersistenceStore,
                 Services.AgentServicesComposition.ComposeHostServices(secretProvider, mcpOAuthOptions),
                 foregroundScheduler);
+            var transportFactoryRegistryProvider = new Services.TransportFactoryRegistryProvider();
             var applicationServices = new ApplicationServices(
-                new RunningAgentChatTable(agentChatFactory),
+                new RunningAgentChatTable(
+                    agentChatFactory,
+                    new Services.AgentSessionRuntimeContextFactory(transportFactoryRegistryProvider)),
                 agentPersistenceStoreCache,
                 loggerFactory: loggerFactory,
                 logDirectoryProvider: logDirectoryProvider,
@@ -319,7 +322,8 @@ public partial class App : Application
                 credentialPicker: credentialPicker,
                 allowedSecretsStore: allowedSecretsStore,
                 platformSecretStore: platformStore,
-                mcpOAuthOptions: mcpOAuthOptions);
+                mcpOAuthOptions: mcpOAuthOptions,
+                transportFactoryRegistryProvider: transportFactoryRegistryProvider);
             var viewModel = new MainWindowViewModel(repositorySource, configuration, applicationServices: applicationServices);
 
             // #1172: register the canonical URL opener now that MainWindowViewModel exists

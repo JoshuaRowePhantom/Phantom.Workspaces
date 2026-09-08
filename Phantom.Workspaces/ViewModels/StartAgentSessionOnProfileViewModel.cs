@@ -243,6 +243,7 @@ public sealed class StartAgentSessionOnProfileViewModel : WorkspaceTabViewModel
             new AcquireAgentChatRequest
             {
                 AgentSessionId = new AgentSessionId(agentSessionId),
+                AgentSessionEntity = createdAgentSessionEntity.Data as JsonElement?,
                 AgentDefinition = agentDefinition,
                 AgentServices = agentServices,
                 ToolResourceFactory = agentServices.ToolResourceFactory,
