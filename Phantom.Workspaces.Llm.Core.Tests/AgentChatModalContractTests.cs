@@ -21,10 +21,37 @@ public sealed class AgentChatModalContractTests
     {
         var content = new MultipleChoiceModalContent
         {
-            Options = Array.Empty<JsonElement>(),
+            Options = new[] { JsonDocument.Parse("\"a\"").RootElement, JsonDocument.Parse("\"b\"").RootElement },
             AllowsMultiple = false,
         };
         Assert.Equal("multiple-choice", content.Type);
+    }
+
+    [Fact]
+    public void MultipleChoiceModalContent_DuplicateOption_Rejected()
+    {
+        // #1485: publisher-side validation rejects duplicate options so callers cannot publish an
+        // ambiguous multiple-choice modal.
+        Assert.Throws<ArgumentException>(() => new MultipleChoiceModalContent
+        {
+            Options = new[] { JsonDocument.Parse("\"x\"").RootElement, JsonDocument.Parse("\"x\"").RootElement },
+            AllowsMultiple = false,
+        });
+    }
+
+    [Fact]
+    public void MultipleChoiceModalContent_OptionsMutationAfterInit_DoesNotAffectContent()
+    {
+        // #1485: options are deep-cloned via JsonElement.Clone so caller mutations of the source
+        // JsonDocument cannot affect the published modal.
+        using var doc = JsonDocument.Parse("[\"a\", \"b\"]");
+        var options = new[] { doc.RootElement[0], doc.RootElement[1] };
+        var content = new MultipleChoiceModalContent { Options = options, AllowsMultiple = false };
+        var before = content.Options[0].GetString();
+        doc.Dispose(); // Underlying document is torn down; cloned options must still be readable.
+        var after = content.Options[0].GetString();
+        Assert.Equal(before, after);
+        Assert.Equal("a", after);
     }
 
     [Fact]

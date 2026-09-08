@@ -13,6 +13,7 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     private readonly RunningAgentChat _chat;
     private bool _continueInBackground;
     private int _viewerCount = 1;
+    private bool _isRemote;
 
     /// <summary>The agent session identifier.</summary>
     public AgentSessionId SessionId => _chat.SessionId;
@@ -45,7 +46,11 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
     /// <see langword="true"/> when the running chat is a remote proxy (issue #1485). Commit 2
     /// wires the property; the remote transport factory is added in a later commit.
     /// </summary>
-    public bool IsRemote { get; init; }
+    public bool IsRemote
+    {
+        get => _isRemote;
+        init => _isRemote = value;
+    }
 
     /// <summary>
     /// <see langword="true"/> when the running chat should continue after the last viewer detaches
@@ -104,4 +109,32 @@ public sealed class RunningAgentChatWithEntityInfo : INotifyPropertyChanged
         _viewerCount = value;
         this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ViewerCount)));
     }
+
+    /// <summary>
+    /// #1485: assigns the remote-proxy flag after construction. Raises
+    /// <see cref="PropertyChanged"/> when the value changes, so retention-metadata observers
+    /// (e.g. the brain popup) update authoritatively.
+    /// </summary>
+    internal void SetIsRemote(bool value)
+    {
+        if (_isRemote == value)
+        {
+            return;
+        }
+        _isRemote = value;
+        this.PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRemote)));
+    }
+
+    /// <summary>
+    /// #1485: bump the viewer count. Used by <c>RunningAgentChatTable</c> on lease
+    /// acquisition/release so viewer counts reflect actual attach state.
+    /// </summary>
+    internal void IncrementViewerCount() => this.SetViewerCount(_viewerCount + 1);
+
+    /// <summary>
+    /// #1485: decrement the viewer count (clamped at zero). Used when a lease is released.
+    /// When the last viewer detaches and <see cref="ContinueInBackground"/> is false, the owner's
+    /// final-lease teardown proceeds; when true, the running chat survives with zero viewers.
+    /// </summary>
+    internal void DecrementViewerCount() => this.SetViewerCount(Math.Max(0, _viewerCount - 1));
 }

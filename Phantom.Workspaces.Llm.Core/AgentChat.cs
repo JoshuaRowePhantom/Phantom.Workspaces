@@ -65,6 +65,12 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     private readonly AgentChatQueueManager chatQueueManager;
     private readonly LocalAgentInputQueuesAdapter commonInputQueues;
     private readonly ObservableCollection<AgentChatModal> modals = [];
+    // #1485: pending RespondToModalAsync completions keyed by modal id. Completed by
+    // PublishModalDismiss (owner-side dismiss delta). Access on the foreground scheduler.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, TaskCompletionSource> pendingModalDismissals = new();
+    // #1485: last observed response per modal id (owner-side hook for tests). Only meaningful
+    // between the RespondToModalAsync call and the corresponding PublishModalDismiss.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, JsonElement> lastModalResponses = new();
     private AgentChatHistoryService? historyService;
     private readonly AgentChatHistoryCollection history = new();
     private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -939,6 +945,11 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
         ct.ThrowIfCancellationRequested();
+        // #1485: RespondToModalAsync no longer removes the modal itself. It records a pending
+        // dismissal for the modal id, awaits the owner-side dismiss delta (delivered via
+        // PublishModalDismiss), and completes only after the owner removes the modal from the
+        // Modals collection. This matches the transport contract: the local engine and the remote
+        // proxy both dismiss modals via an owner-authoritative delta rather than by client fiat.
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         _ = Task.Factory.StartNew(
             () =>
@@ -949,7 +960,6 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                     if (string.Equals(this.modals[i].Id, modalId, StringComparison.Ordinal))
                     {
                         match = this.modals[i];
-                        this.modals.RemoveAt(i);
                         break;
                     }
                 }
@@ -958,7 +968,27 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                     tcs.TrySetException(new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId)));
                     return;
                 }
-                tcs.TrySetResult();
+                if (!this.pendingModalDismissals.TryAdd(modalId, tcs))
+                {
+                    tcs.TrySetException(new InvalidOperationException(
+                        $"Modal '{modalId}' already has a pending response."));
+                    return;
+                }
+                // Cancellation triggers detach only; the modal remains present because dismissal is
+                // owner-authoritative.
+                if (ct.CanBeCanceled)
+                {
+                    ct.Register(() =>
+                    {
+                        if (this.pendingModalDismissals.TryRemove(modalId, out var pending))
+                        {
+                            pending.TrySetCanceled(ct);
+                        }
+                    });
+                }
+                // Owner-side response consumer hook: the tests' foreground scheduler will drain
+                // PublishModalDismiss synchronously after the response is observed.
+                this.lastModalResponses[modalId] = response;
             },
             CancellationToken.None,
             TaskCreationOptions.DenyChildAttach,
@@ -966,12 +996,9 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
         return tcs.Task;
     }
 
-    /// <summary>
-    /// #1485: owner-side helper used by tests and the (future) transport ingress to publish a
-    /// modal onto the foreground scheduler. The added modal is observable via
-    /// <see cref="Modals"/> and resolved via <see cref="RespondToModalAsync"/>.
-    /// </summary>
-    internal void PublishModalForTest(AgentChatModal modal)
+    // #1485: production owner-side ingress. Adds a modal to Modals on the foreground scheduler.
+    // Used by tests and by the (future) transport ingress. Public because remote proxies invoke it.
+    public void PublishModal(AgentChatModal modal)
     {
         ArgumentNullException.ThrowIfNull(modal);
         _ = Task.Factory.StartNew(
@@ -980,6 +1007,38 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             TaskCreationOptions.DenyChildAttach,
             this.foregroundScheduler);
     }
+
+    // #1485: production owner-side dismissal. Removes the modal from Modals on the foreground
+    // scheduler and completes any pending RespondToModalAsync task.
+    public void PublishModalDismiss(string modalId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                for (var i = 0; i < this.modals.Count; i++)
+                {
+                    if (string.Equals(this.modals[i].Id, modalId, StringComparison.Ordinal))
+                    {
+                        this.modals.RemoveAt(i);
+                        break;
+                    }
+                }
+                if (this.pendingModalDismissals.TryRemove(modalId, out var pending))
+                {
+                    pending.TrySetResult();
+                }
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+    }
+
+    /// <summary>
+    /// #1485: test helper preserved for source compatibility. Routes through the production
+    /// <see cref="PublishModal"/> ingress so tests exercise the real path.
+    /// </summary>
+    internal void PublishModalForTest(AgentChatModal modal) => this.PublishModal(modal);
 
     public void ResetSession(AgentChatSession nextSession, bool interruptCurrentResponse = true)
     {
@@ -2382,7 +2441,7 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             || this.TotalReasoningTokenCount != previousReasoningTokenCount
             || this.TotalSessionCostMicroUsd != previousCostMicroUsd)
         {
-            this.usage = new Usage
+            var candidate = new Usage
             {
                 TotalInputTokenCount = this.TotalInputTokenCount,
                 TotalOutputTokenCount = this.TotalOutputTokenCount,
@@ -2391,6 +2450,13 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                 TotalReasoningTokenCount = this.TotalReasoningTokenCount,
                 TotalSessionCostUsd = this.TotalSessionCostUsd,
             };
+            // #1485: publisher validation must gate publication. Invalid candidates (negative
+            // token counts, NaN/negative cost) never reach IAgentChat.Usage or UsageChanged.
+            if (!UsagePublisher.TryValidate(candidate, out _))
+            {
+                return;
+            }
+            this.usage = candidate;
             this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -2402,17 +2468,37 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
             return;
         }
 
-        this.information = new AgentInformation
+        // #1485: guarantee every required-string field is non-blank so publisher validation never
+        // silently drops a publication. Cascading fallback: DisplayName -> Name -> AgentId ->
+        // agentSessionId -> "agent".
+        var fallback = string.IsNullOrWhiteSpace(this.AgentId)
+            ? (string.IsNullOrWhiteSpace(this.agentSessionId) ? "agent" : this.agentSessionId)
+            : this.AgentId;
+        var name = string.IsNullOrWhiteSpace(this.Name) ? fallback : this.Name;
+        var displayName = string.IsNullOrWhiteSpace(this.DisplayName) ? name : this.DisplayName;
+        var description = AgentInformationPublisher.EnsureNonBlankDescription(
+            this.Description,
+            displayName,
+            fallback);
+
+        var candidate = new AgentInformation
         {
-            AgentSessionId = this.agentSessionId,
-            AgentId = this.AgentId,
-            Name = string.IsNullOrWhiteSpace(this.Name) ? this.AgentId : this.Name,
-            DisplayName = string.IsNullOrWhiteSpace(this.DisplayName) ? this.AgentId : this.DisplayName,
-            Description = string.IsNullOrWhiteSpace(this.Description) ? this.DisplayName : this.Description,
+            AgentSessionId = string.IsNullOrWhiteSpace(this.agentSessionId) ? fallback : this.agentSessionId,
+            AgentId = string.IsNullOrWhiteSpace(this.AgentId) ? fallback : this.AgentId,
+            Name = name,
+            DisplayName = displayName,
+            Description = description,
             AcceptsUserInput = this.acceptsUserInput,
-            CurrentModelId = this.CurrentModelId,
+            CurrentModelId = string.IsNullOrWhiteSpace(this.CurrentModelId) ? null : this.CurrentModelId,
             AgentDefinition = this.agentDefinition,
         };
+        // Publisher validation gates publication. All required strings are guaranteed non-blank
+        // above; only null-definition would fail here, which is already guarded at method entry.
+        if (!AgentInformationPublisher.TryValidate(candidate, out _))
+        {
+            return;
+        }
+        this.information = candidate;
         this.InformationChanged?.Invoke(this, EventArgs.Empty);
     }
 

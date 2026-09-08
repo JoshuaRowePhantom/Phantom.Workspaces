@@ -777,7 +777,23 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
         internal void Rename(string newName) => this.name = newName;
 
-        internal void RaiseChanged() => this.Changed?.Invoke(this, EventArgs.Empty);
+        internal void RaiseChanged()
+        {
+            var handler = this.Changed;
+            if (handler is null)
+            {
+                return;
+            }
+            // #1485: per-queue Changed notifications must fire on the captured foreground context
+            // so UI observers do not need to marshal. Mirrors the aggregate RaiseChanged behavior.
+            var ctx = this.parent.foregroundContext;
+            if (ctx is null || SynchronizationContext.Current == ctx)
+            {
+                handler.Invoke(this, EventArgs.Empty);
+                return;
+            }
+            ctx.Post(_ => this.Changed?.Invoke(this, EventArgs.Empty), null);
+        }
 
         internal AgentInputQueueSnapshot CaptureSnapshot()
         {

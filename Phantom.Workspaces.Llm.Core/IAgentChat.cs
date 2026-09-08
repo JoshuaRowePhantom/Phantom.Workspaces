@@ -115,8 +115,9 @@ public sealed record MultipleChoiceModalContent : AgentChatModalContent
 
     /// <summary>
     /// Multiple-choice options. Callers may pass any <see cref="IReadOnlyList{T}"/>; the record
-    /// snapshots the values into an immutable array so later caller mutations cannot affect the
-    /// published modal (issue #1485).
+    /// deep-clones each <see cref="JsonElement"/> so later caller mutations of the source
+    /// <see cref="JsonDocument"/> cannot affect the published modal, and rejects duplicate options
+    /// (issue #1485).
     /// </summary>
     public required IReadOnlyList<JsonElement> Options
     {
@@ -124,9 +125,25 @@ public sealed record MultipleChoiceModalContent : AgentChatModalContent
         init
         {
             ArgumentNullException.ThrowIfNull(value);
-            this.options = value is System.Collections.Immutable.ImmutableArray<JsonElement> imm
-                ? imm
-                : System.Collections.Immutable.ImmutableArray.CreateRange(value);
+            if (value.Count == 0)
+            {
+                throw new ArgumentException("Options must contain at least one entry.", nameof(value));
+            }
+            var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<JsonElement>(value.Count);
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var option in value)
+            {
+                var cloned = option.Clone();
+                var rawJson = cloned.GetRawText();
+                if (!seen.Add(rawJson))
+                {
+                    throw new ArgumentException(
+                        $"Duplicate option '{rawJson}' rejected; multiple-choice options must be distinct.",
+                        nameof(value));
+                }
+                builder.Add(cloned);
+            }
+            this.options = builder.ToImmutable();
         }
     }
 

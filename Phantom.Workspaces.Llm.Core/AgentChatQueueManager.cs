@@ -218,28 +218,41 @@ public sealed class AgentChatQueueManager
             contents.Insert(0, new TextContent(text));
         }
 
+        bool applied;
+        AgentInputQueueManager.QueueStateChangeKind kind;
         if (contents.Count == 0)
         {
-            return queue.TryRemove(ref expected, item);
-        }
-
-        var updatedMessages = item.Messages.ToArray();
-        if (updatedMessages.Length == 0)
-        {
-            updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            applied = queue.TryRemove(ref expected, item);
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemRemoved;
         }
         else
         {
-            updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            var updatedMessages = item.Messages.ToArray();
+            if (updatedMessages.Length == 0)
+            {
+                updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            }
+            else
+            {
+                updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            }
+
+            applied = queue.TryUpdate(
+                ref expected,
+                item,
+                item with
+                {
+                    Messages = updatedMessages,
+                });
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemAdded;
         }
 
-        return queue.TryUpdate(
-            ref expected,
-            item,
-            item with
-            {
-                Messages = updatedMessages,
-            });
+        if (applied)
+        {
+            // #1485: keep the common queue aggregate in lock-step with legacy edits.
+            this.inputQueueManager.NotifyLegacyMutationApplied(queue, kind);
+        }
+        return applied;
     }
 
     private bool TryRemoveQueueItemContent(
@@ -258,27 +271,39 @@ public sealed class AgentChatQueueManager
         }
 
         contents.RemoveAt(contentIndex);
+        bool applied;
+        AgentInputQueueManager.QueueStateChangeKind kind;
         if (contents.Count == 0)
         {
-            return queue.TryRemove(ref expected, item);
-        }
-
-        var updatedMessages = item.Messages.ToArray();
-        if (updatedMessages.Length == 0)
-        {
-            updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            applied = queue.TryRemove(ref expected, item);
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemRemoved;
         }
         else
         {
-            updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            var updatedMessages = item.Messages.ToArray();
+            if (updatedMessages.Length == 0)
+            {
+                updatedMessages = [new ChatMessage(ChatRole.User, contents)];
+            }
+            else
+            {
+                updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
+            }
+
+            applied = queue.TryUpdate(
+                ref expected,
+                item,
+                item with
+                {
+                    Messages = updatedMessages,
+                });
+            kind = AgentInputQueueManager.QueueStateChangeKind.ItemAdded;
         }
 
-        return queue.TryUpdate(
-            ref expected,
-            item,
-            item with
-            {
-                Messages = updatedMessages,
-            });
+        if (applied)
+        {
+            this.inputQueueManager.NotifyLegacyMutationApplied(queue, kind);
+        }
+        return applied;
     }
 }

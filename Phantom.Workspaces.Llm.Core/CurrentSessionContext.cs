@@ -11,6 +11,9 @@ namespace Phantom.Workspaces.Llm;
 public sealed record CurrentSessionContext
 {
     private readonly string agentSessionId = string.Empty;
+    private readonly string? owner;
+    private readonly long ownershipGeneration;
+    private readonly long runtimeEpoch;
 
     /// <summary>The running agent session identifier, stable across resumes.</summary>
     public required string AgentSessionId
@@ -39,4 +42,56 @@ public sealed record CurrentSessionContext
 
     /// <summary>An entity-name reference to the agent-definition the host is currently running, or null when unknown.</summary>
     public EntityName? AgentDefinitionReference { get; init; }
+
+    /// <summary>
+    /// #1485: owning host identity. Set by the host that currently owns the session. An attachment
+    /// peer (viewer) leaves this member unmodified so remote proxies preserve the owning host's
+    /// identity rather than replacing it with the viewer's.
+    /// </summary>
+    public string? Owner
+    {
+        get => this.owner;
+        init
+        {
+            if (value is not null && string.IsNullOrWhiteSpace(value))
+            {
+                throw new ArgumentException("Owner must be null or non-blank.", nameof(value));
+            }
+            this.owner = value;
+        }
+    }
+
+    /// <summary>
+    /// #1485: monotonically increasing ownership generation. Bumped when ownership transfers to a
+    /// new host. Must be nonnegative.
+    /// </summary>
+    public long OwnershipGeneration
+    {
+        get => this.ownershipGeneration;
+        init
+        {
+            if (value < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "OwnershipGeneration must be nonnegative.");
+            }
+            this.ownershipGeneration = value;
+        }
+    }
+
+    /// <summary>
+    /// #1485: runtime epoch. Bumped whenever the host restarts or resumes the session process.
+    /// Must be nonnegative.
+    /// </summary>
+    public long RuntimeEpoch
+    {
+        get => this.runtimeEpoch;
+        init
+        {
+            if (value < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value), "RuntimeEpoch must be nonnegative.");
+            }
+            this.runtimeEpoch = value;
+        }
+    }
 }

@@ -51,40 +51,73 @@ public sealed class Retry1485ContractTests
         Assert.NotNull(t.GetProperty(nameof(RunningAgentChatWithEntityInfo.ViewerCount)));
         Assert.NotNull(t.GetProperty(nameof(RunningAgentChatWithEntityInfo.IsRemote)));
 
-        // SetContinueInBackground / SetViewerCount are the authoritative setters that raise the
-        // INotifyPropertyChanged event.
+        // Behavioural: authoritative setters raise PropertyChanged.
         Assert.NotNull(t.GetMethod("SetContinueInBackground", BindingFlags.NonPublic | BindingFlags.Instance));
         Assert.NotNull(t.GetMethod("SetViewerCount", BindingFlags.NonPublic | BindingFlags.Instance));
+        Assert.NotNull(t.GetMethod("SetIsRemote", BindingFlags.NonPublic | BindingFlags.Instance));
+        Assert.NotNull(t.GetMethod("IncrementViewerCount", BindingFlags.NonPublic | BindingFlags.Instance));
+        Assert.NotNull(t.GetMethod("DecrementViewerCount", BindingFlags.NonPublic | BindingFlags.Instance));
     }
 
     [Fact]
     public void CurrentSessionContext_ValidOwnerGenerationEpoch_PreservesOwningHostIdentity()
     {
-        var ctx = new CurrentSessionContext { AgentSessionId = "s-1" };
+        var ctx = new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            Owner = "host-A",
+            OwnershipGeneration = 3,
+            RuntimeEpoch = 5,
+        };
         Assert.Equal("s-1", ctx.AgentSessionId);
+        Assert.Equal("host-A", ctx.Owner);
+        Assert.Equal(3, ctx.OwnershipGeneration);
+        Assert.Equal(5, ctx.RuntimeEpoch);
     }
 
     [Fact]
     public void CurrentSessionContext_BlankOwner_RejectsInitialization()
     {
-        Assert.Throws<ArgumentException>(() => new CurrentSessionContext { AgentSessionId = "   " });
+        // Both AgentSessionId and Owner (when non-null) reject blank strings.
+        Assert.Throws<ArgumentException>(() => new CurrentSessionContext { AgentSessionId = "s-1", Owner = "   " });
     }
 
     [Fact]
     public void CurrentSessionContext_NegativeGeneration_RejectsInitialization()
     {
-        // Contract-only pin: publisher rejection of blank session id also covers the invariant that
-        // no negative generation identifier survives to the running host. The wider owner/generation
-        // schema is introduced by transport commits; the current record enforces non-blankness.
-        Assert.Throws<ArgumentException>(() => new CurrentSessionContext { AgentSessionId = "" });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            OwnershipGeneration = -1,
+        });
+    }
+
+    [Fact]
+    public void CurrentSessionContext_NegativeEpoch_RejectsInitialization()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            RuntimeEpoch = -1,
+        });
     }
 
     [Fact]
     public void CurrentSessionContext_AttachmentPeer_DoesNotReplaceHostIdentity()
     {
-        var a = new CurrentSessionContext { AgentSessionId = "s-1" };
-        var b = a with { }; // Attachment cannot rewrite the identity.
-        Assert.Equal(a, b);
+        var owner = new CurrentSessionContext
+        {
+            AgentSessionId = "s-1",
+            Owner = "host-A",
+            OwnershipGeneration = 2,
+            RuntimeEpoch = 4,
+        };
+        // Attachment path clones the record with viewer-side updates; the owning host identity
+        // must survive unchanged.
+        var attached = owner with { };
+        Assert.Equal(owner.Owner, attached.Owner);
+        Assert.Equal(owner.OwnershipGeneration, attached.OwnershipGeneration);
+        Assert.Equal(owner.RuntimeEpoch, attached.RuntimeEpoch);
     }
 
     [Fact]
@@ -100,14 +133,11 @@ public sealed class Retry1485ContractTests
     [Fact]
     public void AgentServices_RemoteRuntimeIntentSetter_WithExpressionPreservesOtherServices()
     {
-        // AgentServices is a record so any object-typed seam is settable via `with { ... }` without
-        // disturbing other fields. The RemoteRuntimeIntent seam is carried on the same record type
-        // (as ExecutorBindings / ExecutorTransportFactoryRegistry etc.); the record itself must
-        // expose an init-only setter for every named seam.
-        var s = new AgentServices { LogChat = true };
-        var updated = s with { ExecutorBindings = new object() };
+        var s = new AgentServices { LogChat = true, LogHttpRequests = true };
+        var updated = s with { RemoteRuntimeIntent = new object() };
         Assert.True(updated.LogChat);
-        Assert.NotNull(updated.ExecutorBindings);
+        Assert.True(updated.LogHttpRequests);
+        Assert.NotNull(updated.RemoteRuntimeIntent);
     }
 
     [Fact]
@@ -129,11 +159,15 @@ public sealed class Retry1485ContractTests
             nameof(AgentServices.ProcessExecutor),
             nameof(AgentServices.ExecutionTrustContext),
             nameof(AgentServices.SlashCommandRegistry),
+            nameof(AgentServices.RemoteRuntimeIntent),
         })
         {
             var prop = t.GetProperty(name);
             Assert.NotNull(prop);
             Assert.Equal(typeof(object), prop!.PropertyType);
         }
+        // The GetService dispatch must not accidentally leak a concrete type for RemoteRuntimeIntent.
+        var services = new AgentServices { RemoteRuntimeIntent = new object() };
+        Assert.Null(services.GetService(typeof(object))); // GetService only resolves the named services.
     }
 }

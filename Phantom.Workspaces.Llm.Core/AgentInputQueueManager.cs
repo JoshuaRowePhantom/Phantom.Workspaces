@@ -59,6 +59,26 @@ public sealed class AgentInputQueueManager
     /// <summary>Bumps the aggregate revision and returns the new value.</summary>
     internal long BumpAggregateRevision() => Interlocked.Increment(ref this.aggregateRevision);
 
+    /// <summary>
+    /// #1485: notifies subscribers that a legacy edit/remove path applied a mutation to
+    /// <paramref name="queue"/>. Bumps the aggregate revision and raises
+    /// <see cref="QueueStateChanged"/>. Callers on the legacy <see cref="AgentChatQueueManager"/>
+    /// edit/remove paths invoke this so the common queue aggregate stays in lock-step with the
+    /// legacy surface.
+    /// </summary>
+    public void NotifyLegacyMutationApplied(AgentInputQueue queue, QueueStateChangeKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(queue);
+        Interlocked.Increment(ref this.aggregateRevision);
+        this.QueueStateChanged?.Invoke(
+            this,
+            new QueueStateChangedEventArgs
+            {
+                Queue = queue,
+                ChangeKind = kind,
+            });
+    }
+
     /// <summary>Records an owner-assigned display name for the given queue id.</summary>
     internal void SetQueueName(string queueId, string name)
     {

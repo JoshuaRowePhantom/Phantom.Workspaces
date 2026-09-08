@@ -22,12 +22,17 @@ public sealed class AgentViewModelRetryTests
               "tools": [] }
             """);
 
-    private static AgentChat CreateChat(AgentDefinition? def)
+    private readonly TaskScheduler foregroundScheduler = new SynchronousTaskScheduler();
+
+    private AgentChat CreateChat(AgentDefinition? def)
     {
         var reqType = typeof(AgentChat).Assembly.GetType("Phantom.Workspaces.Llm.InternalCreateAgentChatRequest")!;
         var request = Activator.CreateInstance(reqType)!;
         reqType.GetProperty("AgentDefinition")!.SetValue(request, def);
         reqType.GetProperty("ConfiguredStore")!.SetValue(request, new InMemoryAgentPersistenceStore());
+        // #1485 retry: synchronous foreground scheduler makes PublishModal / RespondToModalAsync /
+        // PublishModalDismiss execute inline so tests do not depend on Task.Yield polling loops.
+        reqType.GetProperty("ForegroundScheduler")!.SetValue(request, this.foregroundScheduler);
         var ctor = typeof(AgentChat).GetConstructor(BindingFlags.Instance | BindingFlags.NonPublic, null, new[] { reqType }, null)!;
         var chat = (AgentChat)ctor.Invoke(new[] { request });
         typeof(AgentChat).GetField("agentDefinition", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(chat, def);
@@ -37,6 +42,15 @@ public sealed class AgentViewModelRetryTests
                 .Invoke(chat, null);
         }
         return chat;
+    }
+
+    // #1226 pattern: inline foreground scheduler so publish/respond/dismiss run inline.
+    private sealed class SynchronousTaskScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task> GetScheduledTasks() => Enumerable.Empty<Task>();
+        protected override void QueueTask(Task task) => this.TryExecuteTask(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+            => this.TryExecuteTask(task);
     }
 
     [Fact]
@@ -125,18 +139,14 @@ public sealed class AgentViewModelRetryTests
             Body = "b",
             Content = new ApprovalModalContent { ApproveLabel = "Y", RejectLabel = "N" },
         };
-        typeof(AgentChat).GetMethod("PublishModalForTest", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(chat, new object[] { modal });
-        for (var i = 0; i < 100 && chat.Modals.Count == 0; i++)
-        {
-            await Task.Yield();
-        }
+        chat.PublishModal(modal);
         Assert.Single(chat.Modals);
-        await chat.RespondToModalAsync("m", default, TestContext.Current.CancellationToken);
-        for (var i = 0; i < 100 && chat.Modals.Count != 0; i++)
-        {
-            await Task.Yield();
-        }
+        var respondTask = chat.RespondToModalAsync("m", default, TestContext.Current.CancellationToken);
+        // Input remains gated: the modal is still present until the owner dismisses it.
+        Assert.False(respondTask.IsCompleted);
+        Assert.Single(chat.Modals);
+        chat.PublishModalDismiss("m");
+        await respondTask;
         Assert.Empty(chat.Modals);
     }
 
@@ -152,17 +162,13 @@ public sealed class AgentViewModelRetryTests
             Body = "b",
             Content = new ApprovalModalContent { ApproveLabel = "Y", RejectLabel = "N" },
         };
-        typeof(AgentChat).GetMethod("PublishModalForTest", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(chat, new object[] { modal });
-        for (var i = 0; i < 100 && chat.Modals.Count == 0; i++)
-        {
-            await Task.Yield();
-        }
+        chat.PublishModal(modal);
+        Assert.Single(chat.Modals);
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => chat.RespondToModalAsync("m", default, cts.Token));
-        // Modal not dismissed by cancellation.
+        // Cancellation does not remove the modal (owner-authoritative dismissal).
         Assert.Single(chat.Modals);
     }
 

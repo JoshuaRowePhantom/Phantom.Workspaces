@@ -1,6 +1,8 @@
+using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 using AgentSchema;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using MongoDB.Bson;
 using Phantom.Workspaces.Llm.Interfaces;
@@ -8,9 +10,11 @@ using Phantom.Workspaces.Llm.Interfaces;
 namespace Phantom.Workspaces.Llm.Tests;
 
 /// <summary>
-/// #1485 retry: explicitly-required tests around <see cref="AgentChat"/> behaviour (modal accept-once,
-/// notes, interrupt idempotence, dispose idempotence, service resolution, and tool-snapshot
-/// immutability). These pin the invariants added to <c>AgentChat</c> in this retry.
+/// #1485 retry: behavioural tests around <see cref="AgentChat"/> (modal accept-once via owner-side
+/// dismiss, notes, interrupt idempotence, dispose idempotence, service resolution, and tool-snapshot
+/// immutability). These pin the invariants added to <c>AgentChat</c> in this retry. All tests use a
+/// synchronous foreground scheduler so <c>PublishModal</c>/<c>PublishModalDismiss</c> and
+/// <c>RespondToModalAsync</c> execute inline — no <c>Task.Yield</c> polling loops.
 /// </summary>
 public sealed class AgentChatRetryTests
 {
@@ -21,7 +25,9 @@ public sealed class AgentChatRetryTests
 
     private static AgentDefinition EchoDef => AgentDefinitionLoader.LoadAgentFromJson(EchoAgentJson);
 
-    private static async Task<AgentChatFactory> NewFactoryAsync(AgentSessionId sessionId)
+    private readonly TaskScheduler foregroundScheduler = new SynchronousTaskScheduler();
+
+    private async Task<AgentChatFactory> NewFactoryAsync(AgentSessionId sessionId)
     {
         var store = new InMemoryAgentPersistenceStore();
         var def = EchoDef;
@@ -34,7 +40,7 @@ public sealed class AgentChatRetryTests
             }
         });
         var services = new AgentServices { ChatClientOverride = new DeterministicTestChatClient() };
-        return new AgentChatFactory(store, services, TaskScheduler.Default);
+        return new AgentChatFactory(store, services, this.foregroundScheduler);
     }
 
     [Fact]
@@ -43,8 +49,14 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-info-1");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        var info = lease.AgentChat.Information;
+        var chat = (AgentChat)lease.AgentChat;
+        var info = chat.Information;
+        // Publisher validation: every required string is non-blank when Information is exposed.
         Assert.False(string.IsNullOrEmpty(info.AgentSessionId));
+        Assert.False(string.IsNullOrEmpty(info.AgentId));
+        Assert.False(string.IsNullOrEmpty(info.Name));
+        Assert.False(string.IsNullOrEmpty(info.DisplayName));
+        Assert.False(string.IsNullOrEmpty(info.Description));
         Assert.NotNull(info.AgentDefinition);
     }
 
@@ -54,9 +66,29 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-usage-1");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        var usage = lease.AgentChat.Usage;
-        // Structural: Usage is a value record; comparing the current with itself yields equality.
-        Assert.Equal(usage, lease.AgentChat.Usage);
+        var chat = (AgentChat)lease.AgentChat;
+        var raised = 0;
+        Usage? observedAtEvent = null;
+        chat.UsageChanged += (_, _) =>
+        {
+            raised++;
+            observedAtEvent = chat.Usage;
+        };
+        // Publish a Usage delta via the same private path the streaming pipeline uses.
+        var update = new AgentResponseUpdate
+        {
+            Contents = new List<AIContent>
+            {
+                new UsageContent(new Microsoft.Extensions.AI.UsageDetails { InputTokenCount = 42, OutputTokenCount = 7 }),
+            },
+        };
+        typeof(AgentChat)
+            .GetMethod("AccumulateUsage", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(chat, new object[] { update });
+        Assert.Equal(1, raised);
+        Assert.NotNull(observedAtEvent);
+        Assert.Equal(42, observedAtEvent!.Value.TotalInputTokenCount);
+        Assert.Equal(7, observedAtEvent.Value.TotalOutputTokenCount);
     }
 
     [Fact]
@@ -75,27 +107,15 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-tools-snap");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        var first = lease.AgentChat.GetToolSnapshot();
-        // The returned type must be a read-only surface; callers cannot mutate the underlying list.
-        Assert.IsAssignableFrom<IReadOnlyList<AgentChatToolItem>>(first);
-    }
-
-    [Fact]
-    public async Task SetToolEnabledAsync_KnownTool_ChangesStateThenRaisesToolsChanged()
-    {
-        var sessionId = new AgentSessionId("retry-tool-known");
-        await using var factory = await NewFactoryAsync(sessionId);
-        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
         var chat = (AgentChat)lease.AgentChat;
-        var snapshot = chat.GetToolSnapshot();
-        if (snapshot.Count == 0)
+        var first = chat.GetToolSnapshot();
+        var firstCount = first.Count;
+        if (firstCount > 0)
         {
-            return; // No tools configured on echo agent — SUT covered by SetToolEnabledAsync_UnknownTool.
+            await chat.SetToolEnabledAsync(first[0].Id, !first[0].IsEnabled);
         }
-        var raised = 0;
-        chat.ToolsChanged += (_, _) => raised++;
-        await chat.SetToolEnabledAsync(snapshot[0].Id, !snapshot[0].IsEnabled);
-        Assert.True(raised >= 0);
+        // Snapshot returned before the mutation is a captured value — its Count is stable.
+        Assert.Equal(firstCount, first.Count);
     }
 
     [Fact]
@@ -104,7 +124,7 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-tool-unknown");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        await Assert.ThrowsAnyAsync<Exception>(
+        await Assert.ThrowsAsync<ArgumentException>(
             () => lease.AgentChat.SetToolEnabledAsync("no-such-tool", true));
     }
 
@@ -114,12 +134,17 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-tool-cancel");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
+        var chat = (AgentChat)lease.AgentChat;
+        var beforeSnapshot = chat.GetToolSnapshot();
         using var cts = new CancellationTokenSource();
         cts.Cancel();
         var raised = 0;
-        ((AgentChat)lease.AgentChat).ToolsChanged += (_, _) => raised++;
+        chat.ToolsChanged += (_, _) => raised++;
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => lease.AgentChat.SetToolEnabledAsync("anything", true, cts.Token));
+            () => chat.SetToolEnabledAsync("anything", true, cts.Token));
+        var afterSnapshot = chat.GetToolSnapshot();
+        Assert.Equal(beforeSnapshot.Count, afterSnapshot.Count);
+        Assert.Equal(0, raised);
     }
 
     [Fact]
@@ -147,23 +172,19 @@ public sealed class AgentChatRetryTests
             Body = "b",
             Content = new ApprovalModalContent { ApproveLabel = "Y", RejectLabel = "N" },
         };
-        // Publish via internal test hook so we do not require transport code.
-        typeof(AgentChat)
-            .GetMethod("PublishModalForTest", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .Invoke(chat, new object[] { modal });
-        // The publish is dispatched to the foreground scheduler; block briefly on the drained task
-        // by scheduling a marker continuation on the same scheduler.
-        for (var i = 0; i < 50 && chat.Modals.Count == 0; i++)
-        {
-            await Task.Yield();
-        }
-        await chat.RespondToModalAsync("m-1", JsonDocument.Parse("{}").RootElement);
-        for (var i = 0; i < 50 && chat.Modals.Count != 0; i++)
-        {
-            await Task.Yield();
-        }
+        chat.PublishModal(modal);
+        Assert.Single(chat.Modals);
+
+        var respondTask = chat.RespondToModalAsync("m-1", JsonDocument.Parse("{}").RootElement);
+        // On a synchronous scheduler, the RespondToModalAsync foreground continuation has run
+        // inline. The modal is still present because dismissal is owner-authoritative.
+        Assert.False(respondTask.IsCompleted, "Modal remains present until owner dismisses.");
+        Assert.Single(chat.Modals);
+
+        chat.PublishModalDismiss("m-1");
+        await respondTask;
         Assert.Empty(chat.Modals);
-        // Second call must throw because modal has been removed.
+
         await Assert.ThrowsAsync<ArgumentException>(
             () => chat.RespondToModalAsync("m-1", JsonDocument.Parse("{}").RootElement));
     }
@@ -174,9 +195,11 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-sys-note");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        // Contract: the method accepts the note and does not throw. The actual append is dispatched
-        // to the internal foreground scheduler; observability is covered by AgentChatTests.
-        lease.AgentChat.EnqueueSystemNote("hello");
+        var chat = (AgentChat)lease.AgentChat;
+        var before = chat.History.Count;
+        chat.EnqueueSystemNote("hello");
+        Assert.Equal(before + 1, chat.History.Count);
+        Assert.Contains(chat.History[^1].Contents.OfType<TextContent>(), c => c.Text == "hello");
     }
 
     [Fact]
@@ -185,7 +208,11 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-help-note");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        lease.AgentChat.EnqueueHelpNote("help");
+        var chat = (AgentChat)lease.AgentChat;
+        var before = chat.History.Count;
+        chat.EnqueueHelpNote("help");
+        Assert.Equal(before + 1, chat.History.Count);
+        Assert.Contains(chat.History[^1].Contents.OfType<TextContent>(), c => c.Text == "help");
     }
 
     [Fact]
@@ -194,7 +221,14 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-diag-note");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        lease.AgentChat.EnqueueTransientDiagnostic("diag");
+        var chat = (AgentChat)lease.AgentChat;
+        var before = chat.History.Count;
+        chat.EnqueueTransientDiagnostic("diag");
+        Assert.Equal(before + 1, chat.History.Count);
+        var last = chat.History[^1];
+        // Diagnostic role: not persisted by the store even though observable in History.
+        Assert.Equal(AgentChatHistoryItem.DiagnosticChatRole, last.Role);
+        Assert.Contains(last.Contents.OfType<TextContent>(), c => c.Text == "diag");
     }
 
     [Fact]
@@ -206,7 +240,6 @@ public sealed class AgentChatRetryTests
         lease.AgentChat.Interrupt();
         lease.AgentChat.Interrupt();
         lease.AgentChat.Interrupt();
-        // No exception thrown.
     }
 
     [Fact]
@@ -215,23 +248,26 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-interrupt-active");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        lease.AgentChat.Interrupt();
-        // Chat remains usable after Interrupt: Information stays queryable.
-        var info = lease.AgentChat.Information;
+        var chat = (AgentChat)lease.AgentChat;
+        var cts = new CancellationTokenSource();
+        typeof(AgentChat)
+            .GetField("activeRunCancellation", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(chat, cts);
+        chat.Interrupt();
+        Assert.True(cts.IsCancellationRequested);
+        var info = chat.Information;
         Assert.False(string.IsNullOrEmpty(info.AgentSessionId));
     }
 
     [Fact]
     public async Task TurnCompleted_TurnPersists_EventRaisedAfterHistoryMutation()
     {
-        var sessionId = new AgentSessionId("retry-turn-completed");
-        await using var factory = await NewFactoryAsync(sessionId);
-        await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        // Contract: TurnCompleted's argument is the completed history item; the event signature
-        // therefore fires only after a history mutation completes.
+        // Structural: TurnCompleted's argument type is the completed history item, so the event
+        // fires *after* the history is mutated (invariant established by the signature contract).
         var evt = typeof(IAgentChat).GetEvent(nameof(IAgentChat.TurnCompleted));
         Assert.NotNull(evt);
-        Assert.Equal(typeof(EventHandler<AgentChatHistoryItem>), evt.EventHandlerType);
+        Assert.Equal(typeof(EventHandler<AgentChatHistoryItem>), evt!.EventHandlerType);
+        await Task.CompletedTask;
     }
 
     [Fact]
@@ -240,11 +276,17 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-dispose-once");
         var factory = await NewFactoryAsync(sessionId);
         var lease = await factory.CreateAsync(EchoDef, sessionId);
+        var chat = (AgentChat)lease.AgentChat;
+        var disposeStartedField = typeof(AgentChat)
+            .GetField("disposeStarted", BindingFlags.NonPublic | BindingFlags.Instance)!;
         await lease.DisposeAsync();
+        var afterFirst = (int)disposeStartedField.GetValue(chat)!;
         await lease.DisposeAsync();
+        var afterSecond = (int)disposeStartedField.GetValue(chat)!;
+        Assert.Equal(1, afterFirst);
+        Assert.Equal(afterFirst, afterSecond);
         await factory.DisposeAsync();
         await factory.DisposeAsync();
-        // No exception.
     }
 
     [Fact]
@@ -253,9 +295,21 @@ public sealed class AgentChatRetryTests
         var sessionId = new AgentSessionId("retry-getservice");
         await using var factory = await NewFactoryAsync(sessionId);
         await using var lease = await factory.CreateAsync(EchoDef, sessionId);
-        // AgentChat.GetService forwards to the underlying chat-client-agent and AgentServices.
-        var provider = (IServiceProvider)lease.AgentChat;
-        // Requesting the interface itself must not throw.
-        _ = provider.GetService(typeof(IAgentChat));
+        var chat = (AgentChat)lease.AgentChat;
+        // The chat resolves itself as an ISubAgentTable service.
+        var subAgentTable = ((IServiceProvider)chat).GetService(typeof(ISubAgentTable));
+        Assert.NotNull(subAgentTable);
+        Assert.Same(chat, subAgentTable);
+    }
+
+    // #1226 pattern: inline foreground scheduler so PublishModal / RespondToModalAsync /
+    // PublishModalDismiss run synchronously on the calling thread. This eliminates the previous
+    // Task.Yield polling loops and makes ordering assertions deterministic (issue #1485 retry).
+    private sealed class SynchronousTaskScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task> GetScheduledTasks() => Enumerable.Empty<Task>();
+        protected override void QueueTask(Task task) => this.TryExecuteTask(task);
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued)
+            => this.TryExecuteTask(task);
     }
 }
