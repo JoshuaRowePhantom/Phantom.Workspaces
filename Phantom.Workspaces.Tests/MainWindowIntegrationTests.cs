@@ -3088,12 +3088,18 @@ public sealed class MainWindowIntegrationTests
             }
             """);
 
-        // Use a different GUID as the owning profile (simulates a remote profile with no connection)
+        // Use a different GUID as the owning profile and persisted executor target
+        // (simulates a remote profile with no connection).
         var remoteProfileEntityId = new EntityId(Guid.NewGuid());
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-            viewModel, agentDefinitionEntity, agentSessionId, hostProfileEntityId: remoteProfileEntityId);
+            viewModel,
+            agentDefinitionEntity,
+            agentSessionId,
+            hostProfileEntityId: remoteProfileEntityId,
+            sessionExecutor: AgentSessionExecutorBindings.UserComputerProfileDescriptor(
+                remoteProfileEntityId.ToString()));
         Assert.NotNull(agentSessionEntity);
 
         // No remote executor configured → no reverse connection available for the remote profile
@@ -3144,7 +3150,12 @@ public sealed class MainWindowIntegrationTests
         var agentSessionShortcutContext = new AgentSessionShortcutContext();
         var agentSessionId = Guid.NewGuid().ToString("n");
         var agentSessionEntity = await agentSessionShortcutContext.CreateAgentSessionEntityAsync(
-            viewModel, agentDefinitionEntity, agentSessionId, hostProfileEntityId: remoteProfileEntityId);
+            viewModel,
+            agentDefinitionEntity,
+            agentSessionId,
+            hostProfileEntityId: remoteProfileEntityId,
+            sessionExecutor: AgentSessionExecutorBindings.UserComputerProfileDescriptor(
+                remoteProfileEntityId.ToString()));
         Assert.NotNull(agentSessionEntity);
 
         // The session must actually persist the canonical field the router reads.
