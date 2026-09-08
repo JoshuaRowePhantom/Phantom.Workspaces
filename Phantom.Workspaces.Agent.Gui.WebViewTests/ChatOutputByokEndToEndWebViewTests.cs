@@ -33,8 +33,8 @@ namespace Phantom.Workspaces.Agent.Gui.WebViewTests;
 /// exclusively event-driven: WebView <c>Ready</c>/<c>HistoryLoaded</c>, collection-changed waits,
 /// the deterministic client's readiness gating, and explicit <c>EndBatch</c> flushes (the same
 /// deterministic flush the production sink exposes). The scripted wire shapes (tool names
-/// <c>task</c>/<c>read_agent</c>/<c>powershell</c>, background-mode agent ids equal to the task
-/// <c>name</c>, blocking <c>read_agent</c> waits) were captured from a real CLI exchange before
+/// <c>task</c>/<c>read_agent</c>/<c>powershell</c>, runtime-assigned background agent ids,
+/// blocking <c>read_agent</c> waits) were captured from a real CLI exchange before
 /// being hard-coded here — and live only in this test body, never in the harness classes.
 /// </summary>
 [Collection(WebViewTestCollection.Name)]
@@ -83,21 +83,6 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             mainTurn0.Complete();
 
             var mainTurn1 = main.Client.EnqueueStreamingResponse();
-            mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
-                ChatRole.Assistant,
-                [new FunctionCallContent("call_read_1", "read_agent", new Dictionary<string, object?>
-                {
-                    ["agent_id"] = "sub-one",
-                    ["wait"] = true,
-                })]));
-            mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
-                ChatRole.Assistant,
-                [new FunctionCallContent("call_read_2", "read_agent", new Dictionary<string, object?>
-                {
-                    ["agent_id"] = "sub-two",
-                    ["wait"] = true,
-                })]));
-            mainTurn1.Complete();
 
             // The final replies stay gated (not ready) until the test releases them, so the DOMs
             // can be attached and observed before the closing text streams through.
@@ -108,6 +93,14 @@ public sealed class ChatOutputByokEndToEndWebViewTests
             }
 
             mainFinalTurn.Complete();
+
+            // Each completed background task queues a system notification turn in current CLI
+            // releases. They carry no additional model output, but the scripted endpoint must
+            // acknowledge both turns so the production loop can return to idle cleanly.
+            for (var i = 0; i < 2; i++)
+            {
+                main.Client.EnqueueStreamingResponse().Complete();
+            }
 
             var subOne = server.AddConversation(
                 "sub-one",
@@ -226,6 +219,38 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                         throw new InvalidOperationException(
                             $"Timed out waiting for 2 sub-agent slots. Diagnostics:\n{Diagnostics(server, chat, loggerFactory)}");
                     }
+
+                    // Current Copilot CLI releases assign opaque runtime IDs rather than using the
+                    // caller's task name as the read_agent key. The task results in the next
+                    // request are the authoritative public hand-off of those IDs.
+                    await main.GetRequestAsync(1).WaitAsync(timeout);
+                    string[] RuntimeAgentIds() =>
+                        chat.History
+                            .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
+                            .Concat(main.Client.LastRequestMessages
+                                .SelectMany(message => message.Contents.OfType<FunctionResultContent>()))
+                            .Select(result => result.Result as string)
+                            .Where(result => result is not null)
+                            .Select(result => System.Text.RegularExpressions.Regex.Match(
+                                result!,
+                                @"agent \((?<id>[0-9a-fA-F-]{36})\):"))
+                            .Where(match => match.Success)
+                            .Select(match => match.Groups["id"].Value)
+                            .Distinct(StringComparer.Ordinal)
+                            .ToArray();
+
+                    var firstRuntimeAgentId = Assert.Single(RuntimeAgentIds());
+                    mainTurn1.EnqueueUpdate(new ChatResponseUpdate(
+                        ChatRole.Assistant,
+                        [new FunctionCallContent(
+                            "call_read_1",
+                            "read_agent",
+                            new Dictionary<string, object?>
+                            {
+                                ["agent_id"] = firstRuntimeAgentId,
+                                ["wait"] = true,
+                            })]));
+                    mainTurn1.Complete();
 
                     var subControls = new List<(string AgentId, AgentChat Chat, ControllableWebViewControl Browser)>();
                     foreach (var slot in viewModel.SubAgentsContainer.Slots.ToArray())

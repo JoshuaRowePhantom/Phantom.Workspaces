@@ -66,6 +66,45 @@ public sealed class CopilotSdkStreamAdapterTests
     }
 
     [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_SubAgentAssistantMessage_YieldsTaggedFinalText()
+    {
+        var updates = await TranslateAsync(new AssistantMessageEvent
+        {
+            AgentId = "child-a",
+            Data = new AssistantMessageData
+            {
+                Content = "SUB-ONE-FINAL: hello world 1",
+                MessageId = "message-1",
+#pragma warning disable GHCP001
+                ParentToolCallId = "call-1",
+#pragma warning restore GHCP001
+            },
+        });
+
+        var update = Assert.Single(updates);
+        var text = Assert.IsType<TextContent>(Assert.Single(update.Contents));
+        Assert.Equal("SUB-ONE-FINAL: hello world 1", text.Text);
+        Assert.Equal("child-a", CopilotSdkStreamAdapter.GetParentToolCallId(text));
+        Assert.Equal("call-1", CopilotSdkStreamAdapter.GetSourceToolCallId(text));
+    }
+
+    [Fact]
+    public async Task TranslateCopilotSdkSessionEvents_RootAssistantMessage_DoesNotDuplicateStreamedText()
+    {
+        var updates = await TranslateAsync(new AssistantMessageEvent
+        {
+            AgentId = string.Empty,
+            Data = new AssistantMessageData
+            {
+                Content = "already emitted as deltas",
+                MessageId = "message-1",
+            },
+        });
+
+        Assert.Empty(updates);
+    }
+
+    [Fact]
     public async Task TranslateCopilotSdkSessionEvents_EmptyAssistantDelta_Dropped()
     {
         var updates = await TranslateAsync(DeltaEvent(string.Empty, string.Empty));

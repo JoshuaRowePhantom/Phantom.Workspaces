@@ -199,8 +199,11 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         var agentId = update.Contents
             .Select(CopilotSdkStreamAdapter.GetParentToolCallId)
             .FirstOrDefault(id => !string.IsNullOrEmpty(id));
+        var sourceToolCallId = update.Contents
+            .Select(CopilotSdkStreamAdapter.GetSourceToolCallId)
+            .FirstOrDefault(id => !string.IsNullOrEmpty(id));
 
-        this.PushUpdate(agentId, update);
+        this.PushUpdate(agentId, sourceToolCallId, update);
 
         if (string.IsNullOrEmpty(agentId))
         {
@@ -208,7 +211,12 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             // signal can inject them as the child's first history message.
             foreach (var toolStart in update.Contents.OfType<FunctionCallContent>())
             {
-                this.BufferRootToolStart(toolStart);
+                var matchedExistingChild = this.BufferRootToolStart(toolStart);
+                if (!matchedExistingChild
+                    && TryCreateBackgroundTaskStart(toolStart, out var backgroundTaskStart))
+                {
+                    await this.HandleSubAgentStartedAsync(backgroundTaskStart).ConfigureAwait(false);
+                }
             }
         }
     }
@@ -228,12 +236,12 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         return false;
     }
 
-    private void BufferRootToolStart(FunctionCallContent toolStart)
+    private bool BufferRootToolStart(FunctionCallContent toolStart)
     {
         var toolCallId = toolStart.CallId;
         if (string.IsNullOrEmpty(toolCallId))
         {
-            return;
+            return false;
         }
 
         ChildRoutingEntry? pendingChild;
@@ -246,11 +254,43 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             else
             {
                 this.bufferedToolStarts[toolCallId] = toolStart;
-                return;
+                return false;
             }
         }
 
         InjectToolCallPrompt(pendingChild!, toolStart);
+        return true;
+    }
+
+    private static bool TryCreateBackgroundTaskStart(
+        FunctionCallContent toolStart,
+        out FunctionCallContent lifecycleStart)
+    {
+        lifecycleStart = null!;
+        if (!string.Equals(toolStart.Name, "task", StringComparison.Ordinal)
+            || !string.Equals(GetStringArgument(toolStart, "mode"), "background", StringComparison.Ordinal)
+            || string.IsNullOrEmpty(toolStart.CallId))
+        {
+            return false;
+        }
+
+        lifecycleStart = new FunctionCallContent(
+            string.Empty,
+            CopilotSdkStreamAdapter.SubAgentStartLifecycleName,
+            new Dictionary<string, object?>
+            {
+                [CopilotSdkStreamAdapter.ParentToolCallIdArgumentName] = toolStart.CallId,
+                [CopilotSdkStreamAdapter.AgentNameArgumentName] = GetStringArgument(toolStart, "name"),
+                [CopilotSdkStreamAdapter.DescriptionArgumentName] = GetStringArgument(toolStart, "description"),
+            })
+        {
+            AdditionalProperties = new()
+            {
+                [CopilotSdkStreamAdapter.ContentTypePropertyName] =
+                    CopilotSdkStreamAdapter.SubAgentLifecycleContentType,
+            },
+        };
+        return true;
     }
 
     private async Task HandleSubAgentStartedAsync(FunctionCallContent start)
@@ -291,8 +331,16 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             {
                 if (!this.childSinks.TryGetValue(agentId, out entry!))
                 {
-                    entry = new ChildRoutingEntry(agentId, this.logger);
-                    this.childSinks[agentId] = entry;
+                    if (!string.IsNullOrEmpty(parentToolCallId)
+                        && this.TryTakePendingSink(parentToolCallId, out entry!))
+                    {
+                        this.childSinks[agentId] = entry;
+                    }
+                    else
+                    {
+                        entry = new ChildRoutingEntry(agentId, this.logger);
+                        this.childSinks[agentId] = entry;
+                    }
                 }
             }
         }
@@ -309,6 +357,11 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     this.pendingChildSinksToolCallOrder.AddLast(parentToolCallId!);
                 }
             }
+        }
+
+        if (!entry.TryBeginCreation())
+        {
+            return;
         }
 
         // Handle parent-tool-call prompt injection: if the tool start already arrived, inject
@@ -472,7 +525,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     // by a SubagentStartedEvent that lacked an AgentId), re-keying it under this AgentId.
     // Otherwise we create a fresh buffering entry on first sight (start lifecycle has not yet
     // arrived). Sub-agent output is NEVER pushed to the parent transcript.
-    private void PushUpdate(string? agentId, ChatResponseUpdate update)
+    private void PushUpdate(string? agentId, string? sourceToolCallId, ChatResponseUpdate update)
     {
         if (string.IsNullOrEmpty(agentId))
         {
@@ -485,7 +538,12 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         {
             if (!this.childSinks.TryGetValue(agentId, out entry!))
             {
-                if (this.TryAdoptPendingSinkForAgentId(agentId, out entry!))
+                if (!string.IsNullOrEmpty(sourceToolCallId)
+                    && this.TryTakePendingSink(sourceToolCallId, out entry!))
+                {
+                    this.childSinks[agentId] = entry;
+                }
+                else if (this.TryAdoptPendingSinkForAgentId(agentId, out entry!))
                 {
                     this.childSinks[agentId] = entry;
                 }
@@ -498,6 +556,21 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         }
 
         entry.Push(update);
+    }
+
+    private bool TryTakePendingSink(string toolCallId, out ChildRoutingEntry entry)
+    {
+        lock (this.pendingChildSinksByToolCall)
+        {
+            if (this.pendingChildSinksByToolCall.Remove(toolCallId, out entry!))
+            {
+                this.pendingChildSinksToolCallOrder.Remove(toolCallId);
+                return true;
+            }
+        }
+
+        entry = null!;
+        return false;
     }
 
     // Fix #1139: bind the oldest AgentId-less pending sink to a newly-observed child AgentId.
@@ -567,6 +640,21 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
     private static string? GetArgument(FunctionCallContent call, string name)
         => call.Arguments?.TryGetValue(name, out var value) == true ? value as string : null;
 
+    private static string? GetStringArgument(FunctionCallContent call, string name)
+    {
+        if (call.Arguments?.TryGetValue(name, out var value) != true)
+        {
+            return null;
+        }
+
+        return value switch
+        {
+            string text => text,
+            JsonElement { ValueKind: JsonValueKind.String } element => element.GetString(),
+            _ => null,
+        };
+    }
+
     /// <summary>
     /// Per-child routing entry. Owns the (optional) buffer of updates that arrived before the
     /// async factory-create completed, the real <see cref="ICopilotSubAgentReceiver"/> once
@@ -586,11 +674,26 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
         private Exception? completedFailure;
         private bool endSignalled;
         private bool disposed;
+        private bool creationStarted;
 
         internal ChildRoutingEntry(string agentId, ILogger? logger)
         {
             this.agentId = agentId;
             this.logger = logger;
+        }
+
+        internal bool TryBeginCreation()
+        {
+            lock (this.gate)
+            {
+                if (this.creationStarted)
+                {
+                    return false;
+                }
+
+                this.creationStarted = true;
+                return true;
+            }
         }
 
         internal void Push(ChatResponseUpdate update)
