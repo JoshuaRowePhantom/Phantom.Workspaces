@@ -7,6 +7,8 @@ using Microsoft.Extensions.Logging;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Mcp;
 
@@ -51,23 +53,89 @@ public sealed class RemoteMcpHostHandler
     {
         ArgumentNullException.ThrowIfNull(channel);
 
+        // #1477: never accept a caller-supplied compiled policy. Policy compilation is authoritative
+        // on this launch host only.
+        McpConnectionRequest.RejectCompiledPolicyProperty(request);
+
         var tool = await this.ResolveConnectionAsync(request, ct).ConfigureAwait(false);
         if (tool is null)
         {
             return null;
         }
 
+        // #1477: when the request references a stored trust profile, this launch host resolves and
+        // compiles it locally (so the mutation-vs-launch race is closed on the host) and threads
+        // the resulting AgentExecutionTrustContext through the shared factory.
+        var trustContext = await this.ResolveTrustContextAsync(request, ct).ConfigureAwait(false);
+
         var serverTransport = await McpTransportFactory.CreateMcpTransportAsync(
             tool,
             this.services,
             this.loggerFactory,
-            ct).ConfigureAwait(false);
+            ct,
+            clientIdOverride: null,
+            trustContext: trustContext,
+            processExecutor: this.services?.ProcessExecutor as IProcessExecutor).ConfigureAwait(false);
 
         var delegatingServer = new DelegatingMcpServer(serverTransport);
         var incoming = McpChannelClientTransport.CreateServerTransport(channel);
         var cts = new CancellationTokenSource();
         var relay = Task.Run(() => delegatingServer.RunAsync(incoming, cts.Token), CancellationToken.None);
         return new HostSession(delegatingServer, incoming, cts, relay);
+    }
+
+    /// <summary>
+    /// Resolves the stored trust profile referenced by a #1477 <c>mcp</c> request on THIS launch
+    /// host and compiles it into an <see cref="AgentExecutionTrustContext"/>. When the request has
+    /// no reference, returns null so the launch is unconstrained. A revision mismatch fails closed
+    /// with <see cref="InvalidOperationException"/> before any process starts.
+    /// </summary>
+    private Task<AgentExecutionTrustContext?> ResolveTrustContextAsync(
+        JsonElement request,
+        CancellationToken ct)
+    {
+        if (!McpConnectionRequest.TryGetTrustProfileReference(
+                request,
+                out var trustProfileRef,
+                out var expectedRevision))
+        {
+            return Task.FromResult<AgentExecutionTrustContext?>(null);
+        }
+
+        var resolver = this.services?.TrustProfileResolver as IRemoteTrustProfileResolver;
+        var compiler = this.services?.TrustProfilePolicyCompiler as ITrustProfileProcessPolicyCompiler;
+        if (resolver is null || compiler is null)
+        {
+            throw new InvalidOperationException(
+                $"Remote MCP host has no trust profile resolver/compiler for reference '{trustProfileRef}'.");
+        }
+
+        return ResolveTrustContextCoreAsync(resolver, compiler, trustProfileRef, expectedRevision, ct);
+
+        static async Task<AgentExecutionTrustContext?> ResolveTrustContextCoreAsync(
+            IRemoteTrustProfileResolver resolver,
+            ITrustProfileProcessPolicyCompiler compiler,
+            string trustProfileRef,
+            string? expectedRevision,
+            CancellationToken ct)
+        {
+            var resolved = await resolver.ResolveAsync(trustProfileRef, ct).ConfigureAwait(false)
+                ?? throw new InvalidOperationException(
+                    $"Trust profile '{trustProfileRef}' could not be resolved on the launch host.");
+
+            if (!string.IsNullOrWhiteSpace(expectedRevision)
+                && !string.Equals(resolved.Revision, expectedRevision, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Trust profile '{trustProfileRef}' has revision '{resolved.Revision}' "
+                    + $"but the request expected '{expectedRevision}'. Refusing to launch.");
+            }
+
+            return new AgentExecutionTrustContext(
+                resolved.Profile,
+                compiler,
+                new AgentExecutionTrustProfileReference("trust-profile", trustProfileRef, expectedRevision));
+        }
     }
 
     /// <summary>

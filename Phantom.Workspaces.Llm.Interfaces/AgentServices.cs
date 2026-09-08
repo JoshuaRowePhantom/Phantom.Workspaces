@@ -142,6 +142,29 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? ExecutorTransportFactoryRegistry { get; init; }
 
+    /// <summary>
+    /// Optional launch-host trust profile resolver (issue #1477). Typed as <see langword="object"/>
+    /// to avoid a reverse project reference; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Trust.ITrustProfileResolver</c>. When null, remote MCP requests
+    /// that carry a trust-profile reference fail closed.
+    /// </summary>
+    public object? TrustProfileResolver { get; init; }
+
+    /// <summary>
+    /// Optional launch-host MXC policy compiler (issue #1477). Typed as <see langword="object"/> to
+    /// avoid a reverse project reference; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Trust.ITrustProfileProcessPolicyCompiler</c>.
+    /// </summary>
+    public object? TrustProfilePolicyCompiler { get; init; }
+
+    /// <summary>
+    /// Optional policy-aware streaming process executor (issue #1474 / #1477). Typed as
+    /// <see langword="object"/> to avoid a reverse project reference; consuming code casts to
+    /// <c>Phantom.Workspaces.Llm.Processes.IProcessExecutor</c>. When null, stdio MCP servers use
+    /// the SDK-owned <c>StdioClientTransport</c> exactly as before.
+    /// </summary>
+    public object? ProcessExecutor { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

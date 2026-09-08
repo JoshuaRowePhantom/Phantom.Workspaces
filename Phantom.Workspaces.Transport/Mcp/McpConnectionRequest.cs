@@ -28,6 +28,27 @@ public static class McpConnectionRequest
     public const string TransportProperty = "transport";
     public const string ServerNameProperty = "server-name";
 
+    /// <summary>
+    /// Names a stored trust profile that the launch host must resolve, compose, and compile
+    /// locally (issue #1477). The wire never carries a compiled MXC policy — see
+    /// <see cref="CompiledPolicyProperty"/>.
+    /// </summary>
+    public const string TrustProfileRefProperty = "trust-profile-ref";
+
+    /// <summary>
+    /// The trust profile entity revision the caller observed. The launch host rejects a request
+    /// whose expected revision no longer matches the resolved profile, so a mutated profile can
+    /// never silently launch under divergent policy (issue #1477).
+    /// </summary>
+    public const string TrustProfileRevisionProperty = "trust-profile-revision";
+
+    /// <summary>
+    /// Reserved: intentionally rejected on parse (issue #1477). The wire model has no
+    /// compiled-policy shape; the launch host — not the caller — compiles policy. If this property
+    /// is present the request is refused so callers cannot inject policy the host never authored.
+    /// </summary>
+    public const string CompiledPolicyProperty = "compiled-policy";
+
     /// <summary>Reserved for the #1439 executor-scoped <c>mcp-server-entity</c> resolution touchpoint.</summary>
     public const string ToolTypeNameProperty = "tool-type-name";
 
@@ -184,4 +205,78 @@ public static class McpConnectionRequest
         => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    /// <summary>
+    /// Reads the trust-profile reference (kind, id, expected revision) from an <c>mcp</c> request,
+    /// if present. Returns <see langword="true"/> when the request names a stored profile the
+    /// launch host must resolve locally (issue #1477).
+    /// </summary>
+    public static bool TryGetTrustProfileReference(
+        JsonElement request,
+        out string trustProfileRef,
+        out string? expectedRevision)
+    {
+        trustProfileRef = string.Empty;
+        expectedRevision = null;
+
+        if (request.ValueKind != JsonValueKind.Object
+            || !request.TryGetProperty(ConnectionProperty, out var connection)
+            || connection.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var reference = GetString(connection, TrustProfileRefProperty);
+        if (string.IsNullOrWhiteSpace(reference))
+            return false;
+
+        trustProfileRef = reference;
+        expectedRevision = GetString(connection, TrustProfileRevisionProperty);
+        return true;
+    }
+
+    /// <summary>
+    /// Rejects an <c>mcp</c> request that attempts to inject a compiled MXC policy over the wire
+    /// (issue #1477). The launch host — not the caller — is the sole compiler; only a trust-profile
+    /// reference is authoritative.
+    /// </summary>
+    public static void RejectCompiledPolicyProperty(JsonElement request)
+    {
+        if (request.ValueKind != JsonValueKind.Object
+            || !request.TryGetProperty(ConnectionProperty, out var connection)
+            || connection.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        if (connection.TryGetProperty(CompiledPolicyProperty, out _))
+        {
+            throw new InvalidOperationException(
+                $"MCP connection request must not include a '{CompiledPolicyProperty}' property; "
+                + "policy is compiled by the launch host, not the caller.");
+        }
+    }
+
+    /// <summary>
+    /// Builds a variant of <see cref="FromTool(McpTool)"/> that additionally carries a stored
+    /// trust-profile reference plus expected revision (issue #1477). The launch host resolves,
+    /// composes, and compiles that profile before opening the process.
+    /// </summary>
+    public static JsonElement FromToolWithTrustProfileReference(
+        McpTool tool,
+        string trustProfileRef,
+        string? expectedRevision)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        ArgumentException.ThrowIfNullOrWhiteSpace(trustProfileRef);
+
+        var wire = FromTool(tool);
+        var mutable = JsonObject.Create(wire) ?? new JsonObject();
+        var connectionNode = mutable[ConnectionProperty] as JsonObject ?? new JsonObject();
+        connectionNode[TrustProfileRefProperty] = trustProfileRef;
+        if (!string.IsNullOrWhiteSpace(expectedRevision))
+            connectionNode[TrustProfileRevisionProperty] = expectedRevision;
+        mutable[ConnectionProperty] = connectionNode;
+        return JsonSerializer.Deserialize<JsonElement>(mutable.ToJsonString());
+    }
 }

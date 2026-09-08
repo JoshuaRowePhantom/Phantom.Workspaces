@@ -4,6 +4,8 @@ using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using Phantom.Workspaces.Llm.Auth;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Llm.Trust;
 
 namespace Phantom.Workspaces.Llm.Mcp;
 
@@ -66,7 +68,9 @@ internal static class McpTransportFactory
         AgentServices? services,
         ILoggerFactory? loggerFactory,
         CancellationToken cancellationToken,
-        string? clientIdOverride = null)
+        string? clientIdOverride = null,
+        AgentExecutionTrustContext? trustContext = null,
+        IProcessExecutor? processExecutor = null)
     {
         ArgumentNullException.ThrowIfNull(tool);
 
@@ -83,7 +87,9 @@ internal static class McpTransportFactory
                     apiKey: null,
                     tool.ServerName,
                     transportMode,
-                    loggerFactory);
+                    loggerFactory,
+                    trustContext,
+                    processExecutor);
 
             case ApiKeyConnection apiKey:
                 var resolvedKey = await AgentFactory.ResolveRequiredSecretOrEnvAsync(
@@ -96,10 +102,13 @@ internal static class McpTransportFactory
                     resolvedKey,
                     tool.ServerName,
                     transportMode,
-                    loggerFactory);
+                    loggerFactory,
+                    trustContext,
+                    processExecutor);
 
             case OAuthConnection oauth
                 when string.Equals(oauth.AuthenticationMode, PhantomAgentSchema.EntraPinnedAuthenticationMode, StringComparison.OrdinalIgnoreCase):
+                EnsureHttpAllowed(trustContext, tool.ServerName);
                 return await CreateEntraPinnedTransportAsync(
                     oauth,
                     tool.ServerName,
@@ -109,6 +118,7 @@ internal static class McpTransportFactory
                     cancellationToken).ConfigureAwait(false);
 
             case OAuthConnection oauth:
+                EnsureHttpAllowed(trustContext, tool.ServerName);
                 return await CreateOAuthTransportAsync(
                     oauth,
                     tool.ServerName,
@@ -132,7 +142,9 @@ internal static class McpTransportFactory
         string? apiKey,
         string? serverName,
         McpHttpTransport transportMode,
-        ILoggerFactory? loggerFactory)
+        ILoggerFactory? loggerFactory,
+        AgentExecutionTrustContext? trustContext = null,
+        IProcessExecutor? processExecutor = null)
     {
         if (string.IsNullOrWhiteSpace(endpoint))
         {
@@ -151,10 +163,32 @@ internal static class McpTransportFactory
                 throw new InvalidOperationException("MCP stdio transport does not support API key headers.");
             }
 
-            return CreateStdioTransport(endpointUri, serverName);
+            return CreateStdioTransport(endpointUri, serverName, trustContext, processExecutor, loggerFactory);
         }
 
+        EnsureHttpAllowed(trustContext, serverName);
         return CreateHttpTransport(endpointUri, apiKey, serverName, transportMode, loggerFactory);
+    }
+
+    /// <summary>
+    /// Rejects HTTP/SSE MCP endpoints when the session's trust context requires process
+    /// containment (issue #1477). Phantom does not own the remote server process, so no child
+    /// process can be sandboxed; the caller must fail closed with an unsupported-policy error.
+    /// </summary>
+    internal static void EnsureHttpAllowed(
+        AgentExecutionTrustContext? trustContext,
+        string? serverName)
+    {
+        if (trustContext is null || !trustContext.IsLaunchHost)
+            return;
+
+        var compilation = trustContext.Compile();
+        if (!compilation.RequiresContainment)
+            return;
+
+        var display = string.IsNullOrWhiteSpace(serverName) ? "(mcp server)" : serverName;
+        throw new McpUnsupportedPolicyException(
+            $"MCP HTTP/SSE server '{display}' cannot be constrained: no child process exists to sandbox.");
     }
 
     private static async Task<IClientTransport> CreateOAuthTransportAsync(
@@ -491,8 +525,84 @@ internal static class McpTransportFactory
             _ => HttpTransportMode.StreamableHttp,
         };
 
-    private static IClientTransport CreateStdioTransport(Uri endpointUri, string? serverName)
-        => new StdioClientTransport(BuildStdioTransportOptions(endpointUri, serverName));
+    private static IClientTransport CreateStdioTransport(
+        Uri endpointUri,
+        string? serverName,
+        AgentExecutionTrustContext? trustContext = null,
+        IProcessExecutor? processExecutor = null,
+        ILoggerFactory? loggerFactory = null)
+    {
+        // Legacy in-process branch: no trust context / executor supplied — retain the SDK-owned
+        // StdioClientTransport so existing call sites that have not yet threaded the trust context
+        // continue to work while #1477 rolls out.
+        if (trustContext is null || processExecutor is null)
+        {
+            return new StdioClientTransport(BuildStdioTransportOptions(endpointUri, serverName));
+        }
+
+        var options = BuildStdioTransportOptions(endpointUri, serverName);
+        var executionRequest = BuildProcessExecutionRequest(options, trustContext);
+        return new ProcessExecutorBackedClientTransport(
+            string.IsNullOrWhiteSpace(options.Name) ? "mcp-stdio" : options.Name,
+            executionRequest,
+            processExecutor,
+            loggerFactory);
+    }
+
+    /// <summary>
+    /// Translates the parsed stdio options into a #1474 <see cref="ProcessExecutionRequest"/> and
+    /// attaches the compiled MXC policy from <paramref name="trustContext"/> when — and only when —
+    /// containment is required (issue #1477). A null policy selects the executor's
+    /// ordinary-process branch; a compiled policy selects MXC. Command resolution honours PATH /
+    /// PATHEXT so that <c>.cmd</c>/<c>.bat</c> shims run through <c>%ComSpec%</c>.
+    /// </summary>
+    internal static ProcessExecutionRequest BuildProcessExecutionRequest(
+        StdioClientTransportOptions options,
+        AgentExecutionTrustContext trustContext)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(trustContext);
+
+        var originalArgs = options.Arguments is null
+            ? Array.Empty<string>()
+            : [.. options.Arguments];
+        var resolved = StdioCommandResolver.Resolve(options.Command, originalArgs);
+
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (options.EnvironmentVariables is not null)
+        {
+            foreach (var (name, value) in options.EnvironmentVariables)
+            {
+                if (value is not null)
+                    environment[name] = value;
+            }
+        }
+
+        var request = new ProcessExecutionRequest(
+            resolved.Executable,
+            resolved.Arguments)
+        {
+            WorkingDirectory = options.WorkingDirectory,
+            Environment = environment,
+        };
+
+        if (trustContext.IsLaunchHost)
+        {
+            var compilation = trustContext.Compile();
+            if (compilation.RequiresContainment)
+            {
+                if (compilation.Policy is null)
+                {
+                    throw new InvalidOperationException(
+                        "Trust profile requires containment but no MXC policy was produced.");
+                }
+
+                request = request with { MxcPolicy = compilation.Policy };
+            }
+        }
+
+        return request;
+    }
 
     internal static StdioClientTransportOptions BuildStdioTransportOptions(Uri endpointUri, string? serverName)
     {
