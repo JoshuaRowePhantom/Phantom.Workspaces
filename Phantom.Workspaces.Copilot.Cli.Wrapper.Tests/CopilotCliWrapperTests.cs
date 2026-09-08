@@ -8,6 +8,70 @@ namespace Phantom.Workspaces.Copilot.Cli.Wrapper.Tests;
 public sealed class CopilotCliWrapperTests
 {
     [Fact]
+    public async Task Wrapper_InvalidArguments_ReturnsReservedExitCode()
+    {
+        using var stderr = new MemoryStream();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", "missing-prefix"],
+            Stream.Null,
+            Stream.Null,
+            stderr,
+            new RecordingExecutor(),
+            "unused",
+            Environment.ProcessId,
+            "unused");
+
+        Assert.Equal(CopilotCliWrapper.InvalidArgumentsExitCode, exitCode);
+        Assert.Contains("invalid", Encoding.UTF8.GetString(stderr.ToArray()), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Wrapper_InvalidPolicyEnvelope_ReturnsReservedExitCode()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        File.WriteAllText(lease.Path, "{");
+        using var stderr = new MemoryStream();
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            Stream.Null,
+            stderr,
+            new RecordingExecutor(),
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath);
+
+        Assert.Equal(CopilotCliWrapper.InvalidEnvelopeExitCode, exitCode);
+        Assert.Contains("invalid or expired", Encoding.UTF8.GetString(stderr.ToArray()), StringComparison.OrdinalIgnoreCase);
+        Assert.False(File.Exists(lease.Path));
+    }
+
+    [Fact]
+    public async Task Wrapper_StreamRelayFails_ReturnsInternalFailureExitCode()
+    {
+        using var files = new WrapperFiles();
+        using var lease = files.Store.Create(CreatePolicy(), Environment.ProcessId);
+        using var stderr = new MemoryStream();
+        var executor = new RecordingExecutor { ChildOutput = [1] };
+
+        var exitCode = await CopilotCliWrapper.RunAsync(
+            ["--policy", lease.Path, "--copilot", files.CopilotPath],
+            Stream.Null,
+            new ThrowingWriteStream(),
+            stderr,
+            executor,
+            files.LaunchRoot,
+            Environment.ProcessId,
+            files.WrapperPath);
+
+        Assert.Equal(CopilotCliWrapper.InternalFailureExitCode, exitCode);
+        Assert.Contains("stream relay failed", Encoding.UTF8.GetString(stderr.ToArray()), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Wrapper_CopilotPathEqualsWrapper_RejectsRecursion()
     {
         using var files = new WrapperFiles();
@@ -218,6 +282,20 @@ public sealed class CopilotCliWrapperTests
             Task.FromResult(new ProcessExitResult(exitCode, false, null));
         public void Kill() { }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ThrowingWriteStream : MemoryStream
+    {
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new IOException("Write failed.");
+
+        public override void Write(ReadOnlySpan<byte> buffer) =>
+            throw new IOException("Write failed.");
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default) =>
+            ValueTask.FromException(new IOException("Write failed."));
     }
 
     private sealed class WrapperFiles : IDisposable
