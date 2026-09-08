@@ -78,6 +78,98 @@ public sealed class AgentSessionEntityFactoryTests
     }
 
     [Fact]
+    public void AgentSessionEntityFactory_CreateEntityData_NegativeOwnershipGeneration_ThrowsArgumentOutOfRangeException()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with { OwnershipGeneration = -1 }));
+
+        Assert.Contains("Ownership generation", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionEntityFactory_CreateEntityData_TrustReferenceWithoutRevision_ThrowsArgumentException()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
+            {
+                TrustProfileReference = JsonString("trusted/default"),
+                ExpectedTrustProfileRevision = null,
+            }));
+
+        Assert.Contains("both", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionEntityFactory_CreateEntityData_RevisionWithoutTrustReference_ThrowsArgumentException()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
+            {
+                TrustProfileReference = null,
+                ExpectedTrustProfileRevision = 1,
+            }));
+
+        Assert.Contains("both", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionEntityFactory_CreateEntityData_BlankTrustReference_ThrowsArgumentException()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
+            {
+                TrustProfileReference = JsonString("   "),
+                ExpectedTrustProfileRevision = 1,
+            }));
+
+        Assert.Contains("non-empty string", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionEntityFactory_CreateEntityData_NonStringTrustReference_ThrowsArgumentException()
+    {
+        var exception = Assert.Throws<ArgumentException>(
+            () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
+            {
+                TrustProfileReference = JsonRaw("42"),
+                ExpectedTrustProfileRevision = 1,
+            }));
+
+        Assert.Contains("non-empty string", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentSessionEntityFactory_CreateEntityData_NegativeExpectedTrustProfileRevision_ThrowsArgumentOutOfRangeException()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => AgentSessionEntityFactory.CreateEntityData(ValidRequest() with
+            {
+                TrustProfileReference = JsonString("trusted/default"),
+                ExpectedTrustProfileRevision = -1,
+            }));
+
+        Assert.Contains("Expected trust profile revision", exception.Message, StringComparison.Ordinal);
+    }
+
+    private static CreateAgentSessionEntityDataRequest ValidRequest()
+        => new()
+        {
+            AgentDefinitionEntityId = new EntityId(),
+            AgentDisplayName = "Agent",
+            AgentSessionId = "s1",
+            AgentSessionNames = [new EntityName("tests", "agent-sessions", "session-x")],
+            CurrentTime = TestInstant,
+            ComputerName = "HOST",
+            HostProfileEntityId = new EntityId(),
+        };
+
+    private static JsonElement JsonString(string value)
+        => JsonRaw(JsonSerializer.Serialize(value));
+
+    private static JsonElement JsonRaw(string raw)
+        => JsonDocument.Parse(raw).RootElement.Clone();
+
+    [Fact]
     public void AgentSessionEntityFactory_CreateSessionSimpleName_EmbedsSanitizedComputerAndSessionId()
     {
         var simpleName = AgentSessionEntityFactory.CreateSessionSimpleName(

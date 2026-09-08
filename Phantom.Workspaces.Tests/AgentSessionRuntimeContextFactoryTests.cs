@@ -533,6 +533,89 @@ public sealed class AgentSessionRuntimeContextFactoryTests
     }
 
     [Fact]
+    public void Create_LegacyMissingOwner_UsesSuppliedLocalProfile()
+    {
+        var localProfileEntityId = new EntityId("33333333-3333-3333-3333-333333333333");
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var context = factory.Create(
+            Json($$"""{"agent-session-id":"{{SessionId}}"}"""),
+            localProfileEntityId);
+
+        Assert.Equal(localProfileEntityId.ToString(), context.Intent.OwningProfileEntityId);
+        Assert.Equal("local", context.Intent.ExecutorBindings.SessionExecutor.GetProperty("type").GetString());
+        Assert.Null(context.TransportFactoryRegistry);
+    }
+
+    [Fact]
+    public void Create_LegacyMissingOwner_WithoutSuppliedLocalProfile_ReportsHostProfile()
+    {
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => factory.Create(Json($$"""{"agent-session-id":"{{SessionId}}"}""")));
+
+        Assert.Contains("host-profile-entity-id", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Create_LegacyMissingOwner_WithDefaultSuppliedLocalProfile_ReportsHostProfile()
+    {
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => factory.Create(
+                Json($$"""{"agent-session-id":"{{SessionId}}"}"""),
+                default(EntityId)));
+
+        Assert.Contains("host-profile-entity-id", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Create_MissingAgentSessionId_ReportsField()
+    {
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.Create(Json(
+            $$"""{"host-profile-entity-id":"{{OwnerId}}","ownership-generation":0}""")));
+
+        Assert.Contains("agent-session-id", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Create_BlankAgentSessionId_ReportsField()
+    {
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.Create(Json(
+            $$"""{"agent-session-id":"   ","host-profile-entity-id":"{{OwnerId}}","ownership-generation":0}""")));
+
+        Assert.Contains("agent-session-id", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Create_NonStringHostProfileEntityId_ReportsField()
+    {
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.Create(Json(
+            $$"""{"agent-session-id":"{{SessionId}}","host-profile-entity-id":42}""")));
+
+        Assert.Contains("host-profile-entity-id", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Create_InvalidHostProfileGuid_ReportsField()
+    {
+        var factory = new AgentSessionRuntimeContextFactory(null);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => factory.Create(Json(
+            $$"""{"agent-session-id":"{{SessionId}}","host-profile-entity-id":"not-a-guid","ownership-generation":0}""")));
+
+        Assert.Contains("host-profile-entity-id", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AgentSessionEntityTypeView_GroupsByHostProfile()
     {
         const string ResourceName =
