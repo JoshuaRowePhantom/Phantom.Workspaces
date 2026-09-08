@@ -8,6 +8,9 @@ namespace Phantom.Workspaces.Services;
 public interface IAgentSessionRuntimeContextFactory
 {
     AgentSessionRuntimeContext Create(JsonElement agentSessionEntity);
+
+    AgentSessionRuntimeContext Create(JsonElement agentSessionEntity, EntityId? localProfileEntityId)
+        => Create(agentSessionEntity);
 }
 
 public sealed class AgentSessionRuntimeContextFactory : IAgentSessionRuntimeContextFactory
@@ -20,10 +23,18 @@ public sealed class AgentSessionRuntimeContextFactory : IAgentSessionRuntimeCont
     }
 
     public AgentSessionRuntimeContext Create(JsonElement agentSessionEntity)
+        => Create(agentSessionEntity, null);
+
+    public AgentSessionRuntimeContext Create(JsonElement agentSessionEntity, EntityId? localProfileEntityId)
     {
         ValidatePersistedShape(agentSessionEntity);
 
         var sessionExecutor = AgentSessionExecutorBindings.ReadSessionExecutor(agentSessionEntity);
+        if (IsLegacyLocalProfile(agentSessionEntity, localProfileEntityId))
+        {
+            sessionExecutor = AgentSessionExecutorBindings.LocalDescriptor();
+        }
+
         var components = AgentSessionExecutorBindings.ReadComponentBindings(agentSessionEntity);
         using var componentsDocument = JsonDocument.Parse(JsonSerializer.Serialize(components));
         var bindings = ExecutorBindings.FromPersistableMap(componentsDocument.RootElement, sessionExecutor);
@@ -43,6 +54,36 @@ public sealed class AgentSessionRuntimeContextFactory : IAgentSessionRuntimeCont
         }
 
         return new AgentSessionRuntimeContext(bindings, registry);
+    }
+
+    private static bool IsLegacyLocalProfile(JsonElement entity, EntityId? localProfileEntityId)
+    {
+        if (localProfileEntityId is null
+            || entity.TryGetProperty(AgentSessionExecutorBindings.RootKey, out var root)
+                && root.ValueKind == JsonValueKind.Object
+                && root.TryGetProperty(AgentSessionExecutorBindings.SessionKey, out _))
+        {
+            return false;
+        }
+
+        foreach (var propertyName in new[]
+                 {
+                     AgentSessionExecutorBindings.HostProfileKey,
+                     AgentSessionExecutorBindings.OwningProfileKey,
+                 })
+        {
+            if (entity.TryGetProperty(propertyName, out var profile)
+                && profile.ValueKind == JsonValueKind.String
+                && string.Equals(
+                    profile.GetString(),
+                    localProfileEntityId.Value.ToString(),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ValidatePersistedShape(JsonElement entity)

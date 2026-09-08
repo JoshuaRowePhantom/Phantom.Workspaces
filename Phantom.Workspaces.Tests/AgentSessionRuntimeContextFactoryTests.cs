@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
@@ -62,6 +63,22 @@ public sealed class AgentSessionRuntimeContextFactoryTests
             "22222222-2222-2222-2222-222222222222",
             ExecutorBindings.DeriveClientInstance(context.ExecutorBindings.SessionExecutor));
         Assert.Same(registry, context.TransportFactoryRegistry);
+    }
+
+    [Theory]
+    [InlineData("host-profile-entity-id")]
+    [InlineData("owning-profile-entity-id")]
+    public void Create_LegacyLocalProfile_UsesLocalSessionExecutor(string propertyName)
+    {
+        var localProfileEntityId = new EntityId("22222222-2222-2222-2222-222222222222");
+        var factory = new AgentSessionRuntimeContextFactory(new TransportFactoryRegistryProvider());
+
+        var context = factory.Create(
+            Json($$"""{"{{propertyName}}":"{{localProfileEntityId}}"}"""),
+            localProfileEntityId);
+
+        Assert.Equal("local", context.ExecutorBindings.SessionExecutor.GetProperty("type").GetString());
+        Assert.Null(context.TransportFactoryRegistry);
     }
 
     [Theory]

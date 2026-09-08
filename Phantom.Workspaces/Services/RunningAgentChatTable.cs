@@ -62,7 +62,9 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         var services = request.AgentServices;
         if (!isRunning && request.AgentSessionEntity is { } entity)
         {
-            var runtimeContext = this.runtimeContextFactory.Create(entity);
+            var localProfileEntityId = (services?.CurrentSessionContext as CurrentSessionContext)
+                ?.UserComputerProfile?.EntityId;
+            var runtimeContext = this.runtimeContextFactory.Create(entity, localProfileEntityId);
             services = (services ?? new AgentServices()) with
             {
                 ExecutorBindings = runtimeContext.ExecutorBindings,
