@@ -313,23 +313,63 @@ internal static class MxcRepositoryTestSupport
 
     private static ProcessStartInfo CreateStartInfo(string fileName, IEnumerable<string> arguments)
     {
-        var startInfo = new ProcessStartInfo(fileName)
+        var path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var cargoHome = Environment.GetEnvironmentVariable("CARGO_HOME");
+        if (string.IsNullOrWhiteSpace(cargoHome))
+        {
+            var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (!string.IsNullOrWhiteSpace(userProfile))
+            {
+                cargoHome = Path.Combine(userProfile, ".cargo");
+            }
+        }
+
+        var cargoBin = string.IsNullOrWhiteSpace(cargoHome)
+            ? null
+            : Path.Combine(cargoHome, "bin");
+        if (cargoBin is not null && Directory.Exists(cargoBin))
+        {
+            path = string.IsNullOrEmpty(path)
+                ? cargoBin
+                : $"{cargoBin}{Path.PathSeparator}{path}";
+        }
+
+        var searchDirectories = path.Split(
+            Path.PathSeparator,
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var pathExtensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").Split(
+                ';',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [];
+        var resolved = MxcExecutableResolver.Resolve(
+            fileName,
+            [.. arguments],
+            searchDirectories,
+            pathExtensions,
+            OperatingSystem.IsWindows(),
+            Environment.GetEnvironmentVariable("ComSpec")
+                ?? Path.Combine(Environment.SystemDirectory, "cmd.exe"),
+            File.Exists);
+        var startInfo = new ProcessStartInfo(resolved.FileName)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             WorkingDirectory = Root.FullName,
         };
-        foreach (var argument in arguments)
+        if (resolved.ArgumentString is not null)
         {
-            startInfo.ArgumentList.Add(argument);
+            startInfo.Arguments = resolved.ArgumentString;
         }
-        var cargoBin = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cargo", "bin");
-        if (Directory.Exists(cargoBin))
+        else
         {
-            startInfo.Environment["PATH"] = $"{cargoBin};{startInfo.Environment["PATH"]}";
+            foreach (var argument in resolved.Arguments)
+            {
+                startInfo.ArgumentList.Add(argument);
+            }
         }
+        startInfo.Environment["PATH"] = path;
         return startInfo;
     }
 
