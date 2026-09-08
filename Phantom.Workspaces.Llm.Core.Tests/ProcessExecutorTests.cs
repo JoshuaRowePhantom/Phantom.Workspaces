@@ -83,6 +83,50 @@ public sealed class ProcessExecutorTests
 
         Assert.Equal(["DACL mutation was required."], handle.LaunchInfo.Warnings);
     }
+
+    [Fact]
+    public void ProcessExecutor_TimeoutZero_Throws()
+    {
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => executor.Start(
+            new ProcessExecutionRequest("tool") { Timeout = TimeSpan.Zero }));
+    }
+
+    [Fact]
+    public void ProcessExecutor_TimeoutNegative_Throws()
+    {
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => executor.Start(
+            new ProcessExecutionRequest("tool") { Timeout = TimeSpan.FromMilliseconds(-1) }));
+    }
+
+    [Fact]
+    public void ProcessExecutor_TimeoutExceedsUInt_Throws()
+    {
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => executor.Start(
+            new ProcessExecutionRequest("tool")
+            {
+                Timeout = TimeSpan.FromMilliseconds((double)uint.MaxValue + 1),
+            }));
+    }
+
+    [Fact]
+    public void ProcessExecutor_NullRequest_Throws()
+    {
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
+        Assert.Throws<ArgumentNullException>(() => executor.Start(null!));
+    }
+
+    [Fact]
+    public void ProcessExecutor_EmptyExecutable_Throws()
+    {
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), new FakeSandboxRunner());
+        Assert.Throws<ArgumentException>(() => executor.Start(new ProcessExecutionRequest("")));
+    }
 }
 
 internal sealed class RecordingSystemProcessFactory : ISystemProcessFactory

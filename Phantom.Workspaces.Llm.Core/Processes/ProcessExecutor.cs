@@ -44,9 +44,7 @@ public sealed record ProcessLaunchInfo(
 public sealed record ProcessExitResult(
     int ExitCode,
     bool TimedOut,
-    SandboxOutputMetadata? OutputMetadata,
-    bool StandardOutputTruncated = false,
-    bool StandardErrorTruncated = false);
+    SandboxOutputMetadata? OutputMetadata);
 
 /// <summary>An owned live process with separate standard streams.</summary>
 public interface IProcessHandle : IAsyncDisposable
@@ -201,6 +199,10 @@ internal sealed class StreamingProcessHandle : IProcessHandle
             backend.ProcessId,
             backend.IsContained,
             backend.Warnings);
+
+        // Start pumps eagerly so an untaken stdout/stderr pipe cannot deadlock the child, even
+        // when no caller ever inspects StandardOutput or StandardError.
+        EnsurePumpsStarted();
     }
 
     public Stream StandardInput { get; }
@@ -209,7 +211,6 @@ internal sealed class StreamingProcessHandle : IProcessHandle
         get
         {
             stdout.Observe();
-            EnsurePumpsStarted();
             return stdout;
         }
     }
@@ -218,7 +219,6 @@ internal sealed class StreamingProcessHandle : IProcessHandle
         get
         {
             stderr.Observe();
-            EnsurePumpsStarted();
             return stderr;
         }
     }
@@ -230,11 +230,7 @@ internal sealed class StreamingProcessHandle : IProcessHandle
         var pumps = EnsurePumpsStarted();
         var result = await backend.WaitAsync(cancellationToken).ConfigureAwait(false);
         await Task.WhenAll(pumps.Stdout, pumps.Stderr).ConfigureAwait(false);
-        return result with
-        {
-            StandardOutputTruncated = stdout.WasTruncated,
-            StandardErrorTruncated = stderr.WasTruncated,
-        };
+        return result;
     }
 
     public void Kill()
@@ -325,16 +321,11 @@ internal sealed class StreamingProcessHandle : IProcessHandle
 
 internal sealed class AdaptiveOutputStream : Stream
 {
-    private const int BufferedChunkLimit = 64;
     private readonly Channel<byte[]> chunks = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
     private byte[]? currentChunk;
     private int currentOffset;
-    private int bufferedChunks;
-    private volatile bool observed;
     private bool disposed;
-
-    internal bool WasTruncated { get; private set; }
 
     public override bool CanRead => !disposed;
     public override bool CanSeek => false;
@@ -348,17 +339,14 @@ internal sealed class AdaptiveOutputStream : Stream
 
     internal void WriteChunk(ReadOnlySpan<byte> bytes)
     {
-        if (!observed && bufferedChunks >= BufferedChunkLimit && chunks.Reader.TryRead(out _))
-        {
-            bufferedChunks--;
-            WasTruncated = true;
-        }
-
-        bufferedChunks++;
         chunks.Writer.TryWrite(bytes.ToArray());
     }
 
-    internal void Observe() => observed = true;
+    internal void Observe()
+    {
+        // Retained as a no-op hook for future backpressure schemes; currently the pump always
+        // drains into an unbounded in-memory buffer to guarantee the OS pipe cannot deadlock.
+    }
 
     internal void Complete(Exception? error = null) => chunks.Writer.TryComplete(error);
 
@@ -379,7 +367,6 @@ internal sealed class AdaptiveOutputStream : Stream
                 return 0;
             if (!chunks.Reader.TryRead(out currentChunk))
                 continue;
-            bufferedChunks--;
             currentOffset = 0;
         }
 
