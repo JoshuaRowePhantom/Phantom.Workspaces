@@ -142,6 +142,19 @@ public sealed record AgentServices : IServiceProvider
     /// </summary>
     public object? ExecutorTransportFactoryRegistry { get; init; }
 
+    /// <summary>
+    /// Effective composed trust profile for the current agent. Typed as <see langword="object"/> to
+    /// preserve the interfaces/core layering; the local Copilot runtime host casts it to the core
+    /// trust-profile contract and compiles containment policy on that host.
+    /// </summary>
+    public object? EffectiveTrustProfile { get; init; }
+
+    /// <summary>
+    /// Host-local trust-profile provider used by remote model listeners to resolve a profile
+    /// reference without transporting a compiled policy or policy-file contents.
+    /// </summary>
+    public object? TrustProfileProvider { get; init; }
+
     public object? GetService(Type serviceType)
     {
         if (serviceType == typeof(ILoggerFactory))             return LoggerFactory;

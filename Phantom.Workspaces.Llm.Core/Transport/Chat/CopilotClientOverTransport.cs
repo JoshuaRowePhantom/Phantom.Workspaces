@@ -16,11 +16,13 @@ namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
 internal sealed class CopilotClientOverTransport : ICopilotClient
 {
     private readonly ITransport transport;
+    private readonly string? trustProfileReference;
     private int disposed;
 
-    public CopilotClientOverTransport(ITransport transport)
+    public CopilotClientOverTransport(ITransport transport, string? trustProfileReference = null)
     {
         this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        this.trustProfileReference = trustProfileReference;
     }
 
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -32,7 +34,9 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
     {
         ArgumentNullException.ThrowIfNull(config);
         var channel = await this.transport
-            .ConnectToMessageChannelAsync(CopilotSessionTransportFrames.BuildConnectionRequest(), cancellationToken)
+            .ConnectToMessageChannelAsync(
+                CopilotSessionTransportFrames.BuildConnectionRequest(this.trustProfileReference),
+                cancellationToken)
             .ConfigureAwait(false);
         return await CopilotSessionOverTransport.CreateAsync(channel, config, cancellationToken).ConfigureAwait(false);
     }
@@ -42,7 +46,9 @@ internal sealed class CopilotClientOverTransport : ICopilotClient
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionId);
         ArgumentNullException.ThrowIfNull(config);
         var channel = await this.transport
-            .ConnectToMessageChannelAsync(CopilotSessionTransportFrames.BuildConnectionRequest(), cancellationToken)
+            .ConnectToMessageChannelAsync(
+                CopilotSessionTransportFrames.BuildConnectionRequest(this.trustProfileReference),
+                cancellationToken)
             .ConfigureAwait(false);
         return await CopilotSessionOverTransport.ResumeAsync(channel, sessionId, config, cancellationToken).ConfigureAwait(false);
     }

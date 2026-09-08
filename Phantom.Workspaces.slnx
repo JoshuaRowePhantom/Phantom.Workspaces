@@ -2,6 +2,8 @@
   <Project Path="Phantom.Workspaces.Data.Core.Tests/Phantom.Workspaces.Data.Core.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Containers.Tests/Phantom.Workspaces.Containers.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Containers/Phantom.Workspaces.Containers.csproj" />
+  <Project Path="Phantom.Workspaces.Copilot.Cli.Wrapper/Phantom.Workspaces.Copilot.Cli.Wrapper.csproj" />
+  <Project Path="Phantom.Workspaces.Copilot.Cli.Wrapper.Tests/Phantom.Workspaces.Copilot.Cli.Wrapper.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui.Tests/Phantom.Workspaces.Agent.Gui.Tests.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui/Phantom.Workspaces.Agent.Gui.csproj" />
   <Project Path="Phantom.Workspaces.Agent.Gui.WebViewTests/Phantom.Workspaces.Agent.Gui.WebViewTests.csproj" />

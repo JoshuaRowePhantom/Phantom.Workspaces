@@ -49,7 +49,10 @@ public sealed class TransportTrustedExecutor : ITrustedExecutor, IAsyncDisposabl
         var transport = await this.ConnectAsync(request.TargetClientInstance, cancellationToken).ConfigureAwait(false);
         var chatClient = new ChatClientOverTransport(transport, BuildChatClientRequest(request));
 
-        var baseServices = request.AgentServices ?? new AgentServices();
+        var baseServices = (request.AgentServices ?? new AgentServices()) with
+        {
+            EffectiveTrustProfile = request.TrustProfile,
+        };
         var services = request.PreserveSourcePersistence
             ? baseServices with { ChatClientOverride = chatClient }
             : baseServices with

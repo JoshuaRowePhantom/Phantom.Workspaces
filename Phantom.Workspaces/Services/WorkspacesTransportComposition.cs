@@ -42,6 +42,14 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
+        agentServices ??= new AgentServices();
+        if (agentServices.TrustProfileProvider is null)
+        {
+            agentServices = agentServices with
+            {
+                TrustProfileProvider = new DataAccessTrustProfileProvider(dataAccessLayer),
+            };
+        }
 
         this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
         this.LocalListeners = new TransportRegistry();

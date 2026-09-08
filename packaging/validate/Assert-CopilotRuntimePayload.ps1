@@ -56,6 +56,22 @@ if (-not (Test-Path -LiteralPath $copilotExe))
 }
 Write-Host "OK  Copilot runtime present: $copilotExe"
 
+$wrapperExe = Join-Path $nativeDir 'phantom-copilot-wrapper.exe'
+if (-not (Test-Path -LiteralPath $wrapperExe -PathType Leaf))
+{
+    throw "Copilot MXC wrapper missing from payload: expected loose file '$wrapperExe' (issue #1476)."
+}
+Write-Host "OK  Copilot MXC wrapper present: $wrapperExe"
+
+foreach ($mxcFile in @('mxc_ffi.dll', 'plm.exe', 'MXC-LICENSE.md'))
+{
+    $mxcPath = Join-Path $nativeDir $mxcFile
+    if (-not (Test-Path -LiteralPath $mxcPath -PathType Leaf))
+    {
+        throw "Copilot containment dependency missing from payload: expected '$mxcPath' (issue #1476)."
+    }
+}
+
 # Distribution_IncludesCopilotCliLicense
 $licenseFile = Join-Path $nativeDir 'LICENSE.md'
 if (-not (Test-Path -LiteralPath $licenseFile))

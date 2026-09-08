@@ -55,6 +55,7 @@ internal static class CopilotSessionTransportFrames
     public const string RequestIdProperty = "request-id";
     public const string ModelIdProperty = "model-id";
     public const string OptionsProperty = "options";
+    public const string TrustProfileProperty = "trust-profile";
 
     // Scalar session-config field names.
     public const string ConfigModel = "model";
@@ -67,9 +68,11 @@ internal static class CopilotSessionTransportFrames
     public const string MessageDisplayPrompt = "display-prompt";
 
     /// <summary>Builds the connection-request descriptor that selects the client-only model host.</summary>
-    public static JsonElement BuildConnectionRequest()
+    public static JsonElement BuildConnectionRequest(string? trustProfileReference = null)
     {
         var obj = new JsonObject { [TypeProperty] = ConnectionType };
+        if (!string.IsNullOrWhiteSpace(trustProfileReference))
+            obj[TrustProfileProperty] = trustProfileReference;
         return JsonSerializer.SerializeToElement(obj);
     }
 

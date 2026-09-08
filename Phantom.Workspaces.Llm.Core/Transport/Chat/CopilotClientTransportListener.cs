@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using GitHub.Copilot;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Copilot;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
@@ -27,16 +28,35 @@ namespace Phantom.Workspaces.Llm.Core.Transport.Chat;
 public sealed class CopilotClientTransportListener : ITransportListener
 {
     private readonly ICopilotClientFactory clientFactory;
+    private readonly ITrustProfileProvider? trustProfileProvider;
+    private readonly Func<TrustProfile?, ICopilotRuntimeConnectionFactory> runtimeConnectionFactory;
 
     public CopilotClientTransportListener(AgentServices? agentServices = null)
     {
         this.clientFactory = agentServices?.CopilotClientFactory as ICopilotClientFactory
             ?? DefaultCopilotClientFactory.Instance;
+        this.trustProfileProvider = agentServices?.TrustProfileProvider as ITrustProfileProvider;
+        this.runtimeConnectionFactory = profile =>
+            new CopilotRuntimeConnectionFactory(null, profile);
     }
 
     internal CopilotClientTransportListener(ICopilotClientFactory clientFactory)
+        : this(
+            clientFactory,
+            trustProfileProvider: null,
+            profile => new CopilotRuntimeConnectionFactory(null, profile))
+    {
+    }
+
+    internal CopilotClientTransportListener(
+        ICopilotClientFactory clientFactory,
+        ITrustProfileProvider? trustProfileProvider,
+        Func<TrustProfile?, ICopilotRuntimeConnectionFactory> runtimeConnectionFactory)
     {
         this.clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
+        this.trustProfileProvider = trustProfileProvider;
+        this.runtimeConnectionFactory = runtimeConnectionFactory
+            ?? throw new ArgumentNullException(nameof(runtimeConnectionFactory));
     }
 
     public Task<IAsyncDisposable?> OnStreamOpenAsync(JsonElement request, Stream stream, CancellationToken ct = default)
@@ -50,10 +70,58 @@ public sealed class CopilotClientTransportListener : ITransportListener
             return null;
         }
 
-        var client = this.clientFactory.Create(new CopilotClientOptions { Mode = CopilotClientMode.CopilotCli });
-        await client.StartAsync(ct).ConfigureAwait(false);
-        var host = new CopilotSessionTransportHost(client, channel, ct);
-        return host;
+        TrustProfile? effectiveProfile = null;
+        var profileReference = CopilotSessionTransportFrames.GetString(
+            request,
+            CopilotSessionTransportFrames.TrustProfileProperty);
+        if (profileReference is not null)
+        {
+            if (this.trustProfileProvider is null)
+            {
+                throw new InvalidOperationException(
+                    "The remote Copilot host cannot resolve the requested trust profile.");
+            }
+            effectiveProfile = await this.trustProfileProvider
+                .ResolveAsync(profileReference, ct)
+                .ConfigureAwait(false);
+        }
+
+        var selection = await this.runtimeConnectionFactory(effectiveProfile)
+            .CreateAsync(ct)
+            .ConfigureAwait(false);
+        var options = new CopilotClientOptions
+        {
+            Mode = CopilotClientMode.CopilotCli,
+            Connection = selection.Connection,
+        };
+        ICopilotClient? client = null;
+        try
+        {
+            client = this.clientFactory.Create(options);
+            await client.StartAsync(ct).ConfigureAwait(false);
+            return new CopilotSessionTransportHost(client, channel, ct, selection);
+        }
+        catch
+        {
+            if (client is not null)
+            {
+                try
+                {
+                    await client.DisposeAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                }
+            }
+            try
+            {
+                await selection.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+            throw;
+        }
     }
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -65,14 +133,20 @@ public sealed class CopilotClientTransportListener : ITransportListener
         private readonly IMessageChannel channel;
         private readonly CancellationTokenSource cancellation;
         private readonly Task pump;
+        private readonly CopilotRuntimeConnectionSelection runtimeConnectionSelection;
         private ICopilotSession? session;
         private IDisposable? subscription;
         private int disposed;
 
-        public CopilotSessionTransportHost(ICopilotClient client, IMessageChannel channel, CancellationToken ct)
+        public CopilotSessionTransportHost(
+            ICopilotClient client,
+            IMessageChannel channel,
+            CancellationToken ct,
+            CopilotRuntimeConnectionSelection runtimeConnectionSelection)
         {
             this.client = client;
             this.channel = channel;
+            this.runtimeConnectionSelection = runtimeConnectionSelection;
             this.cancellation = CancellationTokenSource.CreateLinkedTokenSource(ct);
             this.pump = Task.Run(this.PumpAsync);
         }
@@ -94,14 +168,36 @@ public sealed class CopilotClientTransportListener : ITransportListener
                 // The pump is cancelled/ended here; a faulted pump must not mask teardown.
             }
 
-            this.subscription?.Dispose();
-            if (this.session is { } liveSession)
+            try
             {
-                await liveSession.DisposeAsync().ConfigureAwait(false);
+                this.subscription?.Dispose();
             }
-
-            await this.client.DisposeAsync().ConfigureAwait(false);
-            this.cancellation.Dispose();
+            catch
+            {
+            }
+            try
+            {
+                if (this.session is { } liveSession)
+                    await liveSession.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+            try
+            {
+                await this.client.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+            }
+            try
+            {
+                await this.runtimeConnectionSelection.DisposeAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                this.cancellation.Dispose();
+            }
         }
 
         private async Task PumpAsync()

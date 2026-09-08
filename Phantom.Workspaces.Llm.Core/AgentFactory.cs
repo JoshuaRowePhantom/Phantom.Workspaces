@@ -278,6 +278,16 @@ public static class AgentFactory
             return new ChatClientResult(new CopilotSubAgentChatClient(), "GitHub Copilot Sub-Agent");
         }
 
+        if (services?.EffectiveTrustProfile is null
+            && services?.TrustProfileProvider is Phantom.Workspaces.Llm.Trust.ITrustProfileProvider trustProfileProvider)
+        {
+            var hostProfile = await Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
+                .ResolveAsync(agent, trustProfileProvider, cancellationToken)
+                .ConfigureAwait(false);
+            if (hostProfile is not null)
+                services = services with { EffectiveTrustProfile = hostProfile };
+        }
+
         var model = (agent as PromptAgent)?.Model;
         if (model is null)
         {
@@ -394,7 +404,10 @@ public static class AgentFactory
         CancellationToken cancellationToken)
     {
         var builtinToolPolicy = ExtractBuiltinToolPolicy(agent, services);
-        var (client, displayName) = await CreateGitHubCopilotClientAsync(model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy, cancellationToken).ConfigureAwait(false);
+        var (client, displayName) = await CreateGitHubCopilotClientAsync(
+            model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy,
+            Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver.GetReference(agent),
+            cancellationToken).ConfigureAwait(false);
         return new ChatClientResult(client, displayName);
     }
 
@@ -409,7 +422,11 @@ public static class AgentFactory
         CancellationToken cancellationToken)
     {
         var builtinToolPolicy = ExtractBuiltinToolPolicy(agent, services);
-        var (client, displayName) = await CreateGitHubCopilotByokClientAsync(provider, model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy, cancellationToken).ConfigureAwait(false);
+        var (client, displayName) = await CreateGitHubCopilotByokClientAsync(
+            provider, model, services, queueManager, resolver, subAgentChatRegistry,
+            builtinToolPolicy,
+            Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver.GetReference(agent),
+            cancellationToken).ConfigureAwait(false);
         return new ChatClientResult(client, displayName);
     }
 
@@ -537,9 +554,17 @@ public static class AgentFactory
             createAgentChatRequest.AgentSessionId,
             ct).ConfigureAwait(false);
 
-        await EnforceTrustProfileAsync(
+        var effectiveTrustProfile = await ResolveAndEnforceTrustProfileAsync(
             requestedAgentDefinition,
             createAgentChatRequest.TrustProfileProvider);
+        if (effectiveTrustProfile is not null)
+        {
+            services = (services ?? new AgentServices()) with
+            {
+                EffectiveTrustProfile = effectiveTrustProfile,
+                TrustProfileProvider = createAgentChatRequest.TrustProfileProvider,
+            };
+        }
 
         ChatHistoryProviderDefinition? definition = null;
         if (requestedAgentDefinition is PromptAgent promptAgent
@@ -802,6 +827,7 @@ public static class AgentFactory
         IApiKeyResolver resolver,
         ISubAgentChatRegistry? subAgentChatRegistry,
         CopilotBuiltinToolPolicy? builtinToolPolicy,
+        string? trustProfileReference,
         CancellationToken cancellationToken)
     {
         var modelId = model.Id
@@ -813,7 +839,8 @@ public static class AgentFactory
             // endpoint (e.g. local Ollama). Route through the BYOK client with the "openai" wire
             // provider (schema default); see #1106.
             return await CreateGitHubCopilotByokClientAsync(
-                "openai", model, services, queueManager, resolver, subAgentChatRegistry, builtinToolPolicy, cancellationToken).ConfigureAwait(false);
+                "openai", model, services, queueManager, resolver, subAgentChatRegistry,
+                builtinToolPolicy, trustProfileReference, cancellationToken).ConfigureAwait(false);
         }
 
         if (model.Connection is ApiKeyConnection apiKeyConn && !string.IsNullOrWhiteSpace(apiKeyConn.ApiKey))
@@ -842,7 +869,9 @@ public static class AgentFactory
                 subAgentChatRegistry: subAgentChatRegistry,
                 accountUpsertService: services?.AccountUpsertService,
                 slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
-                builtinToolPolicy: builtinToolPolicy);
+                builtinToolPolicy: builtinToolPolicy,
+                effectiveTrustProfile: services?.EffectiveTrustProfile as Phantom.Workspaces.Llm.Trust.TrustProfile,
+                trustProfileReference: trustProfileReference);
 
             if (services?.CopilotClientFactory is ICopilotClientFactory factory)
             {
@@ -874,6 +903,7 @@ public static class AgentFactory
         IApiKeyResolver resolver,
         ISubAgentChatRegistry? subAgentChatRegistry,
         CopilotBuiltinToolPolicy? builtinToolPolicy,
+        string? trustProfileReference,
         CancellationToken cancellationToken)
     {
         var modelId = model.Id
@@ -918,7 +948,9 @@ public static class AgentFactory
                 modelOptions: model.Options,
                 subAgentChatRegistry: subAgentChatRegistry,
                 slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
-                builtinToolPolicy: builtinToolPolicy);
+                builtinToolPolicy: builtinToolPolicy,
+                effectiveTrustProfile: services?.EffectiveTrustProfile as Phantom.Workspaces.Llm.Trust.TrustProfile,
+                trustProfileReference: trustProfileReference);
 
             if (services?.CopilotClientFactory is ICopilotClientFactory factory)
             {
@@ -1175,13 +1207,13 @@ public static class AgentFactory
         }
     }
 
-    private static async Task EnforceTrustProfileAsync(
+    private static async Task<Phantom.Workspaces.Llm.Trust.TrustProfile?> ResolveAndEnforceTrustProfileAsync(
         AgentDefinition? agentDefinition,
         Phantom.Workspaces.Llm.Trust.ITrustProfileProvider? trustProfileProvider)
     {
         if (agentDefinition is null || trustProfileProvider is null)
         {
-            return;
+            return null;
         }
 
         var trustProfile = await Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
@@ -1192,6 +1224,8 @@ public static class AgentFactory
             throw new InvalidOperationException(
                 "The agent's trust profile does not permit local execution on this client instance.");
         }
+
+        return trustProfile;
     }
 
     private static Task<T> WithRequiredApiKeyForSdkAsync<T>(
