@@ -1440,7 +1440,7 @@ public sealed class MainWindowIntegrationTests
         // #1430: the tab reaches Ready before background MCP/tool initialization completes, so wait
         // for that initialization (and the resulting UI tool-tree update) before asserting the tool
         // is mapped.
-        await sessionTab.Agent!.AgentChat.Initialization;
+        await sessionTab.Agent!.LocalAgentChat.Initialization;
         using var toolCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         while (!sessionTab.Agent.Tools.Any(static tool => string.Equals(tool.Kind, "workspace-entity", StringComparison.Ordinal)))
         {
@@ -10786,7 +10786,7 @@ public sealed class MainWindowIntegrationTests
             Assert.Single(table.RunningSessions);
 
             // Verify the resume prompt was enqueued — wait for it to appear in history
-            await WaitForChatHistoryAsync(lease!.AgentChat, resumePrompt);
+            await WaitForChatHistoryAsync(lease!.LocalAgentChat, resumePrompt);
 
             Assert.Contains(
                 lease.AgentChat.History,

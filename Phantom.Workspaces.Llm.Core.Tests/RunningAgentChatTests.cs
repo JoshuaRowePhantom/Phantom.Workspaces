@@ -94,7 +94,7 @@ public sealed class RunningAgentChatTests
 
         await using var lease = await entry.AcquireLeaseAsync();
 
-        Assert.Same(primeLease.AgentChat, lease.AgentChat);
+        Assert.Same(primeLease.AgentChat, lease.LocalAgentChat);
     }
 
     [Fact]

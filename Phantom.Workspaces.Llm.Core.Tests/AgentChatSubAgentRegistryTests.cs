@@ -567,7 +567,7 @@ public sealed class AgentChatSubAgentRegistryTests
         // applied to it. Any later lease sees the same Succeeded state.
         await using (var lease = await stub.AcquireLeaseAsync())
         {
-            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
         }
     }
 }

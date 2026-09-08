@@ -83,7 +83,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
             // therefore that RunningAgentChatFactory was injected before AgentChat.CreateAsync.
             Assert.Equal(AgentTabState.Ready, sessionTab.State);
             Assert.NotNull(sessionTab.Lease);
-            var services = GetRequestServices(sessionTab.Lease!.AgentChat);
+            var services = GetRequestServices(sessionTab.Lease!.LocalAgentChat);
             Assert.NotNull(services.RunningAgentChatFactory);
         }
     }
@@ -104,7 +104,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
 
             Assert.Equal(AgentTabState.Ready, sessionTab.State);
             Assert.NotNull(sessionTab.Lease);
-            var services = GetRequestServices(sessionTab.Lease!.AgentChat);
+            var services = GetRequestServices(sessionTab.Lease!.LocalAgentChat);
             Assert.NotNull(services.RunningAgentChatFactory);
         }
     }

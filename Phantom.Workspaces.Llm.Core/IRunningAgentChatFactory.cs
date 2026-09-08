@@ -63,4 +63,7 @@ public interface IRunningAgentChatFactory : Interfaces.IRunningAgentChatFactory
         string? descriptionOverride = null,
         bool registerAsRunningAgent = true,
         CancellationToken ct = default);
+
+    Task<bool> TerminateAsync(AgentSessionId sessionId, CancellationToken ct = default)
+        => Task.FromResult(false);
 }

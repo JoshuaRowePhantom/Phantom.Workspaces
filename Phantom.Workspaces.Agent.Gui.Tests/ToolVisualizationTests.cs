@@ -274,7 +274,7 @@ public sealed class ToolVisualizationTests
         await using var agent = new AgentViewModel(CreateChat(), "test", "", loggerFactory, TaskScheduler.Default);
         using var statusLine = new AgentChatStatusLineViewModel(agent);
 
-        var runningItem = agent.AgentChat.CreateRunningItem(new AgentChatHistoryItem
+        var runningItem = agent.LocalAgentChat.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = Microsoft.Extensions.AI.ChatRole.Assistant,
             Contents = [new TextContent("thinking")],
@@ -283,7 +283,7 @@ public sealed class ToolVisualizationTests
         statusLine.UpdateStatus(AgentStatusField.Intent, "searching files");
         Assert.Equal("searching files", statusLine.IntentDisplay);
 
-        agent.AgentChat.CompleteRunningItem(runningItem, writeToHistory: false);
+        agent.LocalAgentChat.CompleteRunningItem(runningItem, writeToHistory: false);
 
         Assert.Null(statusLine.IntentDisplay);
     }

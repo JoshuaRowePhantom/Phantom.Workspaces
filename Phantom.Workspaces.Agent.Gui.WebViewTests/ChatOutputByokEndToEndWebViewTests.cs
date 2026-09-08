@@ -194,7 +194,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                 parentServices);
             try
             {
-                var chat = lease.AgentChat;
+                var chat = lease.LocalAgentChat;
                 await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory, TaskScheduler.Default);
 
                 var parentControl = new AgentChatOutputControl { DataContext = viewModel };
@@ -239,7 +239,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                         subWindow.Show();
                         await subReady.WaitAsync(timeout);
                         await subControl.HistoryLoaded.WaitAsync(timeout);
-                        subControls.Add((slot.AgentId, subViewModel.AgentChat, subBrowser));
+                        subControls.Add((slot.AgentId, subViewModel.LocalAgentChat, subBrowser));
                     }
 
                     // Release both sub-agent final replies in a single burst to stress the
@@ -431,7 +431,7 @@ public sealed class ChatOutputByokEndToEndWebViewTests
                 parentServices);
             try
             {
-                var chat = lease.AgentChat;
+                var chat = lease.LocalAgentChat;
                 await using var viewModel = new AgentViewModel(chat, "byok-e2e-parent", "", loggerFactory, TaskScheduler.Default);
 
                 var parentControl = new AgentChatOutputControl { DataContext = viewModel };

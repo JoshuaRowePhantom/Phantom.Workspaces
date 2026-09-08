@@ -38,7 +38,10 @@ public sealed class SubAgentsContainerViewModel : ViewModelBase
     /// <summary>Adds a new slot for a sub-agent. Must be called on the UI thread.</summary>
     internal SubAgentSlotViewModel AddSlot(string agentId, AgentViewModel subAgentViewModel)
     {
-        var slot = new SubAgentSlotViewModel(agentId, subAgentViewModel, subAgentViewModel.AgentChat);
+        var slot = new SubAgentSlotViewModel(
+            agentId,
+            subAgentViewModel,
+            (IRunningSubAgent)subAgentViewModel.AgentChat);
         this.slotSource.Add(slot);
         return slot;
     }

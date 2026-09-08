@@ -207,8 +207,8 @@ public sealed class AgentChatResumeTests
         await using var lease0 = await stubs.First(s => s.SessionId.Value == childIds[0]).AcquireLeaseAsync();
         await using var lease1 = await stubs.First(s => s.SessionId.Value == childIds[1]).AcquireLeaseAsync();
 
-        Assert.Equal(childIds[0], lease0.AgentChat.AgentSessionId);
-        Assert.Equal(childIds[1], lease1.AgentChat.AgentSessionId);
+        Assert.Equal(childIds[0], lease0.AgentChat.Information.AgentSessionId);
+        Assert.Equal(childIds[1], lease1.AgentChat.Information.AgentSessionId);
         Assert.NotSame(lease0.AgentChat, lease1.AgentChat);
     }
 
@@ -255,7 +255,7 @@ public sealed class AgentChatResumeTests
         foreach (var stub in stubs)
         {
             await using var lease = await stub.AcquireLeaseAsync();
-            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
         }
     }
 
@@ -282,11 +282,11 @@ public sealed class AgentChatResumeTests
         // with the same value must NOT raise the event (idempotency), so to prove the event
         // fires on transition we drive a fresh transition and observe it.
         var raised = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        lease.AgentChat.CompletionStateChanged += (_, _) => raised.TrySetResult();
-        lease.AgentChat.SetCompletionState(AgentChatCompletionState.Failed);
+        lease.LocalAgentChat.CompletionStateChanged += (_, _) => raised.TrySetResult();
+        lease.LocalAgentChat.SetCompletionState(AgentChatCompletionState.Failed);
 
         await raised.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(AgentChatCompletionState.Failed, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Failed, lease.LocalAgentChat.CompletionState);
     }
 
     // #1128: Already-terminal restored sub-agents (in this test we simulate by calling
@@ -310,7 +310,7 @@ public sealed class AgentChatResumeTests
         foreach (var stub in parent.SubAgents.Cast<SubAgent>())
         {
             await using var lease = await stub.AcquireLeaseAsync();
-            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
         }
     }
 
@@ -401,7 +401,7 @@ public sealed class AgentChatResumeTests
             await using var lease = await stub.AcquireLeaseAsync();
             var index = Array.IndexOf(childIds, stub.SessionId.Value);
             Assert.InRange(index, 0, childIds.Length - 1);
-            Assert.Equal(persistedTimes[index], lease.AgentChat.LastUpdatedAt);
+            Assert.Equal(persistedTimes[index], lease.LocalAgentChat.LastUpdatedAt);
         }
     }
 
@@ -437,8 +437,8 @@ public sealed class AgentChatResumeTests
 
         // The forced-terminal override must have fired (#1128) but must not have advanced the
         // timestamp past the persisted seed (#1140).
-        Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
-        Assert.Equal(persistedTime, lease.AgentChat.LastUpdatedAt);
+        Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
+        Assert.Equal(persistedTime, lease.LocalAgentChat.LastUpdatedAt);
     }
 
     // #1140 must not regress #1128: even with preserve-timestamp semantics, restored
@@ -473,9 +473,9 @@ public sealed class AgentChatResumeTests
         {
             await using var lease = await stub.AcquireLeaseAsync();
             // #1128 preserved: still Succeeded after restore.
-            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
             // #1140: timestamp preserved.
-            Assert.Equal(persistedTime, lease.AgentChat.LastUpdatedAt);
+            Assert.Equal(persistedTime, lease.LocalAgentChat.LastUpdatedAt);
         }
     }
 }

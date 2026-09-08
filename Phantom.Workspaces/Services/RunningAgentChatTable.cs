@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using AgentSchema;
+using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
 using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
@@ -45,6 +46,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         AcquireAgentChatRequest request,
         CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateAcquisitionRequest(request);
         var sessionId = request.AgentSessionId;
         // Store entity info before calling the factory so the CollectionChanged handler can read it
         // when the factory posts the Add mutation on the foreground scheduler.
@@ -81,6 +84,49 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             request.EntityDisplayName,
             request.EntityDescription,
             ct: ct);
+    }
+
+    private static void ValidateAcquisitionRequest(AcquireAgentChatRequest request)
+    {
+        if (!Enum.IsDefined(request.AcquisitionMode))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                request.AcquisitionMode,
+                "Unknown agent-chat acquisition mode.");
+        }
+
+        if (request.AcquisitionMode == AgentChatAcquisitionMode.Local)
+        {
+            if (request.OwningProfileTransport is not null)
+            {
+                throw new ArgumentException(
+                    "Local acquisition must not specify an owning profile transport.",
+                    nameof(request));
+            }
+            return;
+        }
+
+        if (request.OwningProfileTransport is null || request.AgentSessionEntity is not { } entity)
+        {
+            throw new ArgumentException(
+                "Remote acquisition requires an owning profile transport and persisted session entity.",
+                nameof(request));
+        }
+        if (!entity.TryGetProperty(AgentSessionExecutorBindings.HostProfileKey, out var owner)
+            || owner.ValueKind != System.Text.Json.JsonValueKind.String
+            || !Guid.TryParse(owner.GetString(), out _)
+            || !entity.TryGetProperty("ownership-generation", out var generation)
+            || !generation.TryGetInt64(out var generationValue)
+            || generationValue < 0)
+        {
+            throw new ArgumentException(
+                "Remote acquisition requires valid persisted owner and ownership generation.",
+                nameof(request));
+        }
+
+        throw new NotSupportedException(
+            "Remote agent-chat transport is introduced by the next implementation commit.");
     }
 
     private async Task<AgentDefinition?> ResolveDefinitionIfNeededAsync(
@@ -168,6 +214,32 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         {
             return _entityInfo.TryGetValue(sessionId, out var info) ? info : ("", null, null);
         }
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> TerminateAsync(
+        AgentSessionId sessionId, CancellationToken ct = default)
+    {
+        return await _factory.TerminateAsync(sessionId, ct).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    public Task SetContinueInBackgroundAsync(
+        AgentSessionId sessionId, bool continueInBackground,
+        CancellationToken ct = default)
+    {
+        // Commit 2 (#1485) defines the surface without adding transport behaviour. The local flag
+        // is stored on the entity-info row so UI observers pick it up via existing property-change
+        // paths; the remote plumbing is added in a later commit.
+        foreach (var entry in _runningSessions)
+        {
+            if (entry.SessionId == sessionId)
+            {
+                entry.SetContinueInBackground(continueInBackground);
+                break;
+            }
+        }
+        return Task.CompletedTask;
     }
 }
 

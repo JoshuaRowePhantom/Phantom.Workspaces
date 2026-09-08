@@ -96,7 +96,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
         lock (_leasesLock)
         {
             if (_leases.TryGetValue(id, out var lease))
-                return lease.AgentChat;
+                return lease.LocalAgentChat;
         }
 
         // Resolve via the authoritative sub-agent table map first (issue #1386). It is populated
@@ -114,7 +114,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                 if (!_leases.TryAdd(id, lease))
                 {
                     duplicateLease = lease;
-                    existingChat = _leases[id].AgentChat;
+                    existingChat = _leases[id].LocalAgentChat;
                 }
             }
 
@@ -123,7 +123,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                 await duplicateLease.DisposeAsync();
                 return existingChat;
             }
-            return lease.AgentChat;
+            return lease.LocalAgentChat;
         }
 
         // Fallback: directly-added AgentChat children are present only in the SubAgents observable
@@ -288,7 +288,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
             // Register with parent's sub-agent table
             var parentChat = _toolset.ParentChat;
-            await ((ISubAgentTable)parentChat).Add(lease.AgentChat);
+            await ((ISubAgentTable)parentChat).Add(lease.LocalAgentChat);
 
             lock (_toolset._leasesLock)
             {
@@ -297,12 +297,12 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
 
             var initialMessage = GetString(arguments, "initial_message");
             if (!string.IsNullOrEmpty(initialMessage))
-                lease.AgentChat.EnqueueUserMessage(initialMessage);
+                lease.LocalAgentChat.EnqueueUserMessage(initialMessage);
 
             return Serialize(new
             {
                 session_id = sessionId.Value,
-                status = GetStatus(lease.AgentChat),
+                status = GetStatus(lease.LocalAgentChat),
                 created_at = _toolset._timeProvider.GetUtcNow().ToString("O"),
             });
         }
@@ -910,7 +910,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                     return Serialize(new
                     {
                         session_id = sessionId,
-                        status = GetStatus(existing.AgentChat),
+                        status = GetStatus(existing.LocalAgentChat),
                         already_acquired = true,
                     });
                 }
@@ -940,7 +940,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
                     return Serialize(new
                     {
                         session_id = sessionId,
-                        status = GetStatus(_toolset._leases[id].AgentChat),
+                        status = GetStatus(_toolset._leases[id].LocalAgentChat),
                         already_acquired = true,
                     });
                 }
@@ -951,7 +951,7 @@ public sealed class AgentSessionToolset : AIContextProvider, IAsyncDisposable
             return Serialize(new
             {
                 session_id = sessionId,
-                status = GetStatus(lease.AgentChat),
+                status = GetStatus(lease.LocalAgentChat),
                 already_acquired = false,
             });
         }

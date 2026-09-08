@@ -9,12 +9,18 @@ public sealed class RunningAgentChatLease : IAsyncDisposable
 
     public AgentSessionId SessionId { get; }
 
-    public AgentChat AgentChat { get; }
+    public IAgentChat AgentChat { get; }
+
+    /// <summary>
+    /// Temporary local-engine compatibility accessor. New UI code consumes <see cref="AgentChat"/>.
+    /// </summary>
+    public AgentChat LocalAgentChat { get; }
 
     internal RunningAgentChatLease(AgentSessionId sessionId, AgentChat agentChat, Func<ValueTask> onDispose)
     {
         SessionId = sessionId;
         AgentChat = agentChat;
+        LocalAgentChat = agentChat;
         _onDispose = onDispose;
     }
 

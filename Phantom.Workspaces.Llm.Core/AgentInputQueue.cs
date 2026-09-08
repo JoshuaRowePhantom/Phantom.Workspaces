@@ -22,20 +22,45 @@ public sealed class AgentInputQueue
         public AgentInputQueueImmediacy Immediacy { get; init; } = AgentInputQueueImmediacy.Queue;
 
         public string? CoalescingKey { get; init; }
+
+        /// <summary>
+        /// Optional stable queue identifier (issue #1485). When null or blank, a fresh
+        /// <c>Guid.NewGuid().ToString("n")</c> is assigned so every queue has a nonblank id.
+        /// </summary>
+        public string? QueueId { get; init; }
+
+        /// <summary>Optional display name (issue #1485).</summary>
+        public string? Name { get; init; }
     }
 
     private ImmutableList<AgentInputItem> items;
+    private long revision;
 
     public AgentInputQueue(
         Parameters? parameters = null)
     {
         parameters ??= new Parameters();
 
+        this.QueueId = string.IsNullOrWhiteSpace(parameters.QueueId)
+            ? Guid.NewGuid().ToString("n")
+            : parameters.QueueId!;
         this.Priority = parameters.Priority;
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;
         this.items = ImmutableList<AgentInputItem>.Empty;
     }
+
+    /// <summary>
+    /// Stable nonblank owner-authoritative queue identifier assigned at construction (issue #1485).
+    /// Common-surface commands identify a queue by this id.
+    /// </summary>
+    public string QueueId { get; }
+
+    /// <summary>
+    /// Monotonically increasing per-queue revision. Bumped once for every applied mutation
+    /// (enqueue/edit/remove/configure/move-in/move-out). Owner-authoritative.
+    /// </summary>
+    public long Revision => Volatile.Read(ref this.revision);
 
     public int Priority { get; private set; }
 
@@ -52,6 +77,7 @@ public sealed class AgentInputQueue
         this.Priority = parameters.Priority;
         this.Immediacy = parameters.Immediacy;
         this.CoalescingKey = parameters.CoalescingKey;
+        Interlocked.Increment(ref this.revision);
         this.OnChanged();
         this.OnConfigurationChanged();
     }
@@ -95,6 +121,7 @@ public sealed class AgentInputQueue
         existingItems = observedItems;
         if (succeeded)
         {
+            Interlocked.Increment(ref this.revision);
             this.OnChanged();
         }
         return succeeded;

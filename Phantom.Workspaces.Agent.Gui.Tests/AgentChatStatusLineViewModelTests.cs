@@ -123,7 +123,7 @@ public sealed class AgentChatStatusLineViewModelTests
         await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
-        var runningItem = agentViewModel.AgentChat.CreateRunningItem(new AgentChatHistoryItem
+        var runningItem = agentViewModel.LocalAgentChat.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("thinking")],
@@ -131,7 +131,7 @@ public sealed class AgentChatStatusLineViewModelTests
 
         Assert.True(statusLine.IsThinking);
 
-        agentViewModel.AgentChat.CompleteRunningItem(runningItem, writeToHistory: false);
+        agentViewModel.LocalAgentChat.CompleteRunningItem(runningItem, writeToHistory: false);
 
         Assert.False(statusLine.IsThinking);
     }
@@ -143,12 +143,12 @@ public sealed class AgentChatStatusLineViewModelTests
         await using var agentViewModel = new AgentViewModel(CreateChat(CreateAgentDefinition()), "test-agent", "", loggerFactory, TaskScheduler.Default);
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
-        SetTokenCountsAndRaiseUsageChanged(agentViewModel.AgentChat, inputTokenCount: 1234, outputTokenCount: null);
+        SetTokenCountsAndRaiseUsageChanged(agentViewModel.LocalAgentChat, inputTokenCount: 1234, outputTokenCount: null);
 
         Assert.Null(statusLine.TokensDisplay);
         Assert.False(statusLine.HasTokens);
 
-        SetTokenCountsAndRaiseUsageChanged(agentViewModel.AgentChat, inputTokenCount: 1234, outputTokenCount: 56);
+        SetTokenCountsAndRaiseUsageChanged(agentViewModel.LocalAgentChat, inputTokenCount: 1234, outputTokenCount: 56);
 
         Assert.Equal("1,234 in / 56 out", statusLine.TokensDisplay);
         Assert.True(statusLine.HasTokens);
@@ -162,7 +162,7 @@ public sealed class AgentChatStatusLineViewModelTests
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         SetUsageAndRaiseUsageChanged(
-            agentViewModel.AgentChat,
+            agentViewModel.LocalAgentChat,
             inputTokenCount: 3_602_110,
             outputTokenCount: 19_755,
             cacheReadTokenCount: 3_402_119);
@@ -178,7 +178,7 @@ public sealed class AgentChatStatusLineViewModelTests
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         SetUsageAndRaiseUsageChanged(
-            agentViewModel.AgentChat,
+            agentViewModel.LocalAgentChat,
             inputTokenCount: 3_602_110,
             outputTokenCount: 19_755,
             cacheReadTokenCount: 3_402_119,
@@ -195,7 +195,7 @@ public sealed class AgentChatStatusLineViewModelTests
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         SetUsageAndRaiseUsageChanged(
-            agentViewModel.AgentChat,
+            agentViewModel.LocalAgentChat,
             inputTokenCount: 1234,
             outputTokenCount: 56);
 
@@ -210,7 +210,7 @@ public sealed class AgentChatStatusLineViewModelTests
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         SetUsageAndRaiseUsageChanged(
-            agentViewModel.AgentChat,
+            agentViewModel.LocalAgentChat,
             inputTokenCount: 1234,
             outputTokenCount: 56,
             sessionCostMicroUsd: 1_230_000);
@@ -226,7 +226,7 @@ public sealed class AgentChatStatusLineViewModelTests
         using var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
 
         SetUsageAndRaiseUsageChanged(
-            agentViewModel.AgentChat,
+            agentViewModel.LocalAgentChat,
             inputTokenCount: 1234,
             outputTokenCount: null,
             cacheReadTokenCount: 500,
@@ -290,7 +290,7 @@ public sealed class AgentChatStatusLineViewModelTests
         var statusLine = new AgentChatStatusLineViewModel(agentViewModel);
         statusLine.Dispose();
 
-        agentViewModel.AgentChat.CreateRunningItem(new AgentChatHistoryItem
+        agentViewModel.LocalAgentChat.CreateRunningItem(new AgentChatHistoryItem
         {
             Role = ChatRole.Assistant,
             Contents = [new TextContent("thinking")],
@@ -325,6 +325,11 @@ public sealed class AgentChatStatusLineViewModelTests
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("agentDefinition field was not found.");
         agentDefinitionField.SetValue(agentChat, agentDefinition);
+        if (agentDefinition is not null)
+        {
+            typeof(AgentChat).GetMethod("PublishInformation", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(agentChat, null);
+        }
         return agentChat;
     }
 
@@ -359,6 +364,7 @@ public sealed class AgentChatStatusLineViewModelTests
     {
         SetBackingField(agentChat, nameof(AgentChat.TotalInputTokenCount), inputTokenCount);
         SetBackingField(agentChat, nameof(AgentChat.TotalOutputTokenCount), outputTokenCount);
+        SetUsageSnapshot(agentChat, inputTokenCount, outputTokenCount);
 
         var usageChangedField = typeof(AgentChat).GetField(
             "UsageChanged",
@@ -381,6 +387,13 @@ public sealed class AgentChatStatusLineViewModelTests
         SetBackingField(agentChat, nameof(AgentChat.TotalCacheReadTokenCount), cacheReadTokenCount);
         SetBackingField(agentChat, nameof(AgentChat.TotalReasoningTokenCount), reasoningTokenCount);
         SetBackingField(agentChat, nameof(AgentChat.TotalSessionCostMicroUsd), sessionCostMicroUsd);
+        SetUsageSnapshot(
+            agentChat,
+            inputTokenCount,
+            outputTokenCount,
+            cacheReadTokenCount,
+            reasoningTokenCount,
+            sessionCostMicroUsd is long microUsd ? microUsd / 1_000_000.0 : null);
 
         var usageChangedField = typeof(AgentChat).GetField(
             "UsageChanged",
@@ -397,6 +410,26 @@ public sealed class AgentChatStatusLineViewModelTests
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException($"{propertyName} backing field was not found.");
         field.SetValue(agentChat, value);
+    }
+
+    private static void SetUsageSnapshot(
+        AgentChat agentChat,
+        long? inputTokenCount,
+        long? outputTokenCount,
+        long? cacheReadTokenCount = null,
+        long? reasoningTokenCount = null,
+        double? sessionCostUsd = null)
+    {
+        var field = typeof(AgentChat).GetField("usage", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Usage field was not found.");
+        field.SetValue(agentChat, new Usage
+        {
+            TotalInputTokenCount = inputTokenCount,
+            TotalOutputTokenCount = outputTokenCount,
+            TotalCacheReadTokenCount = cacheReadTokenCount,
+            TotalReasoningTokenCount = reasoningTokenCount,
+            TotalSessionCostUsd = sessionCostUsd,
+        });
     }
 
     private sealed class ModelTestChatClient(string modelId) : IChatClient, Phantom.Workspaces.Llm.SlashCommands.IModelSlashCommandClient

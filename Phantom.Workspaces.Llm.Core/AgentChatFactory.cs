@@ -263,6 +263,61 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
     private RunningAgentChatLease MakeLease(AgentSessionId sessionId, AgentChat agentChat)
         => new RunningAgentChatLease(sessionId, agentChat, () => ReleaseAsync(sessionId));
 
+    public async Task<bool> TerminateAsync(
+        AgentSessionId sessionId,
+        CancellationToken ct = default)
+    {
+        AgentChat? toDispose;
+        TaskCompletionSource disposalCompletion;
+
+        await _gate.WaitAsync(ct);
+        try
+        {
+            if (!_entries.TryGetValue(sessionId, out var entry))
+            {
+                return false;
+            }
+
+            entry.RefCount = 0;
+            entry.DisposalCompletion ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            disposalCompletion = entry.DisposalCompletion;
+            toDispose = entry.AgentChat;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        try
+        {
+            await PostToForegroundAsync(() =>
+            {
+                var item = _runningSessions.FirstOrDefault(r => r.SessionId == sessionId);
+                if (item is not null)
+                {
+                    _runningSessions.Remove(item);
+                }
+            });
+            await toDispose.DisposeAsync();
+        }
+        finally
+        {
+            await _gate.WaitAsync(CancellationToken.None);
+            try
+            {
+                _entries.Remove(sessionId);
+            }
+            finally
+            {
+                _gate.Release();
+            }
+            disposalCompletion.TrySetResult();
+        }
+
+        return true;
+    }
+
     // Fix #1109: every chat this factory creates MUST reach back to the factory so restore
     // (AgentChat.RestoreSubAgentsAsync) and live sub-agent creation work. The factory *is* the
     // IRunningAgentChatFactory. Always inject unconditionally — the old

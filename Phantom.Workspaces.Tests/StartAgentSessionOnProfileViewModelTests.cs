@@ -83,7 +83,7 @@ public sealed class StartAgentSessionOnProfileViewModelTests
             // The chat is registered under its session id so GetAsync returns the same live
             // in-memory instance (not a duplicate hydrated from persistence).
             var liveChat = sessionTab.Lease!.AgentChat;
-            var sessionId = new AgentSessionId(liveChat.AgentSessionId);
+            var sessionId = new AgentSessionId(liveChat.Information.AgentSessionId);
             var lookupLease = await ((IRunningAgentChatFactory)GetFactory(inner)).GetAsync(
                 sessionId,
                 registerAsRunningAgent: false,

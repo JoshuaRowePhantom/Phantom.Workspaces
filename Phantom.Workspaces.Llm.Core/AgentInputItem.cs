@@ -4,6 +4,13 @@ namespace Phantom.Workspaces.Llm;
 
 public sealed record AgentInputItem
 {
+    /// <summary>
+    /// Stable owner-authoritative item identifier assigned at enqueue-time (issue #1485). Never blank.
+    /// Preserved across edits/moves so the common queue protocol can reference this item by id
+    /// rather than by fragile list index.
+    /// </summary>
+    public string ItemId { get; init; } = Guid.NewGuid().ToString("n");
+
     public required ChatMessage[] Messages { get; init; }
 
     public AgentChatSession? ResetSession { get; init; }

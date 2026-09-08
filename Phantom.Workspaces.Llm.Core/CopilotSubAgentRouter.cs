@@ -351,7 +351,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
                     descriptionOverride: descriptionOverride,
                     nameOverride: nameOverride)
                 .ConfigureAwait(false);
-            var agentChat = lease.AgentChat;
+            var agentChat = lease.LocalAgentChat;
 
             var receiver = agentChat.GetService(typeof(ICopilotSubAgentReceiver)) as ICopilotSubAgentReceiver
                 ?? throw new InvalidOperationException(
@@ -705,7 +705,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             if (target is not null)
             {
                 target.Complete();
-                if (leaseToDispose is { } lease && lease.AgentChat is { } agentChat)
+                if (leaseToDispose is { } lease && lease.LocalAgentChat is { } agentChat)
                 {
                     agentChat.SetCompletionState(AgentChatCompletionState.Succeeded);
                 }
@@ -737,7 +737,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             if (target is not null)
             {
                 target.Fail(exception);
-                if (leaseToDispose is { } lease && lease.AgentChat is { } agentChat)
+                if (leaseToDispose is { } lease && lease.LocalAgentChat is { } agentChat)
                 {
                     agentChat.SetCompletionState(AgentChatCompletionState.Failed);
                 }
@@ -770,7 +770,7 @@ internal sealed class CopilotSubAgentRouter : ISubAgentChat
             if (target is not null)
             {
                 target.Fail(cancellationReason);
-                if (leaseToDispose is { } lease && lease.AgentChat is { } agentChat)
+                if (leaseToDispose is { } lease && lease.LocalAgentChat is { } agentChat)
                 {
                     agentChat.SetCompletionState(AgentChatCompletionState.Failed);
                 }

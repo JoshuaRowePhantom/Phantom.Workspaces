@@ -66,7 +66,7 @@ public sealed class AgentChatFactoryTests
         await using var lease = await factory.GetAsync(sessionId);
 
         Assert.Equal(sessionId, lease.SessionId);
-        Assert.NotNull(lease.AgentChat);
+        Assert.NotNull(lease.LocalAgentChat);
     }
 
     [Fact]
@@ -180,8 +180,8 @@ public sealed class AgentChatFactoryTests
             displayNameOverride: "fix-reload1",
             descriptionOverride: "reload the workspace");
 
-        Assert.Equal("fix-reload1", lease.AgentChat.DisplayName);
-        Assert.Equal("reload the workspace", lease.AgentChat.Description);
+        Assert.Equal("fix-reload1", lease.LocalAgentChat.DisplayName);
+        Assert.Equal("reload the workspace", lease.LocalAgentChat.Description);
     }
 
     [Fact]
@@ -197,7 +197,7 @@ public sealed class AgentChatFactoryTests
 
         // No override was supplied ⇒ DisplayName falls back to the empty client-info default,
         // and — critically — does NOT equal the session id (which was the observed #1133 bug).
-        Assert.NotEqual(sessionId.Value, lease.AgentChat.DisplayName);
+        Assert.NotEqual(sessionId.Value, lease.LocalAgentChat.DisplayName);
     }
 
     [Fact]
@@ -341,8 +341,8 @@ public sealed class AgentChatFactoryTests
         // constructor's affinity verification is satisfied.
         await using var lease = await Task.Run(() => factory.GetOrCreateAsync(sessionId));
 
-        Assert.NotNull(lease.AgentChat);
-        Assert.Same(scheduler, GetForegroundScheduler(lease.AgentChat));
+        Assert.NotNull(lease.LocalAgentChat);
+        Assert.Same(scheduler, GetForegroundScheduler(lease.LocalAgentChat));
     }
 
     [Fact]
@@ -356,8 +356,8 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await Task.Run(() => factory.GetAsync(sessionId));
 
-        Assert.NotNull(lease.AgentChat);
-        Assert.Same(scheduler, GetForegroundScheduler(lease.AgentChat));
+        Assert.NotNull(lease.LocalAgentChat);
+        Assert.Same(scheduler, GetForegroundScheduler(lease.LocalAgentChat));
     }
 
     [Fact]
@@ -370,8 +370,8 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await Task.Run(() => factory.CreateAsync(EchoAgentDefinition, sessionId));
 
-        Assert.NotNull(lease.AgentChat);
-        Assert.Same(scheduler, GetForegroundScheduler(lease.AgentChat));
+        Assert.NotNull(lease.LocalAgentChat);
+        Assert.Same(scheduler, GetForegroundScheduler(lease.LocalAgentChat));
     }
 
     private static TaskScheduler? GetForegroundScheduler(AgentChat chat)
@@ -465,7 +465,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetAsync(sessionId);
 
-        var services = GetRequestServices(lease.AgentChat);
+        var services = GetRequestServices(lease.LocalAgentChat);
         Assert.Same(factory, services.RunningAgentChatFactory);
     }
 
@@ -498,7 +498,7 @@ public sealed class AgentChatFactoryTests
             definition: EchoAgentDefinition,
             services: bareServices);
 
-        var services = GetRequestServices(lease.AgentChat);
+        var services = GetRequestServices(lease.LocalAgentChat);
         Assert.Same(factory, services.RunningAgentChatFactory);
     }
 
@@ -511,7 +511,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetOrCreateAsync(sessionId);
 
-        var services = GetRequestServices(lease.AgentChat);
+        var services = GetRequestServices(lease.LocalAgentChat);
         Assert.Same(factory, services.RunningAgentChatFactory);
     }
 
@@ -526,7 +526,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetOrCreateAsync(sessionId, registerAsRunningAgent: false);
 
-        Assert.NotNull(lease.AgentChat);
+        Assert.NotNull(lease.LocalAgentChat);
         Assert.Empty(factory.RunningSessions);
     }
 
@@ -552,7 +552,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.CreateAsync(EchoAgentDefinition, sessionId);
 
-        var services = GetRequestServices(lease.AgentChat);
+        var services = GetRequestServices(lease.LocalAgentChat);
         Assert.Same(factory, services.RunningAgentChatFactory);
     }
 
@@ -576,7 +576,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetAsync(sessionId);
 
-        var chatServices = GetRequestServices(lease.AgentChat);
+        var chatServices = GetRequestServices(lease.LocalAgentChat);
         Assert.Same(factory, chatServices.RunningAgentChatFactory);
         Assert.NotSame(explicitFactory, chatServices.RunningAgentChatFactory);
     }
@@ -595,8 +595,8 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
 
-        await WaitForSubAgentCountAsync(lease.AgentChat, 2);
-        Assert.Equal(2, lease.AgentChat.SubAgents.Count);
+        await WaitForSubAgentCountAsync(lease.LocalAgentChat, 2);
+        Assert.Equal(2, lease.LocalAgentChat.SubAgents.Count);
     }
 
     // ── Issue #1186: restore-time null-model resilience ──────────────────────
@@ -657,8 +657,8 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
 
-        await WaitForSubAgentCountAsync(lease.AgentChat, 1);
-        Assert.Single(lease.AgentChat.SubAgents);
+        await WaitForSubAgentCountAsync(lease.LocalAgentChat, 1);
+        Assert.Single(lease.LocalAgentChat.SubAgents);
     }
 
     [Fact]
@@ -683,12 +683,12 @@ public sealed class AgentChatFactoryTests
         await using var factory = new AgentChatFactory(store, services, TaskScheduler.Default);
 
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
-        await WaitForSubAgentCountAsync(lease.AgentChat, 1);
+        await WaitForSubAgentCountAsync(lease.LocalAgentChat, 1);
 
         // Snapshot: parent has been constructed. Now if the restore path attempted
         // to materialise the child, an extra AgentChat.InitializeAsync run would
         // pull the client from services.ChatClientOverride and enumerate it.
-        var stub = Assert.IsType<SubAgent>(Assert.Single(lease.AgentChat.SubAgents));
+        var stub = Assert.IsType<SubAgent>(Assert.Single(lease.LocalAgentChat.SubAgents));
         Assert.Null(stub.AgentChat); // child NOT materialised
         Assert.Equal(
             AgentChatCompletionState.Succeeded,
@@ -721,9 +721,9 @@ public sealed class AgentChatFactoryTests
         // #1186 documents.
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId), ct: cts.Token);
-        await lease.AgentChat.WaitForRestoredSubAgentsMarkedTerminalAsync().WaitAsync(cts.Token);
+        await lease.LocalAgentChat.WaitForRestoredSubAgentsMarkedTerminalAsync().WaitAsync(cts.Token);
 
-        Assert.Equal(2, lease.AgentChat.SubAgents.Count);
+        Assert.Equal(2, lease.LocalAgentChat.SubAgents.Count);
     }
 
     [Fact]
@@ -749,8 +749,8 @@ public sealed class AgentChatFactoryTests
         await using var factory = CreateFactory(store: store);
 
         await using var lease = await factory.GetAsync(new AgentSessionId(parentSessionId));
-        await WaitForSubAgentCountAsync(lease.AgentChat, 2);
-        Assert.Equal(2, lease.AgentChat.SubAgents.Count);
+        await WaitForSubAgentCountAsync(lease.LocalAgentChat, 2);
+        Assert.Equal(2, lease.LocalAgentChat.SubAgents.Count);
     }
 
     // ── Test doubles ──────────────────────────────────────────────────────────
@@ -911,7 +911,7 @@ public sealed class AgentChatFactoryTests
 
         await using var lease = await factory.GetAsync(sessionId, registerAsRunningAgent: false);
 
-        Assert.NotNull(lease.AgentChat);
+        Assert.NotNull(lease.LocalAgentChat);
         Assert.Empty(factory.RunningSessions);
     }
 
@@ -934,7 +934,7 @@ public sealed class AgentChatFactoryTests
         await using var lease = await factory.GetOrCreateAsync(sessionId, McpSecretDefinition(), services);
 
         Assert.Equal(1, provider.CallCount);
-        var json = lease.AgentChat.AgentDefinition!.ToJson();
+        var json = lease.LocalAgentChat.AgentDefinition!.ToJson();
         Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
         Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
     }

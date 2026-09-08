@@ -122,8 +122,8 @@ public sealed class SubAgentDispatcherIntegrationTests
 
         // By the time the streaming response has completed, the sub-agent must be idle.
         var lease = factory.Leases.Values.Single();
-        Assert.Empty(lease.AgentChat.RunningItems);
-        Assert.True(lease.AgentChat.History.Count > 0);
+        Assert.Empty(lease.LocalAgentChat.RunningItems);
+        Assert.True(lease.LocalAgentChat.History.Count > 0);
 
         client.Dispose();
     }

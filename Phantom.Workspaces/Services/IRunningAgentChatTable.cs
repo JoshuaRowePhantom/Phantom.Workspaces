@@ -30,5 +30,24 @@ public interface IRunningAgentChatTable
     Task<RunningAgentChatLease> AcquireAsync(
         AcquireAgentChatRequest request,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Terminates the identified session (issue #1485). Returns <see langword="true"/> when a
+    /// session was known and terminate was initiated; <see langword="false"/> when no such session
+    /// is registered. Default implementation returns <see langword="false"/> for source
+    /// compatibility with existing test doubles; production tables override this.
+    /// </summary>
+    Task<bool> TerminateAsync(
+        AgentSessionId sessionId, CancellationToken ct = default)
+        => Task.FromResult(false);
+
+    /// <summary>
+    /// Requests continue-in-background for the identified session (issue #1485). Default
+    /// implementation is a no-op for source compatibility with existing test doubles.
+    /// </summary>
+    Task SetContinueInBackgroundAsync(
+        AgentSessionId sessionId, bool continueInBackground,
+        CancellationToken ct = default)
+        => Task.CompletedTask;
 }
 

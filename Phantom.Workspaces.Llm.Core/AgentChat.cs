@@ -31,7 +31,7 @@ namespace Phantom.Workspaces.Llm;
 /// otherwise a dedicated exclusive scheduler that serializes foreground work so the
 /// running-item collections are never mutated concurrently off the UI thread.
 /// </summary>
-public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
+public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAgent, ISubAgentTable
 {
     private const string GitHubModelsInferenceEndpoint = "https://models.github.ai/inference";
     private const string RunningPartAssistantReasoning = "assistant-reasoning";
@@ -63,6 +63,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     private IReadOnlyList<RuntimeContextProviderRegistration> runtimeContextProviderRegistrations = [];
     private readonly AgentInputQueueManager queueManager;
     private readonly AgentChatQueueManager chatQueueManager;
+    private readonly LocalAgentInputQueuesAdapter commonInputQueues;
+    private readonly ObservableCollection<AgentChatModal> modals = [];
     private AgentChatHistoryService? historyService;
     private readonly AgentChatHistoryCollection history = new();
     private readonly TaskCompletionSource historyPopulated = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -89,6 +91,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     // on it. Assigned once during initialization; Task.CompletedTask when the agent has no tools.
     private Task initialization = Task.CompletedTask;
     private string agentSessionId = Guid.NewGuid().ToString("n");
+    private AgentInformation information;
+    private Usage usage;
 
     private bool isBusy;
     private bool processingStarted;
@@ -147,10 +151,15 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        this.lastUpdatedAt = this.timeProvider.GetUtcNow().UtcDateTime;
        this.queueManager = new AgentInputQueueManager();
        this.chatQueueManager = new AgentChatQueueManager(this.queueManager);
+       this.commonInputQueues = new LocalAgentInputQueuesAdapter(
+           this.queueManager,
+           this.chatQueueManager.DefaultInputQueue.Queue);
        this.runningItemOperations = new AgentRunningItems(this.runningItems);
        this.ownedResources = request.OwnedResources?.ToList() ?? [];
        this.PendingApprovalItems = new ReadOnlyObservableCollection<AgentChatPendingApprovalItem>(this.pendingApprovalItems);
        this.SubAgents = new ReadOnlyObservableCollection<IRunningSubAgent>(this.subAgentItems);
+       this.Modals = new ReadOnlyObservableCollection<AgentChatModal>(this.modals);
+       this.information = default;
        this.foregroundScheduler = request.ForegroundScheduler
            ?? (SynchronizationContext.Current is not null
                ? TaskScheduler.FromCurrentSynchronizationContext()
@@ -299,6 +308,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
        // type-level DisplayName. Blank when no caller name was supplied so downstream UI can
        // fall back to DisplayName / session id without inventing a fake value.
        this.Name = this.request.NameOverride ?? string.Empty;
+       this.PublishInformation();
 
        // Steering messages are injected into the model call deep in the chat-client pipeline
        // (at tool-result boundaries by ToolResultSteeringMiddleware, or forwarded to the live
@@ -514,6 +524,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     public event EventHandler<string>? AgentSessionIdChanged;
 
+    public event EventHandler? InformationChanged;
+
     public event EventHandler? ToolsChanged;
 
     public event EventHandler? UsageChanged;
@@ -553,6 +565,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
 
     /// <summary>All known input queues, including the default queue.</summary>
     public ReadOnlyObservableCollection<AgentChatQueue> InputQueues => this.chatQueueManager.InputQueues;
+
+    IAgentInputQueues IAgentChat.InputQueues => this.commonInputQueues;
 
     /// <summary>The default input queue.</summary>
     public AgentChatQueue DefaultInputQueue => this.chatQueueManager.DefaultInputQueue;
@@ -599,6 +613,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// <summary>Child sub-agent chats spawned by this chat during the current session.</summary>
     public ReadOnlyObservableCollection<IRunningSubAgent> SubAgents { get; }
 
+    public ReadOnlyObservableCollection<AgentChatModal> Modals { get; }
+
     IReadOnlyList<IRunningSubAgent> IRunningSubAgent.SubAgents => this.SubAgents;
 
     public string DisplayName { get; private set; } = string.Empty;
@@ -630,6 +646,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     /// registered automatically during initialisation; <c>/help</c> is always present.
     /// </summary>
     public ISlashCommandRegistry SlashCommands => this.outerSlashCommands;
+
+    public AgentInformation Information => this.information;
+
+    public Usage Usage => this.usage;
 
     public long? TotalInputTokenCount { get; private set; }
 
@@ -685,7 +705,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             {
                 if (!this.toolIndex.TryGetValue(toolId, out var node))
                 {
-                    return;
+                    throw new ArgumentException($"Unknown tool id '{toolId}'.", nameof(toolId));
                 }
 
                 changed = SetNodeEnabled(node, enabled);
@@ -910,6 +930,16 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         cancellationToUse?.Cancel();
+    }
+
+    public Task RespondToModalAsync(
+        string modalId,
+        JsonElement response,
+        CancellationToken ct = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
+        ct.ThrowIfCancellationRequested();
+        throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
     }
 
     public void ResetSession(AgentChatSession nextSession, bool interruptCurrentResponse = true)
@@ -1328,6 +1358,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         this.agentSessionId = agentSessionId;
+        this.PublishInformation();
 
         this.AgentSessionIdChanged?.Invoke(this, agentSessionId);
     }
@@ -1513,6 +1544,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             return;
         }
 
+        this.commonInputQueues.Dispose();
+
         if (this.modelClient is not null)
         {
             this.modelClient.ModelChanged -= this.OnModelChanged;
@@ -1554,7 +1587,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
     }
 
     private void OnModelChanged(object? sender, EventArgs eventArgs)
-        => this.ModelChanged?.Invoke(this, EventArgs.Empty);
+    {
+        this.PublishInformation();
+        this.ModelChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     // Drains a conflator while suppressing coalesce faults so a secondary failure during teardown
     // cannot mask the cancellation or provider error already being handled.
@@ -2307,8 +2343,38 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
             || this.TotalReasoningTokenCount != previousReasoningTokenCount
             || this.TotalSessionCostMicroUsd != previousCostMicroUsd)
         {
+            this.usage = new Usage
+            {
+                TotalInputTokenCount = this.TotalInputTokenCount,
+                TotalOutputTokenCount = this.TotalOutputTokenCount,
+                TotalCacheReadTokenCount = this.TotalCacheReadTokenCount,
+                TotalCacheWriteTokenCount = this.TotalCacheWriteTokenCount,
+                TotalReasoningTokenCount = this.TotalReasoningTokenCount,
+                TotalSessionCostUsd = this.TotalSessionCostUsd,
+            };
             this.UsageChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    private void PublishInformation()
+    {
+        if (this.agentDefinition is null)
+        {
+            return;
+        }
+
+        this.information = new AgentInformation
+        {
+            AgentSessionId = this.agentSessionId,
+            AgentId = this.AgentId,
+            Name = string.IsNullOrWhiteSpace(this.Name) ? this.AgentId : this.Name,
+            DisplayName = string.IsNullOrWhiteSpace(this.DisplayName) ? this.AgentId : this.DisplayName,
+            Description = string.IsNullOrWhiteSpace(this.Description) ? this.DisplayName : this.Description,
+            AcceptsUserInput = this.acceptsUserInput,
+            CurrentModelId = this.CurrentModelId,
+            AgentDefinition = this.agentDefinition,
+        };
+        this.InformationChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>

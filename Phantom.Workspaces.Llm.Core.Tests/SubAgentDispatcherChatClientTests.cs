@@ -135,7 +135,7 @@ public sealed class SubAgentDispatcherChatClientTests
         // The echo agent should have processed the message
         Assert.True(factory.Leases.Count > 0, "At least one lease should have been created");
         var lease = factory.Leases.Values.First();
-        Assert.NotNull(lease.AgentChat);
+        Assert.NotNull(lease.LocalAgentChat);
 
         // LastUpdated should have been set
         // (We can't easily access DispatchedSubAgent from outside, but the test passing indicates it worked)
@@ -216,7 +216,7 @@ public sealed class SubAgentDispatcherChatClientTests
 
         // Get the lease to observe the history
         var lease = factory.Leases.Values.First();
-        var initialHistoryCount = lease.AgentChat.History.Count;
+        var initialHistoryCount = lease.LocalAgentChat.History.Count;
 
         // Act - Route to the existing sub-agent
         var routeMessages = new List<ChatMessage>
@@ -231,7 +231,7 @@ public sealed class SubAgentDispatcherChatClientTests
         }
 
         // Assert - The history should have grown (user message + assistant echo)
-        Assert.True(lease.AgentChat.History.Count > initialHistoryCount,
+        Assert.True(lease.LocalAgentChat.History.Count > initialHistoryCount,
             "History should have grown after routing a message to the sub-agent");
 
         // The output should contain the echo of "follow up message"

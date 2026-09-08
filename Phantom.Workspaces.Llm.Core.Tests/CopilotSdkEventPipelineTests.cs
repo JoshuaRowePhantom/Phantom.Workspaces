@@ -225,10 +225,10 @@ public sealed class CopilotSdkEventPipelineTests
         // Start sub-agent
         await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
-        var receiver = (CopilotSubAgentChatClient)lease.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        var receiver = (CopilotSubAgentChatClient)lease.LocalAgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
         // Verify initial state is Running
-        Assert.Equal(AgentChatCompletionState.Running, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Running, lease.LocalAgentChat.CompletionState);
 
         // Start consuming the stream in the background
         var streamTask = Task.Run(async () =>
@@ -244,7 +244,7 @@ public sealed class CopilotSdkEventPipelineTests
         await streamTask;
 
         // Verify completion state is now Succeeded
-        Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
     }
 
     [Fact]
@@ -257,10 +257,10 @@ public sealed class CopilotSdkEventPipelineTests
         // Start sub-agent
         await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
-        var receiver = (CopilotSubAgentChatClient)lease.AgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
+        var receiver = (CopilotSubAgentChatClient)lease.LocalAgentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
 
         // Verify initial state is Running
-        Assert.Equal(AgentChatCompletionState.Running, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Running, lease.LocalAgentChat.CompletionState);
 
         // Start consuming the stream in the background
         var streamTask = Task.Run(async () =>
@@ -283,7 +283,7 @@ public sealed class CopilotSdkEventPipelineTests
         await streamTask;
 
         // Verify completion state is now Failed
-        Assert.Equal(AgentChatCompletionState.Failed, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Failed, lease.LocalAgentChat.CompletionState);
     }
 
     [Fact]
@@ -298,13 +298,13 @@ public sealed class CopilotSdkEventPipelineTests
         var lease = factory.CreatedLease!;
 
         // Verify initial state is Running
-        Assert.Equal(AgentChatCompletionState.Running, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Running, lease.LocalAgentChat.CompletionState);
 
         // Dispose remaining leases (simulating turn cleanup)
         await router.DisposeRemainingLeasesAsync();
 
         // Verify completion state is now Failed
-        Assert.Equal(AgentChatCompletionState.Failed, lease.AgentChat.CompletionState);
+        Assert.Equal(AgentChatCompletionState.Failed, lease.LocalAgentChat.CompletionState);
         Assert.True(factory.LeaseDisposed);
     }
 
@@ -355,7 +355,7 @@ public sealed class CopilotSdkEventPipelineTests
         // Start sub-agent
         await DispatchAsync(router, StartedEvent("agent-1"));
         var lease = factory.CreatedLease!;
-        var agentChat = lease.AgentChat;
+        var agentChat = lease.LocalAgentChat;
 
         // Simulate consuming the stream (to make the agent "idle" in terms of no running items)
         var receiver = (CopilotSubAgentChatClient)agentChat.GetService(typeof(ICopilotSubAgentReceiver))!;
@@ -503,7 +503,7 @@ public sealed class CopilotSdkEventPipelineTests
         foreach (var stub in parent.SubAgents.Cast<SubAgent>())
         {
             await using var lease = await stub.AcquireLeaseAsync();
-            Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+            Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
         }
     }
 
@@ -571,7 +571,7 @@ public sealed class CopilotSdkEventPipelineTests
 
         // The card's ago-label reads LastUpdatedAt through this chain — it must show the
         // persisted time, not the reload time. And the running marker must clear (#1128).
-        Assert.Equal(childPersistedTime, lease.AgentChat.LastUpdatedAt);
-        Assert.Equal(AgentChatCompletionState.Succeeded, lease.AgentChat.CompletionState);
+        Assert.Equal(childPersistedTime, lease.LocalAgentChat.LastUpdatedAt);
+        Assert.Equal(AgentChatCompletionState.Succeeded, lease.LocalAgentChat.CompletionState);
     }
 }

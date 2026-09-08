@@ -138,7 +138,7 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                         });
                     loadingTab.SetLease(lease);
-                    return (lease.AgentChat, loggerFactory);
+                    return (lease.LocalAgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
         else if (data.TryGetProperty("definition", out var definitionElement))
@@ -167,7 +167,7 @@ internal static class AgentManifestSessionLauncher
                             WorkspaceId = loadingTab.WorkspacePaneId,
                         });
                     loadingTab.SetLease(lease);
-                    return (lease.AgentChat, loggerFactory);
+                    return (lease.LocalAgentChat, loggerFactory);
                 }, createdAgentSessionEntity, loadingTab, foregroundScheduler));
         }
 

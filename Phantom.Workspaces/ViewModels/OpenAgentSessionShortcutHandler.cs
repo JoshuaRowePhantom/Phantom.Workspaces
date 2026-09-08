@@ -248,7 +248,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 WorkspaceId = mainWindowViewModel.SelectedWorkspacePane?.Id,
             });
 
-        lease.AgentChat.EnqueueUserMessage(resumePrompt);
+        lease.LocalAgentChat.EnqueueUserMessage(resumePrompt);
         return lease;
     }
 
@@ -337,7 +337,7 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
                 // status-button clicks (running-agent brain) can switch to it before focusing.
                 WorkspaceId = tab.WorkspacePaneId,
             });
-        var agentChat = lease.AgentChat;
+        var agentChat = lease.LocalAgentChat;
 
         // #1429: build + wire slash commands through the single GUI session-composition seam so this
         // path can never diverge from the other launch paths.

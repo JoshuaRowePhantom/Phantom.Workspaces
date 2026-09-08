@@ -68,7 +68,7 @@ public sealed class AgentChatSlashCommandRegistrationTests
         await using var lease = await factory.CreateAsync(
             CreateCopilotAgent(),
             new AgentSessionId(Guid.NewGuid().ToString("n")));
-        var chat = lease.AgentChat;
+        var chat = lease.LocalAgentChat;
 
         var handler = Assert.Single(chat.SlashCommands.Commands, c => c.Name == "working-directory");
         Assert.IsType<CopilotSdkWorkingDirectorySlashCommandHandler>(handler);
@@ -84,7 +84,7 @@ public sealed class AgentChatSlashCommandRegistrationTests
         await using var lease = await factory.CreateAsync(
             CreateCopilotAgent(),
             new AgentSessionId(Guid.NewGuid().ToString("n")));
-        var chat = lease.AgentChat;
+        var chat = lease.LocalAgentChat;
 
         Assert.Contains(chat.SlashCommands.Commands, c => c.Name == "model");
     }

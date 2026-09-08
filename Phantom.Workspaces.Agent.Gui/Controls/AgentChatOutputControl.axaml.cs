@@ -326,7 +326,9 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
             sink: this,
             toolFactory: DefaultToolFactory,
             statusSink: this,
-            resolveSubAgentId: vm.AgentChat.TryGetSubAgentIdByToolCallId,
+            resolveSubAgentId: vm.AgentChat is AgentChat localChat
+                ? localChat.TryGetSubAgentIdByToolCallId
+                : null,
             subAgents: vm.SubAgentDisplays,
             ancestors: BuildAncestors(vm.AgentChat),
             parentAgent: vm.ParentAgentDisplay);
@@ -493,11 +495,15 @@ public partial class AgentChatOutputControl : UserControl, IChatOutputHtmlSink, 
     /// Builds the ancestry chain from the root agent down to <paramref name="agentChat"/> (inclusive),
     /// for use as the breadcrumb in the running sub-agents panel.
     /// </summary>
-    private static IReadOnlyList<IRunningSubAgent> BuildAncestors(AgentChat agentChat)
+    private static IReadOnlyList<IRunningSubAgent> BuildAncestors(IAgentChat agentChat)
     {
         const int maxDepth = 64;
         var chain = new List<IRunningSubAgent>();
-        AgentChat? current = agentChat;
+        AgentChat? current = agentChat as AgentChat;
+        if (current is null)
+        {
+            return agentChat is IRunningSubAgent remote ? [remote] : [];
+        }
         var depth = 0;
         while (current is not null && depth < maxDepth)
         {

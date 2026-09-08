@@ -17,7 +17,7 @@ namespace Phantom.Workspaces.Agent.Gui.ViewModels;
 
 public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsyncDisposable
 {
-    private readonly AgentChat agentChat;
+    private readonly IAgentChat agentChat;
     private readonly ObservableLoggerFactory loggerFactory;
     private readonly ILogger logger;
     private readonly AgentChatConversationDetailViewModel conversationDetail;
@@ -61,16 +61,31 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     // SynchronizationContextTaskScheduler.FromCurrent() on the UI thread) so that the
     // continuation in AddSubAgentSlotLazy performs its UI-affine mutations on the correct
     // thread. Tests that do not exercise UI-thread affinity may pass TaskScheduler.Default.
-    public AgentViewModel(AgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
+    /// <summary>
+    /// #1485: named-initialiser construction preferred by the common chat surface. Delegates to
+    /// the existing positional constructor to preserve exact behaviour and every existing test.
+    /// </summary>
+    public AgentViewModel(AgentViewModelOptions options)
+        : this(
+            (options ?? throw new ArgumentNullException(nameof(options))).AgentChat,
+            options.DisplayName,
+            options.Description,
+            options.LoggerFactory,
+            options.ForegroundScheduler,
+            options.ParentAgentViewModel)
+    {
+    }
+
+    public AgentViewModel(IAgentChat agentChat, string displayName, string description, ObservableLoggerFactory loggerFactory, TaskScheduler foregroundScheduler, AgentViewModel? parentAgentViewModel = null)
     {
         this.agentChat = agentChat;
         this.loggerFactory = loggerFactory;
         this.logger = loggerFactory.CreateLogger<AgentViewModel>();
         this.foregroundScheduler = foregroundScheduler ?? throw new ArgumentNullException(nameof(foregroundScheduler));
-        this.agentSessionId = agentChat.AgentSessionId;
+        this.agentSessionId = agentChat.Information.AgentSessionId;
         this.ParentAgentViewModel = parentAgentViewModel;
-        this.ParentAgentDisplay = parentAgentViewModel is not null
-            ? new RunningParentAgentDisplay(parentAgentViewModel.agentChat)
+        this.ParentAgentDisplay = parentAgentViewModel?.agentChat is AgentChat parentLocalChat
+            ? new RunningParentAgentDisplay(parentLocalChat)
             : null;
         this.DisplayName = displayName;
         this.Description = description;
@@ -83,11 +98,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.InterruptCommand = new RelayCommand(agentChat.Interrupt);
         this.ToggleReasoningVisibilityCommand = new RelayCommand(this.ToggleReasoningVisibility);
         this.RequestOpenLogWindowCommand = new RelayCommand(this.RequestOpenLogWindow);
-        this.InputQueue = agentChat.AcceptsUserInput
+        this.InputQueue = agentChat.Information.AcceptsUserInput && agentChat is AgentChat localAgentChat
             ? new InputQueueViewModel(
-                this.agentChat,
-                this.agentChat.DefaultInputQueue,
-                this.agentChat.InputQueueManager)
+                localAgentChat,
+                localAgentChat.DefaultInputQueue,
+                localAgentChat.InputQueueManager)
             : null;
         this.ToggleHoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.ToggleHoldAllQueuesCommand.Execute(null));
         this.HoldAllQueuesCommand = new RelayCommand(() => this.InputQueue?.HoldAllQueuesCommand.Execute(null));
@@ -96,10 +111,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
         this.NavigateToAgentHandler = this.NavigateToAgent;
 
-        this.agentChat.AgentSessionIdChanged += this.OnAgentSessionIdChanged;
+        this.agentChat.InformationChanged += this.OnInformationChanged;
         this.agentChat.ToolsChanged += this.OnToolsChanged;
         this.agentChat.UsageChanged += this.OnUsageChanged;
-        this.agentChat.ModelChanged += this.OnModelChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
             runningItemsNotifications.CollectionChanged += this.OnRunningItemsCollectionChanged;
@@ -193,7 +207,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     /// Caller-supplied sub-agent name/id (issue #1151) sourced from <c>AgentChat.Name</c>. Empty
     /// for root agents and for sub-agents whose caller did not supply a name.
     /// </summary>
-    public string Name => this.agentChat.Name;
+    public string Name => this.agentChat.Information.Name;
 
     public AgentChatConversationDetailViewModel ConversationDetail => this.conversationDetail;
 
@@ -232,19 +246,19 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     public string ModelProvider => this.ResolveAgentModel()?.Provider ?? string.Empty;
 
-    public string ModelId => this.agentChat.CurrentModelId ?? string.Empty;
+    public string ModelId => this.agentChat.Information.CurrentModelId ?? string.Empty;
 
-    public long? TotalInputTokenCount => this.agentChat.TotalInputTokenCount;
+    public long? TotalInputTokenCount => this.agentChat.Usage.TotalInputTokenCount;
 
-    public long? TotalOutputTokenCount => this.agentChat.TotalOutputTokenCount;
+    public long? TotalOutputTokenCount => this.agentChat.Usage.TotalOutputTokenCount;
 
-    public long? TotalCacheReadTokenCount => this.agentChat.TotalCacheReadTokenCount;
+    public long? TotalCacheReadTokenCount => this.agentChat.Usage.TotalCacheReadTokenCount;
 
-    public long? TotalCacheWriteTokenCount => this.agentChat.TotalCacheWriteTokenCount;
+    public long? TotalCacheWriteTokenCount => this.agentChat.Usage.TotalCacheWriteTokenCount;
 
-    public long? TotalReasoningTokenCount => this.agentChat.TotalReasoningTokenCount;
+    public long? TotalReasoningTokenCount => this.agentChat.Usage.TotalReasoningTokenCount;
 
-    public double? TotalSessionCostUsd => this.agentChat.TotalSessionCostUsd;
+    public double? TotalSessionCostUsd => this.agentChat.Usage.TotalSessionCostUsd;
 
     public string ModelApiType => this.ResolveAgentModel()?.ApiType ?? string.Empty;
 
@@ -256,10 +270,12 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         var connection => connection.GetType().Name,
     };
 
-    public AgentChat AgentChat => this.agentChat;
+    public IAgentChat AgentChat => this.agentChat;
+
+    internal AgentChat LocalAgentChat => (AgentChat)this.agentChat;
 
     /// <summary>Whether this agent accepts user input (false for hosted sub-agents).</summary>
-    public bool AcceptsUserInput => this.agentChat.AcceptsUserInput;
+    public bool AcceptsUserInput => this.agentChat.Information.AcceptsUserInput;
 
     /// <summary>The sub-agents container (browser card + cached sub-agent slots).</summary>
     public SubAgentsContainerViewModel SubAgentsContainer => this.subAgentsContainerDetail;
@@ -534,7 +550,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         if (handler is null)
         {
             // Unknown slash command — forward to the LLM as a plain message.
-            this.agentChat.EnqueueUserMessage(text);
+            await this.EnqueueUserMessageAsync(text).ConfigureAwait(false);
             return;
         }
 
@@ -595,9 +611,26 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     public void SetReasoningVisibility(bool visible)
         => this.IsReasoningVisible = visible;
 
-    private void OnAgentSessionIdChanged(object? sender, string sessionId)
+    private void OnInformationChanged(object? sender, EventArgs e)
     {
-        this.AgentSessionId = sessionId;
+        this.AgentSessionId = this.agentChat.Information.AgentSessionId;
+        this.OnModelChanged(sender, e);
+    }
+
+    private Task<AgentInputQueueCommandResult> EnqueueUserMessageAsync(
+        string text,
+        CancellationToken cancellationToken = default)
+    {
+        var queues = this.agentChat.InputQueues;
+        return queues.EnqueueAsync(
+            new EnqueueAgentInputRequest
+            {
+                TargetQueueId = queues.DefaultQueue.Snapshot.QueueId,
+                Messages = [new ChatMessage(ChatRole.User, text)],
+                CommandId = Guid.NewGuid(),
+                ExpectedRevision = queues.Snapshot.Revision,
+            },
+            cancellationToken);
     }
 
     private void OnToolsChanged(object? sender, EventArgs e)
@@ -643,10 +676,9 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         this.conversationDetail.Dispose();
         this.subAgentsBrowserDetail.Dispose();
         ((INotifyCollectionChanged)this.agentChat.SubAgents).CollectionChanged -= this.OnSubAgentsCollectionChanged;
-        this.agentChat.AgentSessionIdChanged -= this.OnAgentSessionIdChanged;
+        this.agentChat.InformationChanged -= this.OnInformationChanged;
         this.agentChat.ToolsChanged -= this.OnToolsChanged;
         this.agentChat.UsageChanged -= this.OnUsageChanged;
-        this.agentChat.ModelChanged -= this.OnModelChanged;
         if (this.RunningItems is INotifyCollectionChanged runningItemsNotifications)
         {
             runningItemsNotifications.CollectionChanged -= this.OnRunningItemsCollectionChanged;
@@ -678,7 +710,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
 
     private Model? ResolveAgentModel()
     {
-        var agentDefinition = this.agentChat.AgentDefinition;
+        var agentDefinition = this.agentChat.Information.AgentDefinition;
         if (agentDefinition is null)
         {
             return null;
@@ -803,7 +835,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
     private void RemoveSubAgentDetailContents(string agentId)
     {
         var subAgentViewModel = this.subAgentViewModels
-            .FirstOrDefault(vm => string.Equals(vm.agentChat.AgentId, agentId, StringComparison.Ordinal));
+            .FirstOrDefault(vm => string.Equals(vm.agentChat.Information.AgentId, agentId, StringComparison.Ordinal));
         if (subAgentViewModel is null)
         {
             return;
@@ -832,11 +864,11 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         // the finalizer thread (which previously crashed the process).
         var acquisitionTask = stub.AcquireLeaseAsync();
         var acquisitionContinuation = acquisitionTask.ContinueWith(
-            task =>
+            async task =>
             {
                 if (task.IsCompletedSuccessfully)
                 {
-                    var lease = task.Result;
+                    var lease = await task;
                     // Hold the lease for the lifetime of the slot
                     lock (this.subAgentLeases)
                     {
@@ -844,7 +876,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
                     }
                     try
                     {
-                        this.AddSubAgentSlotEager(stub, lease.AgentChat);
+                        this.AddSubAgentSlotEager(stub, lease.LocalAgentChat);
                     }
                     catch (Exception ex)
                     {
@@ -858,7 +890,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             },
             CancellationToken.None,
             TaskContinuationOptions.None,
-            this.foregroundScheduler);
+            this.foregroundScheduler).Unwrap();
 
         // #1451: while the constructor seeds restored sub-agents, record each acquisition
         // continuation so RestoreSettled awaits the UI-affine running-state mutations they perform.
@@ -885,7 +917,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
 
         var target = root.FindInTreeById(agentId);
-        var resolvedAgentId = target is not null ? target.agentChat.AgentId : agentId;
+        var resolvedAgentId = target is not null ? target.agentChat.Information.AgentId : agentId;
         root.NavigateToSubAgent(resolvedAgentId);
     }
 
@@ -899,8 +931,8 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
             return null;
         }
 
-        if (string.Equals(this.agentChat.AgentId, agentId, StringComparison.Ordinal) ||
-            string.Equals(this.agentChat.AgentSessionId, agentId, StringComparison.Ordinal))
+        if (string.Equals(this.agentChat.Information.AgentId, agentId, StringComparison.Ordinal) ||
+            string.Equals(this.agentChat.Information.AgentSessionId, agentId, StringComparison.Ordinal))
         {
             return this;
         }
@@ -928,7 +960,7 @@ public sealed class AgentViewModel : ViewModelBase, IAutoScrollViewModel, IAsync
         }
 
         // If the target is this agent itself, show the conversation view (navigate to self/root).
-        if (string.Equals(agentId, this.agentChat.AgentId, StringComparison.Ordinal))
+        if (string.Equals(agentId, this.agentChat.Information.AgentId, StringComparison.Ordinal))
         {
             if (this.EditorItems.Count > 0)
             {

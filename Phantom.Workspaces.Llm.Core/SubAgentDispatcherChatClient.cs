@@ -251,7 +251,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             dispatched.DispatchHistoryIndex = lease.AgentChat.History.Count;
 
             // Enqueue the user message
-            lease.AgentChat.EnqueueUserMessage(create.Prompt);
+            lease.LocalAgentChat.EnqueueUserMessage(create.Prompt);
 
             // Store the dispatched sub-agent
             _subAgents[id] = dispatched;
@@ -267,7 +267,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             {
                 if (lease.AgentChat.RunningItems.Count > 0)
                 {
-                    lease.AgentChat.Interrupt();
+                    lease.LocalAgentChat.Interrupt();
                 }
                 idleSignal.TrySetCanceled(cancellationToken);
             });
@@ -401,7 +401,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             targetAgent.DispatchHistoryIndex = lease.AgentChat.History.Count;
 
             // Enqueue the message
-            lease.AgentChat.EnqueueUserMessage(message);
+            lease.LocalAgentChat.EnqueueUserMessage(message);
 
             // Update most recently dispatched
             _mostRecentlyDispatchedId = targetAgent.Id;
@@ -411,7 +411,7 @@ public sealed class SubAgentDispatcherChatClient : IChatClient, ISubAgentDispatc
             {
                 if (lease.AgentChat.RunningItems.Count > 0)
                 {
-                    lease.AgentChat.Interrupt();
+                    lease.LocalAgentChat.Interrupt();
                 }
                 idleSignal.TrySetCanceled(cancellationToken);
             });

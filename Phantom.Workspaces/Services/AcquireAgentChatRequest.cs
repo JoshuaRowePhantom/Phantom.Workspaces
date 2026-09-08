@@ -3,6 +3,7 @@ using AgentSchema;
 using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Services;
 
@@ -28,4 +29,22 @@ public sealed class AcquireAgentChatRequest
     /// status-button navigation (#1135) can switch to the owning workspace before focusing the agent.
     /// </summary>
     public string? WorkspaceId { get; init; }
+
+    /// <summary>
+    /// Acquisition mode (issue #1485). Local mode uses the in-process engine and forbids
+    /// <see cref="OwningProfileTransport"/>; remote modes require a non-null owning transport and a
+    /// persisted owner/generation on the entity.
+    /// </summary>
+    public AgentChatAcquisitionMode AcquisitionMode { get; init; } = AgentChatAcquisitionMode.Local;
+
+    /// <summary>
+    /// Non-owned reference to the transport that anchors the owning profile for a remote
+    /// acquisition (issue #1485). The request does not clone or dispose the transport.
+    /// </summary>
+    public ITransport? OwningProfileTransport { get; init; } = null;
+
+    /// <summary>
+    /// Optional replay cursor when re-attaching to an already-running remote session (issue #1485).
+    /// </summary>
+    public ReplayCursor? ReplayCursor { get; init; } = null;
 }

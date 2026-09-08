@@ -20,7 +20,7 @@ public sealed class RunningAgentChatLeaseTests
         var sessionId = new AgentSessionId("session-1");
         var lease = new RunningAgentChatLease(sessionId, null!, () => ValueTask.CompletedTask);
 
-        Assert.Null(lease.AgentChat);
+        Assert.Null(lease.LocalAgentChat);
     }
 
     [Fact]

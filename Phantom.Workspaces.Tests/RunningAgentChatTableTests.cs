@@ -553,7 +553,7 @@ public sealed class RunningAgentChatTableTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(1, provider.CallCount);
-        var json = lease.AgentChat.AgentDefinition!.ToJson();
+        var json = lease.AgentChat.Information.AgentDefinition.ToJson();
         Assert.DoesNotContain("${SECRET:GitHubToken}", json, StringComparison.Ordinal);
         Assert.Contains("${SECRET:", json, StringComparison.Ordinal);
     }
@@ -586,7 +586,7 @@ public sealed class RunningAgentChatTableTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(0, provider.CallCount);
-        Assert.Equal(originalJson, lease.AgentChat.AgentDefinition!.ToJson());
+        Assert.Equal(originalJson, lease.AgentChat.Information.AgentDefinition.ToJson());
     }
 
     private static AgentDefinition McpSecretDefinition()

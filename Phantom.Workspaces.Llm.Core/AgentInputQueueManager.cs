@@ -26,6 +26,8 @@ public sealed class AgentInputQueueManager
     private readonly object syncLock = new();
     private readonly List<AgentInputQueue> inputQueues;
     private readonly Dictionary<AgentInputQueue, EventHandler> queueConfigurationHandlers = [];
+    private readonly Dictionary<string, string> queueNames = new(StringComparer.Ordinal);
+    private long aggregateRevision;
 
     public event EventHandler<QueuePublishedEventArgs>? QueuePublished;
     public event EventHandler<QueueStateChangedEventArgs>? QueueStateChanged;
@@ -37,13 +39,43 @@ public sealed class AgentInputQueueManager
             {
                 Priority = int.MaxValue,
                 Immediacy = AgentInputQueueImmediacy.Immediate,
+                Name = "Immediate Queue",
             });
         this.inputQueues = [this.ImmediateQueue];
         this.queueConfigurationHandlers[this.ImmediateQueue] = this.OnQueueConfigurationChanged;
         this.ImmediateQueue.ConfigurationChanged += this.OnQueueConfigurationChanged;
+        this.queueNames[this.ImmediateQueue.QueueId] = "Immediate Queue";
     }
 
     public AgentInputQueue ImmediateQueue { get; }
+
+    /// <summary>
+    /// Monotonically increasing aggregate revision (issue #1485). Bumped once per applied
+    /// mutation across all owned queues so cross-queue commands share a deterministic
+    /// conflict rule.
+    /// </summary>
+    public long AggregateRevision => Volatile.Read(ref this.aggregateRevision);
+
+    /// <summary>Bumps the aggregate revision and returns the new value.</summary>
+    internal long BumpAggregateRevision() => Interlocked.Increment(ref this.aggregateRevision);
+
+    /// <summary>Records an owner-assigned display name for the given queue id.</summary>
+    internal void SetQueueName(string queueId, string name)
+    {
+        lock (this.syncLock)
+        {
+            this.queueNames[queueId] = name;
+        }
+    }
+
+    /// <summary>Returns the associated display name for the given queue id, or an empty string.</summary>
+    internal string GetQueueName(string queueId)
+    {
+        lock (this.syncLock)
+        {
+            return this.queueNames.TryGetValue(queueId, out var name) ? name : string.Empty;
+        }
+    }
 
     public IReadOnlyList<AgentInputQueue> InputQueue
     {
@@ -68,6 +100,7 @@ public sealed class AgentInputQueueManager
         var result = queue.Enqueue(items);
         if (result.Count > beforeCount)
         {
+            Interlocked.Increment(ref this.aggregateRevision);
             this.QueueStateChanged?.Invoke(
                 this,
                 new QueueStateChangedEventArgs
@@ -168,6 +201,7 @@ public sealed class AgentInputQueueManager
             item = expected[0];
             if (queue.TryRemoveAt(ref expected, 0))
             {
+                Interlocked.Increment(ref this.aggregateRevision);
                 this.QueueStateChanged?.Invoke(
                     this,
                     new QueueStateChangedEventArgs
@@ -187,6 +221,7 @@ public sealed class AgentInputQueueManager
             return;
         }
 
+        Interlocked.Increment(ref this.aggregateRevision);
         this.QueueStateChanged?.Invoke(
             this,
             new QueueStateChangedEventArgs

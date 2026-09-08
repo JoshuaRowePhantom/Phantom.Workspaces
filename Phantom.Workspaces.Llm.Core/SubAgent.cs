@@ -90,7 +90,7 @@ public sealed class SubAgent : IRunningSubAgent
             AgentChatCompletionState state)
         {
             var lease = await pending.ConfigureAwait(false);
-            if (lease.AgentChat is { } agentChat)
+            if (lease.LocalAgentChat is { } agentChat)
             {
                 agentChat.SetCompletionState(state, preserveLastUpdatedAt: true);
             }
