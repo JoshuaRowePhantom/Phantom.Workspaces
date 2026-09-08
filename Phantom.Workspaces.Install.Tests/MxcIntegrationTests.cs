@@ -158,20 +158,22 @@ public sealed class MxcSdkVersionTests
 public sealed class MxcRuntimePayloadTests
 {
     [Fact]
+    public void MxcRuntimePayload_PublishDisablesPersistentBuildServers()
+    {
+        var arguments = MxcRepositoryTestSupport.CreatePublishArguments("payload");
+
+        Assert.Contains("--disable-build-servers", arguments);
+        Assert.Contains("/nodeReuse:false", arguments);
+        Assert.Contains("-p:UseSharedCompilation=false", arguments);
+    }
+
+    [Fact]
     public async Task MxcRuntimePayload_RequiredNativeUnit_IsPresent()
     {
         using var payload = new MxcRepositoryTestSupport.TestDirectory();
         var publish = await MxcRepositoryTestSupport.InvokeAsync(
             "dotnet",
-            "publish",
-            Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
-            "--nologo",
-            "/nodeReuse:false",
-            "-r",
-            "win-x64",
-            "-p:PublishReadyToRun=false",
-            "-o",
-            payload.Path);
+            MxcRepositoryTestSupport.CreatePublishArguments(payload.Path));
         Assert.True(
             publish.ExitCode == 0,
             $"Application publish failed.\nSTDOUT:\n{publish.StandardOutput}\nSTDERR:\n{publish.StandardError}");
@@ -296,6 +298,21 @@ internal static class MxcRepositoryTestSupport
         process.WaitForExit();
         return new ProcessResult(process.ExitCode, standardOutput, standardError);
     }
+
+    internal static string[] CreatePublishArguments(string outputPath) =>
+    [
+        "publish",
+        Path.Combine("Phantom.Workspaces", "Phantom.Workspaces.csproj"),
+        "--nologo",
+        "--disable-build-servers",
+        "/nodeReuse:false",
+        "-r",
+        "win-x64",
+        "-p:PublishReadyToRun=false",
+        "-p:UseSharedCompilation=false",
+        "-o",
+        outputPath,
+    ];
 
     internal static async Task<ProcessResult> InvokeAsync(string fileName, params string[] arguments)
     {
