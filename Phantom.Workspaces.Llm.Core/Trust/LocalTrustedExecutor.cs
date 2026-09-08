@@ -91,11 +91,25 @@ public sealed class LocalTrustedExecutor : ITrustedExecutor
                 $"LocalTrustedExecutor cannot execute on client instance '{request.TargetClientInstance}'.");
         }
 
+        var services = request.AgentServices ?? new AgentServices();
+        if (request.TrustProfile is not null)
+        {
+            var trustContext = new AgentExecutionTrustContext(
+                request.TrustProfile,
+                services.TrustProfilePolicyCompiler
+                    as ITrustProfileProcessPolicyCompiler
+                    ?? new MxcTrustProfilePolicyCompiler());
+            services = services with
+            {
+                AgentExecutionTrustContext = trustContext,
+                ExecutionTrustContext = trustContext,
+            };
+        }
         return AgentFactory.CreateAgentChatAsync(new CreateAgentChatRequest
         {
             AgentDefinition = request.AgentDefinition,
             AgentSessionId = request.AgentSessionId,
-            AgentServices = request.AgentServices,
+            AgentServices = services,
         });
     }
 

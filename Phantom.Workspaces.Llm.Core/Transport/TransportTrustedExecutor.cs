@@ -50,6 +50,19 @@ public sealed class TransportTrustedExecutor : ITrustedExecutor, IAsyncDisposabl
         var chatClient = new ChatClientOverTransport(transport, BuildChatClientRequest(request));
 
         var baseServices = request.AgentServices ?? new AgentServices();
+        if (request.TrustProfile is not null)
+        {
+            var trustContext = new AgentExecutionTrustContext(
+                request.TrustProfile,
+                baseServices.TrustProfilePolicyCompiler
+                    as ITrustProfileProcessPolicyCompiler
+                    ?? new MxcTrustProfilePolicyCompiler());
+            baseServices = baseServices with
+            {
+                AgentExecutionTrustContext = trustContext,
+                ExecutionTrustContext = trustContext,
+            };
+        }
         var services = request.PreserveSourcePersistence
             ? baseServices with { ChatClientOverride = chatClient }
             : baseServices with

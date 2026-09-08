@@ -551,6 +551,14 @@ public static class AgentFactory
                     ?? services?.TrustProfileResolver as Phantom.Workspaces.Llm.Trust.ITrustProfileProvider,
                 services,
                 ct);
+        if (executionTrustContext is not null)
+        {
+            services = (services ?? new AgentServices()) with
+            {
+                AgentExecutionTrustContext = executionTrustContext,
+                ExecutionTrustContext = executionTrustContext,
+            };
+        }
 
         ChatHistoryProviderDefinition? definition = null;
         if (requestedAgentDefinition is PromptAgent promptAgent
@@ -854,7 +862,11 @@ public static class AgentFactory
                 subAgentChatRegistry: subAgentChatRegistry,
                 accountUpsertService: services?.AccountUpsertService,
                 slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
-                builtinToolPolicy: builtinToolPolicy);
+                builtinToolPolicy: builtinToolPolicy,
+                executionTrustContext: services?.AgentExecutionTrustContext
+                    as Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext
+                    ?? services?.ExecutionTrustContext
+                        as Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext);
 
             if (services?.CopilotClientFactory is ICopilotClientFactory factory)
             {
@@ -930,7 +942,11 @@ public static class AgentFactory
                 modelOptions: model.Options,
                 subAgentChatRegistry: subAgentChatRegistry,
                 slashCommandRegistry: services?.SlashCommandRegistry as SlashCommands.ISlashCommandRegistry,
-                builtinToolPolicy: builtinToolPolicy);
+                builtinToolPolicy: builtinToolPolicy,
+                executionTrustContext: services?.AgentExecutionTrustContext
+                    as Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext
+                    ?? services?.ExecutionTrustContext
+                        as Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext);
 
             if (services?.CopilotClientFactory is ICopilotClientFactory factory)
             {

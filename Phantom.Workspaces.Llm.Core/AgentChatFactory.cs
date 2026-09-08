@@ -85,6 +85,14 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                             effectiveServices.TrustProfileResolver as Trust.ITrustProfileProvider,
                             effectiveServices,
                             ct).ConfigureAwait(false);
+                    if (executionTrustContext is not null)
+                    {
+                        effectiveServices = effectiveServices with
+                        {
+                            AgentExecutionTrustContext = executionTrustContext,
+                            ExecutionTrustContext = executionTrustContext,
+                        };
+                    }
 
                     if (definition is not null)
                     {

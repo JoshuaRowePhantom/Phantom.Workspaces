@@ -172,6 +172,18 @@ public sealed class MxcTrustProfilePolicyCompilerTests
     }
 
     [Fact]
+    public void Compile_DataSharingNoneWithoutOtherRestrictions_RequiresContainment()
+    {
+        var result = CreateCompiler().Compile(new TrustProfile
+        {
+            DataSharing = TrustDataSharing.None,
+        });
+
+        AssertSuccessful(result);
+        Assert.Contains("COPILOT_CONFIG_HOME", result.Policy!.EnvironmentOverrides.Keys);
+    }
+
+    [Fact]
     public void Compile_RegimeScopedSharing_CreatesEphemeralSessionTempDir()
     {
         var result = CreateCompiler().Compile(new TrustProfile

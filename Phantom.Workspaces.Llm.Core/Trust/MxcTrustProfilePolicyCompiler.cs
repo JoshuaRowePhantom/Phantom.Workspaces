@@ -64,7 +64,8 @@ public sealed class MxcTrustProfilePolicyCompiler : ITrustProfileProcessPolicyCo
 
         var requiresContainment =
             effectiveProfile.FilesystemPaths.Count > 0
-            || effectiveProfile.NetworkCapabilities is not null;
+            || effectiveProfile.NetworkCapabilities is not null
+            || effectiveProfile.DataSharing is not TrustDataSharing.FullSharing;
         if (!requiresContainment)
             return new(false, null, []);
 

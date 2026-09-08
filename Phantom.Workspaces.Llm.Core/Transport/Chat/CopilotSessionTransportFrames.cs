@@ -55,6 +55,8 @@ internal static class CopilotSessionTransportFrames
     public const string RequestIdProperty = "request-id";
     public const string ModelIdProperty = "model-id";
     public const string OptionsProperty = "options";
+    public const string TrustProfileProperty = "trust-profile";
+    public const string ExpectedTrustProfileRevisionProperty = "expected-trust-profile-revision";
 
     // Scalar session-config field names.
     public const string ConfigModel = "model";
@@ -67,9 +69,16 @@ internal static class CopilotSessionTransportFrames
     public const string MessageDisplayPrompt = "display-prompt";
 
     /// <summary>Builds the connection-request descriptor that selects the client-only model host.</summary>
-    public static JsonElement BuildConnectionRequest()
+    public static JsonElement BuildConnectionRequest(
+        Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference? trustProfileReference = null)
     {
         var obj = new JsonObject { [TypeProperty] = ConnectionType };
+        if (trustProfileReference is not null)
+        {
+            obj[TrustProfileProperty] = trustProfileReference.Id;
+            obj[ExpectedTrustProfileRevisionProperty] =
+                trustProfileReference.ExpectedRevision;
+        }
         return JsonSerializer.SerializeToElement(obj);
     }
 

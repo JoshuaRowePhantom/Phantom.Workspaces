@@ -50,6 +50,9 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     private readonly ISubAgentChatRegistry? subAgentChatRegistry;
     private readonly IGitHubAccountUpsertService? accountUpsertService;
     private ICopilotClientFactory copilotClientFactory;
+    private ICopilotRuntimeConnectionFactory runtimeConnectionFactory;
+    private readonly object runtimeConnectionGate = new();
+    private Task<CopilotRuntimeConnectionLease>? runtimeConnectionSelectionTask;
 
     // Issue #1443 (per-component-executor-binding): the model's executor NAME sourced from
     // model.options.executor (sibling to cliPath / wireApi / working-directory). When it resolves —
@@ -57,6 +60,7 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     // the innermost SDK session is obtained over a transport instead of the in-process CLI factory,
     // while the router and context providers stay local.
     private readonly string? modelExecutorName;
+    private readonly AgentExecutionTrustContext? executionTrustContext;
     private ExecutorBindings? executorBindings;
     private ITransportFactoryRegistry? executorTransportFactoryRegistry;
 
@@ -199,7 +203,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         ISubAgentChatRegistry? subAgentChatRegistry = null,
         IGitHubAccountUpsertService? accountUpsertService = null,
         SlashCommands.ISlashCommandRegistry? slashCommandRegistry = null,
-        CopilotBuiltinToolPolicy? builtinToolPolicy = null)
+        CopilotBuiltinToolPolicy? builtinToolPolicy = null,
+        AgentExecutionTrustContext? executionTrustContext = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -213,10 +218,12 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         this.builtinToolPolicy = builtinToolPolicy;
         this.cliPath = string.IsNullOrWhiteSpace(cliPath) ? GetStringModelOption(modelOptions, "cliPath") : cliPath;
         this.modelExecutorName = GetStringModelOption(modelOptions, "executor");
+        this.executionTrustContext = executionTrustContext;
         this.queueManager = queueManager;
         this.subAgentChatRegistry = subAgentChatRegistry;
         this.accountUpsertService = accountUpsertService;
         this.copilotClientFactory = DefaultCopilotClientFactory.Instance;
+        this.runtimeConnectionFactory = new CopilotRuntimeConnectionFactory();
 
         if (slashCommandRegistry is { } registry)
         {
@@ -232,6 +239,13 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
     internal void SetCopilotClientFactoryForTest(ICopilotClientFactory factory)
     {
         this.copilotClientFactory = factory ?? throw new ArgumentNullException(nameof(factory));
+    }
+
+    internal void SetRuntimeConnectionFactoryForTest(ICopilotRuntimeConnectionFactory factory)
+    {
+        this.runtimeConnectionFactory = factory
+            ?? throw new ArgumentNullException(nameof(factory));
+        this.runtimeConnectionSelectionTask = null;
     }
 
     /// <summary>
@@ -529,25 +543,20 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 return;
             }
 
-            var clientOptions = new CopilotClientOptions
-            {
-                GitHubToken = this.gitHubToken,
-                Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
-            };
-
-            if (clientOptions.Mode == CopilotClientMode.Empty)
-            {
-                clientOptions.BaseDirectory = Directory.GetCurrentDirectory();
-            }
-
-            if (!string.IsNullOrWhiteSpace(this.cliPath))
-            {
-                clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
-            }
+            var clientOptions = await CreateClientOptionsAsync(
+                workingDirectory: null,
+                cancellationToken).ConfigureAwait(false);
 
             var client = this.copilotClientFactory.Create(clientOptions);
-            await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+                throw;
+            }
             this.copilotClient = client;
         }
         finally
@@ -574,6 +583,90 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         catch (InvalidOperationException ex) when (IsRuntimeNotFound(ex))
         {
             throw new InvalidOperationException(RuntimeMissingMessage, ex);
+        }
+    }
+
+    internal Task<CopilotClientOptions> CreateClientOptionsForTestAsync(
+        string? workingDirectory,
+        CancellationToken cancellationToken = default) =>
+        CreateClientOptionsAsync(workingDirectory, cancellationToken);
+
+    private async Task<CopilotClientOptions> CreateClientOptionsAsync(
+        string? workingDirectory,
+        CancellationToken cancellationToken)
+    {
+        var selection = await GetRuntimeConnectionSelectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var clientOptions = new CopilotClientOptions
+        {
+            GitHubToken = this.gitHubToken,
+            Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
+            Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
+            Connection = selection?.Connection
+                ?? (!string.IsNullOrWhiteSpace(this.cliPath)
+                    ? RuntimeConnection.ForStdio(this.cliPath)
+                    : null),
+        };
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+            clientOptions.WorkingDirectory = workingDirectory;
+        if (clientOptions.Mode == CopilotClientMode.Empty)
+        {
+            clientOptions.BaseDirectory = !string.IsNullOrWhiteSpace(workingDirectory)
+                ? workingDirectory
+                : Directory.GetCurrentDirectory();
+        }
+
+        var diagnosticLogger = this.loggerFactory?
+            .CreateLogger<CopilotRuntimeConnectionFactory>();
+        foreach (var diagnostic in (selection?.Diagnostics ?? []).Where(
+                     item => item.Severity == TrustProfilePolicyDiagnosticSeverity.Warning))
+        {
+            diagnosticLogger?.LogWarning(
+                "Copilot MXC policy warning {Code}: {Message}",
+                diagnostic.Code,
+                diagnostic.Message);
+        }
+
+        return clientOptions;
+    }
+
+    private async Task<CopilotRuntimeConnectionLease?> GetRuntimeConnectionSelectionAsync(
+        CancellationToken cancellationToken)
+    {
+        if (this.executionTrustContext is null)
+            return null;
+
+        Task<CopilotRuntimeConnectionLease> selectionTask;
+        lock (this.runtimeConnectionGate)
+        {
+            selectionTask = this.runtimeConnectionSelectionTask
+                ??= this.runtimeConnectionFactory.CreateConnectionAsync(
+                    this.executionTrustContext,
+                    this.cliPath,
+                    CancellationToken.None);
+        }
+        return await selectionTask.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask DisposeRuntimeConnectionSelectionAsync()
+    {
+        Task<CopilotRuntimeConnectionLease>? selectionTask;
+        lock (this.runtimeConnectionGate)
+        {
+            selectionTask = this.runtimeConnectionSelectionTask;
+            this.runtimeConnectionSelectionTask = null;
+        }
+        if (selectionTask is null)
+            return;
+        try
+        {
+            var selection = await selectionTask.ConfigureAwait(false);
+            await selection.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // A failed selection cannot own a successfully returned policy lease.
         }
     }
 
@@ -1158,6 +1251,8 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
             await client.DisposeAsync().ConfigureAwait(false);
         }
 
+        await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+
         this.sessionInitializationLock.Dispose();
         this.turnLock.Dispose();
     }
@@ -1338,33 +1433,21 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
                 }
                 else
                 {
-                    var clientOptions = new CopilotClientOptions
-                    {
-                        GitHubToken = this.gitHubToken,
-                        Logger = this.loggerFactory?.CreateLogger<CopilotClient>(),
-                        Mode = this.builtinToolPolicy?.ClientMode ?? CopilotClientMode.CopilotCli,
-                    };
-
-                    if (!string.IsNullOrWhiteSpace(this.cliPath))
-                    {
-                        clientOptions.Connection = RuntimeConnection.ForStdio(this.cliPath);
-                    }
-
                     var workingDirectory = GetWorkingDirectory(options);
-                    if (!string.IsNullOrWhiteSpace(workingDirectory))
-                    {
-                        clientOptions.WorkingDirectory = workingDirectory;
-                    }
-
-                    if (clientOptions.Mode == CopilotClientMode.Empty)
-                    {
-                        clientOptions.BaseDirectory = !string.IsNullOrWhiteSpace(workingDirectory)
-                            ? workingDirectory
-                            : Directory.GetCurrentDirectory();
-                    }
+                    var clientOptions = await CreateClientOptionsAsync(
+                        workingDirectory,
+                        cancellationToken).ConfigureAwait(false);
 
                     var client = this.copilotClientFactory.Create(clientOptions);
-                    await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await StartClientAsync(client, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        await DisposeRuntimeConnectionSelectionAsync().ConfigureAwait(false);
+                        throw;
+                    }
                     this.copilotClient = client;
 
                     if (this.accountUpsertService is not null)
@@ -1473,11 +1556,17 @@ public sealed class CopilotSdkChatClient : IChatClient, IAsyncDisposable, ISelfI
         {
             return null;
         }
+        var reference = this.executionTrustContext?.RemoteReference;
+        if (this.executionTrustContext is not null && reference is null)
+        {
+            throw new InvalidOperationException(
+                "Remote Copilot execution requires a named trust-profile reference; inline trust profiles cannot be transported.");
+        }
 
         var transport = await this.executorTransportFactoryRegistry
             .ConnectToAsync(descriptor, cancellationToken)
             .ConfigureAwait(false);
-        return new CopilotClientOverTransport(transport);
+        return new CopilotClientOverTransport(transport, reference);
     }
 
     private static bool IsLocalDescriptor(JsonElement descriptor)

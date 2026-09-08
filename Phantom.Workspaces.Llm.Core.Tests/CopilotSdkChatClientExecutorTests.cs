@@ -179,12 +179,14 @@ internal static class ExecutorRoutingTestHarness
     internal sealed class RecordingClientFactory : ICopilotClientFactory
     {
         public int CreateCount { get; private set; }
+        public CopilotClientOptions? Options { get; private set; }
 
         public RecordingCopilotClient Client { get; } = new();
 
         public ICopilotClient Create(CopilotClientOptions options)
         {
             this.CreateCount++;
+            this.Options = options;
             return this.Client;
         }
     }

@@ -49,8 +49,9 @@
        default lookup finds them, and ship the CLI LICENSE.md unmodified as required by the GitHub
        Copilot CLI License. -->
   <Target Name="PublishCopilotRuntimeLoose"
-          AfterTargets="Publish"
-          Condition="'$(RuntimeIdentifier)' != ''">
+           AfterTargets="Publish"
+           DependsOnTargets="PublishCopilotWrapperLoose"
+           Condition="'$(RuntimeIdentifier)' != ''">
     <ItemGroup>
       <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe" />
       <_CopilotRuntimeToPublish Include="$(OutDir)runtimes\$(RuntimeIdentifier)\native\copilot_runtime.dll"
@@ -66,6 +67,22 @@
           SkipUnchangedFiles="true" />
     <Error Condition="!Exists('$(PublishDir)runtimes\$(RuntimeIdentifier)\native\copilot.exe')"
            Text="Copilot CLI (runtimes\$(RuntimeIdentifier)\native\copilot.exe) was not published as a loose file (issue #1376)." />
+  </Target>
+  <Target Name="PublishCopilotWrapperLoose"
+          Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PropertyGroup>
+      <_CopilotWrapperProject>$(MSBuildProjectDirectory)\..\Phantom.Workspaces.Copilot.Cli.Wrapper\Phantom.Workspaces.Copilot.Cli.Wrapper.csproj</_CopilotWrapperProject>
+      <_CopilotWrapperPublishDir>$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\copilot-wrapper\</_CopilotWrapperPublishDir>
+      <_CopilotWrapperExecutable>$(_CopilotWrapperPublishDir)phantom-copilot-wrapper.exe</_CopilotWrapperExecutable>
+    </PropertyGroup>
+    <MSBuild Projects="$(_CopilotWrapperProject)"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=true;PublishSingleFile=true;PublishReadyToRun=false;PublishTrimmed=false;IncludeNativeLibrariesForSelfExtract=true;PublishDir=$(_CopilotWrapperPublishDir)" />
+    <Error Condition="!Exists('$(_CopilotWrapperExecutable)')"
+           Text="The Copilot MXC wrapper was not published at '$(_CopilotWrapperExecutable)'." />
+    <Copy SourceFiles="$(_CopilotWrapperExecutable)"
+          DestinationFolder="$(PublishDir)runtimes\$(RuntimeIdentifier)\native"
+          SkipUnchangedFiles="true" />
   </Target>
   <Target Name="PublishMxcRuntimeLoose"
           AfterTargets="Publish"
@@ -130,6 +147,9 @@
     <ProjectReference Include="..\Phantom.Workspaces.Install\Phantom.Workspaces.Install.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Logging\Phantom.Workspaces.Logging.csproj" />
     <ProjectReference Include="..\Phantom.Workspaces.Web.Server\Phantom.Workspaces.Web.Server.csproj" />
+    <ProjectReference Include="..\Phantom.Workspaces.Copilot.Cli.Wrapper\Phantom.Workspaces.Copilot.Cli.Wrapper.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="Tools\*.cs" />
