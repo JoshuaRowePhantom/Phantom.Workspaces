@@ -939,7 +939,46 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modalId);
         ct.ThrowIfCancellationRequested();
-        throw new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId));
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _ = Task.Factory.StartNew(
+            () =>
+            {
+                AgentChatModal? match = null;
+                for (var i = 0; i < this.modals.Count; i++)
+                {
+                    if (string.Equals(this.modals[i].Id, modalId, StringComparison.Ordinal))
+                    {
+                        match = this.modals[i];
+                        this.modals.RemoveAt(i);
+                        break;
+                    }
+                }
+                if (match is null)
+                {
+                    tcs.TrySetException(new ArgumentException($"Unknown modal id '{modalId}'.", nameof(modalId)));
+                    return;
+                }
+                tcs.TrySetResult();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
+        return tcs.Task;
+    }
+
+    /// <summary>
+    /// #1485: owner-side helper used by tests and the (future) transport ingress to publish a
+    /// modal onto the foreground scheduler. The added modal is observable via
+    /// <see cref="Modals"/> and resolved via <see cref="RespondToModalAsync"/>.
+    /// </summary>
+    internal void PublishModalForTest(AgentChatModal modal)
+    {
+        ArgumentNullException.ThrowIfNull(modal);
+        _ = Task.Factory.StartNew(
+            () => this.modals.Add(modal),
+            CancellationToken.None,
+            TaskCreationOptions.DenyChildAttach,
+            this.foregroundScheduler);
     }
 
     public void ResetSession(AgentChatSession nextSession, bool interruptCurrentResponse = true)

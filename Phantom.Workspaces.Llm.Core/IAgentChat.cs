@@ -109,8 +109,27 @@ public sealed record FreeformModalContent : AgentChatModalContent
 
 public sealed record MultipleChoiceModalContent : AgentChatModalContent
 {
+    private readonly System.Collections.Immutable.ImmutableArray<JsonElement> options;
+
     public override string Type => "multiple-choice";
-    public required IReadOnlyList<JsonElement> Options { get; init; }
+
+    /// <summary>
+    /// Multiple-choice options. Callers may pass any <see cref="IReadOnlyList{T}"/>; the record
+    /// snapshots the values into an immutable array so later caller mutations cannot affect the
+    /// published modal (issue #1485).
+    /// </summary>
+    public required IReadOnlyList<JsonElement> Options
+    {
+        get => this.options;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            this.options = value is System.Collections.Immutable.ImmutableArray<JsonElement> imm
+                ? imm
+                : System.Collections.Immutable.ImmutableArray.CreateRange(value);
+        }
+    }
+
     public required bool AllowsMultiple { get; init; }
 }
 

@@ -21,6 +21,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
     private readonly object stateLock = new();
     private readonly AgentInputQueueManager manager;
     private readonly AgentInputQueue defaultQueue;
+    private readonly SynchronizationContext? foregroundContext;
     private readonly List<LocalAgentInputQueue> queues = new();
     private readonly Dictionary<string, LocalAgentInputQueue> queuesById = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, (string Payload, AgentInputQueueCommandResult Result)> commandLog = new();
@@ -40,6 +41,8 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         ArgumentNullException.ThrowIfNull(defaultQueue);
         this.manager = manager;
         this.defaultQueue = defaultQueue;
+        // #1485: capture the foreground scheduler once so Changed events fire on the UI thread.
+        this.foregroundContext = SynchronizationContext.Current;
 
         manager.SetQueueName(manager.ImmediateQueue.QueueId, ImmediateQueueDisplayName);
         manager.SetQueueName(defaultQueue.QueueId, DefaultQueueDisplayName);
@@ -232,7 +235,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
                 var item = new AgentInputItem
                 {
-                    Messages = request.Messages.ToArray(),
+                    Messages = CopyMessagesForOwner(request.Messages),
                 };
                 this.manager.Enqueue(queue.Underlying, [item]);
                 var revision = this.manager.AggregateRevision;
@@ -291,7 +294,7 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                     {
                         return Reject(request.CommandId, AgentInputQueueErrorCodes.UnknownItem, queueId: request.QueueId, itemId: request.ItemId);
                     }
-                    var replacement = expected[index] with { Messages = request.Messages.ToArray() };
+                    var replacement = expected[index] with { Messages = CopyMessagesForOwner(request.Messages) };
                     if (queue.Underlying.TryUpdateAt(ref expected, index, replacement))
                     {
                         break;
@@ -390,6 +393,55 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
                         AgentInputQueueErrorCodes.UnknownItem,
                         queueId: request.TargetQueueId,
                         itemId: request.BeforeItemId);
+                }
+
+                // #1485: same-queue reorder is a single atomic Update so per-queue revision only
+                // increments once for the whole transaction.
+                if (ReferenceEquals(source, target))
+                {
+                    while (true)
+                    {
+                        var expected = source.Underlying.Items;
+                        var candidate = expected.FirstOrDefault(x => string.Equals(x.ItemId, request.ItemId, StringComparison.Ordinal));
+                        if (candidate is null)
+                        {
+                            return Reject(request.CommandId, AgentInputQueueErrorCodes.UnknownItem, queueId: request.SourceQueueId, itemId: request.ItemId);
+                        }
+                        var withoutMoved = expected.Remove(candidate);
+                        int insertionIndex = withoutMoved.Count;
+                        if (!string.IsNullOrEmpty(request.BeforeItemId))
+                        {
+                            insertionIndex = -1;
+                            for (var i = 0; i < withoutMoved.Count; i++)
+                            {
+                                if (string.Equals(withoutMoved[i].ItemId, request.BeforeItemId, StringComparison.Ordinal))
+                                {
+                                    insertionIndex = i;
+                                    break;
+                                }
+                            }
+                            if (insertionIndex < 0)
+                            {
+                                return Reject(request.CommandId, AgentInputQueueErrorCodes.UnknownItem, queueId: request.TargetQueueId, itemId: request.BeforeItemId);
+                            }
+                        }
+                        var updated = withoutMoved.Insert(insertionIndex, candidate);
+                        if (source.Underlying.Update(ref expected, updated))
+                        {
+                            break;
+                        }
+                    }
+
+                    var singleRevision = this.manager.BumpAggregateRevision();
+                    this.RefreshSnapshotLocked();
+                    return new AgentInputQueueCommandResult
+                    {
+                        CommandId = request.CommandId,
+                        Status = AgentInputQueueCommandStatus.Applied,
+                        QueueId = target.QueueId,
+                        ItemId = request.ItemId,
+                        Revision = singleRevision,
+                    };
                 }
 
                 AgentInputItem? moved = null;
@@ -583,6 +635,14 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
         return result;
     }
 
+    private static ChatMessage[] CopyMessagesForOwner(IReadOnlyList<ChatMessage> messages)
+    {
+        // #1485: deep-copy on ingress so retained caller references cannot mutate owner state.
+        var json = JsonSerializer.Serialize(messages, AIJsonUtilities.DefaultOptions);
+        return JsonSerializer.Deserialize<ChatMessage[]>(json, AIJsonUtilities.DefaultOptions)
+            ?? Array.Empty<ChatMessage>();
+    }
+
     private AgentInputQueueCommandResult Reject(Guid commandId, string errorCode, string? queueId, string? itemId) => new()
     {
         CommandId = commandId,
@@ -643,7 +703,18 @@ internal sealed class LocalAgentInputQueuesAdapter : IAgentInputQueues, IDisposa
 
     private void RaiseChanged()
     {
-        this.Changed?.Invoke(this, EventArgs.Empty);
+        var handler = this.Changed;
+        if (handler is null)
+        {
+            return;
+        }
+        var ctx = this.foregroundContext;
+        if (ctx is null || SynchronizationContext.Current == ctx)
+        {
+            handler.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        ctx.Post(_ => this.Changed?.Invoke(this, EventArgs.Empty), null);
     }
 
     private void OnManagerQueueStateChanged(object? sender, AgentInputQueueManager.QueueStateChangedEventArgs e)
