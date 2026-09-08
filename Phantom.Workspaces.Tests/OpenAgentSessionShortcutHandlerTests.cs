@@ -102,6 +102,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         // route through the shared IAgentSessionRuntimeContextFactory hydrator, reconstructing the
         // persisted executor-bindings before definition resolution / chat creation. No GUI code
         // may parse executor bindings on this path.
+        var legacyHostProfileEntityId = new EntityId("bbbb1481-0000-4000-8000-000000000001");
         const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000001";
         var registry = new TransportFactoryRegistry();
         var registryProvider = new TransportFactoryRegistryProvider(registry);
@@ -136,14 +137,29 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             """);
 
         var context = new AgentSessionShortcutContext();
-        var sessionExecutor = ExecutorBindings.LocalDescriptor();
-        var componentBindings = BuildWorkerComponentBindings(WorkerProfileEntityId);
-        var sessionEntity = await context.CreateAgentSessionEntityAsync(
-            viewModel,
-            agentDefinitionEntity,
-            Guid.NewGuid().ToString("n"),
-            sessionExecutor: sessionExecutor,
-            executorComponentBindings: componentBindings);
+        var sessionEntityId = new EntityId("eeee1481-0000-4000-8000-000000000001");
+        var sessionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            sessionEntityId,
+            $$"""
+            {
+              "entity-id": "{{sessionEntityId}}",
+              "entity-types": ["entity", "agent-session"],
+              "names": [["tests", "agent-sessions", "first-open-legacy-split-bindings"]],
+              "display-name": { "default": "First-Open Legacy Split Bindings" },
+              "agent-source-entity-id": "{{agentDefinitionEntity.EntityId}}",
+              "agent-session-id": "{{Guid.NewGuid():n}}",
+              "host-profile-entity-id": "{{legacyHostProfileEntityId}}",
+              "executor-bindings": {
+                "components": {
+                  "worker": {
+                    "type": "user-computer-profile",
+                    "entity-id": "{{WorkerProfileEntityId}}"
+                  }
+                }
+              }
+            }
+            """);
         Assert.NotNull(sessionEntity);
 
         var handler = new OpenAgentSessionShortcutHandler(
@@ -167,6 +183,9 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             Assert.NotNull(result);
             Assert.Equal(1, spyRuntimeFactory.CreateCallCount);
             var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
+            Assert.Equal(
+                legacyHostProfileEntityId.ToString(),
+                lastContext.ExecutorBindings.SessionExecutor.GetProperty("entity-id").GetString());
             var workerBinding = lastContext.ExecutorBindings.ResolveComponent("worker");
             Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
             Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());

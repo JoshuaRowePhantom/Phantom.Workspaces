@@ -302,9 +302,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         var loggerFactory = new ObservableLoggerFactory();
         var agentServices = await this.agentSessionShortcutContext.CreateAgentServicesAsync(mainWindowViewModel, loggerFactory);
 
-        AgentChat agentChat;
-        RunningAgentChatLease? lease = null;
-
         // Extract display-name and description from entity data to populate AgentChat properties
         string? entityDisplayName = null;
         string? entityDescription = null;
@@ -320,56 +317,27 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
             entityDescription = descriptionElement.GetString();
         }
 
-        var localProfileEntityId = mainWindowViewModel.EntityBroker.EntityRepository.WorkspaceEntitySession.UserComputerProfileEntityId;
-        var hostProfileEntityId = ReadHostProfileEntityId(agentSessionEntityData);
-        var targetClientInstance = hostProfileEntityId != default
-            && hostProfileEntityId != localProfileEntityId
-            ? hostProfileEntityId.ToString()
-            : TrustProfile.LocalClientInstance;
         var agentDefinitionResolver = CreateAgentDefinitionResolver(mainWindowViewModel);
 
-        if (!string.Equals(targetClientInstance, TrustProfile.LocalClientInstance, StringComparison.Ordinal))
-        {
-            var resolvedDefinition = await agentDefinitionResolver.ResolveAsync(
-                new AgentDefinitionResolveRequest
-                {
-                    AgentSessionEntity = agentSessionEntityData,
-                    ToolResourceFactory = agentServices.ToolResourceFactory,
-                    Parameters = parameterValues,
-                });
-            if (resolvedDefinition is null)
+        var lease = await this.runningAgentChatTable.AcquireAsync(
+            new AcquireAgentChatRequest
             {
-                return null;
-            }
-
-            agentChat = await this.CreateTrustedAgentChatAsync(
-                resolvedDefinition.Definition,
-                agentSessionId!,
-                agentServices,
-                targetClientInstance);
-        }
-        else
-        {
-            lease = await this.runningAgentChatTable.AcquireAsync(
-                new AcquireAgentChatRequest
-                {
-                    AgentSessionId = new AgentSessionId(agentSessionId!),
-                    AgentSessionEntity = agentSessionEntityData,
-                    AgentServices = agentServices,
-                    ForegroundScheduler = foregroundScheduler,
-                    ToolResourceFactory = agentServices.ToolResourceFactory,
-                    Parameters = parameterValues,
-                    AgentDefinitionResolver = agentDefinitionResolver,
-                    EntityName = agentSessionEntity.DisplayName,
-                    EntityId = agentSessionEntity.EntityId.ToString(),
-                    EntityDisplayName = entityDisplayName,
-                    EntityDescription = entityDescription,
-                    // #1135: Stamp the pane the session was started/opened in so cross-workspace
-                    // status-button clicks (running-agent brain) can switch to it before focusing.
-                    WorkspaceId = tab.WorkspacePaneId,
-                });
-            agentChat = lease.AgentChat;
-        }
+                AgentSessionId = new AgentSessionId(agentSessionId!),
+                AgentSessionEntity = agentSessionEntityData,
+                AgentServices = agentServices,
+                ForegroundScheduler = foregroundScheduler,
+                ToolResourceFactory = agentServices.ToolResourceFactory,
+                Parameters = parameterValues,
+                AgentDefinitionResolver = agentDefinitionResolver,
+                EntityName = agentSessionEntity.DisplayName,
+                EntityId = agentSessionEntity.EntityId.ToString(),
+                EntityDisplayName = entityDisplayName,
+                EntityDescription = entityDescription,
+                // #1135: Stamp the pane the session was started/opened in so cross-workspace
+                // status-button clicks (running-agent brain) can switch to it before focusing.
+                WorkspaceId = tab.WorkspacePaneId,
+            });
+        var agentChat = lease.AgentChat;
 
         // #1429: build + wire slash commands through the single GUI session-composition seam so this
         // path can never diverge from the other launch paths.
@@ -402,27 +370,6 @@ public sealed class OpenAgentSessionShortcutHandler : ShortcutHandler, IAsyncDis
         }
 
         return (agent, loggerFactory, lease);
-    }
-
-    private async Task<AgentChat> CreateTrustedAgentChatAsync(
-        AgentDefinition agentDefinition,
-        string agentSessionId,
-        AgentServices agentServices,
-        string targetClientInstance)
-    {
-        var trustProfile = TrustProfileComposer.Finalize(new TrustProfileDefinition
-        {
-            HostingWorkspacesClientInstances = [targetClientInstance],
-        });
-        var executor = this.trustedExecutorSelector.SelectExecutor(trustProfile, targetClientInstance);
-        return await executor.CreateAgentChatAsync(new TrustedExecutionRequest
-        {
-            AgentDefinition = agentDefinition,
-            TrustProfile = trustProfile,
-            TargetClientInstance = targetClientInstance,
-            AgentSessionId = agentSessionId,
-            AgentServices = agentServices,
-        });
     }
 
     private static EntityId ReadHostProfileEntityId(JsonElement entityData)

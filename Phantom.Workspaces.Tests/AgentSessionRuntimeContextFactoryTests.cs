@@ -47,14 +47,16 @@ public sealed class AgentSessionRuntimeContextFactoryTests
         Assert.Null(context.TransportFactoryRegistry);
     }
 
-    [Fact]
-    public void Create_LegacyHostProfile_UsesSessionExecutorFallback()
+    [Theory]
+    [InlineData("host-profile-entity-id")]
+    [InlineData("owning-profile-entity-id")]
+    public void Create_LegacyHostProfile_UsesSessionExecutorFallback(string propertyName)
     {
         var registry = new TransportFactoryRegistry();
         var factory = new AgentSessionRuntimeContextFactory(new TransportFactoryRegistryProvider(registry));
 
         var context = factory.Create(Json(
-            """{"host-profile-entity-id":"22222222-2222-2222-2222-222222222222"}"""));
+            $$"""{"{{propertyName}}":"22222222-2222-2222-2222-222222222222"}"""));
 
         Assert.Equal(
             "22222222-2222-2222-2222-222222222222",
