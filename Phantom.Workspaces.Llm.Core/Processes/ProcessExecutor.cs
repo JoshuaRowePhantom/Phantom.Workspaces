@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Threading.Channels;
@@ -32,6 +33,9 @@ public sealed record ProcessExecutionRequest(
 
     /// <summary>Optional compiled containment configuration.</summary>
     public MxcProcessConfiguration? Mxc { get; init; }
+
+    /// <summary>Optional portable MXC policy compiled from an effective trust profile.</summary>
+    public MxcProcessPolicy? MxcPolicy { get; init; }
 }
 
 /// <summary>Information available immediately after launch.</summary>
@@ -89,15 +93,24 @@ public sealed class ProcessExecutor : IProcessExecutor
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Executable);
         ValidateTimeout(request.Timeout);
+        if (request.Mxc is not null && request.MxcPolicy is not null)
+            throw new ArgumentException("Specify either Mxc or MxcPolicy, not both.", nameof(request));
 
         IProcessBackend backend;
-        if (request.Mxc is null)
+        if (request.Mxc is null && request.MxcPolicy is null)
         {
             backend = systemProcessFactory.Start(request);
         }
         else
         {
-            var sandboxRequest = CreateSandboxRequest(request);
+            var sandboxRequest = request.MxcPolicy is null
+                ? CreateSandboxRequest(request, request.Mxc!)
+                : CreateSandboxRequest(request, MapPortablePolicy(request.MxcPolicy));
+            if (request.MxcPolicy is not null)
+            {
+                foreach (var (name, value) in request.MxcPolicy.EnvironmentOverrides)
+                    sandboxRequest.Environment[name] = value;
+            }
             backend = new SandboxProcessBackend(sandboxRunner.Spawn(sandboxRequest));
         }
 
@@ -112,16 +125,17 @@ public sealed class ProcessExecutor : IProcessExecutor
         }
     }
 
-    private static SandboxRequest CreateSandboxRequest(ProcessExecutionRequest request)
+    private static SandboxRequest CreateSandboxRequest(
+        ProcessExecutionRequest request,
+        MxcProcessConfiguration configuration)
     {
-        var configuration = request.Mxc!;
         var policy = ClonePolicy(configuration.Policy, request.Timeout);
         var sandboxRequest = new SandboxRequest(
             policy,
             WindowsCommandLine.Build(request.Executable, request.Arguments))
         {
             WorkingDirectory = request.WorkingDirectory,
-            Environment = new Dictionary<string, string>(request.Environment),
+            Environment = BuildEnvironment(request.Environment),
             ContainerName = configuration.ContainerName,
             Experimental = configuration.Experimental,
         };
@@ -130,6 +144,60 @@ public sealed class ProcessExecutor : IProcessExecutor
             sandboxRequest.Containment = configuration.Containment;
 
         return sandboxRequest;
+    }
+
+    private static MxcProcessConfiguration MapPortablePolicy(MxcProcessPolicy policy)
+    {
+        if (!string.Equals(
+                policy.SchemaVersion,
+                MxcProcessPolicy.CurrentSchemaVersion,
+                StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"Unsupported MXC process policy schema version '{policy.SchemaVersion}'.",
+                nameof(policy));
+        }
+        if (policy.Containment.Backend != MxcContainmentBackend.ProcessContainer
+            || !policy.Containment.LeastPrivilege
+            || policy.Containment.LearningMode
+            || policy.Containment.PermissiveMode)
+        {
+            throw new ArgumentException(
+                "The portable policy does not describe supported fail-closed containment.",
+                nameof(policy));
+        }
+
+        var sandboxPolicy = new SandboxPolicy
+        {
+            Version = SchemaVersions.LatestStable,
+            Filesystem = new FilesystemPolicy
+            {
+                ReadonlyPaths = policy.ReadonlyPaths.ToList(),
+                ReadwritePaths = policy.ReadwritePaths.ToList(),
+                ClearPolicyOnExit = true,
+            },
+        };
+        var containment = new ProcessContainerContainment
+        {
+            LeastPrivilege = policy.Containment.LeastPrivilege,
+            LearningMode = policy.Containment.LearningMode,
+            Capabilities = policy.NetworkCapabilities.ToList(),
+        };
+        return new MxcProcessConfiguration(sandboxPolicy, containment);
+    }
+
+    private static Dictionary<string, string> BuildEnvironment(
+        IReadOnlyDictionary<string, string> overrides)
+    {
+        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
+        {
+            if (entry.Key is string name && entry.Value is string value)
+                environment[name] = value;
+        }
+        foreach (var (name, value) in overrides)
+            environment[name] = value;
+        return environment;
     }
 
     private static SandboxPolicy ClonePolicy(SandboxPolicy source, TimeSpan? timeout)

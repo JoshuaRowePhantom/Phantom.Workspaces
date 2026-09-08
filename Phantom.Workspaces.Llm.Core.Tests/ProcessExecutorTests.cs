@@ -46,6 +46,129 @@ public sealed class ProcessExecutorTests
     }
 
     [Fact]
+    public void ProcessExecutor_PortableMxcPolicy_MapsImmediatelyBeforeSpawn()
+    {
+        var sandboxRunner = new FakeSandboxRunner();
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), sandboxRunner);
+        var policy = new MxcProcessPolicy(
+            MxcProcessPolicy.CurrentSchemaVersion,
+            [@"C:\read"],
+            [@"C:\write"],
+            ["internetClient"],
+            new Dictionary<string, string> { ["COPILOT_CONFIG_HOME"] = @"C:\config" },
+            new MxcProcessContainment(
+                MxcContainmentBackend.ProcessContainer,
+                LeastPrivilege: true,
+                LearningMode: false,
+                PermissiveMode: false));
+
+        _ = executor.Start(new ProcessExecutionRequest("tool")
+        {
+            Environment = new Dictionary<string, string> { ["EXISTING"] = "value" },
+            MxcPolicy = policy,
+        });
+
+        var request = Assert.IsType<SandboxRequest>(sandboxRunner.LastRequest);
+        var containment = Assert.IsType<ProcessContainerContainment>(request.Containment);
+        Assert.Equal([@"C:\read"], request.Policy.Filesystem!.ReadonlyPaths);
+        Assert.Equal([@"C:\write"], request.Policy.Filesystem.ReadwritePaths);
+        Assert.Equal(["internetClient"], containment.Capabilities);
+        Assert.True(containment.LeastPrivilege);
+        Assert.False(containment.LearningMode);
+        Assert.Equal(@"C:\config", request.Environment["COPILOT_CONFIG_HOME"]);
+        Assert.Equal("value", request.Environment["EXISTING"]);
+    }
+
+    [Fact]
+    public void ProcessExecutor_PortablePolicyOverride_ReplacesCaseVariant()
+    {
+        var sandboxRunner = new FakeSandboxRunner();
+        var executor = new ProcessExecutor(new RecordingSystemProcessFactory(), sandboxRunner);
+        var policy = CreatePortablePolicy();
+
+        _ = executor.Start(new ProcessExecutionRequest("tool")
+        {
+            Environment = new Dictionary<string, string>
+            {
+                ["copilot_config_home"] = @"C:\attacker",
+            },
+            MxcPolicy = policy,
+        });
+
+        var environment = sandboxRunner.LastRequest!.Environment;
+        Assert.Single(
+            environment,
+            pair => string.Equals(
+                pair.Key,
+                "COPILOT_CONFIG_HOME",
+                StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(@"C:\config", environment["COPILOT_CONFIG_HOME"]);
+        Assert.True(environment.Count > 1);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void ProcessExecutor_WeakenedPortableContainment_FailsClosed(
+        bool leastPrivilege,
+        bool learningMode)
+    {
+        var executor = new ProcessExecutor(
+            new RecordingSystemProcessFactory(),
+            new FakeSandboxRunner());
+        var source = CreatePortablePolicy();
+        var policy = new MxcProcessPolicy(
+            source.SchemaVersion,
+            source.ReadonlyPaths,
+            source.ReadwritePaths,
+            source.NetworkCapabilities,
+            source.EnvironmentOverrides,
+            new MxcProcessContainment(
+                MxcContainmentBackend.ProcessContainer,
+                leastPrivilege,
+                learningMode,
+                false));
+
+        Assert.Throws<ArgumentException>(() => executor.Start(
+            new ProcessExecutionRequest("tool") { MxcPolicy = policy }));
+    }
+
+    [Fact]
+    public void ProcessExecutor_UnsupportedPortablePolicyVersion_FailsClosed()
+    {
+        var executor = new ProcessExecutor(
+            new RecordingSystemProcessFactory(),
+            new FakeSandboxRunner());
+        var policy = new MxcProcessPolicy(
+            "unsupported",
+            [],
+            [],
+            [],
+            new Dictionary<string, string>(),
+            new MxcProcessContainment(
+                MxcContainmentBackend.ProcessContainer,
+                true,
+                false,
+                false));
+
+        Assert.Throws<ArgumentException>(() => executor.Start(
+            new ProcessExecutionRequest("tool") { MxcPolicy = policy }));
+    }
+
+    private static MxcProcessPolicy CreatePortablePolicy() =>
+        new(
+            MxcProcessPolicy.CurrentSchemaVersion,
+            [],
+            [],
+            [],
+            new Dictionary<string, string> { ["COPILOT_CONFIG_HOME"] = @"C:\config" },
+            new MxcProcessContainment(
+                MxcContainmentBackend.ProcessContainer,
+                true,
+                false,
+                false));
+
+    [Fact]
     public void ProcessExecutor_MxcLaunchFails_DoesNotFallbackUnsandboxed()
     {
         var systemFactory = new RecordingSystemProcessFactory();
