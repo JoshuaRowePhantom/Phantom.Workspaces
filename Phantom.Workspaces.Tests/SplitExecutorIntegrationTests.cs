@@ -2,9 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using AgentSchema;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
+using IRunningAgentChatFactory = Phantom.Workspaces.Llm.IRunningAgentChatFactory;
 
 namespace Phantom.Workspaces.Tests;
 
@@ -107,5 +115,176 @@ public sealed class SplitExecutorIntegrationTests
         Assert.Equal(".", topology.AgentExecutorClientInstance);
         Assert.Equal(".", topology.HostingInstanceClientInstance);
         Assert.Equal(".", topology.GuiLocalClientInstance);
+    }
+
+    [Fact]
+    public async Task PersistedSession_RoutesModelAndToolToBoundExecutors()
+    {
+        // End-to-end coverage for #1481: persist a split-executor session with distinct model and
+        // tool component bindings, run the full acquisition boundary
+        // (RunningAgentChatTable → AgentSessionRuntimeContextFactory → transport registry), and
+        // prove that
+        //   (a) the effective ExecutorBindings reaching the running-chat factory resolves each
+        //       component to its bound descriptor, and
+        //   (b) the shared registry hands each descriptor to the correct fake transport factory
+        //       — i.e. model calls route to the model executor and tool calls route to the tool
+        //       executor, with no real environment identifiers or network access.
+        const string ModelProfileEntityId = "aaaa1481-model-0000-0000-000000000001";
+        const string ToolProfileEntityId = "bbbb1481-tool0-0000-0000-000000000002";
+
+        var registry = new TransportFactoryRegistry();
+        var modelFactory = new RecordingUserComputerProfileTransportFactory(ModelProfileEntityId);
+        var toolFactory = new RecordingUserComputerProfileTransportFactory(ToolProfileEntityId);
+        registry.Register(modelFactory);
+        registry.Register(toolFactory);
+
+        var runtimeFactory = new AgentSessionRuntimeContextFactory(new TransportFactoryRegistryProvider(registry));
+        var chatFactory = new CapturingRunningAgentChatFactory();
+        var table = new RunningAgentChatTable(chatFactory, runtimeFactory);
+
+        var sessionEntity = JsonDocument.Parse(
+            $$"""
+            {
+              "agent-session-id": "11111111-1111-4111-8111-111111111111",
+              "executor-bindings": {
+                "session": { "type": "local" },
+                "components": {
+                  "model": {
+                    "type": "user-computer-profile",
+                    "entity-id": "{{ModelProfileEntityId}}"
+                  },
+                  "worker": {
+                    "type": "user-computer-profile",
+                    "entity-id": "{{ToolProfileEntityId}}"
+                  }
+                }
+              }
+            }
+            """).RootElement.Clone();
+
+        var lease = await table.AcquireAsync(new AcquireAgentChatRequest
+        {
+            AgentSessionId = new AgentSessionId("11111111-1111-4111-8111-111111111111"),
+            AgentSessionEntity = sessionEntity,
+            AgentDefinition = AgentDefinition.FromJson(
+                """
+                {
+                  "kind": "prompt",
+                  "name": "split-executor-persisted",
+                  "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                  "tools": []
+                }
+                """),
+        }, TestContext.Current.CancellationToken);
+
+        try
+        {
+            // The effective services reaching the running-chat factory carry the reconstructed
+            // ExecutorBindings and the shared transport registry.
+            var services = chatFactory.LastServices;
+            Assert.NotNull(services);
+            var effective = Assert.IsType<ExecutorBindings>(services!.ExecutorBindings);
+            var model = effective.ResolveComponent("model");
+            Assert.Equal("user-computer-profile", model.GetProperty("type").GetString());
+            Assert.Equal(ModelProfileEntityId, model.GetProperty("entity-id").GetString());
+            var tool = effective.ResolveComponent("worker");
+            Assert.Equal("user-computer-profile", tool.GetProperty("type").GetString());
+            Assert.Equal(ToolProfileEntityId, tool.GetProperty("entity-id").GetString());
+            Assert.Same(registry, services.ExecutorTransportFactoryRegistry);
+
+            // Now prove routing through the registry actually dispatches each descriptor to the
+            // matching fake transport — model → model factory, tool → tool factory — so a split
+            // model/tool placement is preserved from persistence through to transport selection.
+            var modelTransport = await ((ITransportFactoryRegistry)services.ExecutorTransportFactoryRegistry!)
+                .ConnectToAsync(model, TestContext.Current.CancellationToken);
+            var toolTransport = await ((ITransportFactoryRegistry)services.ExecutorTransportFactoryRegistry!)
+                .ConnectToAsync(tool, TestContext.Current.CancellationToken);
+            Assert.Same(modelFactory.LastTransport, modelTransport);
+            Assert.Same(toolFactory.LastTransport, toolTransport);
+            Assert.Equal(1, modelFactory.ConnectCallCount);
+            Assert.Equal(1, toolFactory.ConnectCallCount);
+        }
+        finally
+        {
+            await lease.DisposeAsync();
+        }
+    }
+
+    private sealed class RecordingUserComputerProfileTransportFactory : ITransportFactory
+    {
+        private readonly string acceptedEntityId;
+        private int connectCallCount;
+
+        public RecordingUserComputerProfileTransportFactory(string acceptedEntityId)
+        {
+            this.acceptedEntityId = acceptedEntityId;
+        }
+
+        public int ConnectCallCount => Volatile.Read(ref this.connectCallCount);
+        public ITransport? LastTransport { get; private set; }
+
+        public Task<ITransport?> ConnectToAsync(JsonElement connectionDescriptor, CancellationToken ct = default)
+        {
+            if (connectionDescriptor.ValueKind == JsonValueKind.Object
+                && connectionDescriptor.TryGetProperty("type", out var type)
+                && type.ValueKind == JsonValueKind.String
+                && string.Equals(type.GetString(), "user-computer-profile", StringComparison.Ordinal)
+                && connectionDescriptor.TryGetProperty("entity-id", out var entityId)
+                && entityId.ValueKind == JsonValueKind.String
+                && string.Equals(entityId.GetString(), this.acceptedEntityId, StringComparison.Ordinal))
+            {
+                Interlocked.Increment(ref this.connectCallCount);
+                var transport = new FakeTransport();
+                this.LastTransport = transport;
+                return Task.FromResult<ITransport?>(transport);
+            }
+
+            return Task.FromResult<ITransport?>(null);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class FakeTransport : ITransport
+    {
+        public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException("Fake transport does not open channels; the test only verifies routing.");
+
+        public Task<Stream> ConnectToStreamAsync(JsonElement request, CancellationToken ct = default)
+            => throw new NotSupportedException("Fake transport does not open streams; the test only verifies routing.");
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class CapturingRunningAgentChatFactory : IRunningAgentChatFactory
+    {
+        public System.Collections.ObjectModel.ObservableCollection<RunningAgentChat> RunningSessions { get; } = new();
+        public AgentServices? LastServices { get; private set; }
+
+        public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
+            => Task.FromResult(new RunningAgentChatLease(sessionId, null!, () => ValueTask.CompletedTask));
+
+        public Task<RunningAgentChatLease> CreateAsync(
+            AgentDefinition definition,
+            AgentSessionId sessionId,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            string? nameOverride = null,
+            CancellationToken ct = default)
+            => GetAsync(sessionId, ct: ct);
+
+        public Task<RunningAgentChatLease> GetOrCreateAsync(
+            AgentSessionId sessionId,
+            AgentDefinition? definition = null,
+            AgentServices? services = null,
+            string? displayNameOverride = null,
+            string? descriptionOverride = null,
+            bool registerAsRunningAgent = true,
+            CancellationToken ct = default)
+        {
+            LastServices = services;
+            return GetAsync(sessionId, ct: ct);
+        }
     }
 }

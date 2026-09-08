@@ -515,6 +515,87 @@ public sealed class AgentManifestLaunchpadViewModelTests
         }
     }
 
+    [AvaloniaFact(Timeout = 15_000)]
+    public async Task Launchpad_StartSession_WithTrustProfileSelection_ResolvesTrustProfileFreshLaunchBranch()
+    {
+        // Regression pin for #1481 — the fresh-launch trust-profile branch in
+        // AgentManifestSessionLauncher.ResolveSelectedTrustProfileAsync must resolve the referenced
+        // trust profile via DataAccessLayerTrustProfileResolver so that ExecutorBindings.Build
+        // authors a nonlocal worker binding for the persisted session entity. The prior test only
+        // covered the user-computer-profile branch and did not exercise this code path.
+        var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel();
+        await viewModel.InitializeAsync();
+
+        var broker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(UserComputerProfileEntityId), UserComputerProfileEntityJson);
+        await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(TrustProfileEntityId), TrustProfileEntityJson);
+        var manifestEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            broker, new EntityId(Issue1463ExecutorManifestEntityId), Issue1463ExecutorManifestEntityJson);
+
+        var agentSessionShortcutContext = new AgentSessionShortcutContext();
+        var inner = CreateTestRunningAgentChatTable();
+        var spy = new SpyRunningAgentChatTable(inner);
+        var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
+            agentSessionShortcutContext,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            spy);
+
+        var launchpad = new AgentManifestLaunchpadViewModel(
+            manifestEntity,
+            agentSessionShortcutContext,
+            openAgentSessionShortcutHandler,
+            viewModel,
+            new Dictionary<string, string> { ["topic"] = "weather" })
+        {
+            Id = $"launchpad-{manifestEntity.EntityId}",
+            Title = manifestEntity.DisplayName,
+            DockRegion = "full",
+            Entity = manifestEntity,
+        };
+
+        await viewModel.OpenTabAsync(launchpad);
+        await launchpad.ExecutorOptionsLoaded;
+
+        await using (viewModel)
+        {
+            var executorRow = Assert.Single(launchpad.ManifestParameters.Parameters, p => p.IsExecutorPicker);
+            var trustOption = Assert.Single(
+                executorRow.ExecutorOptions,
+                option => option.Kind == ExecutorParameterSelection.TrustProfileKind
+                    && SelectionValue(option.Selection, ExecutorParameterSelection.TrustProfileKind) == "issue-1440-remote");
+            executorRow.SelectedExecutorOption = trustOption;
+
+            launchpad.StartSessionCommand.Execute(null);
+
+            var sessionTab = await MainWindowIntegrationTests.WaitForSelectedTabAsync<AgentSessionWorkspaceTabViewModel>(
+                viewModel.SelectedWorkspacePane);
+            await MainWindowIntegrationTests.WaitForAgentReadyAsync(sessionTab);
+
+            Assert.NotNull(sessionTab.Entity);
+            Assert.True(sessionTab.Entity!.Data is JsonElement);
+            var data = (JsonElement)sessionTab.Entity!.Data!;
+
+            // The trust-profile selection round-trips into the persisted parameter-selections.
+            Assert.True(data.TryGetProperty("parameter-selections", out var parameterSelections));
+            Assert.True(parameterSelections.TryGetProperty("worker-executor", out var workerSelection));
+            Assert.True(ExecutorParameterSelection.TryGetTrustProfile(workerSelection, out var trustName));
+            Assert.Equal("issue-1440-remote", trustName);
+
+            // The trust-profile fresh-launch branch resolved the profile and Build authored a worker
+            // binding (proof the ResolveSelectedTrustProfileAsync branch actually ran; the prior
+            // launch test's user-computer-profile branch skipped it entirely).
+            Assert.True(data.TryGetProperty("executor-bindings", out var executorBindings));
+            var workerBinding = executorBindings.GetProperty("components").GetProperty("worker");
+            Assert.NotEqual(JsonValueKind.Undefined, workerBinding.ValueKind);
+            Assert.True(workerBinding.TryGetProperty("type", out var workerType));
+            Assert.Equal(JsonValueKind.String, workerType.ValueKind);
+            Assert.False(string.IsNullOrWhiteSpace(workerType.GetString()));
+            Assert.Equal(data.GetRawText(), spy.LastRequest?.AgentSessionEntity?.GetRawText());
+        }
+    }
+
     private static RunningAgentChatTable CreateTestRunningAgentChatTable()
     {
         var store = new InMemoryAgentPersistenceStore();

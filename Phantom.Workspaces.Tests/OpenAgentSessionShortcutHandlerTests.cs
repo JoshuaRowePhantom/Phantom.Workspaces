@@ -1,9 +1,17 @@
 using System;
+using System.Collections.Generic;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Headless.XUnit;
 using Phantom.Workspaces.Agent.Gui;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Gui.Shared.Utilities;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Core.Manifest;
+using Phantom.Workspaces.Llm.Interfaces;
+using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.ViewModels;
 using Xunit;
 using AgentViewModel = Phantom.Workspaces.Agent.Gui.ViewModels.AgentViewModel;
@@ -84,6 +92,212 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             await agent.DisposeAsync();
             await chat.DisposeAsync();
             loggerFactory.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task FirstOpen_UsesPersistedSplitBindings()
+    {
+        // Regression pin for #1481 — the first-open path (Open shortcut → TryBuildAgentAsync) must
+        // route through the shared IAgentSessionRuntimeContextFactory hydrator, reconstructing the
+        // persisted executor-bindings before definition resolution / chat creation. No GUI code
+        // may parse executor bindings on this path.
+        const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000001";
+        var registry = new TransportFactoryRegistry();
+        var registryProvider = new TransportFactoryRegistryProvider(registry);
+        var innerRuntimeFactory = new AgentSessionRuntimeContextFactory(registryProvider);
+        var spyRuntimeFactory = new SpyRuntimeContextFactory(innerRuntimeFactory);
+        var runningChatFactory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            SynchronizationContextTaskScheduler.FromCurrent());
+        var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("dd811481-0000-4000-8000-000000000001"),
+            """
+            {
+              "entity-id": "dd811481-0000-4000-8000-000000000001",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "first-open-split-bindings"]],
+              "display-name": { "default": "First-Open Split Bindings" },
+              "definition": {
+                "kind": "prompt",
+                "name": "first-open-split-bindings",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var context = new AgentSessionShortcutContext();
+        var sessionExecutor = ExecutorBindings.LocalDescriptor();
+        var componentBindings = BuildWorkerComponentBindings(WorkerProfileEntityId);
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel,
+            agentDefinitionEntity,
+            Guid.NewGuid().ToString("n"),
+            sessionExecutor: sessionExecutor,
+            executorComponentBindings: componentBindings);
+        Assert.NotNull(sessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table);
+
+        var tab = new AgentSessionWorkspaceTabViewModel
+        {
+            Id = sessionEntity!.EntityId.ToString(),
+            Title = sessionEntity.DisplayName,
+            Entity = sessionEntity,
+        };
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+
+        var result = await Task.Run(() =>
+            handler.TryBuildAgentAsync(viewModel, sessionEntity!, tab, foregroundScheduler));
+
+        try
+        {
+            Assert.NotNull(result);
+            Assert.Equal(1, spyRuntimeFactory.CreateCallCount);
+            var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
+            var workerBinding = lastContext.ExecutorBindings.ResolveComponent("worker");
+            Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
+            Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
+            Assert.Same(registry, lastContext.TransportFactoryRegistry);
+        }
+        finally
+        {
+            if (result?.lease is { } lease)
+            {
+                await lease.DisposeAsync();
+            }
+            if (result?.agent is { } createdAgent)
+            {
+                await createdAgent.DisposeAsync();
+            }
+            result?.loggerFactory.Dispose();
+        }
+    }
+
+    [AvaloniaFact(Timeout = 30_000)]
+    public async Task AutoResume_UsesPersistedSplitBindings()
+    {
+        // Regression pin for #1481 — the auto-resume path must go through the same hydrator, so a
+        // persisted split-executor session that auto-resumes reconstructs the same runtime context
+        // as first-open.
+        const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000002";
+        var registry = new TransportFactoryRegistry();
+        var registryProvider = new TransportFactoryRegistryProvider(registry);
+        var innerRuntimeFactory = new AgentSessionRuntimeContextFactory(registryProvider);
+        var spyRuntimeFactory = new SpyRuntimeContextFactory(innerRuntimeFactory);
+        var runningChatFactory = new AgentChatFactory(
+            new InMemoryAgentPersistenceStore(),
+            new AgentServices(),
+            SynchronizationContextTaskScheduler.FromCurrent());
+        var table = new RunningAgentChatTable(runningChatFactory, spyRuntimeFactory);
+        var appServices = new ApplicationServices(table, new AgentPersistenceStoreCache());
+        await using var viewModel = MainWindowIntegrationTests.CreateTestMainWindowViewModel(applicationServices: appServices);
+        await viewModel.InitializeAsync();
+
+        var entityBroker = MainWindowIntegrationTests.GetEntityBroker(viewModel);
+        var agentDefinitionEntity = await MainWindowIntegrationTests.UpsertEntityAndLoadAsync(
+            entityBroker,
+            new EntityId("dd811481-0000-4000-8000-000000000002"),
+            """
+            {
+              "entity-id": "dd811481-0000-4000-8000-000000000002",
+              "entity-types": ["entity", "agent-definition"],
+              "names": [["tests", "agent-definitions", "auto-resume-split-bindings"]],
+              "display-name": { "default": "Auto-Resume Split Bindings" },
+              "definition": {
+                "kind": "prompt",
+                "name": "auto-resume-split-bindings",
+                "model": { "id": "echo", "provider": "echo", "apiType": "Echo" },
+                "tools": []
+              }
+            }
+            """);
+
+        var context = new AgentSessionShortcutContext();
+        var sessionExecutor = ExecutorBindings.LocalDescriptor();
+        var componentBindings = BuildWorkerComponentBindings(WorkerProfileEntityId);
+        var sessionEntity = await context.CreateAgentSessionEntityAsync(
+            viewModel,
+            agentDefinitionEntity,
+            Guid.NewGuid().ToString("n"),
+            sessionExecutor: sessionExecutor,
+            executorComponentBindings: componentBindings);
+        Assert.NotNull(sessionEntity);
+
+        var handler = new OpenAgentSessionShortcutHandler(
+            context,
+            MainWindowIntegrationTests.CreateLocalTrustedExecutorSelector(),
+            table);
+
+        const string resumePrompt = "Resume with persisted split bindings.";
+        var foregroundScheduler = SynchronizationContextTaskScheduler.FromCurrent();
+        var lease = await Task.Run(() =>
+            handler.TryStartAutoResumeAsync(viewModel, sessionEntity!, resumePrompt, foregroundScheduler));
+
+        try
+        {
+            Assert.NotNull(lease);
+            Assert.Equal(1, spyRuntimeFactory.CreateCallCount);
+            var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
+            var workerBinding = lastContext.ExecutorBindings.ResolveComponent("worker");
+            Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
+            Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
+            Assert.Same(registry, lastContext.TransportFactoryRegistry);
+        }
+        finally
+        {
+            if (lease is not null)
+            {
+                await lease.DisposeAsync();
+            }
+        }
+    }
+
+    private static JsonElement BuildWorkerComponentBindings(string workerProfileEntityId)
+    {
+        using var document = JsonDocument.Parse(
+            $$"""
+            {
+              "worker": {
+                "type": "user-computer-profile",
+                "entity-id": "{{workerProfileEntityId}}"
+              }
+            }
+            """);
+        return document.RootElement.Clone();
+    }
+
+    private sealed class SpyRuntimeContextFactory : IAgentSessionRuntimeContextFactory
+    {
+        private readonly IAgentSessionRuntimeContextFactory inner;
+        private int createCallCount;
+
+        public SpyRuntimeContextFactory(IAgentSessionRuntimeContextFactory inner)
+        {
+            this.inner = inner;
+        }
+
+        public int CreateCallCount => Volatile.Read(ref this.createCallCount);
+        public AgentSessionRuntimeContext? LastContext { get; private set; }
+
+        public AgentSessionRuntimeContext Create(JsonElement agentSessionEntity)
+        {
+            Interlocked.Increment(ref this.createCallCount);
+            var context = this.inner.Create(agentSessionEntity);
+            this.LastContext = context;
+            return context;
         }
     }
 }

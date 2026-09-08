@@ -54,7 +54,11 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
         }
 
         var isRunning = IsRunning(sessionId);
-        var definition = await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false);
+        // Hydrate persisted runtime context BEFORE resolving the definition or invoking the
+        // running-chat factory. Persisted executor bindings must be reconstructed and validated at
+        // the acquisition boundary so definition resolution and chat creation see the effective
+        // services; invalid or nonlocal-without-registry bindings must fail acquisition here rather
+        // than silently downgrade to local execution.
         var services = request.AgentServices;
         if (!isRunning && request.AgentSessionEntity is { } entity)
         {
@@ -65,6 +69,8 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
                 ExecutorTransportFactoryRegistry = runtimeContext.TransportFactoryRegistry,
             };
         }
+
+        var definition = await ResolveDefinitionIfNeededAsync(request, isRunning, ct).ConfigureAwait(false);
 
         return await _factory.GetOrCreateAsync(
             sessionId,
