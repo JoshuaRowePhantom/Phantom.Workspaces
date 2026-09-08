@@ -37,26 +37,45 @@ public static class AgentSessionEntityFactory
     /// session id, optional parameter-values / host-profile, and the #1437 executor-bindings +
     /// typed parameter-selections keys) as a JSON-safe <see cref="JsonElement"/>.
     /// </summary>
-    public static JsonElement CreateEntityData(
-        EntityId agentDefinitionEntityId,
-        string agentDisplayName,
-        string agentSessionId,
-        IReadOnlyCollection<EntityName> agentSessionNames,
-        DateTimeOffset currentTime,
-        string computerName,
-        IReadOnlyDictionary<string, string>? parameterValues = null,
-        EntityId? hostProfileEntityId = null,
-        JsonElement? sessionExecutor = null,
-        JsonElement? executorComponentBindings = null,
-        IReadOnlyDictionary<string, JsonElement>? parameterSelections = null)
+    public static JsonElement CreateEntityData(CreateAgentSessionEntityDataRequest request)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.HostProfileEntityId == default)
+        {
+            throw new ArgumentException("A host profile entity ID is required.", nameof(request));
+        }
+
+        if (request.OwnershipGeneration < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Ownership generation must not be negative.");
+        }
+
+        if (request.TrustProfileReference.HasValue != request.ExpectedTrustProfileRevision.HasValue)
+        {
+            throw new ArgumentException(
+                "Trust profile reference and expected revision must both be present or both be absent.",
+                nameof(request));
+        }
+
+        if (request.TrustProfileReference is { } trustProfileReferenceValue
+            && (trustProfileReferenceValue.ValueKind != JsonValueKind.String
+                || string.IsNullOrWhiteSpace(trustProfileReferenceValue.GetString())))
+        {
+            throw new ArgumentException("Trust profile reference must be a non-empty string.", nameof(request));
+        }
+
+        if (request.ExpectedTrustProfileRevision < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Expected trust profile revision must not be negative.");
+        }
+
         var entityId = new EntityId();
 
         // Assemble the document with JsonNode rather than string interpolation so free-text values
         // (the agent display name, the computer name, and the human-readable timestamp) cannot
         // break the JSON when they contain quotes or other special characters (issue #1397).
         var namesArray = new JsonArray(
-            agentSessionNames
+            request.AgentSessionNames
                 .Select(entityName => (JsonNode)new JsonArray(
                     entityName.Components
                         .Select(component => (JsonNode)JsonValue.Create(component)!)
@@ -65,8 +84,8 @@ public static class AgentSessionEntityFactory
 
         // Human-readable, culture-aware local creation time plus the originating computer, so the
         // sessions list can distinguish otherwise identically-named sessions.
-        var localTime = currentTime.ToLocalTime().ToString("f", CultureInfo.CurrentCulture);
-        var displayName = $"{agentDisplayName} session - {localTime} on {computerName}";
+        var localTime = request.CurrentTime.ToLocalTime().ToString("f", CultureInfo.CurrentCulture);
+        var displayName = $"{request.AgentDisplayName} session - {localTime} on {request.ComputerName}";
 
         var root = new JsonObject
         {
@@ -74,14 +93,17 @@ public static class AgentSessionEntityFactory
             ["entity-types"] = new JsonArray("entity", "agent-session"),
             ["names"] = namesArray,
             ["display-name"] = new JsonObject { ["default"] = displayName },
-            ["agent-source-entity-id"] = agentDefinitionEntityId.ToString(),
-            ["agent-session-id"] = agentSessionId,
+            ["agent-source-entity-id"] = request.AgentDefinitionEntityId.ToString(),
+            ["agent-session-id"] = request.AgentSessionId,
+            ["host-profile-entity-id"] = request.HostProfileEntityId.ToString(),
+            ["ownership-generation"] = request.OwnershipGeneration,
+            ["continue-in-background"] = request.ContinueInBackground,
         };
 
-        if (parameterValues is { Count: > 0 })
+        if (request.ParameterValues is { Count: > 0 })
         {
             var parameterValuesObject = new JsonObject();
-            foreach (var parameterValue in parameterValues)
+            foreach (var parameterValue in request.ParameterValues)
             {
                 parameterValuesObject[parameterValue.Key] = parameterValue.Value;
             }
@@ -89,19 +111,14 @@ public static class AgentSessionEntityFactory
             root["parameter-values"] = parameterValuesObject;
         }
 
-        if (hostProfileEntityId is { } profileId && profileId != default)
-        {
-            root["host-profile-entity-id"] = profileId.ToString();
-        }
-
         // NEW (#1437): the typed executor selections and resolved executor bindings. parameter-selections
         // is a sibling of the string->string parameter-values map (M7); executor-bindings carries the
         // explicit session executor plus per-component connection-descriptor objects (M6). All values are
         // authored via JsonNode so the JsonElement descriptors round-trip verbatim.
-        if (parameterSelections is { Count: > 0 })
+        if (request.ParameterSelections is { Count: > 0 })
         {
             var parameterSelectionsObject = new JsonObject();
-            foreach (var parameterSelection in parameterSelections)
+            foreach (var parameterSelection in request.ParameterSelections)
             {
                 parameterSelectionsObject[parameterSelection.Key] =
                     JsonNode.Parse(parameterSelection.Value.GetRawText());
@@ -110,28 +127,32 @@ public static class AgentSessionEntityFactory
             root["parameter-selections"] = parameterSelectionsObject;
         }
 
-        var hasComponentBindings = executorComponentBindings is { ValueKind: JsonValueKind.Object } componentsProbe
+        var hasComponentBindings = request.ExecutorComponentBindings is { ValueKind: JsonValueKind.Object } componentsProbe
             && componentsProbe.EnumerateObject().Any();
-        if (sessionExecutor is { } || hasComponentBindings)
+        var executorBindings = new JsonObject
         {
-            var executorBindings = new JsonObject
-            {
-                [AgentSessionExecutorBindings.SessionKey] = sessionExecutor is { } session
-                    ? JsonNode.Parse(session.GetRawText())
-                    : new JsonObject { ["type"] = AgentSessionExecutorBindings.LocalDescriptorType },
-            };
+            [AgentSessionExecutorBindings.SessionKey] = request.SessionExecutor is { } session
+                ? JsonNode.Parse(session.GetRawText())
+                : new JsonObject { ["type"] = AgentSessionExecutorBindings.LocalDescriptorType },
+        };
 
-            var components = new JsonObject();
-            if (executorComponentBindings is { ValueKind: JsonValueKind.Object } componentsElement)
+        var components = new JsonObject();
+        if (hasComponentBindings
+            && request.ExecutorComponentBindings is { ValueKind: JsonValueKind.Object } componentsElement)
+        {
+            foreach (var component in componentsElement.EnumerateObject())
             {
-                foreach (var component in componentsElement.EnumerateObject())
-                {
-                    components[component.Name] = JsonNode.Parse(component.Value.GetRawText());
-                }
+                components[component.Name] = JsonNode.Parse(component.Value.GetRawText());
             }
+        }
 
-            executorBindings[AgentSessionExecutorBindings.ComponentsKey] = components;
-            root[AgentSessionExecutorBindings.RootKey] = executorBindings;
+        executorBindings[AgentSessionExecutorBindings.ComponentsKey] = components;
+        root[AgentSessionExecutorBindings.RootKey] = executorBindings;
+
+        if (request.TrustProfileReference is { } trustProfileReference)
+        {
+            root["trust-profile-reference"] = JsonNode.Parse(trustProfileReference.GetRawText());
+            root["expected-trust-profile-revision"] = request.ExpectedTrustProfileRevision;
         }
 
         return JsonSerializer.Deserialize<JsonElement>(root.ToJsonString());

@@ -36,7 +36,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
     {
         _factory = factory;
         this.runtimeContextFactory = runtimeContextFactory
-            ?? new AgentSessionRuntimeContextFactory(new TransportFactoryRegistryProvider());
+            ?? new AgentSessionRuntimeContextFactory(null);
         factory.RunningSessions.CollectionChanged += OnFactorySessionsChanged;
     }
 
@@ -67,7 +67,7 @@ public sealed class RunningAgentChatTable : IRunningAgentChatTable
             var runtimeContext = this.runtimeContextFactory.Create(entity, localProfileEntityId);
             services = (services ?? new AgentServices()) with
             {
-                ExecutorBindings = runtimeContext.ExecutorBindings,
+                ExecutorBindings = runtimeContext.Intent.ExecutorBindings,
                 ExecutorTransportFactoryRegistry = runtimeContext.TransportFactoryRegistry,
             };
         }

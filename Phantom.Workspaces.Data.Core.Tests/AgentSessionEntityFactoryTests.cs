@@ -22,14 +22,17 @@ public sealed class AgentSessionEntityFactoryTests
         var sessionName = new EntityName("tests", "agent-sessions", "session-1");
 
         var data = AgentSessionEntityFactory.CreateEntityData(
-            agentDefinitionEntityId: definitionId,
-            agentDisplayName: "Weird \"Agent\" \\ Name",
-            agentSessionId: "abc123",
-            agentSessionNames: new[] { sessionName },
-            currentTime: TestInstant,
-            computerName: "PC\"WITH\"QUOTES",
-            parameterValues: new Dictionary<string, string> { ["topic"] = "quotes \"and\" slashes \\" },
-            hostProfileEntityId: definitionId);
+            new CreateAgentSessionEntityDataRequest
+            {
+                AgentDefinitionEntityId = definitionId,
+                AgentDisplayName = "Weird \"Agent\" \\ Name",
+                AgentSessionId = "abc123",
+                AgentSessionNames = [sessionName],
+                CurrentTime = TestInstant,
+                ComputerName = "PC\"WITH\"QUOTES",
+                ParameterValues = new Dictionary<string, string> { ["topic"] = "quotes \"and\" slashes \\" },
+                HostProfileEntityId = definitionId,
+            });
 
         // The document round-trips as valid JSON and preserves the special characters verbatim.
         var displayName = data.GetProperty("display-name").GetProperty("default").GetString();
@@ -52,18 +55,26 @@ public sealed class AgentSessionEntityFactoryTests
     }
 
     [Fact]
-    public void AgentSessionEntityFactory_CreateEntityData_OmitsOptionalFieldsWhenAbsent()
+    public void AgentSessionEntityFactory_CreateEntityData_PersistsRuntimeDefaults()
     {
+        var owner = new EntityId();
         var data = AgentSessionEntityFactory.CreateEntityData(
-            agentDefinitionEntityId: new EntityId(),
-            agentDisplayName: "Plain",
-            agentSessionId: "s1",
-            agentSessionNames: new[] { new EntityName("tests", "agent-sessions", "session-2") },
-            currentTime: TestInstant,
-            computerName: "HOST");
+            new CreateAgentSessionEntityDataRequest
+            {
+                AgentDefinitionEntityId = new EntityId(),
+                AgentDisplayName = "Plain",
+                AgentSessionId = "s1",
+                AgentSessionNames = [new EntityName("tests", "agent-sessions", "session-2")],
+                CurrentTime = TestInstant,
+                ComputerName = "HOST",
+                HostProfileEntityId = owner,
+            });
 
         Assert.False(data.TryGetProperty("parameter-values", out _));
-        Assert.False(data.TryGetProperty("host-profile-entity-id", out _));
+        Assert.Equal(owner.ToString(), data.GetProperty("host-profile-entity-id").GetString());
+        Assert.Equal(0, data.GetProperty("ownership-generation").GetInt64());
+        Assert.Equal(JsonValueKind.Object, data.GetProperty("executor-bindings").ValueKind);
+        Assert.False(data.GetProperty("continue-in-background").GetBoolean());
     }
 
     [Fact]

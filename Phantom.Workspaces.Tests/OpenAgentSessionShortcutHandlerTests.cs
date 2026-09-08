@@ -106,7 +106,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000001";
         var registry = new TransportFactoryRegistry();
         var registryProvider = new TransportFactoryRegistryProvider(registry);
-        var innerRuntimeFactory = new AgentSessionRuntimeContextFactory(registryProvider);
+        var innerRuntimeFactory = AgentSessionRuntimeContextFactory.FromProvider(registryProvider);
         var spyRuntimeFactory = new SpyRuntimeContextFactory(innerRuntimeFactory);
         var runningChatFactory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(),
@@ -185,8 +185,8 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
             Assert.Equal(
                 legacyHostProfileEntityId.ToString(),
-                lastContext.ExecutorBindings.SessionExecutor.GetProperty("entity-id").GetString());
-            var workerBinding = lastContext.ExecutorBindings.ResolveComponent("worker");
+                lastContext.Intent.ExecutorBindings.SessionExecutor.GetProperty("entity-id").GetString());
+            var workerBinding = lastContext.Intent.ExecutorBindings.ResolveComponent("worker");
             Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
             Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
             Assert.Same(registry, lastContext.TransportFactoryRegistry);
@@ -214,7 +214,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
         const string WorkerProfileEntityId = "cccc1481-0000-4000-8000-000000000002";
         var registry = new TransportFactoryRegistry();
         var registryProvider = new TransportFactoryRegistryProvider(registry);
-        var innerRuntimeFactory = new AgentSessionRuntimeContextFactory(registryProvider);
+        var innerRuntimeFactory = AgentSessionRuntimeContextFactory.FromProvider(registryProvider);
         var spyRuntimeFactory = new SpyRuntimeContextFactory(innerRuntimeFactory);
         var runningChatFactory = new AgentChatFactory(
             new InMemoryAgentPersistenceStore(),
@@ -270,7 +270,7 @@ public sealed class OpenAgentSessionShortcutHandlerTests
             Assert.NotNull(lease);
             Assert.Equal(1, spyRuntimeFactory.CreateCallCount);
             var lastContext = Assert.IsType<AgentSessionRuntimeContext>(spyRuntimeFactory.LastContext);
-            var workerBinding = lastContext.ExecutorBindings.ResolveComponent("worker");
+            var workerBinding = lastContext.Intent.ExecutorBindings.ResolveComponent("worker");
             Assert.Equal("user-computer-profile", workerBinding.GetProperty("type").GetString());
             Assert.Equal(WorkerProfileEntityId, workerBinding.GetProperty("entity-id").GetString());
             Assert.Same(registry, lastContext.TransportFactoryRegistry);

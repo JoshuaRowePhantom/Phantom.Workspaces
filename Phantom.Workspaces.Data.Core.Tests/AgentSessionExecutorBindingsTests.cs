@@ -31,17 +31,20 @@ public sealed class AgentSessionExecutorBindingsTests
         EntityId? hostProfileEntityId = null,
         IReadOnlyDictionary<string, JsonElement>? parameterSelections = null)
         => AgentSessionEntityFactory.CreateEntityData(
-            agentDefinitionEntityId: new EntityId(),
-            agentDisplayName: "Executor Session",
-            agentSessionId: "sess-1",
-            agentSessionNames: new[] { new EntityName("tests", "agent-sessions", "session-1") },
-            currentTime: TestInstant,
-            computerName: "HOST",
-            parameterValues: parameterValues,
-            hostProfileEntityId: hostProfileEntityId,
-            sessionExecutor: sessionExecutor,
-            executorComponentBindings: components,
-            parameterSelections: parameterSelections);
+            new CreateAgentSessionEntityDataRequest
+            {
+                AgentDefinitionEntityId = new EntityId(),
+                AgentDisplayName = "Executor Session",
+                AgentSessionId = "sess-1",
+                AgentSessionNames = [new EntityName("tests", "agent-sessions", "session-1")],
+                CurrentTime = TestInstant,
+                ComputerName = "HOST",
+                ParameterValues = parameterValues,
+                HostProfileEntityId = hostProfileEntityId ?? new EntityId(ProfileUuid),
+                SessionExecutor = sessionExecutor,
+                ExecutorComponentBindings = components,
+                ParameterSelections = parameterSelections,
+            });
 
     [Fact]
     public void Persist_ExecutorBindings_RoundTrips()
@@ -138,8 +141,13 @@ public sealed class AgentSessionExecutorBindingsTests
     {
         // A legacy session carries only host-profile-entity-id (no executor-bindings).
         var hostProfile = new EntityId();
-        var data = CreateData(hostProfileEntityId: hostProfile);
-        Assert.False(data.TryGetProperty("executor-bindings", out _));
+        var data = Parse(
+            $$"""
+            {
+              "agent-session-id": "legacy-session",
+              "host-profile-entity-id": "{{hostProfile}}"
+            }
+            """);
 
         var sessionExecutor = AgentSessionExecutorBindings.ReadSessionExecutor(data);
 

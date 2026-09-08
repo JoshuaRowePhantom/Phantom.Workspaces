@@ -114,7 +114,7 @@ public sealed class StartAgentSessionOnProfileViewModelTests
         var store = new InMemoryAgentPersistenceStore();
         var factory = new AgentChatFactory(store, new AgentServices(), SynchronizationContextTaskScheduler.FromCurrent());
         var registryProvider = new TransportFactoryRegistryProvider(new TransportFactoryRegistry());
-        var inner = new RunningAgentChatTable(factory, new AgentSessionRuntimeContextFactory(registryProvider));
+        var inner = new RunningAgentChatTable(factory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider));
         var spy = new SpyRunningAgentChatTable(inner);
         var openAgentSessionShortcutHandler = new OpenAgentSessionShortcutHandler(
             agentSessionShortcutContext,

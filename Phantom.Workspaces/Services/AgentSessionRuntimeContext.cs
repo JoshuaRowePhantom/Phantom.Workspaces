@@ -3,6 +3,9 @@ using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Services;
 
-public sealed record AgentSessionRuntimeContext(
-    ExecutorBindings ExecutorBindings,
-    ITransportFactoryRegistry? TransportFactoryRegistry);
+public sealed record AgentSessionRuntimeContext
+{
+    public required PersistedAgentSessionRuntimeIntent Intent { get; init; }
+
+    public ITransportFactoryRegistry? TransportFactoryRegistry { get; init; } = null;
+}

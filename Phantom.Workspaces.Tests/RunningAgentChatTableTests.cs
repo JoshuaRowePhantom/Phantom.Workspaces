@@ -182,12 +182,19 @@ public sealed class RunningAgentChatTableTests
         public AgentSessionRuntimeContext Create(JsonElement agentSessionEntity)
         {
             CreateCallCount++;
-            return new AgentSessionRuntimeContext(
-                new ExecutorBindings
+            return new AgentSessionRuntimeContext
+            {
+                Intent = new PersistedAgentSessionRuntimeIntent
                 {
-                    SessionExecutor = JsonDocument.Parse("""{"type":"local"}""").RootElement.Clone(),
+                    AgentSessionId = "fake-session",
+                    OwningProfileEntityId = "11111111-1111-1111-1111-111111111111",
+                    OwnershipGeneration = 0,
+                    ExecutorBindings = new ExecutorBindings
+                    {
+                        SessionExecutor = JsonDocument.Parse("""{"type":"local"}""").RootElement.Clone(),
+                    },
                 },
-                null);
+            };
         }
     }
 
@@ -427,7 +434,8 @@ public sealed class RunningAgentChatTableTests
             new AcquireAgentChatRequest
             {
                 AgentSessionId = sessionId,
-                AgentSessionEntity = JsonDocument.Parse("""{"agent-session-id":"session-resolver"}""").RootElement.Clone(),
+                AgentSessionEntity = JsonDocument.Parse(
+                    """{"agent-session-id":"session-resolver","host-profile-entity-id":"11111111-1111-1111-1111-111111111111","ownership-generation":0}""").RootElement.Clone(),
                 AgentDefinitionResolver = resolver,
             },
             TestContext.Current.CancellationToken);
@@ -464,8 +472,7 @@ public sealed class RunningAgentChatTableTests
     {
         var factory = new FakeRunningAgentChatFactory();
         var registry = new TransportFactoryRegistry();
-        var runtimeFactory = new AgentSessionRuntimeContextFactory(
-            new TransportFactoryRegistryProvider(registry));
+        var runtimeFactory = new AgentSessionRuntimeContextFactory(registry);
         var table = new RunningAgentChatTable(factory, runtimeFactory);
 
         await using var lease = await table.AcquireAsync(
@@ -475,6 +482,8 @@ public sealed class RunningAgentChatTableTests
                 AgentSessionEntity = JsonDocument.Parse(
                     """
                     {
+                      "agent-session-id": "session-split-runtime",
+                      "host-profile-entity-id": "11111111-1111-1111-1111-111111111111",
                       "executor-bindings": {
                         "session": { "type": "local" },
                         "components": {

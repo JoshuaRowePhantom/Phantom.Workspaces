@@ -211,7 +211,7 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         var agentChatFactory = new AgentChatFactory(agentPersistenceStore, new AgentServices(), TaskScheduler.Current);
         var registryProvider = new TransportFactoryRegistryProvider();
         return new ApplicationServices(
-            new RunningAgentChatTable(agentChatFactory, new AgentSessionRuntimeContextFactory(registryProvider)),
+            new RunningAgentChatTable(agentChatFactory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider)),
             agentPersistenceStoreCache,
             transportFactoryRegistryProvider: registryProvider);
     }

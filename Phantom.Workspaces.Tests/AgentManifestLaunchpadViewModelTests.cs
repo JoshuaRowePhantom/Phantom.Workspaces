@@ -601,7 +601,7 @@ public sealed class AgentManifestLaunchpadViewModelTests
         var store = new InMemoryAgentPersistenceStore();
         var factory = new AgentChatFactory(store, new AgentServices(), SynchronizationContextTaskScheduler.FromCurrent());
         var registryProvider = new TransportFactoryRegistryProvider(new TransportFactoryRegistry());
-        return new RunningAgentChatTable(factory, new AgentSessionRuntimeContextFactory(registryProvider));
+        return new RunningAgentChatTable(factory, AgentSessionRuntimeContextFactory.FromProvider(registryProvider));
     }
 
     private sealed class SpyRunningAgentChatTable : IRunningAgentChatTable

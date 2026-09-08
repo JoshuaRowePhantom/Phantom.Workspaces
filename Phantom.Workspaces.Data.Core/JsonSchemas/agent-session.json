@@ -26,6 +26,27 @@
       "format": "uuid",
       "description": "Entity ID of the user-computer-profile hosting this agent session."
     },
+    "ownership-generation": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Monotonic generation of the profile ownership lease."
+    },
+    "trust-profile-reference": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Trust profile selected for reconstructing runtime trust intent."
+    },
+    "expected-trust-profile-revision": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Expected revision of the selected trust profile."
+    },
+    "continue-in-background": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether this session may continue when its last viewer closes."
+    },
     "agent-definition-reference": {
       "$ref": "core.json#/$defs/entity-reference",
       "x-entity-types": [
@@ -89,6 +110,10 @@
       },
       "required": ["trusted-executor"]
     }
+  },
+  "dependentRequired": {
+    "trust-profile-reference": ["expected-trust-profile-revision"],
+    "expected-trust-profile-revision": ["trust-profile-reference"]
   },
   "required": [
     "entity-types",

@@ -55,15 +55,19 @@ public sealed class SplitExecutorIntegrationTests
         var bindings = ExecutorBindings.Build(resources, selections, trustProfile: null);
 
         var entityData = AgentSessionEntityFactory.CreateEntityData(
-            agentDefinitionEntityId: new EntityId(),
-            agentDisplayName: "GitHub Copilot (split executor)",
-            agentSessionId: "11111111-1111-4111-8111-111111111111",
-            agentSessionNames: [new EntityName("agent-sessions", "split-executor-test")],
-            currentTime: DateTimeOffset.UnixEpoch,
-            computerName: "test-host",
-            sessionExecutor: ExecutorBindings.LocalDescriptor(),
-            executorComponentBindings: bindings.ToPersistableMap(),
-            parameterSelections: selections);
+            new CreateAgentSessionEntityDataRequest
+            {
+                AgentDefinitionEntityId = new EntityId(),
+                AgentDisplayName = "GitHub Copilot (split executor)",
+                AgentSessionId = "11111111-1111-4111-8111-111111111111",
+                AgentSessionNames = [new EntityName("agent-sessions", "split-executor-test")],
+                CurrentTime = DateTimeOffset.UnixEpoch,
+                ComputerName = "test-host",
+                HostProfileEntityId = new EntityId(WorkerProfileUuid),
+                SessionExecutor = ExecutorBindings.LocalDescriptor(),
+                ExecutorComponentBindings = bindings.ToPersistableMap(),
+                ParameterSelections = selections,
+            });
 
         return (entityData, bindings);
     }
@@ -138,7 +142,7 @@ public sealed class SplitExecutorIntegrationTests
         registry.Register(modelFactory);
         registry.Register(toolFactory);
 
-        var runtimeFactory = new AgentSessionRuntimeContextFactory(new TransportFactoryRegistryProvider(registry));
+        var runtimeFactory = new AgentSessionRuntimeContextFactory(registry);
         var chatFactory = new CapturingRunningAgentChatFactory();
         var table = new RunningAgentChatTable(chatFactory, runtimeFactory);
 
@@ -146,6 +150,7 @@ public sealed class SplitExecutorIntegrationTests
             $$"""
             {
               "agent-session-id": "11111111-1111-4111-8111-111111111111",
+              "host-profile-entity-id": "22222222-2222-4222-8222-222222222222",
               "executor-bindings": {
                 "session": { "type": "local" },
                 "components": {

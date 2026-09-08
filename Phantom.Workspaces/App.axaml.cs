@@ -313,7 +313,7 @@ public partial class App : Application
             var applicationServices = new ApplicationServices(
                 new RunningAgentChatTable(
                     agentChatFactory,
-                    new Services.AgentSessionRuntimeContextFactory(transportFactoryRegistryProvider)),
+                    Services.AgentSessionRuntimeContextFactory.FromProvider(transportFactoryRegistryProvider)),
                 agentPersistenceStoreCache,
                 loggerFactory: loggerFactory,
                 logDirectoryProvider: logDirectoryProvider,
