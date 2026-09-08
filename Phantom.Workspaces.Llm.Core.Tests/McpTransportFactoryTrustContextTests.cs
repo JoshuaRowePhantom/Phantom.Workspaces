@@ -16,6 +16,10 @@ namespace Phantom.Workspaces.Llm.Core.Tests;
 /// </summary>
 public sealed class McpTransportFactoryTrustContextTests
 {
+    private static string ComSpecPath =>
+        Environment.GetEnvironmentVariable("ComSpec")
+        ?? Path.Combine(Environment.SystemDirectory, "cmd.exe");
+
     private static McpTool StdioTool(string command = "cmd") => new()
     {
         ServerName = "srv",
@@ -34,7 +38,24 @@ public sealed class McpTransportFactoryTrustContextTests
     private static AgentExecutionTrustContext ConstrainedContext()
         => new(
             new TrustProfile { NetworkCapabilities = [] },
-            new MxcTrustProfilePolicyCompiler(new FakeMxcPolicyHost()));[Fact]
+            new MxcTrustProfilePolicyCompiler(new FakeMxcPolicyHost()));
+
+    [Fact]
+    public async Task CreateStdioTransport_WithoutOptionalServices_UsesPhantomExecutor()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        var transport = await McpTransportFactory.CreateMcpTransportAsync(
+            StdioTool(Uri.EscapeDataString(ComSpecPath)),
+            services: null,
+            NullLoggerFactory.Instance,
+            CancellationToken.None);
+
+        Assert.IsType<ProcessExecutorBackedClientTransport>(transport);
+    }
+
+    [Fact]
     public async Task CreateStdioTransport_UnconstrainedProfile_UsesExecutorWithNullPolicy()
     {
         if (!OperatingSystem.IsWindows())
@@ -43,7 +64,7 @@ public sealed class McpTransportFactoryTrustContextTests
         var trustContext = UnconstrainedContext();
 
         var transport = await McpTransportFactory.CreateMcpTransportAsync(
-            StdioTool("cmd"),
+            StdioTool(Uri.EscapeDataString(ComSpecPath)),
             services: null,
             NullLoggerFactory.Instance,
             CancellationToken.None,
@@ -55,7 +76,8 @@ public sealed class McpTransportFactoryTrustContextTests
         // Force lazy stdio-request construction via BuildProcessExecutionRequest through the
         // internal helper so we can assert the policy switch without launching.
         var request = McpTransportFactory.BuildProcessExecutionRequest(
-            McpTransportFactory.BuildStdioTransportOptions(new Uri("stdio://?command=cmd"), "srv"),
+            McpTransportFactory.BuildStdioTransportOptions(
+                new Uri($"stdio://?command={Uri.EscapeDataString(ComSpecPath)}"), "srv"),
             trustContext);
         Assert.Null(request.MxcPolicy);
     }
@@ -68,7 +90,8 @@ public sealed class McpTransportFactoryTrustContextTests
         var trustContext = ConstrainedContext();
 
         var request = McpTransportFactory.BuildProcessExecutionRequest(
-            McpTransportFactory.BuildStdioTransportOptions(new Uri("stdio://?command=cmd"), "srv"),
+            McpTransportFactory.BuildStdioTransportOptions(
+                new Uri($"stdio://?command={Uri.EscapeDataString(ComSpecPath)}"), "srv"),
             trustContext);
 
         Assert.NotNull(request.MxcPolicy);

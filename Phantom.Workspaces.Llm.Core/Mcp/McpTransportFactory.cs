@@ -73,6 +73,7 @@ internal static class McpTransportFactory
         IProcessExecutor? processExecutor = null)
     {
         ArgumentNullException.ThrowIfNull(tool);
+        processExecutor ??= services?.ProcessExecutor as IProcessExecutor;
 
         // #1416: resolve the Phantom transport mode from the (possibly Phantom-subclassed) tool. A
         // plain McpTool has no 'type' field, so it defaults to Streamable HTTP rather than the SDK's
@@ -532,20 +533,12 @@ internal static class McpTransportFactory
         IProcessExecutor? processExecutor = null,
         ILoggerFactory? loggerFactory = null)
     {
-        // Legacy in-process branch: no trust context / executor supplied — retain the SDK-owned
-        // StdioClientTransport so existing call sites that have not yet threaded the trust context
-        // continue to work while #1477 rolls out.
-        if (trustContext is null || processExecutor is null)
-        {
-            return new StdioClientTransport(BuildStdioTransportOptions(endpointUri, serverName));
-        }
-
         var options = BuildStdioTransportOptions(endpointUri, serverName);
         var executionRequest = BuildProcessExecutionRequest(options, trustContext);
         return new ProcessExecutorBackedClientTransport(
             string.IsNullOrWhiteSpace(options.Name) ? "mcp-stdio" : options.Name,
             executionRequest,
-            processExecutor,
+            processExecutor ?? new ProcessExecutor(),
             loggerFactory);
     }
 
@@ -558,10 +551,9 @@ internal static class McpTransportFactory
     /// </summary>
     internal static ProcessExecutionRequest BuildProcessExecutionRequest(
         StdioClientTransportOptions options,
-        AgentExecutionTrustContext trustContext)
+        AgentExecutionTrustContext? trustContext)
     {
         ArgumentNullException.ThrowIfNull(options);
-        ArgumentNullException.ThrowIfNull(trustContext);
 
         var originalArgs = options.Arguments is null
             ? Array.Empty<string>()
@@ -586,7 +578,7 @@ internal static class McpTransportFactory
             Environment = environment,
         };
 
-        if (trustContext.IsLaunchHost)
+        if (trustContext?.IsLaunchHost == true)
         {
             var compilation = trustContext.Compile();
             if (compilation.RequiresContainment)

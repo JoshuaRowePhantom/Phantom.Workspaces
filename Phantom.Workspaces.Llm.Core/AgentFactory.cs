@@ -537,9 +537,12 @@ public static class AgentFactory
             createAgentChatRequest.AgentSessionId,
             ct).ConfigureAwait(false);
 
-        await EnforceTrustProfileAsync(
+        var executionTrustContext = await ResolveExecutionTrustContextAsync(
             requestedAgentDefinition,
-            createAgentChatRequest.TrustProfileProvider);
+            createAgentChatRequest.TrustProfileProvider
+                ?? services?.TrustProfileResolver as Phantom.Workspaces.Llm.Trust.ITrustProfileProvider,
+            services,
+            ct);
 
         ChatHistoryProviderDefinition? definition = null;
         if (requestedAgentDefinition is PromptAgent promptAgent
@@ -614,6 +617,7 @@ public static class AgentFactory
                 AgentDefinition = requestedAgentDefinition,
                 AgentSessionId = createAgentChatRequest.AgentSessionId,
                 AgentServices = effectiveServices,
+                ExecutionTrustContext = executionTrustContext,
                 ConfiguredStore = configuredStore,
                 ClientOverride = services?.ChatClientOverride,
                 CancellationToken = CancellationToken.None,
@@ -1175,23 +1179,60 @@ public static class AgentFactory
         }
     }
 
-    private static async Task EnforceTrustProfileAsync(
+    internal static async Task<Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext?> ResolveExecutionTrustContextAsync(
         AgentDefinition? agentDefinition,
-        Phantom.Workspaces.Llm.Trust.ITrustProfileProvider? trustProfileProvider)
+        Phantom.Workspaces.Llm.Trust.ITrustProfileProvider? trustProfileProvider,
+        AgentServices? services,
+        CancellationToken cancellationToken)
     {
         if (agentDefinition is null || trustProfileProvider is null)
         {
-            return;
+            return null;
         }
 
-        var trustProfile = await Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
-            .ResolveAsync(agentDefinition, trustProfileProvider);
+        var profileReference = Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
+            .GetProfileReference(agentDefinition);
+        Phantom.Workspaces.Llm.Trust.TrustProfile? trustProfile;
+        string? revision = null;
+        if (!string.IsNullOrWhiteSpace(profileReference)
+            && trustProfileProvider is Phantom.Workspaces.Llm.Trust.IVersionedTrustProfileProvider versionedProvider)
+        {
+            var resolved = await versionedProvider
+                .ResolveVersionedAsync(profileReference, cancellationToken)
+                .ConfigureAwait(false);
+            trustProfile = resolved.Profile;
+            revision = resolved.Revision;
+        }
+        else
+        {
+            trustProfile = await Phantom.Workspaces.Llm.Trust.AgentTrustProfileResolver
+                .ResolveAsync(agentDefinition, trustProfileProvider, cancellationToken);
+        }
 
         if (trustProfile is not null && !trustProfile.AllowsLocalExecution())
         {
             throw new InvalidOperationException(
                 "The agent's trust profile does not permit local execution on this client instance.");
         }
+
+        if (trustProfile is null)
+        {
+            return null;
+        }
+
+        var compiler = services?.TrustProfilePolicyCompiler
+            as Phantom.Workspaces.Llm.Trust.ITrustProfileProcessPolicyCompiler
+            ?? new Phantom.Workspaces.Llm.Trust.MxcTrustProfilePolicyCompiler();
+        var remoteReference = string.IsNullOrWhiteSpace(profileReference)
+            ? null
+            : new Phantom.Workspaces.Llm.Trust.AgentExecutionTrustProfileReference(
+                "trust-profile",
+                profileReference,
+                revision);
+        return new Phantom.Workspaces.Llm.Trust.AgentExecutionTrustContext(
+            trustProfile,
+            compiler,
+            remoteReference);
     }
 
     private static Task<T> WithRequiredApiKeyForSdkAsync<T>(

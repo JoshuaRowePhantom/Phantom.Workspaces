@@ -6,6 +6,7 @@ using Phantom.Workspaces.Data;
 using Phantom.Workspaces.Llm;
 using Phantom.Workspaces.Llm.Core;
 using Phantom.Workspaces.Llm.Core.Transport;
+using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
@@ -67,7 +68,15 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // remote-bound McpToolContextProvider on another machine — is served by opening the requested
         // MCP server here and bridging its JSON-RPC back over the channel. Unrecognised connections
         // return null so the listener declines them.
-        this.RemoteMcpHostHandler = new RemoteMcpHostHandler(agentServices);
+        var remoteHostServices = (agentServices ?? new AgentServices()) with
+        {
+            ProcessExecutor = agentServices?.ProcessExecutor ?? new ProcessExecutor(),
+            TrustProfilePolicyCompiler =
+                agentServices?.TrustProfilePolicyCompiler ?? new MxcTrustProfilePolicyCompiler(),
+            TrustProfileResolver =
+                agentServices?.TrustProfileResolver ?? new DataAccessLayerTrustProfileResolver(dataAccessLayer),
+        };
+        this.RemoteMcpHostHandler = new RemoteMcpHostHandler(remoteHostServices);
         this.LocalListeners.Register(new Phantom.Workspaces.Transport.Mcp.McpTransportListener(
             this.RemoteMcpHostHandler.OpenAsync));
 

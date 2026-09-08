@@ -15,16 +15,22 @@ public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsync
     private readonly string stateKey = $"filesystem-service:{Guid.NewGuid():n}";
     private readonly ILoggerFactory? loggerFactory;
     private readonly string? editStoreConnectionJson;
+    private readonly Trust.AgentExecutionTrustContext? trustContext;
+    private readonly Processes.IProcessExecutor processExecutor;
     private readonly SemaphoreSlim initializeLock = new(1, 1);
     private McpClient? client;
 
     public FilesystemServiceContextProvider(
         string? editStoreConnectionJson = null,
-        ILoggerFactory? loggerFactory = null)
+        ILoggerFactory? loggerFactory = null,
+        Trust.AgentExecutionTrustContext? trustContext = null,
+        Processes.IProcessExecutor? processExecutor = null)
         : base(null, null, null)
     {
         this.editStoreConnectionJson = editStoreConnectionJson;
         this.loggerFactory = loggerFactory;
+        this.trustContext = trustContext;
+        this.processExecutor = processExecutor ?? new Processes.ProcessExecutor();
     }
 
     public override IReadOnlyList<string> StateKeys => [this.stateKey];
@@ -67,7 +73,7 @@ public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsync
 
     private async Task<McpClient> CreateClientAsync(ILoggerFactory? loggerFactory)
     {
-        var transport = CreateTransport(this.editStoreConnectionJson);
+        var transport = CreateTransport(this.editStoreConnectionJson, this.trustContext, this.processExecutor);
         return await McpClient.CreateAsync(
             transport,
             null,
@@ -75,7 +81,10 @@ public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsync
             CancellationToken.None);
     }
 
-    private static StdioClientTransport CreateTransport(string? editStoreConnectionJson)
+    private static IClientTransport CreateTransport(
+        string? editStoreConnectionJson,
+        Trust.AgentExecutionTrustContext? trustContext,
+        Processes.IProcessExecutor processExecutor)
     {
         var (command, arguments, workingDirectory) = ResolveCommand(editStoreConnectionJson);
         var transportOptions = new StdioClientTransportOptions
@@ -86,7 +95,12 @@ public sealed class FilesystemServiceContextProvider : AIContextProvider, IAsync
             WorkingDirectory = workingDirectory,
         };
 
-        return new StdioClientTransport(transportOptions);
+        var request = Mcp.McpTransportFactory.BuildProcessExecutionRequest(transportOptions, trustContext);
+        return new Mcp.ProcessExecutorBackedClientTransport(
+            transportOptions.Name,
+            request,
+            processExecutor,
+            loggerFactory: null);
     }
 
     private static (string Command, IList<string> Arguments, string WorkingDirectory) ResolveCommand(

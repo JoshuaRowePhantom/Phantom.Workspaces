@@ -2539,7 +2539,10 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         }
 
         var toolsetFactory = services?.ToolsetFactory ?? ToolsetFactory.CreateDefaultToolsetFactory();
-        var resolvedServices = services ?? new AgentServices();
+        var resolvedServices = (services ?? new AgentServices()) with
+        {
+            ExecutionTrustContext = this.request.ExecutionTrustContext,
+        };
         var providerTasks = customTools.Select(async tool =>
         {
             var provider = await toolsetFactory.CreateToolsetAsync(tool, resolvedServices);
@@ -2562,7 +2565,7 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
         // "gathering credentials"/"waiting for sign-in" running item without the Llm.Core.Mcp layer
         // needing any AgentChat reference. Chaining preserves any reporter a host already supplied.
         var hostReporter = services?.McpCredentialStatusReporter;
-        var mcpServices = (services ?? new AgentServices()) with
+        var mcpServices = resolvedServices with
         {
             McpCredentialStatusReporter = (server, status) =>
             {
@@ -2597,7 +2600,8 @@ public sealed class AgentChat : IAsyncDisposable, IServiceProvider, ISubAgentCha
                 Core.Transport.ExecutorTargetResolver.ForTool(tool),
                 mcpServices,
                 boundExecutor,
-                executorRouter);
+                executorRouter,
+                this.request.ExecutionTrustContext);
             this.RegisterOwnedResource(provider);
             return new RuntimeContextProviderRegistration(
                 tool,

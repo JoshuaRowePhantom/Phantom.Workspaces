@@ -101,6 +101,11 @@ public sealed class RemoteMcpHostHandler
         {
             return Task.FromResult<AgentExecutionTrustContext?>(null);
         }
+        if (string.IsNullOrWhiteSpace(expectedRevision))
+        {
+            throw new InvalidOperationException(
+                $"Remote MCP trust profile '{trustProfileRef}' must include an expected revision.");
+        }
 
         var resolver = this.services?.TrustProfileResolver as IRemoteTrustProfileResolver;
         var compiler = this.services?.TrustProfilePolicyCompiler as ITrustProfileProcessPolicyCompiler;

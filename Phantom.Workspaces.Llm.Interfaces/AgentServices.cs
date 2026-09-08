@@ -161,9 +161,15 @@ public sealed record AgentServices : IServiceProvider
     /// Optional policy-aware streaming process executor (issue #1474 / #1477). Typed as
     /// <see langword="object"/> to avoid a reverse project reference; consuming code casts to
     /// <c>Phantom.Workspaces.Llm.Processes.IProcessExecutor</c>. When null, stdio MCP servers use
-    /// the SDK-owned <c>StdioClientTransport</c> exactly as before.
+    /// Phantom's default policy-aware process executor.
     /// </summary>
     public object? ProcessExecutor { get; init; }
+
+    /// <summary>
+    /// Optional session execution-trust context used by built-in process-backed toolsets. Typed as
+    /// <see langword="object"/> to avoid a reverse project reference into Llm.Core.
+    /// </summary>
+    public object? ExecutionTrustContext { get; init; }
 
     public object? GetService(Type serviceType)
     {

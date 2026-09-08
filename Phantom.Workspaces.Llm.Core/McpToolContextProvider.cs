@@ -6,6 +6,7 @@ using AgentSchema;
 using System.Text.Json;
 using Phantom.Workspaces.Llm.Interfaces;
 using Phantom.Workspaces.Llm.Mcp;
+using Phantom.Workspaces.Llm.Processes;
 using Phantom.Workspaces.Llm.Core.Transport;
 using Phantom.Workspaces.Llm.Core.Manifest;
 using Phantom.Workspaces.Llm.Trust;
@@ -25,6 +26,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     private readonly McpTool tool;
     private readonly ILoggerFactory? loggerFactory;
     private readonly AgentServices? services;
+    private readonly AgentExecutionTrustContext? trustContext;
     private readonly SemaphoreSlim initializeLock = new(1, 1);
 
     // Per-component executor binding (issue #1438): the resolved connection-descriptor this MCP
@@ -61,8 +63,9 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         ExecutorTarget executorTarget = ExecutorTarget.AgentExecutor,
         AgentServices? services = null,
         JsonElement? boundExecutor = null,
-        ExecutorTargetRouter? router = null)
-        : this(tool, loggerFactory, executorTarget, services, boundExecutor, router, initializeOverride: null)
+        ExecutorTargetRouter? router = null,
+        AgentExecutionTrustContext? trustContext = null)
+        : this(tool, loggerFactory, executorTarget, services, boundExecutor, router, initializeOverride: null, trustContext)
     {
     }
 
@@ -73,7 +76,8 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         AgentServices? services,
         JsonElement? boundExecutor,
         ExecutorTargetRouter? router,
-        Func<CancellationToken, Task<AITool[]>>? initializeOverride)
+        Func<CancellationToken, Task<AITool[]>>? initializeOverride,
+        AgentExecutionTrustContext? trustContext = null)
         : base(null, null, null)
     {
         this.tool = tool;
@@ -81,6 +85,7 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
         this.services = services;
         this.boundExecutor = boundExecutor ?? ExecutorBindings.LocalDescriptor();
         this.router = router;
+        this.trustContext = trustContext;
         this.ExecutorTarget = executorTarget;
         this.initializeToolsAsync = initializeOverride ?? this.ConnectAndListToolsAsync;
     }
@@ -170,7 +175,9 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
                     this.services,
                     this.loggerFactory,
                     ct,
-                    clientIdOverride);
+                    clientIdOverride,
+                    this.trustContext,
+                    this.services?.ProcessExecutor as IProcessExecutor);
                 return await McpClient.CreateAsync(transport, null, this.loggerFactory, ct);
             },
             logger,
@@ -182,7 +189,19 @@ public sealed class McpToolContextProvider : AIContextProvider, IAsyncDisposable
     // handshake over it. The remote host (RemoteMcpHostHandler) opens the real MCP server there.
     private async Task<McpClient> ConnectRemoteAsync(CancellationToken cancellationToken)
     {
-        var request = McpConnectionRequest.FromTool(this.tool);
+        var reference = this.trustContext?.RemoteReference;
+        if (this.trustContext is not null && reference is null)
+        {
+            throw new InvalidOperationException(
+                "Remote MCP execution requires a revisioned trust-profile reference; "
+                + "an inline trust profile cannot be verified by the launch host.");
+        }
+        var request = reference is null
+            ? McpConnectionRequest.FromTool(this.tool)
+            : McpConnectionRequest.FromToolWithTrustProfileReference(
+                this.tool,
+                reference.Id,
+                reference.ExpectedRevision);
         this.remoteTransport = await this.router!.ConnectToDescriptorAsync(this.boundExecutor, cancellationToken);
 
         this.remoteChannel = new McpClientOverTransport(this.remoteTransport, request);

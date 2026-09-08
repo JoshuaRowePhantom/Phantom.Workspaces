@@ -4,6 +4,8 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using Phantom.Workspaces.Services;
+using Phantom.Workspaces.Llm.Processes;
+using Phantom.Workspaces.Llm.Trust;
 using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Tests;
@@ -59,15 +61,19 @@ public sealed class RemoteMcpHostHandlerTests
     [Fact]
     public async Task OpenAsync_StdioConnection_HostsServer()
     {
-        var handler = new RemoteMcpHostHandler();
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            ProcessExecutor = new RecordingProcessExecutor(),
+        });
         await using var channel = new StubMessageChannel();
+        var command = Uri.EscapeDataString(ComSpecPath);
 
         // A stdio connection descriptor selects the stdio branch of the shared factory
         // (McpTransportFactory.IsStdioEndpoint/CreateStdioTransport) rather than the HTTP branch.
         // Construction of the stdio transport is synchronous and the child process launch is lazy, so
         // the host session is live immediately; disposing tears the bridge down without a round-trip.
         var handle = await handler.OpenAsync(
-            Json("""{"type":"mcp","connection":{"server-name":"remote-stdio","endpoint":"stdio://?command=my-server"}}"""),
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"remote-stdio\",\"endpoint\":\"stdio://?command={command}\"}}}}"),
             channel,
             Ct());
 
@@ -118,22 +124,28 @@ public sealed class RemoteMcpHostHandlerTests
             new Phantom.Workspaces.Llm.Trust.RemoteTrustProfileResolution(
                 new Phantom.Workspaces.Llm.Trust.TrustProfile(),
                 Revision: "rev-1"));
+        var compiler = new RecordingPolicyCompiler();
+        var executor = new RecordingProcessExecutor();
         var services = new Phantom.Workspaces.Llm.AgentServices
         {
             TrustProfileResolver = resolver,
-            TrustProfilePolicyCompiler =
-                new Phantom.Workspaces.Llm.Trust.MxcTrustProfilePolicyCompiler(),
+            TrustProfilePolicyCompiler = compiler,
+            ProcessExecutor = executor,
         };
         var handler = new RemoteMcpHostHandler(services);
         await using var channel = new StubMessageChannel();
+        var command = Uri.EscapeDataString(ComSpecPath);
 
         var handle = await handler.OpenAsync(
-            Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=my-server","trust-profile-ref":"my-profile","trust-profile-revision":"rev-1"}}"""),
+            Json($"{{\"type\":\"mcp\",\"connection\":{{\"server-name\":\"srv\",\"endpoint\":\"stdio://?command={command}\",\"trust-profile-ref\":\"my-profile\",\"trust-profile-revision\":\"rev-1\"}}}}"),
             channel,
             Ct());
 
         Assert.NotNull(handle);
         Assert.Equal(1, resolver.ResolveCalls);
+        var launched = await executor.Started.Task.WaitAsync(Ct());
+        Assert.Equal(1, compiler.CompileCalls);
+        Assert.NotNull(launched.MxcPolicy);
         await handle!.DisposeAsync();
     }
 
@@ -164,6 +176,27 @@ public sealed class RemoteMcpHostHandlerTests
         Assert.Contains("revision", ex.Message);
     }
 
+    [Fact]
+    public async Task RemoteStdio_MissingTrustProfileRevision_RejectsLaunch()
+    {
+        var handler = new RemoteMcpHostHandler(new Phantom.Workspaces.Llm.AgentServices
+        {
+            TrustProfileResolver = new FakeRemoteTrustProfileResolver(
+                new RemoteTrustProfileResolution(new TrustProfile(), Revision: "current")),
+            TrustProfilePolicyCompiler = new RecordingPolicyCompiler(),
+            ProcessExecutor = new RecordingProcessExecutor(),
+        });
+        await using var channel = new StubMessageChannel();
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await handler.OpenAsync(
+                Json("""{"type":"mcp","connection":{"server-name":"srv","endpoint":"stdio://?command=cmd","trust-profile-ref":"my-profile"}}"""),
+                channel,
+                Ct()));
+
+        Assert.Contains("expected revision", exception.Message, StringComparison.Ordinal);
+    }
+
     private sealed class FakeRemoteTrustProfileResolver
         : Phantom.Workspaces.Llm.Trust.IRemoteTrustProfileResolver
     {
@@ -182,7 +215,62 @@ public sealed class RemoteMcpHostHandlerTests
         }
     }
 
+    private sealed class RecordingPolicyCompiler : ITrustProfileProcessPolicyCompiler
+    {
+        public int CompileCalls { get; private set; }
+
+        public TrustProfileProcessPolicyCompilation Compile(TrustProfile effectiveProfile)
+        {
+            CompileCalls++;
+            var policy = new MxcProcessPolicy(
+                MxcProcessPolicy.CurrentSchemaVersion,
+                [], [], [],
+                new Dictionary<string, string>(),
+                new MxcProcessContainment(
+                    MxcContainmentBackend.ProcessContainer,
+                    LeastPrivilege: true,
+                    LearningMode: false,
+                    PermissiveMode: false));
+            return new TrustProfileProcessPolicyCompilation(true, policy, []);
+        }
+    }
+
+    private sealed class RecordingProcessExecutor : IProcessExecutor
+    {
+        public TaskCompletionSource<ProcessExecutionRequest> Started { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IProcessHandle Start(ProcessExecutionRequest request)
+        {
+            Started.TrySetResult(request);
+            return new StubProcessHandle();
+        }
+    }
+
+    private sealed class StubProcessHandle : IProcessHandle
+    {
+        private readonly TaskCompletionSource<ProcessExitResult> exit =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Stream StandardInput { get; } = new MemoryStream();
+        public Stream StandardOutput { get; } = new MemoryStream();
+        public Stream StandardError { get; } = new MemoryStream();
+        public ProcessLaunchInfo LaunchInfo { get; } = new(1234, true, []);
+        public Task<ProcessExitResult> WaitAsync(CancellationToken cancellationToken = default)
+            => exit.Task.WaitAsync(cancellationToken);
+        public void Kill() => exit.TrySetResult(new ProcessExitResult(-1, false, null));
+        public ValueTask DisposeAsync()
+        {
+            exit.TrySetResult(new ProcessExitResult(0, false, null));
+            return ValueTask.CompletedTask;
+        }
+    }
+
     private static JsonElement Json(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    private static string ComSpecPath =>
+        Environment.GetEnvironmentVariable("ComSpec")
+        ?? Path.Combine(Environment.SystemDirectory, "cmd.exe");
 
     private static CancellationToken Ct() => new CancellationTokenSource(TimeSpan.FromSeconds(10)).Token;
 

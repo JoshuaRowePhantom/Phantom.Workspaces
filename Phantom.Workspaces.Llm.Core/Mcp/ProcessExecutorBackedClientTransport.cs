@@ -68,7 +68,7 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
             handle = executor.Start(request);
             drainCts = new CancellationTokenSource();
             stderrDrainer = new StderrDrainer(handle.StandardError, logger, Name, drainCts.Token);
-            var exitMonitor = MonitorExitAsync(handle, drainCts.Token);
+            var exitTask = handle.WaitAsync(drainCts.Token);
 
             var streamTransport = new StreamClientTransport(
                 handle.StandardInput,
@@ -80,7 +80,8 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
                 handle,
                 stderrDrainer,
                 drainCts,
-                exitMonitor);
+                exitTask,
+                Name);
         }
         catch
         {
@@ -107,28 +108,6 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
                 }
             }
             throw;
-        }
-    }
-
-    private async Task MonitorExitAsync(IProcessHandle handle, CancellationToken cancellationToken)
-    {
-        try
-        {
-            var result = await handle.WaitAsync(cancellationToken).ConfigureAwait(false);
-            if (result.ExitCode != 0)
-            {
-                logger.LogWarning(
-                    "MCP stdio server '{Name}' exited with code {ExitCode}.",
-                    Name,
-                    result.ExitCode);
-            }
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning(ex, "MCP stdio server '{Name}' exit monitor faulted.", Name);
         }
     }
 
@@ -202,16 +181,26 @@ public sealed class ProcessExecutorBackedClientTransport : IClientTransport
 
         private void AppendRolling(string line)
         {
+            var sanitized = new string(
+                line.Select(static character => char.IsControl(character) && character != '\t' ? ' ' : character)
+                    .ToArray());
+            if (sanitized.Length >= StderrRollingCapacity)
+                sanitized = sanitized[^StderrRollingCapacity..];
+
             lock (rollingLock)
             {
-                if (rolling.Length + line.Length + 1 > StderrRollingCapacity)
+                var separatorLength = rolling.Length > 0 ? 1 : 0;
+                var overflow = rolling.Length + separatorLength + sanitized.Length - StderrRollingCapacity;
+                if (overflow > 0)
                 {
-                    var drop = Math.Min(rolling.Length, line.Length + 1);
-                    rolling.Remove(0, drop);
+                    rolling.Remove(0, Math.Min(rolling.Length, overflow));
                 }
                 if (rolling.Length > 0)
                     rolling.Append('\n');
-                rolling.Append(line);
+                rolling.Append(sanitized);
+
+                if (rolling.Length > StderrRollingCapacity)
+                    rolling.Remove(0, rolling.Length - StderrRollingCapacity);
             }
         }
     }

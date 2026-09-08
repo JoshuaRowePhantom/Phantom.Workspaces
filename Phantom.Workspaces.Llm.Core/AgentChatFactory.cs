@@ -77,6 +77,13 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                 else
                 {
                     var effectiveServices = WithSelfAsFactory(services ?? _services);
+                    var trustProfileProvider =
+                        effectiveServices.TrustProfileResolver as Trust.ITrustProfileProvider;
+                    var executionTrustContext = await AgentFactory.ResolveExecutionTrustContextAsync(
+                        definition,
+                        trustProfileProvider,
+                        effectiveServices,
+                        ct).ConfigureAwait(false);
 
                     if (definition is not null)
                     {
@@ -96,6 +103,7 @@ internal sealed class AgentChatFactory : IRunningAgentChatFactory, IAsyncDisposa
                         AgentDefinition = definition,
                         AgentSessionId = sessionId.Value,
                         AgentServices = effectiveServices,
+                        ExecutionTrustContext = executionTrustContext,
                         ConfiguredStore = _store,
                         ClientOverride = effectiveServices.ChatClientOverride,
                         DisplayNameOverride = displayNameOverride,

@@ -13,3 +13,14 @@ public interface ITrustProfileProvider
     /// <param name="cancellationToken">A cancellation token.</param>
     ValueTask<TrustProfile> ResolveAsync(string profileName, CancellationToken cancellationToken = default);
 }
+
+/// <summary>A composed trust profile and the entity revision from which it was resolved.</summary>
+public sealed record VersionedTrustProfile(TrustProfile Profile, string? Revision);
+
+/// <summary>Optional extension for providers that can preserve the selected entity revision.</summary>
+public interface IVersionedTrustProfileProvider : ITrustProfileProvider
+{
+    ValueTask<VersionedTrustProfile> ResolveVersionedAsync(
+        string profileName,
+        CancellationToken cancellationToken = default);
+}

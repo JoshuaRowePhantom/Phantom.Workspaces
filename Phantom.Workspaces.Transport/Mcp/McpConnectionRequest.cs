@@ -269,13 +269,13 @@ public static class McpConnectionRequest
     {
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentException.ThrowIfNullOrWhiteSpace(trustProfileRef);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedRevision);
 
         var wire = FromTool(tool);
         var mutable = JsonObject.Create(wire) ?? new JsonObject();
         var connectionNode = mutable[ConnectionProperty] as JsonObject ?? new JsonObject();
         connectionNode[TrustProfileRefProperty] = trustProfileRef;
-        if (!string.IsNullOrWhiteSpace(expectedRevision))
-            connectionNode[TrustProfileRevisionProperty] = expectedRevision;
+        connectionNode[TrustProfileRevisionProperty] = expectedRevision;
         mutable[ConnectionProperty] = connectionNode;
         return JsonSerializer.Deserialize<JsonElement>(mutable.ToJsonString());
     }
