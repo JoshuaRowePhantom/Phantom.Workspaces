@@ -29,6 +29,20 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         this.runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
     }
 
+    internal RemoteAgentSessionHost(
+        IAgentSessionAttachAuthorizer authorizer,
+        IRemoteAgentSessionRuntimeRegistry runtimeRegistry,
+        IAgentSessionRuntimeContextFactory runtimeContextFactory)
+        : this(
+            authorizer,
+            runtimeRegistry,
+            runtimeContextFactory as IAgentSessionRuntimeHostFactory
+                ?? throw new ArgumentException(
+                    "The runtime context factory must provide host-side persistence and startup operations.",
+                    nameof(runtimeContextFactory)))
+    {
+    }
+
     internal async Task<AgentSessionRemoteStatus> GetStatusAsync(
         TransportPeerIdentity peer, AgentSessionOpenRequest request, CancellationToken ct = default)
     {
