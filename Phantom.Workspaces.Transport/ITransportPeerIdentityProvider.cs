@@ -7,11 +7,11 @@ internal interface ITransportPeerIdentityProvider
     TransportPeerIdentity GetRequiredIdentity(IMessageChannel channel);
 }
 
-internal sealed class TransportPeerIdentityProvider : ITransportPeerIdentityProvider
+public sealed class TransportPeerIdentityProvider : ITransportPeerIdentityProvider
 {
     private readonly ConditionalWeakTable<IMessageChannel, TransportPeerIdentity> identities = new();
 
-    internal void SetIdentity(IMessageChannel channel, TransportPeerIdentity identity)
+    public void SetIdentity(IMessageChannel channel, TransportPeerIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(channel);
         ArgumentNullException.ThrowIfNull(identity);

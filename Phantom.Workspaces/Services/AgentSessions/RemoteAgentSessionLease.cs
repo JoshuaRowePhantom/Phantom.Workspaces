@@ -14,13 +14,17 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     private readonly SemaphoreSlim transitionGate = new(1, 1);
     private readonly Dictionary<string, AttachmentState> attachments = new(StringComparer.Ordinal);
     private readonly Dictionary<Guid, CommandCacheEntry> commands = [];
+    private readonly Dictionary<AgentChatRunningItem, string> runningItemIds =
+        new(ReferenceEqualityComparer.Instance);
     private readonly TimeProvider timeProvider;
     private readonly Func<bool, CancellationToken, ValueTask> persistRetentionAsync;
     private readonly Func<CancellationToken, ValueTask> persistTerminalAsync;
     private readonly Func<AgentSessionSnapshot> snapshotFactory;
     private readonly AgentSessionOwnershipLease? ownershipLease;
+    private readonly IAsyncDisposable? runtimeLifetime;
     private HashSet<string> queueIds;
     private Task? termination;
+    private string terminalReason = "runtime-stopped";
     private bool fenced;
     private bool continueInBackground;
 
@@ -34,7 +38,8 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         Func<bool, CancellationToken, ValueTask>? persistRetentionAsync = null,
         Func<CancellationToken, ValueTask>? persistTerminalAsync = null,
         TimeProvider? timeProvider = null,
-        AgentSessionOwnershipLease? ownershipLease = null)
+        AgentSessionOwnershipLease? ownershipLease = null,
+        IAsyncDisposable? runtimeLifetime = null)
     {
         this.SessionId = !string.IsNullOrWhiteSpace(sessionId) ? sessionId : throw new ArgumentException("Session id is required.", nameof(sessionId));
         this.OwnershipGeneration = ownershipGeneration >= 0 ? ownershipGeneration : throw new ArgumentOutOfRangeException(nameof(ownershipGeneration));
@@ -46,6 +51,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.persistTerminalAsync = persistTerminalAsync ?? (_ => ValueTask.CompletedTask);
         this.timeProvider = timeProvider ?? TimeProvider.System;
         this.ownershipLease = ownershipLease;
+        this.runtimeLifetime = runtimeLifetime;
         this.Replay = new AgentSessionReplayBuffer(epoch, this.timeProvider);
         var initialQueues = this.Chat.InputQueues.Snapshot.Queues;
         this.queueIds = initialQueues.IsDefault
@@ -57,6 +63,11 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.Chat.TurnCompleted += this.OnTurnCompleted;
         this.Chat.InputQueues.Changed += this.OnQueuesChanged;
         ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged += this.OnRunningItemsChanged;
+        foreach (var item in this.Chat.RunningItems)
+        {
+            this.runningItemIds[item] = Guid.NewGuid().ToString("N");
+            item.Items.CollectionChanged += this.OnRunningItemUpdated;
+        }
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged += this.OnSubagentsChanged;
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged += this.OnModalsChanged;
     }
@@ -166,11 +177,23 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         if (stop) await this.TryTerminateAsync(ct).ConfigureAwait(false);
     }
 
-    internal ValueTask PublishAsync(
+    internal async ValueTask PublishAsync(
         AgentSessionServerEvent value, Guid correlationId = default, CancellationToken ct = default)
     {
-        var frame = this.Replay.Append(correlationId == default ? Guid.NewGuid() : correlationId, value);
-        return this.PublishFrameAsync(frame, ct);
+        AgentSessionServerFrame frame;
+        IMessageChannel[] channels;
+        lock (this.gate)
+        {
+            if (this.fenced) return;
+            frame = this.Replay.Append(correlationId == default ? Guid.NewGuid() : correlationId, value);
+            channels = this.attachments.Values
+                .Where(state => !state.Disconnected)
+                .Select(state => state.Channel)
+                .ToArray();
+        }
+        var serialized = AgentSessionProtocolCodec.SerializeFrame(frame);
+        foreach (var channel in channels)
+            await channel.Writer.WriteAsync(serialized, ct).ConfigureAwait(false);
     }
 
     internal async ValueTask<AgentSessionServerEvent> ExecuteCommandOnceAsync(
@@ -209,6 +232,12 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     }
 
     internal async ValueTask<bool> TryTerminateAsync(CancellationToken ct = default)
+        => await this.TerminateAsync("runtime-stopped", ct).ConfigureAwait(false);
+
+    internal async ValueTask ReportFatalFailureAsync(CancellationToken ct = default)
+        => await this.TerminateAsync("runtime-failed", ct).ConfigureAwait(false);
+
+    private async ValueTask<bool> TerminateAsync(string reason, CancellationToken ct)
     {
         await this.transitionGate.WaitAsync(ct).ConfigureAwait(false);
         Task task;
@@ -223,6 +252,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
                 else
                 {
                     this.fenced = true;
+                    this.terminalReason = reason;
                     task = this.termination = this.TerminateCoreAsync();
                 }
             }
@@ -275,12 +305,13 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     internal async ValueTask PublishToAttachmentAsync(
         string token, AgentSessionServerEvent value, CancellationToken ct)
     {
-        var frame = this.Replay.Append(Guid.NewGuid(), value);
+        AgentSessionServerFrame frame;
         IMessageChannel channel;
         lock (this.gate)
         {
             if (!this.attachments.TryGetValue(token, out var state) || state.Disconnected)
                 throw new ObjectDisposedException(nameof(RemoteAgentAttachmentLease));
+            frame = this.Replay.Append(Guid.NewGuid(), value);
             channel = state.Channel;
         }
         await channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
@@ -330,15 +361,6 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         }, ct: ct).ConfigureAwait(false);
     }
 
-    private async ValueTask PublishFrameAsync(AgentSessionServerFrame frame, CancellationToken ct)
-    {
-        IMessageChannel[] channels;
-        lock (this.gate)
-            channels = this.attachments.Values.Where(value => !value.Disconnected).Select(value => value.Channel).ToArray();
-        foreach (var channel in channels)
-            await channel.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
-    }
-
     private async Task TerminateCoreAsync()
     {
         AttachmentState[] states;
@@ -352,16 +374,37 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         this.Chat.TurnCompleted -= this.OnTurnCompleted;
         this.Chat.InputQueues.Changed -= this.OnQueuesChanged;
         ((INotifyCollectionChanged)this.Chat.RunningItems).CollectionChanged -= this.OnRunningItemsChanged;
+        lock (this.gate)
+        {
+            foreach (var item in this.runningItemIds.Keys)
+                item.Items.CollectionChanged -= this.OnRunningItemUpdated;
+            this.runningItemIds.Clear();
+        }
         ((INotifyCollectionChanged)this.Chat.SubAgents).CollectionChanged -= this.OnSubagentsChanged;
         ((INotifyCollectionChanged)this.Chat.Modals).CollectionChanged -= this.OnModalsChanged;
-        await this.Chat.DisposeAsync().ConfigureAwait(false);
-        await this.persistTerminalAsync(CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            if (this.runtimeLifetime is not null)
+                await this.runtimeLifetime.DisposeAsync().ConfigureAwait(false);
+            else
+                await this.Chat.DisposeAsync().ConfigureAwait(false);
+        }
+        catch { }
+        try { await this.persistTerminalAsync(CancellationToken.None).ConfigureAwait(false); }
+        catch { }
         if (this.ownershipLease is not null)
-            await this.ownershipLease.ReleaseAsync().ConfigureAwait(false);
+        {
+            try { await this.ownershipLease.ReleaseAsync().ConfigureAwait(false); }
+            catch { }
+        }
         var terminal = this.Replay.Append(Guid.NewGuid(), new SessionTerminalEvent
         {
-            Reason = "runtime-stopped",
-            CompletionState = System.Text.Json.JsonSerializer.SerializeToElement(new { stopped = true }),
+            Reason = this.terminalReason,
+            CompletionState = System.Text.Json.JsonSerializer.SerializeToElement(new
+            {
+                stopped = true,
+                failed = this.terminalReason == "runtime-failed",
+            }),
         });
         foreach (var state in states)
         {
@@ -423,7 +466,58 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     }
 
     private void OnRunningItemsChanged(object? sender, NotifyCollectionChangedEventArgs args)
-        => this.PublishFromOwner(new BusyChangedEvent { IsBusy = this.Chat.IsBusy });
+    {
+        lock (this.gate)
+        {
+            if (this.fenced) return;
+            if (args.OldItems is not null)
+            {
+                foreach (AgentChatRunningItem item in args.OldItems)
+                {
+                    item.Items.CollectionChanged -= this.OnRunningItemUpdated;
+                    if (this.runningItemIds.Remove(item, out var runId))
+                    {
+                        this.PublishFromOwner(new StreamingCompletedEvent
+                        {
+                            RunId = runId,
+                            Item = JsonSerializer.SerializeToElement(item),
+                        });
+                    }
+                }
+            }
+            if (args.NewItems is not null)
+            {
+                foreach (AgentChatRunningItem item in args.NewItems)
+                {
+                    var runId = Guid.NewGuid().ToString("N");
+                    this.runningItemIds[item] = runId;
+                    item.Items.CollectionChanged += this.OnRunningItemUpdated;
+                    this.PublishFromOwner(new StreamingStartedEvent
+                    {
+                        RunId = runId,
+                        Item = JsonSerializer.SerializeToElement(item),
+                    });
+                }
+            }
+            this.PublishFromOwner(new BusyChangedEvent { IsBusy = this.Chat.IsBusy });
+        }
+    }
+
+    private void OnRunningItemUpdated(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        if (sender is not ICollection<AgentChatHistoryItem> items) return;
+        lock (this.gate)
+        {
+            if (this.fenced) return;
+            var entry = this.runningItemIds.FirstOrDefault(pair => ReferenceEquals(pair.Key.Items, items));
+            if (entry.Key is null) return;
+            this.PublishFromOwner(new StreamingUpdatedEvent
+            {
+                RunId = entry.Value,
+                Update = JsonSerializer.SerializeToElement(entry.Key),
+            });
+        }
+    }
 
     private void OnSubagentsChanged(object? sender, NotifyCollectionChangedEventArgs args)
         => this.PublishFromOwner(new SubagentsChangedEvent

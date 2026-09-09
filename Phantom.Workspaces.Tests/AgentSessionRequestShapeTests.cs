@@ -33,6 +33,10 @@ public sealed class AgentSessionRequestShapeTests
             TotalReasoningTokenCount = 5L,
             TotalSessionCostUsd = 0.25d,
         };
+        Assert.Equal(1L, usage.TotalInputTokenCount);
+        Assert.Equal(2L, usage.TotalOutputTokenCount);
+        Assert.Equal(3L, usage.TotalCacheReadTokenCount);
+        Assert.Equal(4L, usage.TotalCacheWriteTokenCount);
         Assert.Equal(5L, usage.TotalReasoningTokenCount);
         Assert.Equal(0.25d, usage.TotalSessionCostUsd);
     }
@@ -45,8 +49,16 @@ public sealed class AgentSessionRequestShapeTests
                 attribute => attribute.AttributeType == typeof(System.Runtime.CompilerServices.RequiredMemberAttribute)))
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-        Assert.Contains(nameof(AgentInformation.AgentSessionId), required);
-        Assert.Contains(nameof(AgentInformation.AgentDefinition), required);
+        Assert.Equal(new[]
+        {
+            nameof(AgentInformation.AcceptsUserInput),
+            nameof(AgentInformation.AgentDefinition),
+            nameof(AgentInformation.AgentId),
+            nameof(AgentInformation.AgentSessionId),
+            nameof(AgentInformation.Description),
+            nameof(AgentInformation.DisplayName),
+            nameof(AgentInformation.Name),
+        }, required.Order(StringComparer.Ordinal));
         Assert.DoesNotContain(nameof(AgentInformation.CurrentModelId), required);
     }
 
@@ -67,6 +79,11 @@ public sealed class AgentSessionRequestShapeTests
             AgentDefinition = definition,
         };
         Assert.Equal("session", information.AgentSessionId);
+        Assert.Equal("agent", information.AgentId);
+        Assert.Equal("name", information.Name);
+        Assert.Equal("Agent", information.DisplayName);
+        Assert.Equal("Description", information.Description);
+        Assert.Equal("echo", information.CurrentModelId);
         Assert.Same(definition, information.AgentDefinition);
         Assert.True(information.AcceptsUserInput);
     }

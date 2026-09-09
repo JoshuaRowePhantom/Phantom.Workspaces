@@ -228,30 +228,50 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
     [Fact]
     public async Task RuntimeDispose_ActiveAttachments_DisposesChildrenPersistsThenEmitsOneTerminal()
     {
-        var persisted = false;
+        var order = new List<string>();
         var channel = new TestChannel();
         var chat = Chat();
-        chat.Setup(value => value.DisposeAsync()).Callback(() => persisted = true).Returns(ValueTask.CompletedTask);
+        var childRuntime = new Mock<IAsyncDisposable>();
+        childRuntime.Setup(value => value.DisposeAsync())
+            .Callback(() => order.Add("child"))
+            .Returns(ValueTask.CompletedTask);
+        chat.Setup(value => value.DisposeAsync())
+            .Callback(() => order.Add("root"))
+            .Returns(ValueTask.CompletedTask);
+        var runtimeTree = new RuntimeTree(chat.Object, childRuntime.Object);
         await using var lease = new RemoteAgentSessionLease(
             "session", 1, Epoch(), chat.Object, true, () => null!,
             persistTerminalAsync: _ =>
             {
-                Assert.True(persisted);
+                order.Add("persist");
                 return ValueTask.CompletedTask;
-            });
+            },
+            runtimeLifetime: runtimeTree);
         lease.Attach(new AttachRemoteAgentSessionRequest { AttachmentToken = "a", Channel = channel });
         await lease.DisposeAsync();
         var frames = new List<JsonElement>();
         while (channel.Reader.TryRead(out var frame)) frames.Add(frame);
+        Assert.Equal(["child", "root", "persist"], order);
         Assert.Single(frames, frame => frame.GetRawText().Contains("session-terminal", StringComparison.Ordinal));
         Assert.True(channel.IsDisposed);
+        childRuntime.Verify(value => value.DisposeAsync(), Times.Once);
     }
 
     [Fact]
     public async Task RuntimeDispose_ActiveTurn_FencesInterruptsPersistsTerminalThenClosesChannels()
     {
         var order = new List<string>();
+        TestChannel? channel = null;
+        channel = new TestChannel(() =>
+        {
+            var sawTerminal = false;
+            while (channel!.Reader.TryRead(out var frame))
+                sawTerminal |= frame.GetRawText().Contains("session-terminal", StringComparison.Ordinal);
+            Assert.True(sawTerminal);
+            order.Add("close");
+        });
         var chat = Chat();
+        chat.SetupGet(value => value.IsBusy).Returns(true);
         chat.Setup(value => value.Interrupt()).Callback(() => order.Add("interrupt"));
         chat.Setup(value => value.DisposeAsync()).Callback(() => order.Add("dispose")).Returns(ValueTask.CompletedTask);
         await using var lease = Lease(true, chat: chat.Object, persistTerminal: _ =>
@@ -259,20 +279,41 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
             order.Add("persist");
             return ValueTask.CompletedTask;
         });
+        lease.Attach(new AttachRemoteAgentSessionRequest { AttachmentToken = "active", Channel = channel });
         await lease.DisposeAsync();
-        Assert.Equal(["interrupt", "dispose", "persist"], order);
+        Assert.Equal(["interrupt", "dispose", "persist", "close"], order);
         Assert.True(lease.IsFenced);
     }
 
     [Fact]
-    public async Task HostCrash_Restart_RecordsInterruptedEpochStoppedAndPreservesPreference()
+    public async Task RuntimeDispose_CleanupFailures_StillEmitsTerminalBeforeClosingChannel()
     {
-        var oldEpoch = Epoch();
-        await using var recovered = new RemoteAgentSessionLease(
-            "session", 2, Epoch(), Chat().Object, true, () => null!);
-        Assert.NotEqual(oldEpoch, recovered.Epoch);
-        Assert.True(recovered.ContinueInBackground);
-        Assert.Equal(2, recovered.OwnershipGeneration);
+        TestChannel? channel = null;
+        channel = new TestChannel(() =>
+        {
+            var sawTerminal = false;
+            while (channel!.Reader.TryRead(out var frame))
+                sawTerminal |= frame.GetRawText().Contains("session-terminal", StringComparison.Ordinal);
+            Assert.True(sawTerminal);
+        });
+        var runtimeTree = new Mock<IAsyncDisposable>();
+        runtimeTree.Setup(value => value.DisposeAsync())
+            .ThrowsAsync(new InvalidOperationException("runtime cleanup failed"));
+        await using var lease = new RemoteAgentSessionLease(
+            "session", 1, Epoch(), Chat().Object, true, () => null!,
+            persistTerminalAsync: _ => ValueTask.FromException(
+                new InvalidOperationException("persistence failed")),
+            runtimeLifetime: runtimeTree.Object);
+        lease.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "active",
+            Channel = channel,
+        });
+
+        await lease.DisposeAsync();
+
+        Assert.True(channel.IsDisposed);
+        Assert.True(lease.IsFenced);
     }
 
     private static PersistedAgentSessionRuntimeIntent Intent() => new()
@@ -309,6 +350,15 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         return chat;
     }
 
+    private sealed class RuntimeTree(IAgentChat root, IAsyncDisposable child) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await child.DisposeAsync();
+            await root.DisposeAsync();
+        }
+    }
+
     private static RuntimeEpoch Epoch() => new() { Value = Guid.NewGuid() };
     private static AttachRemoteAgentSessionRequest Attach(string token) => new()
     {
@@ -316,7 +366,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         Channel = new TestChannel(),
     };
 
-    private sealed class TestChannel : IMessageChannel
+    private sealed class TestChannel(Action? onDispose = null) : IMessageChannel
     {
         private readonly Channel<JsonElement> channel = Channel.CreateUnbounded<JsonElement>();
         public ChannelWriter<JsonElement> Writer => this.channel.Writer;
@@ -325,6 +375,7 @@ public sealed class RemoteAgentSessionRuntimeRegistryTests
         public ValueTask DisposeAsync()
         {
             this.IsDisposed = true;
+            onDispose?.Invoke();
             this.channel.Writer.TryComplete();
             return ValueTask.CompletedTask;
         }

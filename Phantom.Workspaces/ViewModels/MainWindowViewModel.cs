@@ -912,7 +912,8 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
             this.entityBroker!.EntityRepository.DataAccessLayer,
             this.entityBroker.EntityRepository.WorkspaceEntitySession,
             hubFactories,
-            registryProvider: this.applicationServices.TransportFactoryRegistryProvider);
+            registryProvider: this.applicationServices.TransportFactoryRegistryProvider,
+            runningAgentChats: this.applicationServices.RunningAgentChats);
         this.transportComposition = composition;
         this.trustedExecutorSelector.SetRemoteExecutor(composition.TrustedExecutor);
         await composition.StartAsync();
@@ -4602,5 +4603,4 @@ public sealed class MainWindowViewModel : ViewModelBase, IProfileAppearanceContr
         await base.DisposeAsync();
     }
 }
-
 

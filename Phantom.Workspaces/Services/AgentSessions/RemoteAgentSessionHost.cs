@@ -31,18 +31,6 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         this.runtimeFactory = runtimeFactory ?? throw new ArgumentNullException(nameof(runtimeFactory));
     }
 
-    internal RemoteAgentSessionHost(
-        IAgentSessionAttachAuthorizer authorizer,
-        IRemoteAgentSessionRuntimeRegistry runtimeRegistry,
-        IAgentSessionRuntimeContextFactory runtimeContextFactory)
-        : this(
-            authorizer,
-            runtimeRegistry,
-            runtimeContextFactory as IAgentSessionRuntimeHostFactory
-                ?? new ContextOnlyRuntimeHostFactory(runtimeContextFactory))
-    {
-    }
-
     internal async Task<AgentSessionRemoteStatus> GetStatusAsync(
         TransportPeerIdentity peer, AgentSessionOpenRequest request, CancellationToken ct = default)
     {
@@ -118,9 +106,18 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         }
         var attachment = initial.Attachment;
         attachment.StartReceiving((command, token) =>
-            this.HandleCommandAsync(request.Peer, open, runtime, attachment, command, token));
+            this.DispatchCommandAsync(request.Peer, open, runtime, attachment, command, token));
         return attachment;
     }
+
+    internal ValueTask DispatchCommandAsync(
+        TransportPeerIdentity peer,
+        AgentSessionOpenRequest open,
+        RemoteAgentSessionLease runtime,
+        RemoteAgentAttachmentLease attachment,
+        AgentSessionCommand command,
+        CancellationToken ct = default)
+        => this.HandleCommandAsync(peer, open, runtime, attachment, command, ct);
 
     internal Task TakeOverAsync(
         TransportPeerIdentity peer, AgentSessionTakeoverRequest request, CancellationToken ct = default)
@@ -167,6 +164,18 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             throw new AgentSessionTakeoverBlockedException();
         if (!await this.runtimeFactory.TryTakeOverAsync(request, ct).ConfigureAwait(false))
             throw new AgentSessionTakeoverBlockedException();
+        var replacement = await this.runtimeFactory.LoadIntentAsync(request.AgentSessionId, ct).ConfigureAwait(false);
+        if (replacement is null
+            || replacement.OwnershipGeneration != request.ExpectedOwnershipGeneration + 1
+            || !string.Equals(
+                replacement.OwningProfileEntityId,
+                request.NewOwningProfileEntityId,
+                StringComparison.OrdinalIgnoreCase))
+            throw new AgentSessionTakeoverBlockedException();
+        await this.runtimeRegistry.GetOrStartAsync(
+            replacement,
+            token => this.runtimeFactory.StartAsync(replacement, token),
+            ct).ConfigureAwait(false);
     }
 
     private async ValueTask HandleCommandAsync(
@@ -213,13 +222,13 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
                 await attachment.DisposeAsync().ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception)
+        catch (Exception error)
         {
             await attachment.PublishAsync(new OperationErrorEvent
             {
                 Error = new RemoteAgentOperationError
                 {
-                    Code = "operation-failed",
+                    Code = error is AgentSessionUnavailableException ? "unauthorized" : "internal-error",
                     Operation = command.Type,
                     IsRetryable = false,
                     Message = "The operation could not be completed.",
@@ -302,6 +311,23 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
             default:
                 throw new InvalidOperationException("Unsupported agent session command.");
         }
+        if (result is AgentInputQueueCommandResult queueResult
+            && queueResult.Status is AgentInputQueueCommandStatus.Conflict or AgentInputQueueCommandStatus.Rejected)
+        {
+            return new OperationErrorEvent
+            {
+                Error = new RemoteAgentOperationError
+                {
+                    Code = queueResult.Status == AgentInputQueueCommandStatus.Conflict ? "conflict" : "rejected",
+                    Operation = command.Type,
+                    IsRetryable = queueResult.Status == AgentInputQueueCommandStatus.Conflict,
+                    Message = queueResult.Status == AgentInputQueueCommandStatus.Conflict
+                        ? "The queue changed before this command was applied."
+                        : "The queue command was rejected.",
+                    CorrelationId = command.CorrelationId,
+                },
+            };
+        }
         return new CommandCompletedEvent
         {
             CommandId = command.CommandId,
@@ -311,26 +337,6 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
 
     private static IReadOnlyList<ChatMessage> DeserializeMessages(JsonElement messages)
         => JsonSerializer.Deserialize<ChatMessage[]>(messages) ?? throw new InvalidOperationException("Messages are required.");
-}
-
-internal sealed class ContextOnlyRuntimeHostFactory : IAgentSessionRuntimeHostFactory
-{
-    private readonly IAgentSessionRuntimeContextFactory contextFactory;
-
-    internal ContextOnlyRuntimeHostFactory(IAgentSessionRuntimeContextFactory contextFactory)
-        => this.contextFactory = contextFactory ?? throw new ArgumentNullException(nameof(contextFactory));
-
-    public ValueTask<PersistedAgentSessionRuntimeIntent?> LoadIntentAsync(string sessionId, CancellationToken ct)
-    {
-        ct.ThrowIfCancellationRequested();
-        return ValueTask.FromResult<PersistedAgentSessionRuntimeIntent?>(null);
-    }
-
-    public Task<RemoteAgentSessionLease> StartAsync(PersistedAgentSessionRuntimeIntent intent, CancellationToken ct)
-        => throw new InvalidOperationException("A persisted session entity is required to create the runtime context.");
-
-    public ValueTask<bool> TryTakeOverAsync(AgentSessionTakeoverRequest request, CancellationToken ct)
-        => ValueTask.FromResult(false);
 }
 
 internal sealed class AgentSessionUnavailableException : Exception;

@@ -2,7 +2,10 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Moq;
 using Phantom.Workspaces.Data;
+using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Services;
 using Phantom.Workspaces.Transport;
 using Phantom.Workspaces.Transport.Chat;
@@ -126,6 +129,42 @@ public sealed class WorkspacesTransportCompositionTests
 
         Assert.NotNull(handle);
         await handle!.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task Composition_WithRunningChats_AuthenticatesAndDispatchesAgentSessionLocally()
+    {
+        var dataAccessLayer = new EntityLookupDataAccessLayer(
+            (LocalProfileId, """{"entity-id":"11111111-1111-1111-1111-111111111111"}"""));
+        var session = new WorkspaceEntitySession
+        {
+            UserEntityId = new EntityId("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            ComputerEntityId = new EntityId("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+            UserComputerProfileEntityId = LocalProfileId,
+        };
+        await using var composition = new WorkspacesTransportComposition(
+            dataAccessLayer,
+            session,
+            runningAgentChats: Mock.Of<IRunningAgentChatTable>());
+        using var localDescriptor = JsonDocument.Parse("""{"type":"local"}""");
+        await using var transport = await composition.TransportFactoryRegistry.ConnectToAsync(
+            localDescriptor.RootElement, Ct());
+        var request = AgentSessionProtocolCodec.SerializeOpen(new AgentSessionOpenRequest
+        {
+            ProtocolVersion = 1,
+            AgentSessionId = "missing",
+            ExpectedOwningProfileEntityId = LocalProfileId.ToString(),
+            ExpectedOwnershipGeneration = 1,
+            OpenIntent = AgentSessionOpenIntent.Attach,
+            AttachmentToken = Guid.NewGuid().ToString("N"),
+            Capabilities = [],
+        });
+
+        await using var channel = await transport.ConnectToMessageChannelAsync(request, Ct());
+        var response = await channel.Reader.ReadAsync(Ct());
+
+        Assert.Contains("not-found", response.GetRawText(), StringComparison.Ordinal);
+        Assert.NotNull(composition.AgentSessionPeerIdentities);
     }
 
     [Fact]
@@ -284,7 +323,7 @@ public sealed class WorkspacesTransportCompositionTests
             => throw new System.NotSupportedException();
 
         public Task<QueryResult> QueryAsync(QueryRequest request, CancellationToken cancellationToken = default)
-            => throw new System.NotSupportedException();
+            => Task.FromResult(new QueryResult { Batches = [] });
 
         public Task<GetHistoryResult> GetHistoryAsync(GetHistoryRequest request, CancellationToken cancellationToken = default)
             => throw new System.NotSupportedException();

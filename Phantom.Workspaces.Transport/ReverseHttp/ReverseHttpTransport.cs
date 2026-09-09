@@ -13,6 +13,7 @@ namespace Phantom.Workspaces.Transport.ReverseHttp;
 public sealed class ReverseHttpTransport : ITransport
 {
     private readonly IMessageChannel registrationChannel;
+    private readonly TransportPeerIdentity? authenticatedPeer;
     private readonly ConcurrentDictionary<string, ReverseHttpMessageChannel> channels = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DispatchedStream> streams = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource shutdown = new();
@@ -24,9 +25,12 @@ public sealed class ReverseHttpTransport : ITransport
     private readonly TaskCompletionSource<TransportException?> relayReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task readLoop;
 
-    public ReverseHttpTransport(IMessageChannel registrationChannel)
+    public ReverseHttpTransport(
+        IMessageChannel registrationChannel,
+        TransportPeerIdentity? authenticatedPeer = null)
     {
         this.registrationChannel = registrationChannel ?? throw new ArgumentNullException(nameof(registrationChannel));
+        this.authenticatedPeer = authenticatedPeer;
         this.readLoop = this.RunReadLoopAsync();
     }
 
@@ -39,6 +43,13 @@ public sealed class ReverseHttpTransport : ITransport
         {
             type = "channel-open",
             channelId,
+            authenticatedPeer = this.authenticatedPeer is null ? null : new
+            {
+                authenticationScheme = this.authenticatedPeer.AuthenticationScheme,
+                stablePeerId = this.authenticatedPeer.StablePeerId,
+                userEntityId = this.authenticatedPeer.UserEntityId,
+                userComputerProfileEntityId = this.authenticatedPeer.UserComputerProfileEntityId,
+            },
             request = JsonSerializer.Deserialize<JsonElement>(request.GetRawText()),
         }));
         await this.registrationChannel.Writer.WriteAsync(document.RootElement.Clone(), ct).ConfigureAwait(false);

@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading.Channels;
 using AgentSchema;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
 using Moq;
 using Phantom.Workspaces.Llm;
@@ -81,10 +82,40 @@ public sealed partial class RemoteAgentSessionHostTests
     [Fact]
     public async Task OpenAsync_ChildSubagent_ReauthorizesMembership()
     {
-        var childRegistry = new Mock<IAgentSessionChildRegistry>();
-        childRegistry.Setup(value => value.ContainsAsync("session", 1, "child", It.IsAny<CancellationToken>()))
-            .ReturnsAsync(true);
-        Assert.True(await childRegistry.Object.ContainsAsync("session", 1, "child"));
+        await using var fixture = new HostFixture();
+        var childChecks = 0;
+        fixture.Authorizer.Setup(value => value.AuthorizeAsync(
+                It.IsAny<TransportPeerIdentity>(),
+                It.Is<AgentSessionAuthorizationRequest>(request =>
+                    request.Operation == AgentSessionAuthorizationOperation.OpenSubagent
+                    && request.ChildAgentId == "child"),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new AgentSessionAuthorizationDecision
+            {
+                IsAllowed = ++childChecks == 1,
+            });
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        var command = new OpenSubagentCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = fixture.Runtime.Epoch,
+            AgentId = "child",
+        };
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment, command);
+        var first = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+            AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync()));
+        Assert.IsType<CommandCompletedEvent>(first);
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment,
+            command with { CommandId = Guid.NewGuid() });
+        var denied = Assert.IsType<OperationErrorEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
+        Assert.Equal("unauthorized", denied.Error.Code);
+        Assert.Equal(2, childChecks);
     }
 
     [Fact]
@@ -119,51 +150,131 @@ public sealed partial class RemoteAgentSessionHostTests
 
     [Fact]
     public async Task QueueCommand_StaleExpectedRevision_ReturnsConflictWithoutMutation()
-        => await AssertQueueResultAsync("conflict", changed: false);
+    {
+        await using var fixture = new HostFixture();
+        fixture.Queues.Setup(value => value.CreateQueueAsync(
+                It.IsAny<CreateAgentInputQueueRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateAgentInputQueueRequest request, CancellationToken _) =>
+                new AgentInputQueueCommandResult
+                {
+                    CommandId = request.CommandId,
+                    Status = AgentInputQueueCommandStatus.Conflict,
+                    Revision = 2,
+                    ErrorCode = "stale-revision",
+                });
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment,
+            Command(fixture.Runtime.Epoch));
+        var result = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
+        Assert.Equal("conflict", Assert.IsType<OperationErrorEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(result)).Error.Code);
+        fixture.Queues.Verify(value => value.CreateQueueAsync(
+            It.Is<CreateAgentInputQueueRequest>(request => request.ExpectedRevision == 1),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
 
     [Fact]
     public async Task QueueCommand_InvalidQueueOrItem_ReturnsRejectedWithoutDelta()
-        => await AssertQueueResultAsync("rejected", changed: false);
+    {
+        await using var fixture = new HostFixture();
+        fixture.Queues.Setup(value => value.CreateQueueAsync(
+                It.IsAny<CreateAgentInputQueueRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateAgentInputQueueRequest request, CancellationToken _) =>
+                new AgentInputQueueCommandResult
+                {
+                    CommandId = request.CommandId,
+                    Status = AgentInputQueueCommandStatus.Rejected,
+                    Revision = 1,
+                    ErrorCode = "invalid-queue",
+                });
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        var before = fixture.Runtime.Replay.HighWaterMark;
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment,
+            Command(fixture.Runtime.Epoch));
+        var result = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
+        Assert.Equal("rejected", Assert.IsType<OperationErrorEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(result)).Error.Code);
+        Assert.Equal(before + 1, fixture.Runtime.Replay.HighWaterMark);
+    }
 
     [Fact]
     public async Task SetToolEnabledCommand_EachMutation_ReauthorizesAndBroadcastsToolsEvent()
     {
         await using var fixture = new HostFixture();
-        var before = fixture.Runtime.Replay.HighWaterMark;
-        fixture.Chat.Raise(value => value.ToolsChanged += null, EventArgs.Empty);
-        Assert.True(fixture.Runtime.Replay.HighWaterMark > before);
+        fixture.Chat.Setup(value => value.SetToolEnabledAsync("tool", true, It.IsAny<CancellationToken>()))
+            .Callback(() => fixture.Chat.Raise(value => value.ToolsChanged += null, EventArgs.Empty))
+            .Returns(Task.CompletedTask);
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment,
+            new SetToolEnabledCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = fixture.Runtime.Epoch,
+            ToolId = "tool",
+            Enabled = true,
+        });
+        var frames = new[]
+        {
+            AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync()),
+            AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync()),
+        };
+        Assert.Contains(frames, frame =>
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame) is ToolsChangedEvent);
+        fixture.Authorizer.Verify(value => value.AuthorizeAsync(
+            It.IsAny<TransportPeerIdentity>(),
+            It.Is<AgentSessionAuthorizationRequest>(request =>
+                request.Operation == AgentSessionAuthorizationOperation.SetToolState),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
     public async Task QueueCommand_Applied_BroadcastsOneOrderedDeltaToEveryViewer()
     {
         await using var fixture = new HostFixture();
-        await using var first = fixture.Runtime.Attach(new AttachRemoteAgentSessionRequest
-        {
-            AttachmentToken = "a", Channel = new DuplexChannel(),
-        });
-        await using var second = fixture.Runtime.Attach(new AttachRemoteAgentSessionRequest
-        {
-            AttachmentToken = "b", Channel = new DuplexChannel(),
-        });
-        var before = fixture.Runtime.Replay.HighWaterMark;
-        fixture.Queues.Raise(value => value.Changed += null, EventArgs.Empty);
-        Assert.Equal(before + 1, fixture.Runtime.Replay.HighWaterMark);
-        Assert.Equal(2, fixture.Runtime.ViewerCount);
+        var secondChannel = new DuplexChannel();
+        SetupAppliedQueue(fixture, 4);
+        await using var first = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach, token: "a"));
+        await using var second = await fixture.Host.OpenAsync(
+            fixture.Request(AgentSessionOpenIntent.Attach, secondChannel, "b"));
+        await fixture.Channel.Output.ReadAsync();
+        await fixture.Channel.Output.ReadAsync();
+        await secondChannel.Output.ReadAsync();
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, first,
+            Command(fixture.Runtime.Epoch));
+        var firstDelta = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
+        var secondDelta = AgentSessionProtocolCodec.DeserializeFrame(await secondChannel.Output.ReadAsync());
+        Assert.Equal(firstDelta.Sequence, secondDelta.Sequence);
+        Assert.Equal(4, Assert.IsType<QueueChangedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(firstDelta)).Revision);
+        await secondChannel.DisposeAsync();
     }
 
     [Fact]
     public async Task QueueCommand_Applied_TaskCompletesAfterAuthoritativeRevisionApplied()
     {
         await using var fixture = new HostFixture();
-        var revision = 0L;
-        fixture.Queues.SetupGet(value => value.Snapshot).Returns(() => new AgentInputQueuesSnapshot
-        {
-            Revision = revision, Queues = [],
-        });
-        revision = 3;
-        fixture.Queues.Raise(value => value.Changed += null, EventArgs.Empty);
-        Assert.Equal(1, fixture.Runtime.Replay.HighWaterMark);
+        SetupAppliedQueue(fixture, 3);
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        await fixture.Host.DispatchCommandAsync(
+            Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment,
+            Command(fixture.Runtime.Epoch));
+        var delta = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
+        var completed = AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync());
+        Assert.IsType<QueueChangedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(delta));
+        Assert.IsType<CommandCompletedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(completed));
+        Assert.True(delta.Sequence < completed.Sequence);
     }
 
     [Fact]
@@ -171,50 +282,81 @@ public sealed partial class RemoteAgentSessionHostTests
     {
         await using var fixture = new HostFixture();
         fixture.Queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot
-        {
-            Revision = 9, Queues = [],
-        });
+            { Revision = 9, Queues = [] });
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
         fixture.Queues.Raise(value => value.Changed += null, EventArgs.Empty);
-        Assert.Equal(1, fixture.Runtime.Replay.HighWaterMark);
+        var delta = Assert.IsType<QueueChangedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
+        Assert.Equal(9, delta.Revision);
     }
 
     [Fact]
     public async Task Command_EachMutation_ReauthorizesPeer()
     {
-        var authorizer = new Mock<IAgentSessionAttachAuthorizer>();
-        authorizer.Setup(value => value.AuthorizeAsync(
-                It.IsAny<TransportPeerIdentity>(), It.IsAny<AgentSessionAuthorizationRequest>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new AgentSessionAuthorizationDecision { IsAllowed = true });
+        await using var fixture = new HostFixture();
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        AgentSessionCommand[] commands =
+        [
+            Command(fixture.Runtime.Epoch),
+            new SetToolEnabledCommand
+            {
+                CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(),
+                RuntimeEpoch = fixture.Runtime.Epoch, ToolId = "tool", Enabled = true,
+            },
+            new InterruptCommand
+            {
+                CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(),
+                RuntimeEpoch = fixture.Runtime.Epoch,
+            },
+        ];
+        foreach (var command in commands)
+            await fixture.Host.DispatchCommandAsync(
+                Peer(), Open(AgentSessionOpenIntent.Attach), fixture.Runtime, attachment, command);
         foreach (var operation in new[]
                  {
                      AgentSessionAuthorizationOperation.Send,
                      AgentSessionAuthorizationOperation.SetToolState,
                      AgentSessionAuthorizationOperation.Interrupt,
-                     AgentSessionAuthorizationOperation.Terminate,
                  })
         {
-            Assert.True((await authorizer.Object.AuthorizeAsync(Peer(), new AgentSessionAuthorizationRequest
-            {
-                AgentSessionId = "session", ExpectedOwningProfileEntityId = Owner,
-                ExpectedOwnershipGeneration = 1, Operation = operation,
-            })).IsAllowed);
+            fixture.Authorizer.Verify(value => value.AuthorizeAsync(
+                It.IsAny<TransportPeerIdentity>(),
+                It.Is<AgentSessionAuthorizationRequest>(request => request.Operation == operation),
+                It.IsAny<CancellationToken>()), Times.Once);
         }
-        authorizer.Verify(value => value.AuthorizeAsync(
-            It.IsAny<TransportPeerIdentity>(), It.IsAny<AgentSessionAuthorizationRequest>(),
-            It.IsAny<CancellationToken>()), Times.Exactly(4));
     }
 
     [Fact]
     public async Task TakeOverAsync_ConfirmedOldTermination_AdvancesGenerationThenStartsNewEpoch()
     {
         await using var fixture = new HostFixture();
+        var replacement = Runtime();
+        var takeover = Takeover();
         fixture.Factory.Setup(value => value.TryTakeOverAsync(
             It.IsAny<AgentSessionTakeoverRequest>(), It.IsAny<CancellationToken>())).ReturnsAsync(true);
-        await fixture.Host.TakeOverAsync(Peer(), Takeover());
+        fixture.Factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Intent() with
+            {
+                OwningProfileEntityId = takeover.NewOwningProfileEntityId,
+                OwnershipGeneration = 2,
+            });
+        fixture.Factory.Setup(value => value.StartAsync(
+                It.Is<PersistedAgentSessionRuntimeIntent>(intent => intent.OwnershipGeneration == 2),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(replacement);
+        await fixture.Host.TakeOverAsync(Peer(), takeover);
         Assert.True(fixture.Runtime.IsFenced);
+        Assert.Same(replacement, await fixture.Registry.TryGetAsync("session", 2));
         fixture.Factory.Verify(value => value.TryTakeOverAsync(
             It.Is<AgentSessionTakeoverRequest>(request => request.ExpectedOwnershipGeneration == 1),
+            It.IsAny<CancellationToken>()), Times.Once);
+        fixture.Factory.Verify(value => value.StartAsync(
+            It.Is<PersistedAgentSessionRuntimeIntent>(intent =>
+                intent.OwnershipGeneration == 2
+                && intent.OwningProfileEntityId == takeover.NewOwningProfileEntityId),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -262,22 +404,48 @@ public sealed partial class RemoteAgentSessionHostTests
     public async Task OpenAsync_AttachRacesLastViewerStop_WinnerDeterminesExistingOrFreshEpoch()
     {
         await using var runtime = Runtime(background: false);
-        var attachment = runtime.Attach(new AttachRemoteAgentSessionRequest
+        var originalEpoch = runtime.Epoch;
+        var first = runtime.Attach(new AttachRemoteAgentSessionRequest
         {
             AttachmentToken = "first", Channel = new DuplexChannel(),
         });
-        await attachment.DisposeAsync();
+        await using var winningAttach = runtime.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "winner", Channel = new DuplexChannel(),
+        });
+        await first.DisposeAsync();
+        Assert.False(runtime.IsFenced);
+        Assert.Equal(originalEpoch, runtime.Epoch);
+        Assert.Equal(1, runtime.ViewerCount);
+        await winningAttach.DisposeAsync();
         Assert.True(runtime.IsFenced);
+
+        await using var fresh = Runtime(background: false);
+        Assert.NotEqual(originalEpoch, fresh.Epoch);
         var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
         registry.Setup(value => value.TryGetAsync("session", 1, It.IsAny<CancellationToken>()))
             .ReturnsAsync((RemoteAgentSessionLease?)null);
-        var host = new RemoteAgentSessionHost(Allow(), registry.Object, Mock.Of<IAgentSessionRuntimeHostFactory>());
-        await Assert.ThrowsAsync<AgentSessionUnavailableException>(() =>
-            host.OpenAsync(new OpenAgentSessionHostRequest
-            {
-                Peer = Peer(), OpenRequest = Open(AgentSessionOpenIntent.Attach),
-                Channel = new DuplexChannel(),
-            }));
+        registry.Setup(value => value.GetOrStartAsync(
+                It.IsAny<PersistedAgentSessionRuntimeIntent>(),
+                It.IsAny<Func<CancellationToken, Task<RemoteAgentSessionLease>>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(fresh);
+        var factory = new Mock<IAgentSessionRuntimeHostFactory>();
+        factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Intent());
+        var host = new RemoteAgentSessionHost(Allow(), registry.Object, factory.Object);
+        await using var freshAttachment = await host.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.Start) with { AttachmentToken = "fresh" },
+            Channel = new DuplexChannel(),
+        });
+
+        Assert.Equal(1, fresh.ViewerCount);
+        registry.Verify(value => value.GetOrStartAsync(
+            It.Is<PersistedAgentSessionRuntimeIntent>(intent => intent.AgentSessionId == "session"),
+            It.IsAny<Func<CancellationToken, Task<RemoteAgentSessionLease>>>(),
+            It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -327,6 +495,26 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.True(runtime.IsFenced);
     }
 
+    [Fact]
+    public async Task OwnerStreamingLifecycle_BroadcastsStartedUpdatedAndCompleted()
+    {
+        await using var fixture = new HostFixture();
+        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
+        await fixture.Channel.Output.ReadAsync();
+        var running = new AgentChatRunningItem();
+        fixture.RunningItems.Add(running);
+        running.Items.Add(new AgentChatHistoryItem { Role = ChatRole.Assistant });
+        fixture.RunningItems.Remove(running);
+
+        var types = new List<string>();
+        for (var index = 0; index < 5; index++)
+            types.Add(AgentSessionProtocolCodec.DeserializeFrame(
+                await fixture.Channel.Output.ReadAsync()).Type);
+        Assert.Contains("streaming-started", types);
+        Assert.Contains("streaming-updated", types);
+        Assert.Contains("streaming-completed", types);
+    }
+
     private static async Task AssertQueueResultAsync(string code, bool changed)
     {
         await using var fixture = new HostFixture();
@@ -345,12 +533,31 @@ public sealed partial class RemoteAgentSessionHostTests
         Assert.False(changed);
     }
 
+    private static void SetupAppliedQueue(HostFixture fixture, long revision)
+    {
+        fixture.Queues.SetupGet(value => value.Snapshot).Returns(() =>
+            new AgentInputQueuesSnapshot { Revision = revision, Queues = [] });
+        fixture.Queues.Setup(value => value.CreateQueueAsync(
+                It.IsAny<CreateAgentInputQueueRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((CreateAgentInputQueueRequest request, CancellationToken _) =>
+            {
+                fixture.Queues.Raise(value => value.Changed += null, EventArgs.Empty);
+                return new AgentInputQueueCommandResult
+                {
+                    CommandId = request.CommandId,
+                    Status = AgentInputQueueCommandStatus.Applied,
+                    Revision = revision,
+                    QueueId = "queue",
+                };
+            });
+    }
+
     private const string Owner = "22222222-2222-2222-2222-222222222222";
 
-    private static CreateQueueCommand Command() => new()
+    private static CreateQueueCommand Command(RuntimeEpoch? epoch = null) => new()
     {
         CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(),
-        RuntimeEpoch = new RuntimeEpoch { Value = Guid.NewGuid() }, ExpectedRevision = 1,
+        RuntimeEpoch = epoch ?? new RuntimeEpoch { Value = Guid.NewGuid() }, ExpectedRevision = 1,
         Configuration = new AgentInputQueueConfiguration
         {
             Name = "queue", Immediacy = AgentInputQueueImmediacy.Queue, Priority = 0,
@@ -390,11 +597,13 @@ public sealed partial class RemoteAgentSessionHostTests
             Chat(queues).Object, background, Snapshot, timeProvider: time);
     }
 
-    private static Mock<IAgentChat> Chat(Mock<IAgentInputQueues> queues)
+    private static Mock<IAgentChat> Chat(
+        Mock<IAgentInputQueues> queues,
+        AgentChatRunningItemCollection? runningItems = null)
     {
         var chat = new Mock<IAgentChat>();
         chat.SetupGet(value => value.InputQueues).Returns(queues.Object);
-        chat.SetupGet(value => value.RunningItems).Returns(new AgentChatRunningItemCollection());
+        chat.SetupGet(value => value.RunningItems).Returns(runningItems ?? new AgentChatRunningItemCollection());
         chat.SetupGet(value => value.SubAgents).Returns(
             new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));
         chat.SetupGet(value => value.Modals).Returns(
@@ -424,6 +633,8 @@ public sealed partial class RemoteAgentSessionHostTests
         internal readonly Mock<IAgentChat> Chat;
         internal readonly RemoteAgentSessionRuntimeRegistry Registry = new(TimeProvider.System);
         internal readonly Mock<IAgentSessionRuntimeHostFactory> Factory = new();
+        internal readonly Mock<IAgentSessionAttachAuthorizer> Authorizer = new();
+        internal readonly AgentChatRunningItemCollection RunningItems = new();
         internal readonly DuplexChannel Channel = new();
         internal readonly RemoteAgentSessionLease Runtime;
         internal readonly RemoteAgentSessionHost Host;
@@ -432,7 +643,7 @@ public sealed partial class RemoteAgentSessionHostTests
         internal HostFixture(bool started = true)
         {
             this.Queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
-            this.Chat = RemoteAgentSessionHostTests.Chat(this.Queues);
+            this.Chat = RemoteAgentSessionHostTests.Chat(this.Queues, this.RunningItems);
             this.Runtime = new RemoteAgentSessionLease(
                 "session", 1, new RuntimeEpoch { Value = Guid.NewGuid() }, this.Chat.Object, true, Snapshot);
             this.Factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
@@ -443,8 +654,12 @@ public sealed partial class RemoteAgentSessionHostTests
                     this.FactoryStarts++;
                     return Task.FromResult(this.Runtime);
                 });
-            this.Host = new RemoteAgentSessionHost(Allow(), this.Registry, this.Factory.Object);
-            if (started) this.StartRuntimeAsync().GetAwaiter().GetResult();
+            this.Authorizer.Setup(value => value.AuthorizeAsync(
+                    It.IsAny<TransportPeerIdentity>(), It.IsAny<AgentSessionAuthorizationRequest>(),
+                    It.IsAny<CancellationToken>()))
+                .ReturnsAsync(new AgentSessionAuthorizationDecision { IsAllowed = true });
+            this.Host = new RemoteAgentSessionHost(this.Authorizer.Object, this.Registry, this.Factory.Object);
+            if (started) _ = this.StartRuntimeAsync();
         }
 
         internal Task StartRuntimeAsync() => this.Registry.GetOrStartAsync(
@@ -475,6 +690,8 @@ public sealed partial class RemoteAgentSessionHostTests
         public ChannelWriter<JsonElement> Writer => this.output.Writer;
         public ChannelReader<JsonElement> Reader => this.input.Reader;
         internal ChannelReader<JsonElement> Output => this.output.Reader;
+        internal ValueTask SendAsync(AgentSessionCommand command)
+            => this.input.Writer.WriteAsync(AgentSessionProtocolCodec.SerializeCommand(command));
         public ValueTask DisposeAsync()
         {
             this.input.Writer.TryComplete();

@@ -594,7 +594,7 @@ internal static class AgentSessionProtocolCodec
         private static readonly HashSet<string> AllowedErrorCodes = new(StringComparer.Ordinal)
         {
             "invalid-request", "unauthorized", "not-found", "owner-mismatch", "generation-mismatch",
-            "runtime-changed", "unsupported", "conflict", "cancelled", "containment-required",
+            "runtime-changed", "unsupported", "conflict", "rejected", "cancelled", "containment-required",
             "launch-failed", "takeover-blocked", "internal-error",
         };
     }

@@ -13,6 +13,7 @@ using Phantom.Workspaces.Transport.Chat;
 using Phantom.Workspaces.Transport.Http;
 using Phantom.Workspaces.Transport.Local;
 using Phantom.Workspaces.Transport.ReverseHttp;
+using Phantom.Workspaces.Services.AgentSessions;
 
 namespace Phantom.Workspaces.Services;
 
@@ -41,11 +42,20 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         IReadOnlyList<ReverseHttpClientTransportFactory>? hubFactories = null,
         AgentServices? agentServices = null,
         TransportFactoryRegistryProvider? registryProvider = null,
-        ITransportListener? agentSessionTransportListener = null)
+        ITransportListener? agentSessionTransportListener = null,
+        IRunningAgentChatTable? runningAgentChats = null)
     {
         ArgumentNullException.ThrowIfNull(dataAccessLayer);
         ArgumentNullException.ThrowIfNull(workspaceEntitySession);
 
+        var effectiveRegistryProvider = registryProvider ?? new TransportFactoryRegistryProvider();
+        var localPeer = new TransportPeerIdentity
+        {
+            AuthenticationScheme = "local-workspace-session",
+            StablePeerId = workspaceEntitySession.UserComputerProfileEntityId.ToString(),
+            UserEntityId = workspaceEntitySession.UserEntityId.ToString(),
+            UserComputerProfileEntityId = workspaceEntitySession.UserComputerProfileEntityId.ToString(),
+        };
         this.ConnectionStatusRegistry = new ReverseConnectionStatusRegistry();
         this.LocalListeners = new TransportRegistry();
 
@@ -88,29 +98,50 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
         // ICopilotClient here and bridging only its SDK session back over the channel. This is
         // distinct from ChatClientTransportListener above, which remotes the whole AgentChat.
         this.LocalListeners.Register(new Phantom.Workspaces.Llm.Core.Transport.Chat.CopilotClientTransportListener(agentServices));
+        if (agentSessionTransportListener is null && runningAgentChats is not null)
+        {
+            var runtimeRegistry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+            var peerIdentities = new TransportPeerIdentityProvider();
+            var authorizer = new AgentSessionAttachAuthorizer(dataAccessLayer, runtimeRegistry);
+            var runtimeFactory = new DataAccessAgentSessionRuntimeHostFactory(
+                dataAccessLayer,
+                runningAgentChats,
+                AgentSessionRuntimeContextFactory.FromProvider(effectiveRegistryProvider),
+                TimeProvider.System);
+            var host = new RemoteAgentSessionHost(authorizer, runtimeRegistry, runtimeFactory);
+            agentSessionTransportListener = new AgentSessionTransportListener(host, peerIdentities);
+            this.AgentSessionPeerIdentities = peerIdentities;
+        }
         if (agentSessionTransportListener is not null)
         {
             this.LocalListeners.Register(agentSessionTransportListener);
         }
 
         var registry = new TransportFactoryRegistry();
-        this.localTransportFactory = new LocalTransportFactory(this.LocalListeners);
+        this.localTransportFactory = new LocalTransportFactory(
+            this.LocalListeners,
+            this.AgentSessionPeerIdentities is { } identities
+                ? channel => identities.SetIdentity(channel, localPeer)
+                : null);
         this.userComputerProfileTransportFactory =
             new UserComputerProfileTransportFactory(dataAccessLayer, workspaceEntitySession, registry);
         this.httpClientTransportFactory = new HttpClientTransportFactory();
-        this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory();
+        this.reverseHttpForwardingTransportFactory = new ReverseHttpForwardingTransportFactory(
+            new HttpClientTransportFactory(),
+            authenticatedPeer: this.AgentSessionPeerIdentities is not null ? localPeer : null);
 
         registry.Register(this.localTransportFactory);
         registry.Register(this.userComputerProfileTransportFactory);
         registry.Register(this.httpClientTransportFactory);
         registry.Register(this.reverseHttpForwardingTransportFactory);
         this.TransportFactoryRegistry = registry;
-        registryProvider?.Publish(registry);
+        effectiveRegistryProvider.Publish(registry);
 
         this.TrustedExecutor = new TransportTrustedExecutor(registry, new ExecutionTargetResolver());
 
         this.HubFactories = hubFactories ?? [];
-        this.TransportHost = new WorkspacesTransportHost(this.LocalListeners, this.HubFactories);
+        this.TransportHost = new WorkspacesTransportHost(
+            this.LocalListeners, this.HubFactories, this.AgentSessionPeerIdentities);
     }
 
     /// <summary>The resolved registry that builds transports for every registered descriptor type.</summary>
@@ -133,6 +164,8 @@ public sealed class WorkspacesTransportComposition : IAsyncDisposable
 
     /// <summary>The configured reverse-HTTP hub client factories the host registers with.</summary>
     public IReadOnlyList<ReverseHttpClientTransportFactory> HubFactories { get; }
+
+    internal TransportPeerIdentityProvider? AgentSessionPeerIdentities { get; }
 
     /// <summary>Starts the GUI-side transport host (hub registration + dispatcher hosting).</summary>
     public Task StartAsync(CancellationToken cancellationToken = default)

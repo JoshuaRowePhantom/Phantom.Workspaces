@@ -6,14 +6,18 @@ namespace Phantom.Workspaces.Transport.Local;
 public sealed class LocalTransport : ITransport
 {
     private readonly TransportRegistry registry;
+    private readonly Action<IMessageChannel>? authenticateServerChannel;
     private readonly object gate = new();
     private readonly List<LocalMessageChannel> channels = [];
     private readonly List<Stream> streams = [];
     private bool disposed;
 
-    public LocalTransport(TransportRegistry registry)
+    public LocalTransport(
+        TransportRegistry registry,
+        Action<IMessageChannel>? authenticateServerChannel = null)
     {
         this.registry = registry ?? throw new ArgumentNullException(nameof(registry));
+        this.authenticateServerChannel = authenticateServerChannel;
     }
 
     public Task<IMessageChannel> ConnectToMessageChannelAsync(JsonElement request, CancellationToken ct = default)
@@ -21,6 +25,7 @@ public sealed class LocalTransport : ITransport
         this.ThrowIfDisposed();
 
         var (clientChannel, serverChannel) = LocalMessageChannel.CreatePair();
+        this.authenticateServerChannel?.Invoke(serverChannel);
         lock (this.gate)
         {
             this.channels.Add(clientChannel);
