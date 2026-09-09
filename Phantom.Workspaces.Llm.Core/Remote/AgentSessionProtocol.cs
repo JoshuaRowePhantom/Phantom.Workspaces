@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentSchema;
 using Phantom.Workspaces.Llm;
+using Phantom.Workspaces.Transport;
 
 namespace Phantom.Workspaces.Llm.Remote;
 
@@ -814,6 +815,36 @@ internal static class AgentSessionProtocolCodec
 
         public override void Write(Utf8JsonWriter writer, AgentChatModalContent value, JsonSerializerOptions options)
             => JsonSerializer.Serialize(writer, value, value.GetType(), options);
+    }
+}
+
+internal sealed class AgentSessionFramePublisher(
+    IMessageChannel channel,
+    RuntimeEpoch runtimeEpoch)
+{
+    private readonly SemaphoreSlim publishGate = new(1, 1);
+    private long sequence;
+
+    internal async Task<AgentSessionServerFrame> PublishAsync(
+        AgentSessionServerEvent value,
+        Guid correlationId,
+        CancellationToken ct = default)
+    {
+        await this.publishGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var nextSequence = this.sequence + 1;
+            var frame = AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
+                runtimeEpoch, nextSequence, correlationId, value);
+            await channel.Writer.WriteAsync(
+                AgentSessionProtocolCodec.SerializeFrame(frame), ct).ConfigureAwait(false);
+            this.sequence = nextSequence;
+            return frame;
+        }
+        finally
+        {
+            this.publishGate.Release();
+        }
     }
 }
 

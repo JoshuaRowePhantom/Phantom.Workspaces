@@ -116,6 +116,27 @@ public sealed partial class RemoteAgentChatTests
         var (transport, chat) = await AttachAsync();
         await using (chat)
         {
+            var historyItem = new AgentChatHistoryItem
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("history")],
+            };
+            var runningItem = historyItem with { Contents = [new TextContent("streaming")] };
+            var updatedItem = historyItem with { Contents = [new TextContent("updated")] };
+            var toolSnapshot = new AgentChatToolItem("old", "Old", "Old", "", "function", false, []);
+            var toolChanged = new AgentChatToolItem("new", "New", "New", "", "function", true, []);
+            static JsonElement Json(object value) => JsonSerializer.SerializeToElement(value, AIJsonUtilities.DefaultOptions);
+            static JsonElement Subagent(string id) => Json(new
+            {
+                AgentId = id,
+                DisplayName = id,
+                Description = id,
+                Name = id,
+                CompletionState = AgentChatCompletionState.Running,
+                LastUpdatedAt = DateTime.UnixEpoch,
+                SubAgents = Array.Empty<object>(),
+            });
+
             var usageApplied = Event(chat, nameof(chat.UsageChanged));
             await transport.SendAsync(Frame(2, new UsageChangedEvent { Usage = new Usage { TotalOutputTokenCount = 11 } }));
             await usageApplied;
@@ -128,7 +149,71 @@ public sealed partial class RemoteAgentChatTests
             }));
             await informationApplied;
             Assert.Equal("Changed", chat.Information.DisplayName);
+
+            await transport.SendAsync(Frame(4, new HistoryAppendedEvent { Item = Json(historyItem) }));
+            await transport.SendAsync(Frame(5, new StreamingStartedEvent { RunId = "run", Item = Json(runningItem) }));
+            await transport.SendAsync(Frame(6, new StreamingUpdatedEvent
+            {
+                RunId = "run",
+                Update = Json(new[] { updatedItem }),
+            }));
+            await transport.SendAsync(Frame(7, new BusyChangedEvent { IsBusy = true }));
+            await transport.SendAsync(Frame(8, new ToolsSnapshotEvent { Tools = [Json(toolSnapshot)] }));
+            await transport.SendAsync(Frame(9, new ToolsChangedEvent { Tools = [Json(toolChanged)] }));
+            await transport.SendAsync(Frame(10, new SubagentsSnapshotEvent { Subagents = [Subagent("old-child")] }));
+            await transport.SendAsync(Frame(11, new SubagentsChangedEvent { Subagents = [Subagent("new-child")] }));
+            await transport.SendAsync(Frame(12, new ModalRaisedEvent { Modal = Modal() }));
+            await transport.SendAsync(Frame(13, new ModalUpdatedEvent
+            {
+                Modal = Modal() with { Title = "Updated question" },
+            }));
+            await transport.SendAsync(Frame(14, new ModalDismissedEvent { ModalId = "modal" }));
+            var allApplied = Event(chat, nameof(chat.InformationChanged));
+            await transport.SendAsync(Frame(15, new AgentInformationChangedEvent
+            {
+                Information = AgentSessionProtocolCodecTests.Snapshot().Information with { DisplayName = "Sentinel" },
+            }));
+            await allApplied;
+
+            Assert.Equal("history", Assert.IsType<TextContent>(chat.History.Single().Contents.Single()).Text);
+            Assert.Equal("updated", Assert.IsType<TextContent>(chat.RunningItems.Single().Items.Single().Contents.Single()).Text);
+            Assert.True(chat.IsBusy);
+            Assert.Equal(("new", true), (chat.GetToolSnapshot().Single().Id, chat.GetToolSnapshot().Single().IsEnabled));
+            Assert.Equal("new-child", chat.SubAgents.Single().AgentId);
+            Assert.Empty(chat.Modals);
         }
+    }
+
+    [Fact]
+    public async Task OrderedFrames_ConcurrentScheduler_AppliesStateThenNotifiesInSequence()
+    {
+        var transport = new TestTransport();
+        var client = new RemoteAgentSessionClient(transport);
+        var scheduler = new ManuallyReversedTaskScheduler();
+        var attaching = RemoteAgentChat.AttachAsync(new RemoteAgentChatAttachOptions
+        {
+            Client = client,
+            OpenRequest = AgentSessionProtocolCodecTests.Open(),
+            ForegroundScheduler = scheduler,
+        });
+        await transport.SendAsync(Frame(1, new SessionSnapshotEvent
+        { Snapshot = AgentSessionProtocolCodecTests.Snapshot() }));
+        await scheduler.Queued;
+        scheduler.RunNewest();
+        await using var chat = await attaching;
+
+        var clientReceivedBoth = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.FrameReceived += (_, frame) =>
+        {
+            if (frame.Sequence == 3) clientReceivedBoth.TrySetResult();
+        };
+        await transport.SendAsync(Frame(2, new BusyChangedEvent { IsBusy = true }));
+        await transport.SendAsync(Frame(3, new BusyChangedEvent { IsBusy = false }));
+        await clientReceivedBoth.Task;
+
+        scheduler.RunNewest();
+        scheduler.RunNewest();
+        Assert.False(chat.IsBusy);
     }
 
     [Fact]
@@ -393,7 +478,69 @@ public sealed partial class RemoteAgentChatTests
         var (transport, chat) = await AttachAsync(snapshot);
         Assert.Equal(continueInBackground, chat.ContinueInBackground);
         await chat.DetachAsync();
-        Assert.IsType<DetachCommand>(AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+        var command = Assert.IsType<DetachCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.Outgoing.ReadAsync()));
+        var owner = new LastViewerOwnerHarness(continueInBackground);
+        owner.Apply(command);
+        Assert.Equal(continueInBackground, owner.RuntimeIsRunning);
+    }
+
+    private sealed class LastViewerOwnerHarness(bool continueInBackground)
+    {
+        public bool RuntimeIsRunning { get; private set; } = true;
+
+        public void Apply(DetachCommand command)
+        {
+            Assert.Equal("detach", command.Type);
+            if (!continueInBackground)
+                this.RuntimeIsRunning = false;
+        }
+    }
+
+    private sealed class ManuallyReversedTaskScheduler : TaskScheduler
+    {
+        private readonly object sync = new();
+        private readonly List<Task> queued = [];
+        private TaskCompletionSource queuedSignal = NewSignal();
+
+        public Task Queued
+        {
+            get
+            {
+                lock (this.sync)
+                    return this.queued.Count > 0 ? Task.CompletedTask : this.queuedSignal.Task;
+            }
+        }
+
+        protected override void QueueTask(Task task)
+        {
+            lock (this.sync)
+            {
+                this.queued.Add(task);
+                this.queuedSignal.TrySetResult();
+            }
+        }
+
+        public void RunNewest()
+        {
+            Task task;
+            lock (this.sync)
+            {
+                task = this.queued[^1];
+                this.queued.RemoveAt(this.queued.Count - 1);
+                if (this.queued.Count == 0) this.queuedSignal = NewSignal();
+            }
+            Assert.True(this.TryExecuteTask(task));
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+        protected override IEnumerable<Task> GetScheduledTasks()
+        {
+            lock (this.sync) return this.queued.ToArray();
+        }
+
+        private static TaskCompletionSource NewSignal()
+            => new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed class ReconnectingChatTransport : ITransport

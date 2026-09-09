@@ -41,9 +41,16 @@ public sealed partial class RemoteAgentSessionClientTests
         var id = Guid.NewGuid();
         var status = new AgentSessionStatusRequest { Transport = new TestTransport(), OpenRequest = AgentSessionProtocolCodecTests.Open() };
         var terminate = new TerminateAgentSessionRequest { Reason = "done", CommandId = id };
+        var subagent = new OpenAgentSubagentRequest { AgentId = "agent", CommandId = id };
+        var response = JsonDocument.Parse("""{"answer":"yes"}""").RootElement.Clone();
+        var modal = new RespondToAgentModalRequest { ModalId = "modal", Response = response, CommandId = id };
+        var tool = new SetAgentToolEnabledRequest { ToolId = "tool", Enabled = true, CommandId = id };
         var retention = new SetAgentSessionRetentionRequest { ContinueInBackground = true, CommandId = id };
         Assert.Equal("session", status.OpenRequest.AgentSessionId);
         Assert.Equal(("done", id), (terminate.Reason, terminate.CommandId));
+        Assert.Equal(("agent", id), (subagent.AgentId, subagent.CommandId));
+        Assert.Equal(("modal", "yes", id), (modal.ModalId, modal.Response.GetProperty("answer").GetString(), modal.CommandId));
+        Assert.Equal(("tool", true, id), (tool.ToolId, tool.Enabled, tool.CommandId));
         Assert.Equal((true, id), (retention.ContinueInBackground, retention.CommandId));
     }
 
@@ -251,6 +258,7 @@ public sealed partial class RemoteAgentSessionClientTests
         }
         public ValueTask ServerSendAsync(JsonElement value) => this.channel.ServerWrites.Writer.WriteAsync(value);
         public ValueTask<JsonElement> ServerReadAsync() => this.channel.ClientWrites.Reader.ReadAsync();
+        public void CompleteServer() => this.channel.ServerWrites.Writer.TryComplete();
     }
 
     private sealed class TestMessageChannel : IMessageChannel

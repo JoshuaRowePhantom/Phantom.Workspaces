@@ -8,6 +8,7 @@ namespace Phantom.Workspaces.Llm.Remote;
 public sealed class RemoteAgentSessionClient : IAsyncDisposable
 {
     private readonly ITransport transport;
+    private readonly TimeProvider timeProvider;
     private readonly SemaphoreSlim lifecycleGate = new(1, 1);
     private readonly ConcurrentDictionary<Guid, PendingCommand> pending = new();
     private readonly ConcurrentDictionary<Guid, Guid> abandonedCommands = new();
@@ -23,9 +24,18 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
     private bool detached;
     private bool terminal;
     private bool disposed;
+    private Task? reconnectAttempt;
 
     public RemoteAgentSessionClient(ITransport transport)
-        => this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        : this(transport, TimeProvider.System)
+    {
+    }
+
+    internal RemoteAgentSessionClient(ITransport transport, TimeProvider timeProvider)
+    {
+        this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        this.timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+    }
 
     public event EventHandler<AgentSessionServerFrame>? FrameReceived;
     internal event EventHandler? UnexpectedlyDisconnected;
@@ -96,27 +106,38 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
 
     public async Task ReconnectAsync(CancellationToken ct = default)
     {
+        Task attempt;
         await this.lifecycleGate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
             this.ThrowIfDisposed();
-            if (!this.connectAttempted || this.openRequest is null || this.channel is not null
-                || this.detached || this.terminal || this.reconnectDeadline is null
-                || DateTimeOffset.UtcNow >= this.reconnectDeadline)
-                throw new InvalidOperationException("The session is not eligible for reconnect.");
-
-            var request = this.openRequest with
+            if (this.reconnectAttempt is { IsCompleted: false } currentAttempt)
             {
-                OpenIntent = AgentSessionOpenIntent.Attach,
-                ReplayCursor = this.LastAppliedCursor,
-            };
-            this.reconnecting = true;
-            await this.OpenChannelAsync(request, ct).ConfigureAwait(false);
+                attempt = currentAttempt;
+            }
+            else
+            {
+                if (!this.connectAttempted || this.openRequest is null || this.channel is not null
+                    || this.detached || this.terminal || this.reconnectDeadline is null
+                    || this.timeProvider.GetUtcNow() >= this.reconnectDeadline)
+                    throw new InvalidOperationException("The session is not eligible for reconnect.");
+
+                var request = this.openRequest with
+                {
+                    OpenIntent = AgentSessionOpenIntent.Attach,
+                    ReplayCursor = this.LastAppliedCursor,
+                };
+                this.reconnecting = true;
+                attempt = this.OpenChannelAsync(request, ct);
+                this.reconnectAttempt = attempt;
+            }
         }
         finally
         {
             this.lifecycleGate.Release();
         }
+
+        await attempt.WaitAsync(ct).ConfigureAwait(false);
     }
 
     public Task<AgentInputQueueCommandResult> CreateQueueAsync(
@@ -276,7 +297,14 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         {
             ToolId = RequireText(request.ToolId, nameof(request.ToolId)), Enabled = request.Enabled,
             CommandId = request.CommandId, CorrelationId = Guid.NewGuid(), RuntimeEpoch = this.RequireEpoch(),
-        }, frame => frame.Type == "tools-changed", ct);
+        }, frame => AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame)
+            is ToolsChangedEvent changed
+            && changed.Tools
+                .Select(tool => JsonSerializer.Deserialize<AgentChatToolItem>(
+                    tool.GetRawText(), AIJsonUtilities.DefaultOptions))
+                .Any(tool => tool is not null
+                    && tool.Id == request.ToolId
+                    && tool.IsEnabled == request.Enabled), ct);
     }
 
     public Task SetContinueInBackgroundAsync(
@@ -287,7 +315,9 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
         {
             ContinueInBackground = request.ContinueInBackground, CommandId = request.CommandId,
             CorrelationId = Guid.NewGuid(), RuntimeEpoch = this.RequireEpoch(),
-        }, frame => frame.Type == "session-retention-changed", ct);
+        }, frame => AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(frame)
+            is SessionRetentionChangedEvent changed
+            && changed.ContinueInBackground == request.ContinueInBackground, ct);
     }
 
     public async Task DetachAsync(CancellationToken ct = default)
@@ -360,7 +390,7 @@ public sealed class RemoteAgentSessionClient : IAsyncDisposable
                 this.channel = null;
                 if (!this.detached && !this.terminal && !this.disposed)
                 {
-                    this.reconnectDeadline = DateTimeOffset.UtcNow.AddSeconds(5);
+                    this.reconnectDeadline = this.timeProvider.GetUtcNow().AddSeconds(5);
                     this.UnexpectedlyDisconnected?.Invoke(this, EventArgs.Empty);
                 }
             }

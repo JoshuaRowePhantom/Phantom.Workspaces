@@ -24,6 +24,8 @@ public sealed class RemoteAgentChat : IAgentChat
     private readonly Dictionary<string, AgentChatRunningItem> runningById = new(StringComparer.Ordinal);
     private readonly SlashCommandRegistry slashCommands = new();
     private readonly RemoteInputQueues inputQueues;
+    private readonly object frameApplicationLock = new();
+    private Task frameApplication = Task.CompletedTask;
     private bool disposed;
     private bool detached;
     private AgentInformation information;
@@ -191,11 +193,16 @@ public sealed class RemoteAgentChat : IAgentChat
 
     private void OnFrameReceived(object? sender, AgentSessionServerFrame frame)
     {
-        _ = Task.Factory.StartNew(
-            () => this.ApplyFrame(frame),
-            CancellationToken.None,
-            TaskCreationOptions.DenyChildAttach,
-            this.foregroundScheduler).ContinueWith(
+        Task application;
+        lock (this.frameApplicationLock)
+        {
+            application = this.frameApplication = this.frameApplication.ContinueWith(
+                _ => this.ApplyFrame(frame),
+                CancellationToken.None,
+                TaskContinuationOptions.DenyChildAttach,
+                this.foregroundScheduler);
+        }
+        _ = application.ContinueWith(
                 task =>
                 {
                     if (task.IsFaulted)

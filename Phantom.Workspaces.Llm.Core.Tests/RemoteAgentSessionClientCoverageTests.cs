@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Time.Testing;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
 
@@ -12,15 +13,40 @@ public sealed partial class RemoteAgentSessionClientTests
     [Fact]
     public async Task GetStatusAsync_UnauthorizedOrMissing_ReturnsUnavailableWithoutMetadata()
     {
-        var transport = new TestTransport();
-        await transport.ServerSendAsync(Frame(1, new SessionStatusEvent { Status = AgentSessionRemoteStatus.Unavailable }));
-        var status = await RemoteAgentSessionClient.GetStatusAsync(new AgentSessionStatusRequest
+        static AgentSessionStatusRequest Request(ITransport transport) => new()
         {
             Transport = transport,
             OpenRequest = AgentSessionProtocolCodecTests.Open() with { OpenIntent = AgentSessionOpenIntent.Status },
-        });
-        Assert.Equal(AgentSessionRemoteStatus.Unavailable, status);
-        Assert.True(transport.ChannelDisposed);
+        };
+
+        var denial = new TestTransport();
+        var deniedCorrelation = Guid.NewGuid();
+        await denial.ServerSendAsync(Frame(1, new OperationErrorEvent
+        {
+            Error = new RemoteAgentOperationError
+            {
+                Code = "unauthorized", Operation = "status", IsRetryable = false,
+                Message = "Unavailable.", CorrelationId = deniedCorrelation,
+            },
+        }, deniedCorrelation));
+        Assert.Equal(AgentSessionRemoteStatus.Unavailable,
+            await RemoteAgentSessionClient.GetStatusAsync(Request(denial)));
+        Assert.True(denial.ChannelDisposed);
+
+        var metadataBearingDenial = new TestTransport();
+        await metadataBearingDenial.ServerSendAsync(Frame(1, new SessionSnapshotEvent
+        {
+            Snapshot = AgentSessionProtocolCodecTests.Snapshot(),
+        }));
+        Assert.Equal(AgentSessionRemoteStatus.Unavailable,
+            await RemoteAgentSessionClient.GetStatusAsync(Request(metadataBearingDenial)));
+        Assert.True(metadataBearingDenial.ChannelDisposed);
+
+        var missing = new TestTransport();
+        missing.CompleteServer();
+        Assert.Equal(AgentSessionRemoteStatus.Unavailable,
+            await RemoteAgentSessionClient.GetStatusAsync(Request(missing)));
+        Assert.True(missing.ChannelDisposed);
     }
 
     [Fact]
@@ -87,11 +113,62 @@ public sealed partial class RemoteAgentSessionClientTests
     [Fact]
     public async Task ReconnectAsync_ConnectedDetachedTerminalOrExpired_ThrowsInvalidOperationException()
     {
-        var transport = new TestTransport();
+        var connectedTransport = new TestTransport();
+        await using (var connected = await ConnectAsync(connectedTransport))
+            await Assert.ThrowsAsync<InvalidOperationException>(() => connected.ReconnectAsync());
+
+        var detachedTransport = new TestTransport();
+        await using (var detached = await ConnectAsync(detachedTransport))
+        {
+            await detached.DetachAsync();
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => detached.ReconnectAsync());
+        }
+
+        var terminalTransport = new ReconnectTransport();
+        await using (var terminal = await ConnectAsync(terminalTransport))
+        {
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            terminal.FrameReceived += (_, frame) =>
+            {
+                if (frame.Type == "session-terminal") received.TrySetResult();
+            };
+            await terminalTransport.SendAsync(0, Frame(2, new SessionTerminalEvent
+            {
+                Reason = "done",
+                CompletionState = JsonDocument.Parse("""{"state":"completed"}""").RootElement.Clone(),
+            }));
+            await received.Task;
+            terminalTransport.Complete(0);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => terminal.ReconnectAsync());
+        }
+
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-09-09T00:00:00Z"));
+        var expiredTransport = new ReconnectTransport();
+        await using var expired = await ConnectAsync(expiredTransport, time);
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        expired.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        expiredTransport.Complete(0);
+        await disconnected.Task;
+        time.Advance(TimeSpan.FromSeconds(6));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => expired.ReconnectAsync());
+    }
+
+    [Fact]
+    public async Task ReconnectAsync_ConcurrentCallers_JoinSingleFlightAttempt()
+    {
+        var transport = new ReconnectTransport();
         await using var client = await ConnectAsync(transport);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.ReconnectAsync());
-        await client.DetachAsync();
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.ReconnectAsync());
+        var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        client.UnexpectedlyDisconnected += (_, _) => disconnected.TrySetResult();
+        transport.Complete(0);
+        await disconnected.Task;
+
+        var first = client.ReconnectAsync();
+        var second = client.ReconnectAsync();
+        Assert.Equal(2, transport.Opens.Count);
+        await transport.SendAsync(1, Frame(2, new BusyChangedEvent { IsBusy = true }));
+        await Task.WhenAll(first, second);
+        Assert.Equal(2, transport.Opens.Count);
     }
 
     [Fact]
@@ -223,18 +300,40 @@ public sealed partial class RemoteAgentSessionClientTests
 
     [Fact]
     public async Task SetToolEnabledAsync_Connected_AwaitsAuthoritativeToolsEvent()
-        => await AssertAuthoritativeCommandAsync(
-            (client, id) => client.SetToolEnabledAsync(new SetAgentToolEnabledRequest { ToolId = "tool", Enabled = true, CommandId = id }),
-            command => Assert.True(Assert.IsType<SetToolEnabledCommand>(command).Enabled),
-            new ToolsChangedEvent { Tools = [] });
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var operation = client.SetToolEnabledAsync(new SetAgentToolEnabledRequest
+        { ToolId = "tool", Enabled = true, CommandId = Guid.NewGuid() });
+        var command = Assert.IsType<SetToolEnabledCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync()));
+        await CompleteAsync(transport, 2, command);
+        await transport.ServerSendAsync(Frame(3, new ToolsChangedEvent
+        {
+            Tools = [Tool("other", true), Tool("tool", false)],
+        }));
+        Assert.False(operation.IsCompleted);
+        await transport.ServerSendAsync(Frame(4, new ToolsChangedEvent { Tools = [Tool("tool", true)] }));
+        await operation;
+    }
 
     [Fact]
     public async Task SetContinueInBackgroundAsync_Connected_AwaitsPersistedAuthoritativeEvent()
-        => await AssertAuthoritativeCommandAsync(
-            (client, id) => client.SetContinueInBackgroundAsync(new SetAgentSessionRetentionRequest
-            { ContinueInBackground = true, CommandId = id }),
-            command => Assert.True(Assert.IsType<SetContinueInBackgroundCommand>(command).ContinueInBackground),
-            new SessionRetentionChangedEvent { ContinueInBackground = true, ViewerCount = 1 });
+    {
+        var transport = new TestTransport();
+        await using var client = await ConnectAsync(transport);
+        var operation = client.SetContinueInBackgroundAsync(new SetAgentSessionRetentionRequest
+        { ContinueInBackground = true, CommandId = Guid.NewGuid() });
+        var command = Assert.IsType<SetContinueInBackgroundCommand>(
+            AgentSessionProtocolCodec.DeserializeCommand(await transport.ServerReadAsync()));
+        await CompleteAsync(transport, 2, command);
+        await transport.ServerSendAsync(Frame(3, new SessionRetentionChangedEvent
+        { ContinueInBackground = false, ViewerCount = 1 }));
+        Assert.False(operation.IsCompleted);
+        await transport.ServerSendAsync(Frame(4, new SessionRetentionChangedEvent
+        { ContinueInBackground = true, ViewerCount = 1 }));
+        await operation;
+    }
 
     [Fact]
     public async Task SetContinueInBackgroundAsync_Rejected_LeavesProjectionUnchanged()
@@ -374,10 +473,29 @@ public sealed partial class RemoteAgentSessionClientTests
         Name = "renamed", Immediacy = AgentInputQueueImmediacy.Queue, Priority = 2,
     };
 
+    private static JsonElement Tool(string id, bool enabled)
+        => JsonSerializer.SerializeToElement(
+            new AgentChatToolItem(id, id, id, "", "function", enabled, []),
+            AIJsonUtilities.DefaultOptions);
+
     private static void AssertRequired<T>(params string[] names)
     {
         foreach (var name in names)
             Assert.NotNull(typeof(T).GetProperty(name)!.GetCustomAttribute<System.Runtime.CompilerServices.RequiredMemberAttribute>());
+    }
+
+    private static async Task<RemoteAgentSessionClient> ConnectAsync(
+        ReconnectTransport transport,
+        TimeProvider? timeProvider = null)
+    {
+        var client = timeProvider is null
+            ? new RemoteAgentSessionClient(transport)
+            : new RemoteAgentSessionClient(transport, timeProvider);
+        var connecting = client.ConnectAsync(AgentSessionProtocolCodecTests.Open());
+        await transport.SendAsync(0, Frame(1, new SessionSnapshotEvent
+        { Snapshot = AgentSessionProtocolCodecTests.Snapshot() }));
+        await connecting;
+        return client;
     }
 
     private sealed class ReconnectTransport : ITransport

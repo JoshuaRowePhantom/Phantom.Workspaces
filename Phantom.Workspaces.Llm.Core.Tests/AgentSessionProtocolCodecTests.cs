@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading.Channels;
 using AgentSchema;
 using Phantom.Workspaces.Llm.Remote;
 using Phantom.Workspaces.Transport;
@@ -54,6 +55,64 @@ public sealed class AgentSessionProtocolCodecTests
             nameof(RemoteSubagentDescriptor.OwningProfileEntityId),
             nameof(RemoteSubagentDescriptor.OwnershipGeneration),
             nameof(RemoteSubagentDescriptor.RuntimeEpoch));
+        AssertRequired<RuntimeEpoch>(nameof(RuntimeEpoch.Value));
+        AssertRequired<ReplayCursor>(nameof(ReplayCursor.Epoch), nameof(ReplayCursor.Sequence));
+        AssertRequired<AgentSessionServerFrame>(
+            nameof(AgentSessionServerFrame.ProtocolVersion),
+            nameof(AgentSessionServerFrame.CorrelationId),
+            nameof(AgentSessionServerFrame.RuntimeEpoch),
+            nameof(AgentSessionServerFrame.Sequence),
+            nameof(AgentSessionServerFrame.Payload));
+        AssertRequired<AgentSessionTakeoverRequest>(
+            nameof(AgentSessionTakeoverRequest.AgentSessionId),
+            nameof(AgentSessionTakeoverRequest.ExpectedOwningProfileEntityId),
+            nameof(AgentSessionTakeoverRequest.ExpectedOwnershipGeneration),
+            nameof(AgentSessionTakeoverRequest.NewOwningProfileEntityId),
+            nameof(AgentSessionTakeoverRequest.CorrelationId));
+        AssertRequired<RemoteAgentOperationError>(
+            nameof(RemoteAgentOperationError.Code), nameof(RemoteAgentOperationError.Operation),
+            nameof(RemoteAgentOperationError.IsRetryable), nameof(RemoteAgentOperationError.Message),
+            nameof(RemoteAgentOperationError.CorrelationId));
+
+        AssertCommandRequired<CreateQueueCommand>("ExpectedRevision", "Configuration");
+        AssertCommandRequired<DeleteQueueCommand>("ExpectedRevision", "QueueId");
+        AssertCommandRequired<EnqueueInputCommand>("ExpectedRevision", "TargetQueueId", "Messages");
+        AssertCommandRequired<EditQueueItemCommand>("ExpectedRevision", "QueueId", "ItemId", "Messages");
+        AssertCommandRequired<RemoveQueueItemCommand>("ExpectedRevision", "QueueId", "ItemId");
+        AssertCommandRequired<MoveQueueItemCommand>("ExpectedRevision", "SourceQueueId", "ItemId", "TargetQueueId");
+        AssertCommandRequired<ConfigureQueueCommand>("ExpectedRevision", "QueueId", "Configuration");
+        AssertCommandRequired<InterruptCommand>();
+        AssertCommandRequired<TerminateSessionCommand>("Reason");
+        AssertCommandRequired<OpenSubagentCommand>("AgentId");
+        AssertCommandRequired<ModalResponseCommand>("ModalId", "Response");
+        AssertCommandRequired<SetToolEnabledCommand>("ToolId", "Enabled");
+        AssertCommandRequired<SetContinueInBackgroundCommand>("ContinueInBackground");
+        AssertCommandRequired<DetachCommand>();
+
+        AssertRequired<SessionStatusEvent>("Status");
+        AssertRequired<SessionSnapshotEvent>("Snapshot");
+        AssertRequired<HistoryAppendedEvent>("Item");
+        AssertRequired<UsageChangedEvent>("Usage");
+        AssertRequired<AgentInformationChangedEvent>("Information");
+        AssertRequired<QueueChangedEvent>("Revision", "Queues", "RemovedQueueIds");
+        AssertRequired<StreamingStartedEvent>("RunId", "Item");
+        AssertRequired<StreamingUpdatedEvent>("RunId", "Update");
+        AssertRequired<StreamingCompletedEvent>("RunId", "Item");
+        AssertRequired<BusyChangedEvent>("IsBusy");
+        AssertRequired<ToolsSnapshotEvent>("Tools");
+        AssertRequired<ToolsChangedEvent>("Tools");
+        AssertRequired<SubagentsSnapshotEvent>("Subagents");
+        AssertRequired<SubagentsChangedEvent>("Subagents");
+        AssertRequired<ModalRaisedEvent>("Modal");
+        AssertRequired<ModalUpdatedEvent>("Modal");
+        AssertRequired<ModalDismissedEvent>("ModalId");
+        AssertRequired<SessionRetentionChangedEvent>("ContinueInBackground", "ViewerCount");
+        AssertRequired<CommandCompletedEvent>("CommandId");
+        AssertRequired<OperationErrorEvent>("Error");
+        AssertRequired<SessionTerminalEvent>("Reason", "CompletionState");
+        AssertRequired<AgentSessionSnapshot>(
+            "Information", "Usage", "InputQueues", "IsBusy", "History", "RunningItems",
+            "Tools", "Subagents", "Modals", "ContinueInBackground", "ViewerCount");
     }
 
     [Fact]
@@ -152,18 +211,59 @@ public sealed class AgentSessionProtocolCodecTests
     [Fact]
     public void RoundTrip_AllCommandDiscriminators_PreservesIdsEpochAndPayload()
     {
-        var command = new MoveQueueItemCommand
+        var json = JsonDocument.Parse("""[{"value":"payload"}]""").RootElement.Clone();
+        var configuration = new AgentInputQueueConfiguration
+        { Name = "queue", Immediacy = AgentInputQueueImmediacy.Queue, Priority = 3 };
+        static (Guid CommandId, Guid CorrelationId, RuntimeEpoch Epoch) Identity()
+            => (Guid.NewGuid(), Guid.NewGuid(), Epoch());
+        var i = Identity();
+        AgentSessionCommand[] commands =
+        [
+            new CreateQueueCommand
+            { ExpectedRevision = 1, Configuration = configuration, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new DeleteQueueCommand
+            { ExpectedRevision = 2, QueueId = "queue", CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new EnqueueInputCommand
+            { ExpectedRevision = 3, TargetQueueId = "queue", Messages = json, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new EditQueueItemCommand
+            { ExpectedRevision = 4, QueueId = "queue", ItemId = "item", Messages = json, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new RemoveQueueItemCommand
+            { ExpectedRevision = 5, QueueId = "queue", ItemId = "item", CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new MoveQueueItemCommand
+            {
+                ExpectedRevision = 6, SourceQueueId = "source", ItemId = "item",
+                TargetQueueId = "target", BeforeItemId = "before",
+                CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch,
+            },
+            new ConfigureQueueCommand
+            { ExpectedRevision = 7, QueueId = "queue", Configuration = configuration, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new InterruptCommand
+            { CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new TerminateSessionCommand
+            { Reason = "done", CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new OpenSubagentCommand
+            { AgentId = "agent", CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new ModalResponseCommand
+            { ModalId = "modal", Response = json, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new SetToolEnabledCommand
+            { ToolId = "tool", Enabled = true, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new SetContinueInBackgroundCommand
+            { ContinueInBackground = true, CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+            new DetachCommand
+            { CommandId = (i = Identity()).CommandId, CorrelationId = i.CorrelationId, RuntimeEpoch = i.Epoch },
+        ];
+
+        foreach (var command in commands)
         {
-            ExpectedRevision = 42, SourceQueueId = "source", ItemId = "item",
-            TargetQueueId = "target", BeforeItemId = "before",
-            CommandId = Guid.NewGuid(), CorrelationId = Guid.NewGuid(), RuntimeEpoch = Epoch(),
-        };
-        var copy = Assert.IsType<MoveQueueItemCommand>(
-            AgentSessionProtocolCodec.DeserializeCommand(AgentSessionProtocolCodec.SerializeCommand(command)));
-        Assert.Equal(command.CommandId, copy.CommandId);
-        Assert.Equal(command.CorrelationId, copy.CorrelationId);
-        Assert.Equal("before", copy.BeforeItemId);
-        Assert.Equal(42, copy.ExpectedRevision);
+            var encoded = AgentSessionProtocolCodec.SerializeCommand(command);
+            var copy = AgentSessionProtocolCodec.DeserializeCommand(encoded);
+            Assert.IsType(command.GetType(), copy);
+            Assert.Equal(command.Type, copy.Type);
+            Assert.Equal(command.CommandId, copy.CommandId);
+            Assert.Equal(command.CorrelationId, copy.CorrelationId);
+            Assert.Equal(encoded.GetRawText(), AgentSessionProtocolCodec.SerializeCommand(copy).GetRawText());
+        }
+        Assert.Equal(14, commands.Select(command => command.Type).Distinct().Count());
     }
 
     [Fact]
@@ -293,19 +393,20 @@ public sealed class AgentSessionProtocolCodecTests
     }
 
     [Fact]
-    public void ServerFrames_ConcurrentPublish_AreStrictlyOrdered()
+    public async Task ServerFrames_ConcurrentPublish_AreStrictlyOrdered()
     {
-        long sequence = 0;
-        var frames = new ConcurrentBag<AgentSessionServerFrame>();
-        Parallel.For(0, 128, _ =>
-        {
-            var current = Interlocked.Increment(ref sequence);
-            frames.Add(AgentSessionProtocolCodec.DeserializeFrame(
-                AgentSessionProtocolCodec.SerializeFrame(
-                    AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.CreateFrame(
-                        Epoch(), current, Guid.NewGuid(), new BusyChangedEvent { IsBusy = true }))));
-        });
-        Assert.Equal(Enumerable.Range(1, 128).Select(i => (long)i), frames.OrderBy(f => f.Sequence).Select(f => f.Sequence));
+        var channel = new PublisherChannel();
+        var publisher = new AgentSessionFramePublisher(channel, Epoch());
+        var publishes = Enumerable.Range(0, 128)
+            .Select(index => Task.Run(() => publisher.PublishAsync(
+                new BusyChangedEvent { IsBusy = index % 2 == 0 }, Guid.NewGuid())))
+            .ToArray();
+        await Task.WhenAll(publishes);
+
+        var delivered = new List<long>();
+        while (channel.Outgoing.Reader.TryRead(out var raw))
+            delivered.Add(AgentSessionProtocolCodec.DeserializeFrame(raw).Sequence);
+        Assert.Equal(Enumerable.Range(1, 128).Select(index => (long)index), delivered);
     }
 
     internal static AgentSessionOpenRequest Open() => new()
@@ -408,5 +509,19 @@ public sealed class AgentSessionProtocolCodecTests
     {
         foreach (var name in propertyNames)
             Assert.NotNull(typeof(T).GetProperty(name)!.GetCustomAttribute<System.Runtime.CompilerServices.RequiredMemberAttribute>());
+    }
+
+    private static void AssertCommandRequired<T>(params string[] payloadPropertyNames)
+        where T : AgentSessionCommand
+        => AssertRequired<T>(
+            [nameof(AgentSessionCommand.CommandId), nameof(AgentSessionCommand.CorrelationId),
+             nameof(AgentSessionCommand.RuntimeEpoch), .. payloadPropertyNames]);
+
+    private sealed class PublisherChannel : IMessageChannel
+    {
+        public Channel<JsonElement> Outgoing { get; } = Channel.CreateUnbounded<JsonElement>();
+        public ChannelWriter<JsonElement> Writer => this.Outgoing.Writer;
+        public ChannelReader<JsonElement> Reader => Channel.CreateUnbounded<JsonElement>().Reader;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
