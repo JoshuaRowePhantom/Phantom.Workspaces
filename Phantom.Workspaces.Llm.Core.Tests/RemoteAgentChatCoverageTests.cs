@@ -378,6 +378,16 @@ public sealed partial class RemoteAgentChatTests
         => await AssertDetachPolicyAsync(continueInBackground: true);
 
     [Fact]
+    public void ShouldTerminateRuntime_NegativeViewerCount_RejectsInvalidState()
+    {
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            AgentSessionViewerReleasePolicy.ShouldTerminateRuntime(
+                continueInBackground: false, remainingViewerCount: -1));
+
+        Assert.Equal("remainingViewerCount", exception.ParamName);
+    }
+
+    [Fact]
     public async Task TerminateAsync_CurrentEpoch_WaitsForTerminalFrame()
     {
         var (transport, chat) = await AttachAsync();
