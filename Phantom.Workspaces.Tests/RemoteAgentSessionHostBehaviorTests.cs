@@ -280,16 +280,52 @@ public sealed partial class RemoteAgentSessionHostTests
     [Fact]
     public async Task QueueConsumption_CurrentRun_BroadcastsOwnerRevisionAfterEnqueue()
     {
-        await using var fixture = new HostFixture();
-        fixture.Queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot
-            { Revision = 9, Queues = [] });
-        await using var attachment = await fixture.Host.OpenAsync(fixture.Request(AgentSessionOpenIntent.Attach));
-        await fixture.Channel.Output.ReadAsync();
-        fixture.Queues.Raise(value => value.Changed += null, EventArgs.Empty);
-        var delta = Assert.IsType<QueueChangedEvent>(
+        var manager = new AgentInputQueueManager();
+        var queue = new AgentInputQueue(new AgentInputQueue.Parameters
+        {
+            Priority = 1,
+            Immediacy = AgentInputQueueImmediacy.Queue,
+        });
+        manager.RegisterInputQueue(queue);
+        using var queues = new LocalAgentInputQueuesAdapter(manager, queue);
+        var chat = Chat(queues);
+        await using var runtime = new RemoteAgentSessionLease(
+            "session", 1, new RuntimeEpoch { Value = Guid.NewGuid() }, chat.Object, true, Snapshot);
+        var channel = new DuplexChannel();
+        await using var attachment = runtime.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "owner",
+            Channel = channel,
+        });
+        var host = new RemoteAgentSessionHost(
+            Allow(), Mock.Of<IRemoteAgentSessionRuntimeRegistry>(), Mock.Of<IAgentSessionRuntimeHostFactory>());
+        var enqueueRevision = queues.Snapshot.Revision;
+        var command = new EnqueueInputCommand
+        {
+            CommandId = Guid.NewGuid(),
+            CorrelationId = Guid.NewGuid(),
+            RuntimeEpoch = runtime.Epoch,
+            ExpectedRevision = enqueueRevision,
+            TargetQueueId = queue.QueueId,
+            Messages = JsonSerializer.SerializeToElement(new[] { new ChatMessage(ChatRole.User, "run") }),
+        };
+
+        await host.DispatchCommandAsync(Peer(), Open(AgentSessionOpenIntent.Attach), runtime, attachment, command);
+        var enqueued = Assert.IsType<QueueChangedEvent>(
             AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
-                AgentSessionProtocolCodec.DeserializeFrame(await fixture.Channel.Output.ReadAsync())));
-        Assert.Equal(9, delta.Revision);
+                AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync())));
+        Assert.Equal(enqueueRevision + 1, enqueued.Revision);
+        Assert.IsType<CommandCompletedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync())));
+
+        Assert.True(manager.TryDequeueNextImmediateOrQueued(out var consumed));
+        var consumedDelta = Assert.IsType<QueueChangedEvent>(
+            AgentSessionProtocolCodec.AgentSessionProtocolEventCodec.Deserialize(
+                AgentSessionProtocolCodec.DeserializeFrame(await channel.Output.ReadAsync())));
+        Assert.Equal("run", consumed.Messages!.Single().Text);
+        Assert.Equal(enqueued.Revision + 1, consumedDelta.Revision);
+        Assert.Empty(consumedDelta.Queues.Single(value => value.QueueId == queue.QueueId).Items);
     }
 
     [Fact]
@@ -403,48 +439,96 @@ public sealed partial class RemoteAgentSessionHostTests
     [Fact]
     public async Task OpenAsync_AttachRacesLastViewerStop_WinnerDeterminesExistingOrFreshEpoch()
     {
-        await using var runtime = Runtime(background: false);
-        var originalEpoch = runtime.Epoch;
-        var first = runtime.Attach(new AttachRemoteAgentSessionRequest
+        var attachEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseAttach = new ManualResetEventSlim();
+        var snapshots = 0;
+        AgentSessionSnapshot BlockingSnapshot()
         {
-            AttachmentToken = "first", Channel = new DuplexChannel(),
-        });
-        await using var winningAttach = runtime.Attach(new AttachRemoteAgentSessionRequest
+            if (Interlocked.Increment(ref snapshots) == 1)
+            {
+                attachEntered.SetResult();
+                releaseAttach.Wait();
+            }
+            return Snapshot();
+        }
+        await using var attachWinningRuntime = Runtime(background: false, snapshotFactory: BlockingSnapshot);
+        var originalEpoch = attachWinningRuntime.Epoch;
+        await using var registry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await registry.GetOrStartAsync(Intent(), _ => Task.FromResult(attachWinningRuntime));
+        var attachWinningFactory = new Mock<IAgentSessionRuntimeHostFactory>();
+        attachWinningFactory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Intent());
+        var attachWinningHost = new RemoteAgentSessionHost(
+            Allow(), registry, attachWinningFactory.Object);
+        var first = attachWinningRuntime.Attach(new AttachRemoteAgentSessionRequest
         {
-            AttachmentToken = "winner", Channel = new DuplexChannel(),
+            AttachmentToken = "first",
+            Channel = new DuplexChannel(),
         });
-        await first.DisposeAsync();
-        Assert.False(runtime.IsFenced);
-        Assert.Equal(originalEpoch, runtime.Epoch);
-        Assert.Equal(1, runtime.ViewerCount);
-        await winningAttach.DisposeAsync();
-        Assert.True(runtime.IsFenced);
+        var winningAttachTask = Task.Run(() => attachWinningHost.OpenAsync(new OpenAgentSessionHostRequest
+        {
+            Peer = Peer(),
+            OpenRequest = Open(AgentSessionOpenIntent.StartOrAttach) with { AttachmentToken = "winner" },
+            Channel = new DuplexChannel(),
+        }));
+        var attachStarted = await Task.WhenAny(attachEntered.Task, winningAttachTask);
+        if (ReferenceEquals(attachStarted, winningAttachTask))
+            await winningAttachTask;
+        var losingStopTask = Task.Run(async () => await first.DisposeAsync());
+        releaseAttach.Set();
+        await using var winningAttach = await winningAttachTask;
+        await losingStopTask;
+        Assert.False(attachWinningRuntime.IsFenced);
+        Assert.Equal(originalEpoch, attachWinningRuntime.Epoch);
+        Assert.Equal(1, attachWinningRuntime.ViewerCount);
+    }
+
+    [Fact]
+    public async Task OpenAsync_LastViewerStopWinsAttachRace_StartsFreshEpoch()
+    {
+        var terminalEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseTerminal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var stopWinningRuntime = Runtime(
+            background: false,
+            persistTerminalAsync: async _ =>
+            {
+                terminalEntered.SetResult();
+                await releaseTerminal.Task;
+            });
+        await using var stopWinningRegistry = new RemoteAgentSessionRuntimeRegistry(TimeProvider.System);
+        await stopWinningRegistry.GetOrStartAsync(Intent(), _ => Task.FromResult(stopWinningRuntime));
+        var lastViewer = stopWinningRuntime.Attach(new AttachRemoteAgentSessionRequest
+        {
+            AttachmentToken = "last",
+            Channel = new DuplexChannel(),
+        });
+        var stopTask = lastViewer.DisposeAsync().AsTask();
+        await terminalEntered.Task;
 
         await using var fresh = Runtime(background: false);
-        Assert.NotEqual(originalEpoch, fresh.Epoch);
-        var registry = new Mock<IRemoteAgentSessionRuntimeRegistry>();
-        registry.Setup(value => value.TryGetAsync("session", 1, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((RemoteAgentSessionLease?)null);
-        registry.Setup(value => value.GetOrStartAsync(
-                It.IsAny<PersistedAgentSessionRuntimeIntent>(),
-                It.IsAny<Func<CancellationToken, Task<RemoteAgentSessionLease>>>(),
-                It.IsAny<CancellationToken>()))
-            .ReturnsAsync(fresh);
         var factory = new Mock<IAgentSessionRuntimeHostFactory>();
         factory.Setup(value => value.LoadIntentAsync("session", It.IsAny<CancellationToken>()))
             .ReturnsAsync(Intent());
-        var host = new RemoteAgentSessionHost(Allow(), registry.Object, factory.Object);
-        await using var freshAttachment = await host.OpenAsync(new OpenAgentSessionHostRequest
+        factory.Setup(value => value.StartAsync(
+                It.IsAny<PersistedAgentSessionRuntimeIntent>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(fresh);
+        var stopWinningHost = new RemoteAgentSessionHost(Allow(), stopWinningRegistry, factory.Object);
+        var freshAttachmentTask = stopWinningHost.OpenAsync(new OpenAgentSessionHostRequest
         {
             Peer = Peer(),
-            OpenRequest = Open(AgentSessionOpenIntent.Start) with { AttachmentToken = "fresh" },
+            OpenRequest = Open(AgentSessionOpenIntent.StartOrAttach) with { AttachmentToken = "fresh" },
             Channel = new DuplexChannel(),
         });
-
+        RemoteAgentAttachmentLease? freshAttachment = null;
+        var openError = await Record.ExceptionAsync(async () => freshAttachment = await freshAttachmentTask);
+        releaseTerminal.SetResult();
+        await stopTask;
+        Assert.Null(openError);
+        await using var freshAttachmentScope = freshAttachment!;
         Assert.Equal(1, fresh.ViewerCount);
-        registry.Verify(value => value.GetOrStartAsync(
+        Assert.NotEqual(stopWinningRuntime.Epoch, fresh.Epoch);
+        factory.Verify(value => value.StartAsync(
             It.Is<PersistedAgentSessionRuntimeIntent>(intent => intent.AgentSessionId == "session"),
-            It.IsAny<Func<CancellationToken, Task<RemoteAgentSessionLease>>>(),
             It.IsAny<CancellationToken>()), Times.Once);
     }
 
@@ -589,20 +673,30 @@ public sealed partial class RemoteAgentSessionHostTests
         },
     };
 
-    private static RemoteAgentSessionLease Runtime(bool background = true, TimeProvider? time = null)
+    private static RemoteAgentSessionLease Runtime(
+        bool background = true,
+        TimeProvider? time = null,
+        Func<AgentSessionSnapshot>? snapshotFactory = null,
+        Func<CancellationToken, ValueTask>? persistTerminalAsync = null)
     {
         var queues = new Mock<IAgentInputQueues>();
         queues.SetupGet(value => value.Snapshot).Returns(new AgentInputQueuesSnapshot { Revision = 0, Queues = [] });
         return new RemoteAgentSessionLease("session", 1, new RuntimeEpoch { Value = Guid.NewGuid() },
-            Chat(queues).Object, background, Snapshot, timeProvider: time);
+            Chat(queues).Object, background, snapshotFactory ?? Snapshot,
+            persistTerminalAsync: persistTerminalAsync, timeProvider: time);
     }
 
     private static Mock<IAgentChat> Chat(
         Mock<IAgentInputQueues> queues,
         AgentChatRunningItemCollection? runningItems = null)
+        => Chat(queues.Object, runningItems);
+
+    private static Mock<IAgentChat> Chat(
+        IAgentInputQueues queues,
+        AgentChatRunningItemCollection? runningItems = null)
     {
         var chat = new Mock<IAgentChat>();
-        chat.SetupGet(value => value.InputQueues).Returns(queues.Object);
+        chat.SetupGet(value => value.InputQueues).Returns(queues);
         chat.SetupGet(value => value.RunningItems).Returns(runningItems ?? new AgentChatRunningItemCollection());
         chat.SetupGet(value => value.SubAgents).Returns(
             new ReadOnlyObservableCollection<IRunningSubAgent>(new ObservableCollection<IRunningSubAgent>()));

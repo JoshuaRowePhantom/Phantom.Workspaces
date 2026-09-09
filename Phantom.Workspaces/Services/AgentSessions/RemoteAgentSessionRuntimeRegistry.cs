@@ -49,29 +49,42 @@ internal sealed class RemoteAgentSessionRuntimeRegistry :
         ArgumentNullException.ThrowIfNull(intent);
         ArgumentNullException.ThrowIfNull(startAsync);
         var key = new RuntimeKey(intent.AgentSessionId, intent.OwnershipGeneration);
-        RegistryEntry entry;
-        lock (this.gate)
+        while (true)
         {
-            ObjectDisposedException.ThrowIf(this.disposed, this);
-            if (!this.entries.TryGetValue(key, out entry!))
+            RegistryEntry entry;
+            lock (this.gate)
             {
-                entry = new RegistryEntry(startAsync(ct));
-                this.entries.Add(key, entry);
+                ObjectDisposedException.ThrowIf(this.disposed, this);
+                if (!this.entries.TryGetValue(key, out entry!))
+                {
+                    entry = new RegistryEntry(startAsync(ct));
+                    this.entries.Add(key, entry);
+                }
             }
-        }
-        try
-        {
-            var lease = await entry.StartTask.WaitAsync(ct).ConfigureAwait(false);
-            lock (this.gate) entry.Lease ??= lease;
-            lease.Terminated -= this.OnTerminated;
-            lease.Terminated += this.OnTerminated;
-            return lease;
-        }
-        catch
-        {
+
+            RemoteAgentSessionLease lease;
+            try
+            {
+                lease = await entry.StartTask.WaitAsync(ct).ConfigureAwait(false);
+                lock (this.gate) entry.Lease ??= lease;
+            }
+            catch
+            {
+                lock (this.gate)
+                    if (this.entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry))
+                        this.entries.Remove(key);
+                throw;
+            }
+
+            if (!lease.IsFenced)
+            {
+                lease.Terminated -= this.OnTerminated;
+                lease.Terminated += this.OnTerminated;
+                return lease;
+            }
+
             lock (this.gate)
                 if (this.entries.TryGetValue(key, out var current) && ReferenceEquals(current, entry)) this.entries.Remove(key);
-            throw;
         }
     }
 

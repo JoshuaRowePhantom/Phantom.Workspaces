@@ -88,12 +88,12 @@ internal sealed class RemoteAgentSessionHost : IAsyncDisposable
         RemoteAgentSessionLease.InitialAttachmentState initial;
         try
         {
-            initial = runtime.AttachAndCaptureInitialState(new AttachRemoteAgentSessionRequest
+            initial = await runtime.AttachAndCaptureInitialStateAsync(new AttachRemoteAgentSessionRequest
             {
                 AttachmentToken = open.AttachmentToken,
                 Channel = request.Channel,
                 Cursor = open.ReplayCursor,
-            });
+            }, ct).ConfigureAwait(false);
         }
         catch (InvalidOperationException) when (runtime.IsFenced)
         {

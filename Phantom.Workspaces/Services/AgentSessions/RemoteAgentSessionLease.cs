@@ -125,27 +125,37 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         }
     }
 
-    internal InitialAttachmentState AttachAndCaptureInitialState(AttachRemoteAgentSessionRequest request)
+    internal async ValueTask<InitialAttachmentState> AttachAndCaptureInitialStateAsync(
+        AttachRemoteAgentSessionRequest request,
+        CancellationToken ct = default)
     {
-        lock (this.gate)
+        await this.transitionGate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            var attachment = this.AttachUnderLock(request);
-            if (request.Cursor is { } cursor)
+            lock (this.gate)
             {
-                var replay = this.Replay.ReadAfter(cursor);
-                if (replay.IsCovered)
-                    return new InitialAttachmentState(attachment, replay.Frames, null);
-            }
+                var attachment = this.AttachUnderLock(request);
+                if (request.Cursor is { } cursor)
+                {
+                    var replay = this.Replay.ReadAfter(cursor);
+                    if (replay.IsCovered)
+                        return new InitialAttachmentState(attachment, replay.Frames, null);
+                }
 
-            var snapshot = this.snapshotFactory() with
-            {
-                ContinueInBackground = this.continueInBackground,
-                ViewerCount = this.attachments.Count,
-            };
-            var frame = this.Replay.Append(
-                Guid.NewGuid(),
-                new SessionSnapshotEvent { Snapshot = snapshot });
-            return new InitialAttachmentState(attachment, [frame], snapshot);
+                var snapshot = this.snapshotFactory() with
+                {
+                    ContinueInBackground = this.continueInBackground,
+                    ViewerCount = this.attachments.Count,
+                };
+                var frame = this.Replay.Append(
+                    Guid.NewGuid(),
+                    new SessionSnapshotEvent { Snapshot = snapshot });
+                return new InitialAttachmentState(attachment, [frame], snapshot);
+            }
+        }
+        finally
+        {
+            this.transitionGate.Release();
         }
     }
 
@@ -244,18 +254,7 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
         try
         {
             lock (this.gate)
-            {
-                if (this.termination is not null)
-                {
-                    task = this.termination;
-                }
-                else
-                {
-                    this.fenced = true;
-                    this.terminalReason = reason;
-                    task = this.termination = this.TerminateCoreAsync();
-                }
-            }
+                task = this.BeginTerminationUnderLock(reason);
         }
         finally
         {
@@ -280,16 +279,30 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
 
     internal async ValueTask ReleaseAsync(string token, long generation)
     {
-        bool stop;
-        lock (this.gate)
+        Task? terminationTask = null;
+        var changed = false;
+        await this.transitionGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            if (!this.attachments.TryGetValue(token, out var state) || state.Generation != generation) return;
-            this.attachments.Remove(token);
-            state.GraceTimer?.Dispose();
-            stop = !this.fenced && this.attachments.Count == 0 && !this.continueInBackground;
+            lock (this.gate)
+            {
+                if (!this.attachments.TryGetValue(token, out var state) || state.Generation != generation)
+                    return;
+                this.attachments.Remove(token);
+                state.GraceTimer?.Dispose();
+                changed = true;
+                if (!this.fenced && this.attachments.Count == 0 && !this.continueInBackground)
+                    terminationTask = this.BeginTerminationUnderLock("runtime-stopped");
+            }
         }
-        await this.PublishRetentionChangedAsync().ConfigureAwait(false);
-        if (stop) await this.TryTerminateAsync().ConfigureAwait(false);
+        finally
+        {
+            this.transitionGate.Release();
+        }
+        if (terminationTask is not null)
+            await terminationTask.ConfigureAwait(false);
+        else if (changed)
+            await this.PublishRetentionChangedAsync().ConfigureAwait(false);
     }
 
     internal IMessageChannel? GetConnectedChannel(string token, long generation)
@@ -318,6 +331,15 @@ internal sealed class RemoteAgentSessionLease : IAsyncDisposable
     }
 
     public async ValueTask DisposeAsync() => await this.TryTerminateAsync().ConfigureAwait(false);
+
+    private Task BeginTerminationUnderLock(string reason)
+    {
+        if (this.termination is not null)
+            return this.termination;
+        this.fenced = true;
+        this.terminalReason = reason;
+        return this.termination = this.TerminateCoreAsync();
+    }
 
     private async Task ExpireDisconnectedAsync(string token)
     {
