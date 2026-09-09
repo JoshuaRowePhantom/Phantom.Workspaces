@@ -10,8 +10,14 @@ namespace Phantom.Workspaces.Llm.SlashCommands;
 /// </summary>
 public sealed record SlashCommandContext
 {
+    private readonly IAgentChat agentChat = null!;
+
     /// <summary>The common local/remote chat instance.</summary>
-    public required IAgentChat AgentChat { get; init; }
+    public required IAgentChat AgentChat
+    {
+        get => this.agentChat;
+        init => this.agentChat = value ?? throw new ArgumentNullException(nameof(value));
+    }
 
     /// <summary>
     /// The workspace entity id for the <c>agent-session</c> entity, when the session is persisted.
