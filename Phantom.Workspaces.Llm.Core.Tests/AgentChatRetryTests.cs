@@ -375,11 +375,15 @@ public sealed class AgentChatRetryTests
     public async Task Interrupt_ActiveTurn_CancelsTurnWithoutDisposingChat()
     {
         var client = new DeterministicTestChatClient();
-        var stream = client.EnqueueStreamingResponse();
-        stream.EnqueueUpdate(
-            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("blocked")] },
-            isReady: false);
-        stream.Complete(isReady: false);
+        var subsequentTurn = client.EnqueueStreamingResponse();
+        subsequentTurn.EnqueueUpdate(
+            new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new TextContent("still-usable")],
+                FinishReason = ChatFinishReason.Stop,
+            });
+        subsequentTurn.Complete();
         await using var chat = await AgentChat.CreateAsync(new InternalCreateAgentChatRequest
         {
             AgentDefinition = EchoDef,
@@ -387,34 +391,44 @@ public sealed class AgentChatRetryTests
             ClientOverride = client,
             ForegroundScheduler = this.foregroundScheduler,
         });
-        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var interrupted = false;
         ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
         {
-            if (chat.RunningItems.Count > 0)
+            if (!interrupted && chat.RunningItems.Count > 0)
             {
-                started.TrySetResult();
+                interrupted = true;
+                chat.Interrupt();
             }
         };
-        chat.EnqueueUserMessage("start");
-        await started.Task.WaitAsync(CancellationToken.None);
-
-        chat.Interrupt();
         var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         ((System.Collections.Specialized.INotifyCollectionChanged)chat.RunningItems).CollectionChanged += (_, _) =>
         {
-            if (chat.RunningItems.Count == 0)
+            if (interrupted && chat.RunningItems.Count == 0)
             {
                 stopped.TrySetResult();
             }
         };
-        if (chat.RunningItems.Count == 0)
-        {
-            stopped.TrySetResult();
-        }
-        await stopped.Task.WaitAsync(CancellationToken.None);
 
-        chat.EnqueueSystemNote("still-usable");
-        Assert.Contains(chat.History, item => item.Contents.OfType<TextContent>().Any(content => content.Text == "still-usable"));
+        chat.EnqueueUserMessage("interrupt immediately");
+        await stopped.Task.WaitAsync(timeout.Token);
+
+        Assert.Contains(
+            chat.History,
+            item => item.Contents.OfType<TextContent>().Any(content => content.Text == "Interrupted by user."));
+
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        chat.TurnCompleted += (_, item) =>
+        {
+            if (item.Contents.OfType<TextContent>().Any(content => content.Text == "still-usable"))
+            {
+                completed.TrySetResult();
+            }
+        };
+        chat.EnqueueUserMessage("next turn");
+        await completed.Task.WaitAsync(timeout.Token);
+
+        Assert.Empty(chat.RunningItems);
     }
 
     [Fact]

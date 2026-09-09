@@ -2045,27 +2045,29 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
 
                 this.AppendUserMessagesToHistory(chatMessagesToSubmit);
 
-                AgentChatRunningItem? currentPartialTextResponseItem = this.CreateRunningItem([
-                    new AgentChatHistoryItem
-                    {
-                        Role = ChatRole.Assistant,
-                        Timestamp = this.timeProvider.GetUtcNow(),
-                    }]);
-
                 // A fresh per-run cancellation source (linked to the loop token) is what Interrupt()
-                // cancels, so a Ctrl+Break interrupts only the current run while the agent keeps
-                // accepting new input afterwards.
+                // cancels. Publish it before creating the running item because creating that item
+                // synchronously notifies observers; an interrupt from that notification must not be
+                // lost before the provider read starts.
                 var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 lock (this.processingStateLock)
                 {
                     this.activeRunCancellation = runCancellation;
                 }
 
+                AgentChatRunningItem? currentPartialTextResponseItem = null;
                 IAsyncEnumerator<AgentResponseUpdate>? providerEnumerator = null;
                 Task<bool>? pendingMoveNext = null;
                 PartialResponseConflator? partialResponses = null;
                 try
                 {
+                    currentPartialTextResponseItem = this.CreateRunningItem([
+                        new AgentChatHistoryItem
+                        {
+                            Role = ChatRole.Assistant,
+                            Timestamp = this.timeProvider.GetUtcNow(),
+                        }]);
+
                     partialResponses = new PartialResponseConflator(
                         this,
                         currentPartialTextResponseItem
@@ -2177,7 +2179,10 @@ public sealed class AgentChat : IAgentChat, ISubAgentChatRegistry, IRunningSubAg
                         this.activeConflator = null;
                     }
 
-                    this.CompleteRunningItem(currentPartialTextResponseItem);
+                    if (currentPartialTextResponseItem is not null)
+                    {
+                        this.CompleteRunningItem(currentPartialTextResponseItem);
+                    }
                 }
             }
         }
