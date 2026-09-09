@@ -760,16 +760,12 @@ public sealed class AgentViewModelSubAgentBrowserTests
             Task.Factory.StartNew(
                 () =>
                 {
-                    // Create a lease using reflection to access the internal constructor
-                    var leaseType = typeof(RunningAgentChatLease);
-                    var constructor = leaseType.GetConstructor(
-                        System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
-                        null,
-                        [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>), typeof(Func<ValueTask>)],
-                        null);
                     var sessionIdStruct = new AgentSessionId(_agentChat.AgentSessionId);
-                    var lease = (RunningAgentChatLease)constructor!.Invoke(
-                        [sessionIdStruct, _agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask), null]);
+                    var lease = new RunningAgentChatLease(
+                        sessionIdStruct,
+                        _agentChat,
+                        () => ValueTask.CompletedTask,
+                        localAgentChat: _agentChat);
                     tcs.SetResult(lease);
                 },
                 CancellationToken.None,

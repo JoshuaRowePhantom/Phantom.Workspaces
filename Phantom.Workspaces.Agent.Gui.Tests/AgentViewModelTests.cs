@@ -352,13 +352,11 @@ public sealed class AgentViewModelTests
 
         public void CompleteLease()
         {
-            var leaseCtor = typeof(RunningAgentChatLease).GetConstructor(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
-                null,
-                [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>), typeof(Func<ValueTask>)],
-                null)!;
-            var lease = (RunningAgentChatLease)leaseCtor.Invoke(
-                [new AgentSessionId(this.agentChat.AgentSessionId), this.agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask), null]);
+            var lease = new RunningAgentChatLease(
+                new AgentSessionId(this.agentChat.AgentSessionId),
+                this.agentChat,
+                () => ValueTask.CompletedTask,
+                localAgentChat: this.agentChat);
             this.leaseTcs.SetResult(lease);
             this.ContinuationQueued.TrySetResult();
         }
@@ -376,13 +374,11 @@ public sealed class AgentViewModelTests
 
         public Task<RunningAgentChatLease> GetAsync(AgentSessionId sessionId, bool registerAsRunningAgent = true, CancellationToken ct = default)
         {
-            var leaseCtor = typeof(RunningAgentChatLease).GetConstructor(
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
-                null,
-                [typeof(AgentSessionId), typeof(AgentChat), typeof(Func<ValueTask>), typeof(Func<ValueTask>)],
-                null)!;
-            var lease = (RunningAgentChatLease)leaseCtor.Invoke(
-                [new AgentSessionId(agentChat.AgentSessionId), agentChat, new Func<ValueTask>(() => ValueTask.CompletedTask), null]);
+            var lease = new RunningAgentChatLease(
+                new AgentSessionId(agentChat.AgentSessionId),
+                agentChat,
+                () => ValueTask.CompletedTask,
+                localAgentChat: agentChat);
 
             if (backgroundLease)
             {
