@@ -220,7 +220,7 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.Apply(this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
+        this.Apply((commandId, expectedRevision) => this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
         {
             QueueId = queueId,
             Configuration = new AgentInputQueueConfiguration
@@ -230,8 +230,8 @@ public sealed class InputQueueViewModel : ViewModelBase
                 Priority = snapshot.Priority,
                 CoalescingKey = snapshot.CoalescingKey,
             },
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
         this.RefreshQueue(queueId);
     }
@@ -262,12 +262,12 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public void RemoveQueueItem(string queueId, string itemId)
     {
-        this.Apply(this.inputQueues.Remove(new RemoveAgentInputQueueItemRequest
+        this.Apply((commandId, expectedRevision) => this.inputQueues.Remove(new RemoveAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
         this.RefreshQueue(queueId);
     }
@@ -277,11 +277,11 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     public bool RemoveInputQueue(string queueId)
     {
-        var result = this.Apply(this.inputQueues.DeleteQueue(new DeleteAgentInputQueueRequest
+        var result = this.Apply((commandId, expectedRevision) => this.inputQueues.DeleteQueue(new DeleteAgentInputQueueRequest
         {
             QueueId = queueId,
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
 
         if (result.Status != AgentInputQueueCommandStatus.Applied)
@@ -324,13 +324,13 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.Apply(this.inputQueues.Edit(new EditAgentInputQueueItemRequest
+        this.Apply((commandId, expectedRevision) => this.inputQueues.Edit(new EditAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
             Messages = UpdateMessages(item.Messages, text),
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
         this.RefreshQueue(queueId);
     }
@@ -393,13 +393,13 @@ public sealed class InputQueueViewModel : ViewModelBase
 
         var updatedMessages = item.Messages.ToArray();
         updatedMessages[0] = new ChatMessage(ChatRole.User, contents);
-        this.Apply(this.inputQueues.Edit(new EditAgentInputQueueItemRequest
+        this.Apply((commandId, expectedRevision) => this.inputQueues.Edit(new EditAgentInputQueueItemRequest
         {
             QueueId = queueId,
             ItemId = itemId,
             Messages = updatedMessages,
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
         this.RefreshQueue(queueId);
     }
@@ -427,12 +427,12 @@ public sealed class InputQueueViewModel : ViewModelBase
             return;
         }
 
-        this.Apply(this.inputQueues.Enqueue(new EnqueueAgentInputRequest
+        this.Apply((commandId, expectedRevision) => this.inputQueues.Enqueue(new EnqueueAgentInputRequest
         {
             TargetQueueId = queueId,
             Messages = [new ChatMessage(ChatRole.User, contents.ToList())],
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
         this.RecordQueueUse(queueId);
         this.RefreshQueue(queueId);
@@ -505,18 +505,20 @@ public sealed class InputQueueViewModel : ViewModelBase
                 continue;
             }
 
-            this.Apply(this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
+            var currentQueue = queue;
+            var currentTargetImmediacy = targetImmediacy;
+            this.Apply((commandId, expectedRevision) => this.inputQueues.Configure(new ConfigureAgentInputQueueRequest
             {
-                QueueId = queue.QueueId,
+                QueueId = currentQueue.QueueId,
                 Configuration = new AgentInputQueueConfiguration
                 {
-                    Name = queue.Name,
-                    Immediacy = targetImmediacy,
-                    Priority = queue.Priority,
-                    CoalescingKey = queue.CoalescingKey,
+                    Name = currentQueue.Name,
+                    Immediacy = currentTargetImmediacy,
+                    Priority = currentQueue.Priority,
+                    CoalescingKey = currentQueue.CoalescingKey,
                 },
-                CommandId = Guid.NewGuid(),
-                ExpectedRevision = this.inputQueues.Snapshot.Revision,
+                CommandId = commandId,
+                ExpectedRevision = expectedRevision,
             }));
         }
     }
@@ -594,16 +596,17 @@ public sealed class InputQueueViewModel : ViewModelBase
 
     private string? CreateQueue(AgentInputQueueImmediacy immediacy)
     {
-        var result = this.Apply(this.inputQueues.CreateQueue(new CreateAgentInputQueueRequest
+        var name = this.CreateQueueName();
+        var result = this.Apply((commandId, expectedRevision) => this.inputQueues.CreateQueue(new CreateAgentInputQueueRequest
         {
             Configuration = new AgentInputQueueConfiguration
             {
-                Name = this.CreateQueueName(),
+                Name = name,
                 Immediacy = immediacy,
                 Priority = 0,
             },
-            CommandId = Guid.NewGuid(),
-            ExpectedRevision = this.inputQueues.Snapshot.Revision,
+            CommandId = commandId,
+            ExpectedRevision = expectedRevision,
         }));
         return result.Status == AgentInputQueueCommandStatus.Applied ? result.QueueId : null;
     }
@@ -678,11 +681,31 @@ public sealed class InputQueueViewModel : ViewModelBase
         return updatedMessages;
     }
 
-    // #1485 retry 5: owner-side commands complete synchronously on the caller's thread.
-    // No task blocking is needed — Apply just records the coalescing sentinel and refreshes.
-    private AgentInputQueueCommandResult Apply(AgentInputQueueCommandResult result)
+    // #1485: owner-side commands complete synchronously on the caller's thread. The
+    // adapter's Execute() re-reads AggregateRevision under stateLock, which can advance
+    // between the caller's Snapshot.Revision read and that lock (e.g. a legacy Configure
+    // or a background dequeue on another queue). A single-shot apply would then get
+    // Conflict and silently drop the user's edit. This helper reads a fresh revision
+    // and mints a new command id on each retry so UI mutations converge on a consistent
+    // Applied result instead of being lost.
+    internal AgentInputQueueCommandResult Apply(Func<Guid, long, AgentInputQueueCommandResult> command)
     {
-        Interlocked.Increment(ref this.ignoredQueueChangedEvents);
+        ArgumentNullException.ThrowIfNull(command);
+        const int maxAttempts = 8;
+        AgentInputQueueCommandResult result = default;
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            var expectedRevision = this.inputQueues.Snapshot.Revision;
+            result = command(Guid.NewGuid(), expectedRevision);
+            if (result.Status != AgentInputQueueCommandStatus.Conflict)
+            {
+                break;
+            }
+        }
+        if (result.Status == AgentInputQueueCommandStatus.Applied)
+        {
+            Interlocked.Increment(ref this.ignoredQueueChangedEvents);
+        }
         this.RefreshQueues();
         return result;
     }
